@@ -2,6 +2,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
+import { pickBannerItems, type BannerPost } from '$lib/utils/crazylogBanner'
 
 export type BannerSlot = {
   id: string
@@ -111,6 +112,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     title: string
     log_type: string | null
     thumbnail_url: string | null
+    first_text: string | null
   }
 
   const SLOT_FALLBACK_COLORS: Record<string, string> = {
@@ -128,60 +130,55 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: clSettingsData } = await (db.rpc as any)('get_crazylog_banner_settings')
+    const { data: clSettingsData, error: clSettingsError } = await (db.rpc as any)('get_crazylog_banner_settings')
+    if (clSettingsError) console.error('[home] get_crazylog_banner_settings 실패 — 크레이지로그 섹션 비움:', clSettingsError.message)
     const clSettings = (clSettingsData ?? {}) as Record<string, { posts: Array<{ id: string }>; mode: string } | undefined>
 
+    // /crazylog 헤더 배너와 동일 규칙: 슬롯(1·2·3)마다 pickBannerItems(고정=순서, 랜덤=셔플)로 대표 1건을 뽑아
+    // 슬롯 순서대로 카드 0·1·2에 배치 — 홈 미리보기는 /crazylog 헤더의 슬롯별 대표글을 그대로 반영한다.
     const SLOT_KEYS = ['crazylog_banner_slot1', 'crazylog_banner_slot2', 'crazylog_banner_slot3'] as const
-    const seenIds = new Set<string>()
-    const orderedIds: string[] = []
-    const postSlotMap = new Map<string, string>()
-    let anyRandom = false
-
+    const allIds = new Set<string>()
     for (const key of SLOT_KEYS) {
-      const slot = clSettings[key]
-      if (!slot) continue
-      if (slot.mode === 'random') anyRandom = true
-      for (const p of slot.posts) {
-        if (!seenIds.has(p.id)) {
-          seenIds.add(p.id)
-          orderedIds.push(p.id)
-          postSlotMap.set(p.id, key)
-        }
-      }
+      for (const p of clSettings[key]?.posts ?? []) allIds.add(p.id)
     }
 
-    if (orderedIds.length > 0) {
+    if (allIds.size > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: postsData } = await (db.rpc as any)('get_crazylog_posts_by_ids', { p_ids: orderedIds })
+      const { data: postsData, error: postsError } = await (db.rpc as any)('get_crazylog_posts_by_ids', { p_ids: [...allIds] })
+      if (postsError) console.error('[home] get_crazylog_posts_by_ids 실패 — 크레이지로그 섹션 비움:', postsError.message)
 
       const postById = new Map<string, CrazylogPostRow>()
       for (const row of (postsData ?? []) as CrazylogPostRow[]) {
         postById.set(row.id, row)
       }
 
-      let pool = orderedIds
-        .map((id) => postById.get(id))
-        .filter((p): p is CrazylogPostRow => !!p)
-
-      if (anyRandom) {
-        for (let i = pool.length - 1; i > 0; i--) {
+      const shuffle = <T,>(arr: T[]): T[] => {
+        const a = [...arr]
+        for (let i = a.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1))
-          ;[pool[i], pool[j]] = [pool[j], pool[i]]
+          ;[a[i], a[j]] = [a[j], a[i]]
         }
+        return a
       }
 
-      crazylogPosts = pool.slice(0, 5).map((row) => {
-        const slotKey = postSlotMap.get(row.id) ?? 'crazylog_banner_slot1'
-        const catBg = LOG_TYPE_COLORS[row.log_type ?? ''] ?? SLOT_FALLBACK_COLORS[slotKey] ?? '#201857'
-        return {
-          id:     row.id,
-          img:    row.thumbnail_url ?? '',
-          cat:    row.log_type ?? 'Flash Deals',
-          catBg,
-          title:  row.title,
-          desc:   null,
-        }
-      })
+      for (const key of SLOT_KEYS) {
+        const cfg = clSettings[key]
+        if (!cfg) continue
+        const pool: BannerPost[] = cfg.posts
+          .map((sp) => postById.get(sp.id))
+          .filter((row): row is CrazylogPostRow => !!row)
+          .map((row) => ({ id: row.id, title: row.title, logType: row.log_type, img: row.thumbnail_url, desc: row.first_text || null }))
+        const [lead] = pickBannerItems(pool, { posts: cfg.posts as { id: string; order: number }[], mode: cfg.mode === 'fixed' ? 'fixed' : 'random' }, 1, shuffle)
+        if (!lead) continue
+        crazylogPosts.push({
+          id:    lead.id,
+          img:   lead.img ?? '',
+          cat:   lead.logType ?? 'Flash Deals',
+          catBg: LOG_TYPE_COLORS[lead.logType ?? ''] ?? SLOT_FALLBACK_COLORS[key] ?? '#201857',
+          title: lead.title,
+          desc:  lead.desc,
+        })
+      }
     }
   }
 
@@ -257,7 +254,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     .eq('key', 'help_hero_bg_images')
     .maybeSingle()
 
-  type HeroBgValue = { images?: Array<{ url: string; path: string }>; mode?: 'random' | 'fixed' }
+  type HeroBgValue = { images?: Array<{ url: string; path: string }>; mode?: 'random' | 'fixed'; title?: string; sub?: string }
   const heroBgVal = ((heroBgRow as { value: unknown } | null)?.value ?? {}) as HeroBgValue
   const heroBgImages = heroBgVal.images ?? []
   const heroBgModeVal: 'random' | 'fixed' = heroBgVal.mode ?? 'random'
@@ -269,6 +266,10 @@ export const load: PageServerLoad = async ({ locals }) => {
         ? heroBgImages[Math.floor(Math.random() * heroBgImages.length)].url
         : heroBgImages[0].url
   }
+
+  // 헬프 히어로 문구·이미지 목록(모바일 FAQ 헤더 관리 모달용) — 같은 설정값 재사용
+  const faqHeroTitle = (heroBgVal.title ?? '').trim()
+  const faqHeroSub = (heroBgVal.sub ?? '').trim()
 
   // ── Phase 3: 취향직격 테마그룹 ────────────────────────────────────────
   // get_home_theme_groups_with_products: migration #322 — stage 적용 전까지 오류 무시
@@ -321,7 +322,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const categoryPageSettings =
     ((catPageSettingRes.data as { value: unknown } | null)?.value as {
-      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null }[]
+      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null; icon_active_url?: string | null }[]
     } | null) ?? { items: [] }
 
   const keywordsPageSettings =
@@ -448,7 +449,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   mdProducts = mdProducts.map(withDualPrice)
 
   return {
-    bannerMap, isCms, categories, crazylogPosts, recentLogPosts, topFaqs, faqHeroBgUrl,
+    bannerMap, isCms, categories, crazylogPosts, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts,

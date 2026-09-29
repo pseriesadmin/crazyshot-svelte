@@ -245,7 +245,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	}
 
 	// 상품 후기 목록 로드
-	type ReviewItem = { id: string; author_name: string; title: string; content: string; created_at: string };
+	type ReviewItem = { id: string; author_name: string; title: string; content: string; created_at: string; isMine?: boolean };
 	let reviews: ReviewItem[] = [];
 	if (isUuid(String(row.id))) {
 		const { data: reviewData } = await (locals.supabase.rpc as unknown as RpcFn)(
@@ -253,10 +253,21 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			{ p_product_id: String(row.id) },
 		);
 		reviews = (reviewData ?? []) as ReviewItem[];
+		// 본인 후기 표시(삭제 버튼 노출용) — user_id 자체는 클라이언트로 내려보내지 않는다.
+		// get_product_reviews RPC는 user_id를 돌려주지 않으므로, 본인 소유 id만 별도 조회해 대조한다.
+		if (session?.user.id && reviews.length > 0) {
+			const { data: mine } = await locals.supabase
+				.from('product_reviews')
+				.select('id')
+				.eq('user_id', session.user.id)
+				.in('id', reviews.map((r) => r.id));
+			const mineIds = new Set(((mine ?? []) as { id: string }[]).map((r) => r.id));
+			reviews = reviews.map((r) => ({ ...r, isMine: mineIds.has(r.id) }));
+		}
 	}
 
 	// Shotlog: 최신 공개 게시글 5개
-	type ShotlogItem = { id: string; title: string; author: string; img: string | null; createdAt: string };
+	type ShotlogItem = { id: string; title: string; author: string; img: string | null; desc: string | null; createdAt: string };
 	const { data: rawPosts } = await locals.supabase
 		.from('user_posts')
 		.select('id, title, log_type, content_blocks, created_at, user_id')
@@ -289,11 +300,23 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		return null;
 	}
 
+	// 크레이지로그 목록 카드의 설명 줄과 동일 규칙: 첫 텍스트 블록의 HTML 태그 제거 후 120자
+	function extractFirstText(blocks: unknown): string {
+		if (!Array.isArray(blocks)) return '';
+		for (const b of blocks as Array<Record<string, unknown>>) {
+			if (b.type === 'text' && typeof b.html === 'string') {
+				return b.html.replace(/<[^>]*>/g, '').trim().slice(0, 120);
+			}
+		}
+		return '';
+	}
+
 	const shotlogs: ShotlogItem[] = postRows.map((p) => ({
 		id:        p.id,
 		title:     p.title,
 		author:    authorMap[p.user_id] ?? '익명',
 		img:       extractFirstImage(p.content_blocks),
+		desc:      extractFirstText(p.content_blocks) || null,
 		createdAt: p.created_at,
 	}));
 

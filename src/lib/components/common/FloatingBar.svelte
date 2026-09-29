@@ -185,6 +185,14 @@
 	 * 스프링 바운스 표준"(base 57.5px) 대비 이 컴포넌트 진폭(59.5px) 비율로 재계산 —
 	 * 감쇠율 45~50%·오버슈트 비율(+13%/-8%/+1.7%)은 표준 그대로 유지, 9단계로 세분화 */
 	@media (max-width: 639px) {
+		/* iOS Safari: transform 애니메이션(forwards)이 걸린 fixed 요소가 스크롤 중 간헐적으로 사라지는 렌더링 버그 예방 —
+		   전용 합성 레이어 승격(GNB의 translateZ(0) 처리와 같은 목적). 모바일은 이미 transform이 항상 걸려 있어
+		   fixed 자손의 containing block 동작은 달라지지 않는다(PC에는 적용하지 않음). */
+		.fab-bar {
+			will-change: transform;
+			-webkit-backface-visibility: hidden;
+			backface-visibility: hidden;
+		}
 		.fab-bar:not(.peek) {
 			animation: fab-bar-pop-out 0.5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 		}

@@ -108,7 +108,7 @@
   }
 
   @media (max-width: 640px) {
-    .theme-page { padding-top: 87px; }
+    .theme-page { padding-top: var(--layout-mob-gnb-offset); }
     .theme-page-inner { padding: 24px 20px; }
     .theme-prod-grid { gap: 12px; }
   }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+  import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { goto } from '$app/navigation';
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import { supabase } from '$lib/services/supabase';
@@ -42,6 +44,7 @@
     title: string;
     content: string;
     created_at: string;
+    isMine?: boolean;
   }
 
   interface ShotlogItem {
@@ -49,6 +52,7 @@
     title: string;
     author: string;
     img: string | null;
+    desc: string | null;
     createdAt: string;
   }
 
@@ -67,6 +71,7 @@
     name: string;
     sort_order: number;
     icon_url: string | null;
+    icon_active_url?: string | null;
   }
 
   interface Props {
@@ -331,6 +336,23 @@
     csToast.warning('로그인 후 이용해주세요.');
   }
 
+  // 본인 후기 영구 삭제 — CMS "삭제 안전 토스트"(cms-uiux.md §0-10-B) 표준 재사용:
+  // 1차 클릭 경고 토스트 + 무장 / 2차 클릭 삭제(delete_own_product_review RPC, #581) → 성공·실패 토스트
+  const reviewDeleteSafety = createDeleteSafetyToast({
+    successMessage: '후기가 삭제됐습니다.',
+    errorMessage: '후기 삭제에 실패했습니다.',
+  })
+  function deleteReview(id: string) {
+    return reviewDeleteSafety.handleAction(id, async () => {
+      type RpcFn = (name: string, args: Record<string, unknown>) => ReturnType<typeof supabase.rpc>
+      const { data: ok, error } = await (supabase.rpc as unknown as RpcFn)('delete_own_product_review', { p_review_id: id })
+      if (error) throw new Error(error.message)
+      if (!ok) throw new Error('본인 후기가 아니거나 이미 삭제된 후기입니다.')
+      reviews = reviews.filter((r) => r.id !== id)
+      return true
+    })
+  }
+
   async function submitReview() {
     if (isSubmittingReview) return;
     if (!session) {
@@ -360,6 +382,7 @@
           title,
           content,
           created_at: new Date().toISOString(),
+          isMine: true,
         },
         ...reviews,
       ];
@@ -1140,13 +1163,20 @@
             <div class="review-list">
               {#each reviews as r (r.id)}
                 <article class="review-card">
-                  <div class="review-top">
-                    <p class="review-card-title">{r.title}</p>
-                    <p class="review-meta-text">{r.author_name} / {new Date(r.created_at).toLocaleDateString('ko-KR')}</p>
+                  <div class="review-meta-row">
+                    <span class="review-author">{r.author_name}</span>
+                    <span class="review-date">{new Date(r.created_at).toLocaleDateString('ko-KR')}</span>
+                    {#if r.isMine}
+                      <DeleteIconButton
+                        ariaLabel="내 후기 삭제"
+                        confirming={reviewDeleteSafety.pendingKey === r.id}
+                        disabled={reviewDeleteSafety.busyKey === r.id}
+                        onclick={() => deleteReview(r.id)}
+                      />
+                    {/if}
                   </div>
-                  <div class="review-bottom">
-                    <p class="review-body">{r.content}</p>
-                  </div>
+                  <p class="review-card-title">{r.title}</p>
+                  <p class="review-body">{r.content}</p>
                 </article>
               {/each}
             </div>
@@ -1182,10 +1212,18 @@
       {:else}
         {#each shotlogs as post (post.id)}
           <a href="/crazylog/view/{post.id}" class="shotlog-card" aria-label={post.title}>
-            <!-- 모바일: 이미지 상단 -->
-            <div class="shotlog-img-mobile" aria-hidden="true">
+            <!-- 모바일: 최신 카드 타입(크레이지로그 목록과 동일) — 이미지 배경 + 오버레이 + 날짜·제목 -->
+            <div class="shotlog-m-bg" aria-hidden="true">
               {#if post.img}
                 <img src={post.img} alt="" loading="lazy" class="shotlog-img-tag" />
+              {/if}
+            </div>
+            <div class="shotlog-m-overlay" aria-hidden="true"></div>
+            <div class="shotlog-m-content">
+              <span class="shotlog-m-date">{new Date(post.createdAt).toLocaleDateString('ko-KR')}·by {post.author}</span>
+              <p class="shotlog-m-title">{post.title}</p>
+              {#if post.desc}
+                <p class="shotlog-m-desc">{post.desc}</p>
               {/if}
             </div>
             <!-- PC: 좌측 보라 바 -->
@@ -1218,13 +1256,20 @@
     <div class="review-list">
       {#each reviews as review (review.id)}
         <article class="review-card">
-          <div class="review-top">
-            <p class="review-card-title">{review.title}</p>
-            <p class="review-meta-text">{review.author_name} / {new Date(review.created_at).toLocaleDateString('ko-KR')}</p>
+          <div class="review-meta-row">
+            <span class="review-author">{review.author_name}</span>
+            <span class="review-date">{new Date(review.created_at).toLocaleDateString('ko-KR')}</span>
+                    {#if review.isMine}
+                      <DeleteIconButton
+                        ariaLabel="내 후기 삭제"
+                        confirming={reviewDeleteSafety.pendingKey === review.id}
+                        disabled={reviewDeleteSafety.busyKey === review.id}
+                        onclick={() => deleteReview(review.id)}
+                      />
+                    {/if}
           </div>
-          <div class="review-bottom">
-            <p class="review-body">{review.content}</p>
-          </div>
+          <p class="review-card-title">{review.title}</p>
+          <p class="review-body">{review.content}</p>
         </article>
       {/each}
       {#if reviews.length === 0}
@@ -2024,26 +2069,66 @@
     gap: 30px;
   }
   .shotlog-card {
-    background: var(--cs-white);
+    position: relative;
+    display: block;
+    height: 264px;
+    background: var(--cs-dark);
     border-radius: 30px;
     overflow: hidden;
+    text-decoration: none;
+  }
+  @media (min-width: 641px) {
+    .shotlog-card {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      height: auto;
+      background: var(--cs-white);
+    }
+  }
+  /* 모바일: 최신 카드 타입(이미지 배경 + 하단 그라데이션 오버레이 + 흰 텍스트) — PC에서는 숨김 */
+  .shotlog-m-bg { position: absolute; inset: 0; }
+  .shotlog-m-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(16, 11, 50, 0.82) 0%, rgba(16, 11, 50, 0.30) 60%, rgba(16, 11, 50, 0.05) 100%);
+  }
+  .shotlog-m-content {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;
+    padding: 18px 22px 28px;
+    gap: 4px;
   }
-  @media (min-width: 641px) {
-    .shotlog-card { flex-direction: row; align-items: stretch; }
+  .shotlog-m-date {
+    font: var(--text-m-script-12);
+    color: rgba(255, 255, 255, 0.65);
+    letter-spacing: 0.2px;
   }
-  /* 모바일 이미지 (상단) */
-  .shotlog-img-mobile {
-    height: 150px;
-    background: var(--cs-surface-gray);
-    width: 100%;
-    flex-shrink: 0;
-    position: relative;
+  .shotlog-m-title {
+    font: var(--text-m-ad-kr-18);
+    color: #ffffff;
+    margin: 0;
+    line-height: 1.4;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* 설명 줄 — 크레이지로그 목록 카드(.m-article-card-desc)와 동일 */
+  .shotlog-m-desc {
+    font: var(--text-m-script-14B);
+    color: rgba(255, 255, 255, 0.70);
+    margin: 0;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   @media (min-width: 641px) {
-    .shotlog-img-mobile { display: none; }
+    .shotlog-m-bg, .shotlog-m-overlay, .shotlog-m-content { display: none; }
   }
   /* PC 좌측 보라 바 */
   .shotlog-purple-bar {
@@ -2077,8 +2162,8 @@
     object-fit: cover;
   }
   .shotlog-writing {
+    display: none;   /* 모바일은 .shotlog-m-content가 텍스트 담당 — PC에서만 표시 */
     padding: 16px 20px;
-    display: flex;
     flex-direction: column;
     gap: 6px;
     flex: 1;
@@ -2086,7 +2171,7 @@
     justify-content: center;
   }
   @media (min-width: 641px) {
-    .shotlog-writing { padding: 20px 30px; }
+    .shotlog-writing { display: flex; padding: 20px 30px; }
   }
   .shotlog-post-title {
     font: var(--text-pc-title-18);
@@ -2160,6 +2245,16 @@
     .popular-scroll { padding: 0 var(--layout-pc-pad) 10px; }
   }
   /* .popular-card* 인라인 카드 CSS 제거(front-uiux.md §14-4) — ProductDPCard 표준 컴포넌트로 대체 */
+  /* 최신 등록 상품 썸네일 = /products MD추천 카드 값 적용(2026-09-29) — ProductDPCard 내부는 수정하지 않고
+     부모 래퍼 :global 오버라이드로만 처리(front-uiux.md §14-4).
+     모바일 139px(= PC 232px × 0.60) · 반경 20px 8px(MD추천 모바일), PC(≥768px) 232px(표준 290px −20%) · 반경 33px 13px.
+     이미지 호버 확대(1.04배)는 ProductDPCard 기본 동작(.pc-card:hover .pc-img)이 MD추천과 동일 */
+  .popular-section .popular-scroll :global(.pc-card)     { width: 139px; }
+  .popular-section .popular-scroll :global(.pc-img-wrap) { width: 139px; height: 139px; border-radius: 20px 8px 20px 8px; }
+  @media (min-width: 768px) {
+    .popular-section .popular-scroll :global(.pc-card)     { width: 232px; }
+    .popular-section .popular-scroll :global(.pc-img-wrap) { width: 232px; height: 232px; border-radius: 33px 13px 33px 13px; }
+  }
 
   /* ── Reviews */
   .review-section {
@@ -2190,45 +2285,51 @@
     font: var(--text-m-script-14B);
     color: var(--cs-text-light);
   }
+  /* 후기 목록 — 크레이지로그 댓글 카드와 동일 스타일(2026-09-29): purple-10 배경 단일 카드·구분선 없음,
+     반경 = 지침 card 중(모바일 20px / PC 30px), 카드 사이 간격 모바일 15px / PC 16px */
   .review-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 15px;
   }
   .review-card {
-    border-radius: 30px;
-    overflow: hidden;
-    background: var(--cs-white);
-  }
-  .review-top {
-    background: var(--cs-purple-op10);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     padding: 14px 20px;
+    background: color-mix(in srgb, var(--cs-purple-op10) 50%, transparent);   /* purple-10 알파 50% (크레이지로그 댓글 카드와 동일) */
+    border-radius: 20px;
+  }
+  .review-meta-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    gap: 8px;
+  }
+  .review-author {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cs-purple);
+  }
+  .review-date {
+    font-size: 11px;
+    color: var(--cs-text-light);
   }
   .review-card-title {
     font: var(--text-m-body-16L);
     color: var(--cs-text);
     margin: 0;
   }
-  .review-meta-text {
-    font: var(--text-m-script-12);
-    color: var(--cs-text-light);
-    margin: 0;
-    flex-shrink: 0;
-  }
-  .review-bottom {
-    padding: 14px 20px;
-    background: var(--cs-white);
-    border-radius: 0 0 30px 30px;
-  }
   .review-body {
     font: var(--text-m-script-14);
     color: var(--cs-text-dark);
     margin: 0;
     line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  @media (min-width: 641px) {
+    .review-list { gap: 16px; }
+    .review-card { padding: 16px 24px; border-radius: var(--radius-xl); }
   }
   .review-form {
     display: flex;

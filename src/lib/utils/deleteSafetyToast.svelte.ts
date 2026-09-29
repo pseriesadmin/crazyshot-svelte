@@ -58,9 +58,47 @@ export function createDeleteSafetyToast(options: DeleteSafetyToastOptions = {}) 
     }
   }
 
+  // ── 폼 없이 쓰는 방식(2026-09-29 추가) ─────────────────────────────────────────
+  // RPC·fetch로 삭제하는 화면(예: 크레이지로그 댓글·상품 후기)용. 폼 액션 방식(handleSubmit)과 동일한
+  // 2단계 확인(1차: 경고 토스트 + 무장 / 2차: 실제 삭제 → 성공·실패 토스트)을 그대로 따르되,
+  // 목록의 여러 항목 중 "무장한 항목만" 2차 클릭에 삭제되도록 항목 key로 무장 상태를 구분한다.
+  let pendingKey = $state<string | null>(null)
+  let busyKey = $state<string | null>(null)
+
+  /** perform: 실제 삭제를 수행하고 성공 여부(true/false)를 돌려주는 함수(예외 throw도 실패로 처리 — Error 메시지는 실패 토스트에 사유로 표시) */
+  async function handleAction(key: string, perform: () => Promise<boolean>): Promise<void> {
+    if (busyKey) return
+    if (pendingKey !== key) {
+      pendingKey = key
+      csToast.warning(warningMessage)
+      return
+    }
+    busyKey = key
+    try {
+      const ok = await perform()
+      if (ok) {
+        csToast.success(successMessage)
+        await onSuccess?.()
+      } else {
+        csToast.error(errorMessage)
+      }
+    } catch (err) {
+      // perform이 던진 Error 메시지가 있으면 실패 사유를 함께 표시(원인 파악용) + 콘솔 로그
+      console.error('[deleteSafety] 삭제 실패:', err)
+      const reason = err instanceof Error && err.message ? err.message : ''
+      csToast.error(reason ? `${errorMessage} (${reason})` : errorMessage)
+    } finally {
+      busyKey = null
+      pendingKey = null
+    }
+  }
+
   return {
     get pending() { return pending },
     get isDeleting() { return isDeleting },
     handleSubmit,
+    get pendingKey() { return pendingKey },
+    get busyKey() { return busyKey },
+    handleAction,
   }
 }

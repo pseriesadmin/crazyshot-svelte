@@ -50,7 +50,7 @@
   const searchCategory = packageCategoryKey ?? 'hypepack'
 
   const MAX_GROUPS   = 10
-  const MAX_PRODUCTS = 10
+  // 2026-09-29: 테마그룹당 상품 개수 제한 폐지(Stephen 지시, Migration #574) — 무제한
 
   // ── 로컬 상태 ─────────────────────────────────────────────────────────
   let localGroups = $state<LocalGroup[]>([])
@@ -212,7 +212,6 @@
   }
 
   function onProductSelect(opt: SuggestPickerOption) {
-    if (activeProductsList.length >= MAX_PRODUCTS) return
     if (activeProductsList.some((p) => p.id === opt.id)) return
     // 마지막 검색 캐시에서 실제 썸네일·가격을 찾아 채움
     const cached = pickerItemsCache.get(opt.id)
@@ -419,7 +418,7 @@
             {#key activeGroupId}
               <div class="tg-products-area">
                 <div class="tg-products-label">
-                  상품 ({activeProductsList.length}/{MAX_PRODUCTS})
+                  상품 ({activeProductsList.length})
                 </div>
 
                 <!-- 상품 목록 (드래그 정렬) -->
@@ -449,9 +448,8 @@
                   </CmsDragList>
                 {/if}
 
-                <!-- 상품 추가 검색 (패키지 카테고리 잠금) -->
-                {#if activeProductsList.length < MAX_PRODUCTS}
-                  <div class="tg-picker-wrap">
+                <!-- 상품 추가 검색 (패키지 카테고리 잠금) — 개수 제한 없음 -->
+                <div class="tg-picker-wrap">
                     <SuggestPicker
                       id="hype-theme-product-search"
                       bind:selectedId={pickerSelId}
@@ -487,8 +485,7 @@
                         <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
                       {/snippet}
                     </SuggestPicker>
-                  </div>
-                {/if}
+                </div>
               </div>
             {/key}
           {/if}

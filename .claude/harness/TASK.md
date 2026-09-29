@@ -7,6 +7,67 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: /products 화면 개편 — PC·모바일 무한스크롤·하단 MD추천 도크·카테고리 배너·노출순서 연동·카테고리 아이콘 ON/OFF 동기화 (Migration #577·#578, 2026-09-29, 이 세션'만', GATE E 검수 대기)
+
+⚠️ 세션 스코프: 이 블록은 "이 세션이 실제로 수정한 것"만 기록. 같은 작업폴더의 병행 세션 소관(ProductCategoryModal.svelte의 ON 아이콘 업로드 슬롯,
+   /products 카테고리 메뉴의 ON/OFF 교차전환 마크업·CSS, ProductGridModal 외 타 파일)은 확인만 하고 미수정 — 별도 세션 기록을 따른다.
+
+수행 작업:
+  [1] /products "전체" 무한스크롤 — 처음 20개, 하단 도달 시 ?n= 10개씩 증가 재조회(상한 200), 랜덤 순서는 ?seed=로 유지.
+      PC(.d-list)·모바일(.m-list) 모두 적용(감지 지점 2개, entries.some 판정). 추가 카드는 in:fade 700ms(첫 렌더 제외).
+      카테고리 선택 화면은 기존 CMS 설정 개수(mobileGridCount) 유지. 모바일은 무한스크롤 모드에서 slice 해제.
+  [2] 하단 도크(PC·모바일 공통) — MD추천+브랜드마퀴를 .bottom-dock으로 묶음. 스크롤 멈춤 120ms 후 30%만 슬라이드업(fade), 클릭·터치 시 전체 펼침,
+      스크롤 재개 시 접힘. 더 불러올 상품 있음(hasMore)이면 상시 도크, 목록 끝이면 푸터 위 일반 배치 → 일반 배치 자리(slotEl 0높이 기준점)가
+      화면 아래로 벗어난 뒤 위 스크롤 시 도크 전환·다시 들어오면 복귀(자리 유지 spacer로 점프 방지, 트랙패드 바운스 무관).
+      라운드(--dr: PC 50px/모바일 30px, 일반 배치 PC는 ::before 모서리 채움), 상단 그림자(0 -6px 28px rgba(16,11,50,.28)),
+      모바일 BottomTabBar 노출 중 70px 위로 배치(tabBarShown), 여백 조정(MD 상단 26px·제목↔카드 30px·모바일 MD↔브랜드 −50%·일반배치 +50%).
+  [3] MD추천 카드 — PC 232px(표준 290px −20%)·호버 시 이미지만 1.04배 확대·상품명 color purple-dark 표준화, 모바일 139px(PC×0.60).
+  [4] 카테고리 배너(PC 150px·라운드 30px, 모바일 200px full-bleed) — 카테고리 선택 시 헤더 슬라이드 대신 노출. 모달(ProductHeroModal)에
+      카테고리별 PC/모바일 이미지·링크·alt·노출 관리. 설정 키 product_page_category_banners (Migration #577: upsert 화이트리스트+get_product_page_settings).
+      모바일 목록 중간 배너("촬영본능 PICK!") 관리 추가(mid_banner: 이미지·타이틀·서브·링크·노출, 기본값=기존 하드코딩 유지).
+  [5] 노출 순서 연동 — Migration #578 get_products_sorted(p_category,p_sort,p_limit,p_seed): latest/random(md5 시드)/views/rentals.
+      서버가 product_page_grid.sort 사용(미설정=views), 실패 시 search_products 폴백. ProductGridModal "노출 수량" 블록은 주석 보관(숨김).
+  [6] 정리 — view=all 전체목록 화면·"전체보기" 아이콘·서버 viewAll·layout GNB 예외 제거, PC "Category" 제목 제거, 헤더 슬라이드 좌우 화살표 제거,
+      PC 제목↔그리드 여백 −30%, 모바일 헤더 슬라이더 full-bleed(padding/scroll-padding 25px), 모바일 목록 타이틀=선택 분류명(18px Bold 토큰),
+      모바일 .m-list 상단 라운드 30px.
+  [7] 카테고리 아이콘 ON/OFF 동기화(이 세션 부분) — productCategorySettings.ts(CatSettingsItem/DisplayCategory/joinDisplayCategories에 icon_active_url),
+      홈(+page.server.ts 타입·+page.svelte 탭 교차전환), ProductHero(상품상세 카테고리 아이콘 행, 현재 카테고리=ON), products/[id]/+page.svelte 타입.
+
+수정 파일(이 세션):
+  - supabase/migrations/20260929040000_577_product_page_category_banners_key.sql (신규)
+  - supabase/migrations/20260929050000_578_get_products_sorted_rpc.sql (신규)
+  - src/routes/products/+page.svelte · +page.server.ts · src/routes/+layout.svelte(변경 후 원복 — 최종 diff 없음)
+  - src/lib/components/products/admin/ProductHeroModal.svelte · ProductGridModal.svelte(주석 보관)
+  - src/lib/server/productCategorySettings.ts · src/routes/+page.server.ts · src/routes/+page.svelte
+  - src/lib/components/products/ProductHero.svelte · src/routes/products/[id]/+page.svelte(타입)
+  - (1차 검수 이후 추가) supabase/migrations/20260929060000_579_get_products_sorted_limit_cap.sql(신규)
+  - (1차 검수 이후 추가) src/lib/server/products/productGrid.ts(신규) · src/routes/products/_more/+server.ts(신규) · src/routes/help/+page.svelte
+
+DB 마이그레이션: #579(조회 개수 상한 200) Stage ✅ / Production ✅ · #577 Stage ✅ / Production ✅ · #578 Stage ✅(정렬 4종 실측) / Production ✅ (둘 다 Stephen 승인 후 적용, 권한(ACL) 확인)
+
+GATE C:
+  [x] svelte-check 이 세션 수정 파일 신규 에러 0건
+  [x] Migration #577·#578 Stage → Production 순서 준수, 함수 존재·권한 확인
+  [ ] GATE E(@sp3-qa-agent) 검수 대기 — 브라우저 실화면은 프로젝트 규칙상 미기동, 소스·DB 실측 기준
+  [x] GATE E 1차(sp3-qa-agent): 조건부 통과·블로킹 0건 → QA 권고 4건 반영(Stephen 승인): ①카테고리 이동 시 도크 상태 초기화(resetDockState)
+      ②#577 ROLLBACK 주석 추가 ③배너·중간배너 링크 스킴 검증(저장 전 선검증 + 렌더 시 safeHref, "/"·http(s)만 허용)
+      ④Migration #579 get_products_sorted 조회 개수 상한 200(Stage 실측 100000→200·0→1, Production 적용·정의·ACL 확인)
+  [x] Stephen 추가 지시 반영 — 무한스크롤 추가 조회를 "페이지 전체 load 재실행(goto ?n=)"에서 "목록만 조회"로 전환:
+      신규 src/lib/server/products/productGrid.ts(그리드 조회·가격 합성 공용화, load와 엔드포인트가 동일 로직 공유),
+      신규 src/routes/products/_more/+server.ts(GET offset/limit/seed → {products, wishedIds, hasMore}, 상한 200),
+      +page.server.ts는 공용 모듈 사용으로 리팩터(초기 20개만 내려줌, ?n= 제거), +page.svelte는 fetch로 추가분만 이어 붙임
+      (카테고리 이동 시 초기화·중복 제거·실패 시 중단). hero·MD추천·키워드 랭킹 재조회 없음.
+  [x] 추가 수정(1차 검수 이후, 이 세션): ⑤/help FAQ 제목 옆 ⋯ 아이콘(.order-badge) PC·모바일 제거(src/routes/help/+page.svelte)
+      ⑥MD추천 썸네일 호버를 카드 확대→내부 이미지 1.04배 확대로 통일(PC·모바일 공통, +page.svelte)
+      ⑦Migration #579(조회 개수 상한) 파일 추가, 목록 전용 조회 엔드포인트·공용 모듈 신설(위 항목)
+  [ ] GATE E 2차(sp3-qa-agent) — 1차 이후 변경분 재검수 진행 중
+  ⚠️ 미반영 권고(수용 보류): 저장 원자성·도크 접근성(inert)·dvh — 경미/시범오픈 수용 범위. (서버 load 재실행 권고는 위 항목으로 해소)
+  ⚠️ 알려진 한계: 실화면(도크 전환·모바일 탭바 연동·트랙패드 관성)은 미확인 — Stephen 실기기 확인 필요
+  ⚠️ 알려진 한계: 노출 수량 설정 UI 주석 보관 중(PC "전체"는 무한스크롤, 모바일 "전체" 20개부터)
+git commit: Stephen 직접 실행 필요(병행 세션 파일과 add 시 분리 필수 — git add -A 금지).
+
+---
+
 ## DONE — 🟡 BOUNDARY: 사용자 검색(/products/search)·상품 썸네일 정보 토큰·/products 노출 기준(조회수순) 개선 묶음 (2026-09-29, 이 세션'만', GATE E 검수 대기)
 
 수행 작업(이 세션 후반 — 앞선 NLSearch 묶음(Migration #307)은 별도 검수 완료분이라 제외):

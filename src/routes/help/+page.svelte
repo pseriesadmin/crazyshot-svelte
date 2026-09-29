@@ -2,6 +2,7 @@
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
+  import { HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB } from '$lib/constants/helpHero'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -93,14 +94,8 @@
 
       <div class="hero-content">
         <div class="hero-heading">
-          <h1 class="hero-title">
-            다양한 영상장비<br />
-            쉽고 빠른 렌탈마법가이드
-          </h1>
-          <p class="hero-sub">
-            크레이지샷만의 빠른 예약, 장비 수령, 반납까지<br />
-            자주 묻는 질문을 바로 확인하세요.
-          </p>
+          <h1 class="hero-title">{data.heroTitle || HELP_HERO_DEFAULT_TITLE}</h1>
+          <p class="hero-sub">{data.heroSub || HELP_HERO_DEFAULT_SUB}</p>
         </div>
 
         <!-- Category Cards -->
@@ -150,12 +145,6 @@
     <section class="mobile-guide">
       <div class="mobile-guide-header">
         <p class="mobile-guide-title">FAQ ·자주 묻는 질문</p>
-        <div class="order-badge" aria-hidden="true">
-          <svg fill="none" viewBox="0 0 22 22" width="22" height="22">
-            <rect fill="#E1DEF3" height="22" rx="7" width="22"/>
-            <path d="M5.5 9.5C6.32843 9.5 7 10.1716 7 11C7 11.8284 6.32843 12.5 5.5 12.5C4.67157 12.5 4 11.8284 4 11C4 10.1716 4.67157 9.5 5.5 9.5ZM11 9.5C11.8284 9.5 12.5 10.1716 12.5 11C12.5 11.8284 11.8284 12.5 11 12.5C10.1716 12.5 9.5 11.8284 9.5 11C9.5 10.1716 10.1716 9.5 11 9.5ZM16.5 9.5C17.3284 9.5 18 10.1716 18 11C18 11.8284 17.3284 12.5 16.5 12.5C15.6716 12.5 15 11.8284 15 11C15 10.1716 15.6716 9.5 16.5 9.5Z" fill="#553FE0"/>
-          </svg>
-        </div>
       </div>
 
       <div class="mobile-guide-list">
@@ -191,12 +180,6 @@
       <!-- Section header -->
       <div class="faq-header">
         <span class="faq-header-label">Order Faq</span>
-        <div class="order-badge" aria-hidden="true">
-          <svg fill="none" viewBox="0 0 22 22" width="22" height="22">
-            <rect fill="#E1DEF3" height="22" rx="7" width="22"/>
-            <path d="M5.5 9.5C6.32843 9.5 7 10.1716 7 11C7 11.8284 6.32843 12.5 5.5 12.5C4.67157 12.5 4 11.8284 4 11C4 10.1716 4.67157 9.5 5.5 9.5ZM11 9.5C11.8284 9.5 12.5 10.1716 12.5 11C12.5 11.8284 11.8284 12.5 11 12.5C10.1716 12.5 9.5 11.8284 9.5 11C9.5 10.1716 10.1716 9.5 11 9.5ZM16.5 9.5C17.3284 9.5 18 10.1716 18 11C18 11.8284 17.3284 12.5 16.5 12.5C15.6716 12.5 15 11.8284 15 11C15 10.1716 15.6716 9.5 16.5 9.5Z" fill="#553FE0"/>
-          </svg>
-        </div>
       </div>
 
       <!-- Tab bar -->
@@ -250,6 +233,8 @@
   <HelpHeroBgModal
     initialImages={data.heroBgImages}
     initialMode={data.heroBgMode}
+    initialTitle={data.heroTitle}
+    initialSub={data.heroSub}
     onclose={() => (showHeroBgModal = false)}
   />
 {/if}
@@ -269,7 +254,7 @@
   width: 100%;
   max-width: 1240px;
   margin: 0 auto;
-  padding: 95px 16px 24px;
+  padding: var(--layout-mob-gnb-offset) 16px 24px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -343,6 +328,7 @@
 }
 
 .hero-title {
+  white-space: pre-line;
   font-family: 'SB AggroOTF', 'Black Han Sans', sans-serif;
   font-weight: 700;
   font-size: 28px;
@@ -351,6 +337,7 @@
 }
 
 .hero-sub {
+  white-space: pre-line;
   font-family: 'Noto Sans KR', sans-serif;
   font-weight: 900;
   font-size: 13px;
@@ -545,7 +532,6 @@
   letter-spacing: -0.5px;
 }
 
-.order-badge { display: flex; align-items: center; }
 
 .tab-bar {
   display: grid;

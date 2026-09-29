@@ -3,6 +3,7 @@
   import CrazylogBannerModal from '$lib/components/crazylog/admin/CrazylogBannerModal.svelte'
   import CrazylogKeywordModal from '$lib/components/crazylog/admin/CrazylogKeywordModal.svelte'
   import type { PageData } from './$types'
+  import { revealOnScroll } from '$lib/actions/revealOnScroll'
   interface Props { data: PageData }
   let { data }: Props = $props()
 
@@ -150,7 +151,7 @@
             <!-- Figma: Writing2 — gradient bg-gradient-to-t from-rgba(16,11,50,0) to-#100b32 via-40% -->
             <div class="d-shotlog-writing">
               <p class="d-shotlog-writing-text">{data.bannerSlots[0].items[0]?.title ?? 'From Portraits to Panoramas-One Lens to Rule Them All'}</p>
-              <p class="d-shotlog-writing-sub">{data.bannerSlots[0].items[0]?.desc ?? '올어라운드 렌즈의 끝판왕'}</p>
+              <p class="d-shotlog-writing-sub">{data.bannerSlots[0].items[0] ? (data.bannerSlots[0].items[0].desc ?? '') : '올어라운드 렌즈의 끝판왕'}</p>
             </div>
           </a>
         </div>
@@ -180,7 +181,7 @@
             </div>
             <div class="d-shotlog1-writing">
               <p class="d-shotlog1-title">{data.bannerSlots[1].items[0]?.title ?? '경복궁 한복 체험'}</p>
-              <p class="d-shotlog1-sub">{data.bannerSlots[1].items[0]?.desc ?? 'K-트레일 나들이 완벽 가이드'}</p>
+              <p class="d-shotlog1-sub">{data.bannerSlots[1].items[0] ? (data.bannerSlots[1].items[0].desc ?? '') : 'K-트레일 나들이 완벽 가이드'}</p>
             </div>
           </a>
         </div>
@@ -205,7 +206,7 @@
             </div>
             <div class="d-shotlog2-writing">
               <p class="d-shotlog2-title">{data.bannerSlots[2].items[0]?.title ?? 'DJI Mini2se Aerial Drone'}</p>
-              <p class="d-shotlog2-sub">{data.bannerSlots[2].items[0]?.desc ?? '드론시장에서 품질은 없다.'}</p>
+              <p class="d-shotlog2-sub">{data.bannerSlots[2].items[0] ? (data.bannerSlots[2].items[0].desc ?? '') : '드론시장에서 품질은 없다.'}</p>
             </div>
           </a>
         </div>
@@ -305,15 +306,7 @@
   <!-- HeadPosts: 3 sections (horizontal card carousel) -->
   {#each M_LISTS as list}
     <section class="m-list">
-      <!-- Figma: com.product.title.bar — flex items-center justify-between py-[40px] -->
-      <div class="m-list-header">
-        <p class="m-list-title">{list.titleText}</p>
-        <div class="m-list-icons">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform:scaleY(-1)">
-            <path d="M2 5L8 11L14 5" stroke="#3B2F8A" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
-          </svg>
-        </div>
-      </div>
+      <!-- 섹션 제목 줄(분류명 + 장식 화살표)은 카드 헤더(.m-card-header)의 분류명과 동일해 중복이라 제거(2026-09-29) -->
       <!-- Figma: horizontal scroll snap carousel -->
       <div class="m-carousel" class:m-carousel-static={list.cards.length <= 1}>
         {#each list.cards as card, ci}
@@ -360,7 +353,7 @@
         <p class="m-content-title-sub">가장 최신 크레이지로그를 놓치지 마세요.</p>
       </div>
       {#each data.posts as post}
-        <a href="/crazylog/view/{post.id}" class="m-article-card" aria-label={post.title}>
+        <a href="/crazylog/view/{post.id}" class="m-article-card" aria-label={post.title} use:revealOnScroll>
           {#if post.img}
             <img src={post.img} alt="" class="m-article-card-bg" aria-hidden="true" />
           {:else}
@@ -903,9 +896,9 @@
   @media (min-width: 768px) { .m-page { display: none; } }
 
   /* ── HeadKeyword ── */
-  .m-head { padding-top: 95px; }
+  .m-head { padding-top: var(--layout-mob-gnb-offset); }
   .m-head-inner {
-    padding: 50px 25px 30px;
+    padding: 0 25px 30px;   /* 위 50px 제거(2026-09-29) — GNB 아래 간격은 .m-head padding-top(--layout-mob-gnb-offset)만 담당 */
     display: flex;
     flex-direction: column;
     gap: 30px;
@@ -972,30 +965,8 @@
   .m-chip-help { width: 30px; height: 30px; flex-shrink: 0; }
 
   /* ── HeadPosts: 3 list sections ── */
-  .m-list { padding: 0 0 10px; }
-  /* Figma: py-[40px] flex justify-between items-center */
-  .m-list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 40px 25px;
-  }
-  /* Figma: 21px Bold Noto #100B32 */
-  .m-list-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 21px;
-    font-weight: 700;
-    color: var(--cs-text);
-    margin: 0;
-    letter-spacing: -0.3px;
-    line-height: 1.6;
-  }
-  .m-list-icons {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
+  /* 섹션 위 40px = 제거한 제목 줄(.m-list-header)이 담당하던 섹션 간 세로 간격 */
+  .m-list { padding: 40px 0 10px; }
 
   /* Figma: horizontal scroll — flex gap-[50px] overflow-x snap */
   .m-carousel {
@@ -1054,8 +1025,7 @@
   }
   /* Figma: Tilt Warp 24px white */
   .m-card-category {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 24px;
+    font: var(--text-m-title-21);   /* 기존 24px(Tilt Warp) → 한 단계 작은 모바일 토큰 21px/700 (2026-09-29) */
     color: white;
     letter-spacing: -0.5px;
   }
@@ -1094,7 +1064,7 @@
   }
   /* Figma: 24px Black(900) Noto white leading-[1.6] */
   .m-card-title {
-    font: var(--text-m-ad-kr-30);
+    font: var(--text-m-ad-kr-24);   /* 기존 --text-m-ad-kr-30(30px) → 한 단계 작은 토큰 24px/700 (2026-09-29) */
     color: white;
     margin: 0;
     letter-spacing: -0.5px;
@@ -1230,7 +1200,7 @@
     letter-spacing: 0.2px;
   }
   .m-article-card-title {
-    font: var(--text-m-ad-kr-20);
+    font: var(--text-m-ad-kr-18);   /* 기존 --text-m-ad-kr-20(20px) → 한 단계 작은 토큰 18px/700 (2026-09-29) */
     color: #ffffff;
     margin: 0;
     line-height: 1.4;

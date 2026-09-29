@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+  import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { supabase } from '$lib/services/supabase'
+  import type { SupabaseClient } from '@supabase/supabase-js'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
@@ -105,7 +108,7 @@
   let writeCardVisible = $state(true)
 
   // ── 댓글 상태 ─────────────────────────────────────────
-  type Comment = { id: string; authorName: string; content: string; createdAt: string }
+  type Comment = { id: string; authorName: string; content: string; createdAt: string; isMine?: boolean }
   let comments    = $state<Comment[]>((data.comments ?? []) as Comment[])
   // ⚠️ core-rules.md: $state(prop) 초기화 금지 — post와 동일한 이유(같은 라우트 내 다른
   // slug로 재마운트 없이 이동 가능)로 다른 글로 이동 시 댓글목록도 새로 반영되도록 동기화
@@ -115,6 +118,22 @@
   let commentText = $state('')
   let commentBusy = $state(false)
   let commentError = $state<string | null>(null)
+
+  // 본인 댓글 영구 삭제 — CMS "삭제 안전 토스트"(cms-uiux.md §0-10-B) 표준 재사용:
+  // 1차 클릭 경고 토스트 + 무장 / 2차 클릭 삭제(delete_own_post_comment RPC, #580) → 성공·실패 토스트
+  const commentDeleteSafety = createDeleteSafetyToast({
+    successMessage: '댓글이 삭제됐습니다.',
+    errorMessage: '댓글 삭제에 실패했습니다.',
+  })
+  function handleCommentDelete(id: string) {
+    return commentDeleteSafety.handleAction(id, async () => {
+      const { data: ok, error } = await (supabase as SupabaseClient).rpc('delete_own_post_comment', { p_comment_id: id })
+      if (error) throw new Error(error.message)
+      if (!ok) throw new Error('본인 댓글이 아니거나 이미 삭제된 댓글입니다.')
+      comments = comments.filter((c) => c.id !== id)
+      return true
+    })
+  }
 
   async function handleCommentSubmit() {
     const content = commentText.trim()
@@ -131,7 +150,7 @@
       if (error) throw new Error(error.message)
       if (newId) {
         const now = new Date().toISOString()
-        comments = [...comments, { id: newId, authorName: '나', content, createdAt: now }]
+        comments = [...comments, { id: newId, authorName: '나', content, createdAt: now, isMine: true }]
         commentText = ''
       }
     } catch (e) {
@@ -407,6 +426,14 @@
             <div class="d-comment-meta">
               <span class="d-comment-author">{c.authorName}</span>
               <span class="d-comment-date">{formatCommentDate(c.createdAt)}</span>
+              {#if c.isMine}
+                <DeleteIconButton
+                  ariaLabel="내 댓글 삭제"
+                  confirming={commentDeleteSafety.pendingKey === c.id}
+                  disabled={commentDeleteSafety.busyKey === c.id}
+                  onclick={() => handleCommentDelete(c.id)}
+                />
+              {/if}
             </div>
             <span class="d-comment-content">{c.content}</span>
           </div>
@@ -569,6 +596,14 @@
             <div class="m-comment-meta">
               <span class="m-comment-author">{c.authorName}</span>
               <span class="m-comment-date">{formatCommentDate(c.createdAt)}</span>
+              {#if c.isMine}
+                <DeleteIconButton
+                  ariaLabel="내 댓글 삭제"
+                  confirming={commentDeleteSafety.pendingKey === c.id}
+                  disabled={commentDeleteSafety.busyKey === c.id}
+                  onclick={() => handleCommentDelete(c.id)}
+                />
+              {/if}
             </div>
             <span class="m-comment-content">{c.content}</span>
           </div>
@@ -822,39 +857,44 @@
     flex-direction: column;
     gap: 30px;
   }
+  /* 글꼴 토큰 PC↔모바일 짝 (2026-09-29, 기준 비율 ≈0.88 · 제목은 app.css 문서화된 짝 pc-ad-kr-35↔m-ad-kr-24):
+       제목 35↔24 · 작성자·날짜 16↔14(700) · 본문 16↔14(500) · 태그 14↔11 · 댓글 작성자 14↔12 · 댓글 날짜 12↔11 · 댓글 내용 16↔14 */
   .d-author {
-    font-size: 16px;
-    font-weight: 400;
-    font-family: 'Noto Sans KR', sans-serif;
+    font: var(--text-pc-title-16);   /* 16px / 700 (모바일 --text-m-script-14B 짝) */
     color: var(--cs-text-mid);
     margin: 0;
   }
   .d-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 35px;
-    font-weight: 400;
+    font: var(--text-pc-ad-kr-35);   /* 35px / 700 (모바일 --text-m-ad-kr-24 짝) */
     color: var(--cs-text);
     margin: 0;
   }
+  /* 본문 글꼴은 컨테이너에 직접 지정(2026-09-29, B안: 본문 보통 굵기 · 강조만 굵게) — 모바일 .m-article와 같은 이유로
+     {@html} 주입 본문에는 스코프된 `.d-article p` 규칙이 적용되지 않았다 → 컨테이너 상속 + :global 보강 */
   .d-article {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    font: var(--text-m-body-16L);    /* 16px / 500 */
+    line-height: 1.8;
+    color: var(--cs-text-dark);
   }
+  .d-article :global(p),
+  .d-article :global(li),
+  .d-article :global(span) {
+    margin: 0;
+    font: inherit;
+    line-height: inherit;
+    color: inherit;
+  }
+  .d-article :global(strong),
+  .d-article :global(b) { font-weight: 700; }
   .d-section-title {
     font-size: 25px;
     font-weight: 900;
     font-family: 'Noto Sans KR', sans-serif;
     color: var(--cs-text);
     margin: 8px 0 0;
-  }
-  .d-article p {
-    font-size: 16px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-dark);
-    margin: 0;
-    line-height: 1.8;
   }
 
   /* 이미지 블록 */
@@ -999,8 +1039,10 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--cs-surface-gray);
+    padding: 16px 24px;
+    /* 댓글 항목 하단 구분선 제거(요청 2026-09-29) → 카드형 배경: purple-10(--cs-purple-op10), 반경 = 지침 card 중 PC 30px */
+    background: color-mix(in srgb, var(--cs-purple-op10) 50%, transparent);   /* purple-10 알파 50% */
+    border-radius: var(--radius-xl);
   }
   .d-comment-meta {
     display: flex;
@@ -1008,16 +1050,16 @@
     gap: 8px;
   }
   .d-comment-author {
-    font-size: 12px;
+    font-size: 14px;   /* 모바일 12px 짝 */
     font-weight: 700;
     color: var(--cs-purple);
   }
   .d-comment-date {
-    font-size: 11px;
+    font-size: 12px;   /* 모바일 11px 짝 */
     color: var(--cs-text-light);
   }
   .d-comment-content {
-    font-size: 14px;
+    font-size: 16px;   /* 모바일 14px 짝 */
     color: var(--cs-text);
     white-space: pre-wrap;
     word-break: break-word;
@@ -1128,12 +1170,9 @@
     flex-shrink: 0;
   }
   .m-author {
-    font-size: 14px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
+    font: var(--text-m-script-14B);   /* 14px / 700 (PC --text-pc-title-16 짝) */
     color: var(--cs-text-dark);
     letter-spacing: -0.5px;
-    line-height: 2;
   }
   .m-author span:last-child { color: var(--cs-text-dark); }
 
@@ -1193,40 +1232,46 @@
 
   /* Title */
   .m-title {
-    font-size: 24px;
-    font-weight: 900;
-    font-family: 'Noto Sans KR', sans-serif;
+    font: var(--text-m-ad-kr-18);   /* 두 단계 작게: ad-kr-24 → ad-kr-20 → ad-kr-18 (18px / 700, 요청 2026-09-29) */
     color: var(--cs-text);
     margin: 0;
-    line-height: 1.6;
     letter-spacing: -0.5px;
     word-break: keep-all;
     flex-shrink: 0;
   }
 
   /* Article body */
+  /* 본문 글꼴은 컨테이너에 직접 지정(2026-09-29, B안: 본문 보통 굵기 · 강조만 굵게).
+     본문은 {@html}로 주입돼 컴포넌트 스코프 스타일이 닿지 않고 <p> 없이 글자+<br>만 오는 경우도 있어,
+     기존 `.m-article p, li` 규칙은 한 번도 적용되지 않았다 → 컨테이너 상속 + 주입 요소는 :global로 보강 */
   .m-article {
     display: flex;
     flex-direction: column;
     gap: 0;
     width: 100%;
     min-width: 100%;
-  }
-  .m-article p, .m-article li {
-    font-size: 14px;
-    font-weight: 700;
-    font-family: 'Noto Sans KR', sans-serif;
-    color: var(--cs-text-dark);
-    margin: 0;
+    font: var(--text-m-script-14);   /* 14px / 500 (PC 16px의 한 단계 아래) */
     line-height: 2;
     letter-spacing: -0.5px;
+    color: var(--cs-text-dark);
   }
-  .m-article ul {
+  .m-article :global(p),
+  .m-article :global(li),
+  .m-article :global(span) {
+    margin: 0;
+    font: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
+  .m-article :global(strong),
+  .m-article :global(b) { font-weight: 700; }
+  .m-article :global(ul) {
     margin: 0;
     padding-left: 21px;
     list-style: disc;
   }
-  .m-article li { margin-bottom: 0; }
+  .m-article :global(li) { margin-bottom: 0; }
   /* 본문 이미지 모바일 리사이징 */
   .article-images {
     width: 100%;
@@ -1248,7 +1293,7 @@
     padding-top: 8px;
   }
   .m-tag {
-    font: var(--text-m-script-14B);
+    font: var(--text-m-tag-11);   /* 11px / 700 (PC --text-pc-body-14 짝) */
     color: var(--cs-purple);
     background: var(--cs-purple-op10);
     padding: 4px 12px;
@@ -1281,14 +1326,15 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .m-huri-label { font-size: 21px; }
-  .m-huri-count { font-size: 18px; }
+  /* 한 사이즈씩 작게(요청 2026-09-29, 2회): 라벨 21 → 18 → 16px(--text-m-body-16B), 개수 18 → 16 → 14px(--text-m-script-14B, 줄 높이는 제목 줄 높이가 흔들리지 않게 1.6 유지) */
+  .m-huri-label { font: var(--text-m-body-16B); }
+  .m-huri-count { font: var(--text-m-script-14B); line-height: 1.6; }
 
   /* Frame1: gap-[30px] pb-[50px] */
   .m-frame1 {
     display: flex;
     flex-direction: column;
-    gap: 30px;
+    gap: 15px;   /* 댓글 카드 사이 세로 간격 30px → 15px (50% 축소, 요청 2026-09-29) */
     padding-bottom: 50px;
     width: 100%;
     align-items: flex-start;
@@ -1402,8 +1448,12 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--cs-border);
+    width: 100%;   /* 부모(.m-frame1)가 align-items:flex-start라 내용 폭으로 줄어들던 것을 카드 전체 폭으로 */
+    box-sizing: border-box;
+    padding: 14px 20px;
+    /* 댓글 항목 하단 구분선 제거(요청 2026-09-29) → 카드형 배경: purple-10(--cs-purple-op10), 반경 = 지침 card 중 Mobile 20px(하드코딩) */
+    background: color-mix(in srgb, var(--cs-purple-op10) 50%, transparent);   /* purple-10 알파 50% */
+    border-radius: 20px;
   }
   .m-comment-meta {
     display: flex;

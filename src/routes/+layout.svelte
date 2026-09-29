@@ -11,6 +11,7 @@
 	import LoadingIndicator from '$lib/components/common/LoadingIndicator.svelte';
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
 	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
+	import ChevronIcon from '$lib/components/common/ChevronIcon.svelte';
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
 	import { supabase } from '$lib/services/supabase';
@@ -25,6 +26,9 @@
 		company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
 		privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
 	});
+
+	// 모바일(≤640px) 푸터 아코디언 — 기본 접힘(브랜드 로고만), 우상단 버튼으로 전체 펼침. PC(≥641px)는 항상 전체 노출
+	let footerOpen = $state(false);
 
 	// 푸터 법적 고지 모달
 	let policyModal = $state<{ open: boolean; title: string; text: string; loading: boolean }>({
@@ -134,7 +138,16 @@
 
 	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract')}
 	<footer class="site-footer">
-		<div class="footer-inner">
+		<div class="footer-inner" class:footer-collapsed={!footerOpen}>
+			<button
+				type="button"
+				class="footer-toggle"
+				aria-expanded={footerOpen}
+				aria-label={footerOpen ? '푸터 정보 접기' : '푸터 정보 펼치기'}
+				onclick={() => (footerOpen = !footerOpen)}
+			>
+				<ChevronIcon direction={footerOpen ? 'up' : 'down'} size={9} color="#C1BBEC" />
+			</button>
 			<div class="footer-top">
 				<!-- 브랜드 컬럼 -->
 				<div class="footer-brand">
@@ -272,8 +285,45 @@
 		flex-direction: column;
 		gap: 0;
 	}
+	.footer-inner { position: relative; }
 	@media (min-width: 641px) {
 		.footer-inner { padding: 30px 0; }
+	}
+
+	/* 모바일 푸터 아코디언 버튼 — 푸터 상단 우측(2026-09-29). PC에서는 숨김.
+	   배경 없이 화살표만 노출(2026-09-29) — 화살표는 purple-20(--cs-purple-pale, 어두운 푸터 위 대비 확보).
+	   아웃라인·그림자·배경 없음, 터치 타겟 44px(::before로 확장) */
+	.footer-toggle {
+		display: none;
+		position: absolute;
+		top: 36px;
+		right: 25px;
+		z-index: 2;
+		width: 32px;
+		height: 32px;
+		border: none;
+		border-radius: 0;
+		background: none;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		padding: 0;
+		transition: background 0.15s;
+	}
+	.footer-toggle::before { content: ''; position: absolute; inset: -6px; }
+	@media (max-width: 640px) {
+		.footer-toggle { display: flex; }
+		/* 접힘: 브랜드 로고만 남기고 나머지 정보 숨김 */
+		.footer-collapsed .footer-desc,
+		.footer-collapsed .footer-contact,
+		.footer-collapsed .footer-sns,
+		.footer-collapsed .footer-links,
+		.footer-collapsed .footer-bottom { display: none; }
+		/* 접힘 상태 세로폭 50% 축소(2026-09-29): 안쪽 높이 154px → 약 78px(위아래 패딩 30→12, 브랜드 세로 패딩 20→0).
+		   하단 탭바 완충 패딩(.site-footer 70px)은 유지 */
+		.footer-inner.footer-collapsed { padding-top: 12px; padding-bottom: 12px; }
+		.footer-collapsed .footer-brand { padding-top: 0; padding-bottom: 0; }
+		.footer-collapsed .footer-toggle { top: 23px; }   /* 로고(54px) 세로 중앙에 맞춤 */
 	}
 
 	.footer-top {
@@ -302,6 +352,9 @@
 		display: block;
 		width: 100%;
 		height: auto;
+	}
+	@media (max-width: 640px) {
+		.footer-bi { width: 90px; }   /* 모바일 푸터 BI 180px → 90px(50% 축소, 2026-09-29) */
 	}
 	/* SNS 아이콘 버튼 */
 	.footer-sns {
@@ -408,6 +461,13 @@
 	}
 	@media (min-width: 641px) {
 		.footer-bottom { padding: 20px 0; }
+	}
+	/* 모바일 푸터 좌우 여백 50% 축소(2026-09-29): 화면 가장자리→내용 50px(=푸터 안쪽 패딩 25 + 각 블록 패딩 25) → 25px */
+	@media (max-width: 640px) {
+		.footer-inner { padding-left: 12.5px; padding-right: 12.5px; }
+		.footer-brand,
+		.footer-link-col,
+		.footer-bottom { padding-left: 12.5px; padding-right: 12.5px; }
 	}
 	.footer-biz-block {
 		display: flex;

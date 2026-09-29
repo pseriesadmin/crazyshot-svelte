@@ -19,6 +19,7 @@ type ProfileRow = {
 type CommentRow = {
 	id: string
 	post_id: string
+	user_id: string | null
 	author_name: string | null
 	content: string
 	created_at: string
@@ -103,7 +104,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.maybeSingle(),
 		locals.supabase
 			.from('post_comments')
-			.select('id, post_id, author_name, content, created_at')
+			.select('id, post_id, user_id, author_name, content, created_at')
 			.eq('post_id', params.slug)
 			.eq('is_public', true)
 			.order('created_at', { ascending: true }),
@@ -117,6 +118,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		authorName: c.author_name ?? '익명',
 		content:    c.content,
 		createdAt:  c.created_at,
+		// 본인 댓글 여부(삭제 버튼 노출용) — user_id 자체는 클라이언트로 내려보내지 않는다
+		isMine:     !!session && !!c.user_id && c.user_id === session.user.id,
 	}))
 
 	// YouTube videoId 파생

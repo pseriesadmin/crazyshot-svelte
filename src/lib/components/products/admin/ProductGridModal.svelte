@@ -90,7 +90,10 @@
       </div>
     </div>
 
-    <!-- 노출 수량 -->
+    <!-- [숨김 보관 2026-09-29, Stephen 지시] 노출 수량(8개/16개/전체) 선택 UI — 제거하지 않고 주석 처리.
+         PC '전체' 화면은 무한스크롤(20개 시작·10개씩 추가)로 동작하며 이 설정과 연동되지 않아 일시 숨김.
+         추후 재개발 시 이 블록의 주석을 해제하고 서버(+page.server.ts gridLimit)·화면 연동을 함께 정리할 것.
+         저장값(count)은 기존 값 그대로 유지된다.
     <div class="section">
       <p class="section-label">노출 수량</p>
       <div class="radio-group">
@@ -108,6 +111,7 @@
         {/each}
       </div>
     </div>
+    -->
 
     <!-- 노출 순서 -->
     <div class="section">

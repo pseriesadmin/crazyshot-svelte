@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { goto } from '$app/navigation'
   import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
-  import { fly } from 'svelte/transition'
+  import { fly, fade } from 'svelte/transition'
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
@@ -68,7 +69,7 @@
 
   // ── 카테고리: 저장된 설정 기준 표시 (순서·아이콘URL 반영) ───────────────
   interface DisplayCat {
-    id: string; code: string; name: string; sort_order: number; icon_url: string | null
+    id: string; code: string; name: string; sort_order: number; icon_url: string | null; icon_active_url: string | null
   }
 
   let displayCats = $derived<DisplayCat[]>((() => {
@@ -85,6 +86,7 @@
           name:       cat.name,
           sort_order: item.sort_order,
           icon_url:   (item as { icon_url?: string | null }).icon_url ?? null,
+          icon_active_url: (item as { icon_active_url?: string | null }).icon_active_url ?? null,
         }]
       })
   })())
@@ -102,8 +104,167 @@
       : (displayCats.find((c) => c.id === activeCategory)?.name ?? '')
   )
 
+  // 선택된 카테고리의 노출 배너(이미지가 있고 노출 ON인 경우만)
+  let activeBanner = $derived.by(() => {
+    const b = data.settings.categoryBanners?.items.find(
+      (x) => x.category_id === activeCategory && x.enabled && !!x.image_url
+    )
+    return b ? { ...b, link_url: safeHref(b.link_url) } : null
+  })
+
+  // 링크는 사이트 내 경로(/…) 또는 http(s)만 허용 — 저장값이 그 외(javascript: 등)여도 렌더링 시 무시
+  function safeHref(v: string | null | undefined): string | null {
+    const t = (v ?? '').trim()
+    // 백슬래시·공백·제어문자는 브라우저가 "/"로 해석하거나 제거해 //외부도메인 으로 바뀔 수 있어 거부
+    if (/[\x00-\x20\\]/.test(t)) return null
+    return /^\/(?![/\\])/.test(t) || /^https?:\/\//i.test(t) ? t : null
+  }
+
+  // 목록 중간 배너(촬영본능 PICK!) — 저장값이 없으면 기존 하드코딩 값 그대로
+  let midBanner = $derived({
+    enabled: data.settings.categoryBanners?.mid_banner?.enabled ?? true,
+    image_url: data.settings.categoryBanners?.mid_banner?.image_url ?? null,
+    title: data.settings.categoryBanners?.mid_banner?.title ?? '촬영본능',
+    sub: data.settings.categoryBanners?.mid_banner?.sub ?? 'PICK!',
+    link_url: safeHref(data.settings.categoryBanners?.mid_banner?.link_url),
+  })
+
+  // 모바일 배너 — 모바일 이미지 우선, 없으면 PC 이미지로 대체
+  let activeBannerMobile = $derived.by(() => {
+    const b = data.settings.categoryBanners?.items.find((x) => x.category_id === activeCategory && x.enabled)
+    const src = b?.mobile_image_url || b?.image_url
+    return b && src ? { src, link_url: safeHref(b.link_url), alt: b.alt } : null
+  })
+
   // ── 슬라이드 (DB 설정값만 사용) ────────────────────────────────────
   let useDbGrid  = $derived(data.gridProducts.length > 0)
+
+  // ── "전체" 목록 무한스크롤 — 처음 20개는 서버 load, 이후 10개씩은 목록 전용 엔드포인트(/products/_more)에서
+  //    추가로 받아 이어 붙임(페이지 전체 load 재실행 없음). 카테고리 이동 등으로 data.gridProducts가 바뀌면 초기화.
+  const INFINITE_STEP = 10
+  const INFINITE_MAX = 200
+  let extraProducts = $state<ProductCard[]>([])
+  let exhausted = $state(false)
+  // 추가분은 "카테고리가 바뀔 때만" 초기화 — 찜 토글·로그인 변경 등으로 load가 다시 실행돼도 이어 붙인 목록을 유지
+  // (랜덤 순서 시드도 카테고리 진입 시점 값을 유지해 추가 조회가 같은 순서를 이어받게 함)
+  let listSeed = $state(data.seed)
+  $effect(() => {
+    void data.urlCategory
+    // seed는 추적하지 않음 — URL에 seed가 없으면 load마다 새 값이 만들어지므로, 추적하면 찜 토글 등에서 이어 붙인 목록이 초기화됨
+    untrack(() => {
+      extraProducts = []
+      exhausted = false
+      listSeed = data.seed
+    })
+  })
+  // 화면에 표시할 전체 목록(서버 초기분 + 추가분)
+  let gridAll = $derived(
+    data.infiniteMode
+      ? (() => {
+          const base = new Set(data.gridProducts.map((p) => p.id))
+          // load가 다시 실행돼 초기분이 바뀌어도 추가분과 중복되지 않게 걸러냄
+          return [...data.gridProducts, ...extraProducts.filter((p) => !base.has(p.id))]
+        })()
+      : data.gridProducts,
+  )
+  // 모바일: 무한스크롤 모드에서는 PC와 동일하게 전체 표시, 카테고리 선택 시엔 기존 CMS 설정 개수
+  let mobileGrid = $derived(data.infiniteMode ? gridAll : data.gridProducts.slice(0, data.mobileGridCount))
+
+  let sentinelEl = $state<HTMLDivElement | null>(null)
+  let mSentinelEl = $state<HTMLDivElement | null>(null)
+  let loadingMore = $state(false)
+  // 서버 초기분이 가득 찼고, 추가 조회가 끝(exhausted)에 닿지 않았으며, 상한 전이면 더 있을 수 있음
+  let hasMore = $derived(
+    data.infiniteMode && useDbGrid && !exhausted &&
+    data.gridProducts.length >= data.infiniteLimit && gridAll.length < INFINITE_MAX
+  )
+
+  // 스크롤 멈춤 감지 → 하단 도크 슬라이드업 (스크롤 중엔 내려감, 최상단 근처에선 숨김)
+  let dockVisible = $state(false)
+  // 노출된 30% 영역을 클릭/터치하면 전체가 슬라이드업 — 스크롤 재개 시 다시 접힘
+  let dockExpanded = $state(false)
+  let dockTimer: ReturnType<typeof setTimeout> | null = null
+  // 목록 끝(hasMore=false)에서는 푸터 위 일반 배치를 유지하다가, 스크롤 업이 시작되면 도크로 전환
+  let endDock = $state(false)
+  // 무한스크롤 진행 중(hasMore)엔 목록 끝에 닿을 수 없으므로 PC·모바일 공통으로 항상 도크
+  let dockAuto = $derived(hasMore)
+  let dockOn = $derived(dockAuto || endDock)
+  // 일반 배치 상태의 실제 높이 — 도크(fixed)로 전환돼도 이 높이만큼 자리를 남겨 페이지가 튀지 않게 함
+  let flowH = $state(0)
+  // 일반 배치 자리의 기준점(0높이) — 도크 전환 여부와 무관하게 항상 같은 문서 위치에 존재
+  let slotEl = $state<HTMLDivElement | null>(null)
+  // 모바일 BottomTabBar(스크롤 다운 시 숨김·업 시 노출)와 동일 규칙으로 노출 여부를 추적 — 노출 중이면 도크를 탭바 높이만큼 위로 띄워 가려짐 방지
+  let tabBarShown = $state(true)
+  let wrapH = $state(0)
+  $effect(() => { if (!dockOn && wrapH > 0) flowH = wrapH })
+
+  // 도크 관련 상태 일괄 초기화 — 카테고리 이동 등으로 infiniteMode가 꺼질 때 이전 화면의 fixed 도크가 남지 않게 함
+  function resetDockState() {
+    endDock = false
+    dockVisible = false
+    dockExpanded = false
+    if (dockTimer) { clearTimeout(dockTimer); dockTimer = null }
+  }
+
+  $effect(() => {
+    if (!data.infiniteMode) { resetDockState(); return }
+    let lastY = window.scrollY
+    const onScroll = () => {
+      const y = window.scrollY
+      const goingUp = y < lastY
+      if (!dockAuto && slotEl) {
+        // 일반 배치 자리(slotEl)의 화면상 위치로 판정 — 스크롤 관성·바운스에 영향받지 않음
+        const slotTop = slotEl.getBoundingClientRect().top
+        if (goingUp && slotTop > window.innerHeight) endDock = true       // 자리가 화면 아래로 완전히 벗어난 뒤에만 도크 전환
+        else if (!goingUp && slotTop <= window.innerHeight) endDock = false // 자리가 화면에 다시 들어오면 일반 배치 복귀
+      }
+      if (y > lastY && y > 50) tabBarShown = false
+      else if (y < lastY) tabBarShown = true
+      lastY = y
+      dockVisible = false
+      dockExpanded = false
+      if (dockTimer) clearTimeout(dockTimer)
+      dockTimer = setTimeout(() => { dockVisible = window.scrollY > 300 && dockOn }, 120)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      resetDockState()
+    }
+  })
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return
+    loadingMore = true
+    try {
+      const res = await fetch(
+        `/products/_more?offset=${gridAll.length}&limit=${INFINITE_STEP}&seed=${encodeURIComponent(listSeed)}`,
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = (await res.json()) as { products: ProductCard[]; wishedIds: string[]; hasMore: boolean }
+      const known = new Set(gridAll.map((p) => p.id))
+      const fresh = json.products.filter((p) => !known.has(p.id))   // 조회수순 등은 사이에 순서가 바뀔 수 있어 중복 제거
+      extraProducts = [...extraProducts, ...fresh]
+      if (json.wishedIds.length > 0) wishedSet = new Set([...wishedSet, ...json.wishedIds])
+      if (!json.hasMore || fresh.length === 0) exhausted = true
+    } catch {
+      exhausted = true   // 실패 시 무한 재시도 방지 — 새로고침 전까지 추가 조회 중단
+    } finally {
+      loadingMore = false
+    }
+  }
+
+  $effect(() => {
+    if ((!sentinelEl && !mSentinelEl) || !hasMore) return
+    const io = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) void loadMore() },
+      { rootMargin: '400px 0px' }
+    )
+    // PC·모바일 감지 지점 중 화면에 렌더링된(display:none 아닌) 쪽만 교차 판정됨
+    if (sentinelEl) io.observe(sentinelEl)
+    if (mSentinelEl) io.observe(mSentinelEl)
+    return () => io.disconnect()
+  })
 
   // 데스크탑 슬라이더 페이지네이션
   let dPerPage = $state(4)  // SSR 기본값 4, 클라이언트에서 뷰포트에 따라 결정
@@ -178,42 +339,41 @@
   <div class="body-wrap">
     <div class="cat-section">
 
-      <!-- Desktop: "Category" title bar (desktop only) -->
-      <div class="d-pkg-title-bar">
-        <span class="d-pkg-title">Category</span>
-      </div>
+        <div class="cat-icons" class:cat-icons-empty={displayCats.length === 0} style="position:relative">
 
-      <!-- Category icons -->
-      <div class="cat-icons" class:cat-icons-empty={displayCats.length === 0} style="position:relative">
+          {#each displayCats as cat}
+            <button
+              class="cat-btn"
+              class:active={activeCategory === cat.id}
+              onclick={() => {
+                if (cat.name === '추천패키지') { goto('/hype-pack'); return }
+                goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
+              }}
+              aria-pressed={activeCategory === cat.id}
+            >
+              {#if cat.icon_url}
+                <!-- ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 있으면 OFF 위에 겹쳐 교차 전환 -->
+                <div class="cat-icon-box" class:has-on={!!cat.icon_active_url}>
+                  <img src={cat.icon_url} alt={cat.name} class="cat-custom-icon cat-icon-off" />
+                  {#if cat.icon_active_url}
+                    <img src={cat.icon_active_url} alt="" aria-hidden="true" class="cat-custom-icon cat-icon-on" />
+                  {/if}
+                </div>
+              {/if}
+              <span class="cat-label" class:active={activeCategory === cat.id}>{cat.name}</span>
+            </button>
+          {/each}
 
-        {#each displayCats as cat}
-          <button
-            class="cat-btn"
-            class:active={activeCategory === cat.id}
-            onclick={() => {
-              if (cat.name === '추천패키지') { goto('/hype-pack'); return }
-              goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
-            }}
-            aria-pressed={activeCategory === cat.id}
-          >
-            {#if cat.icon_url}
-              <div class="cat-icon-box">
-                <img src={cat.icon_url} alt={cat.name} class="cat-custom-icon" />
-              </div>
-            {/if}
-            <span class="cat-label" class:active={activeCategory === cat.id}>{cat.name}</span>
-          </button>
-        {/each}
-
-        <!-- 관리자: 카테고리 설정 버튼 상시 노출 -->
-        {#if data.isCms}
-          <button
-            class="admin-cat-btn"
-            onclick={() => { activeModal = 'categories' }}
-            aria-label="카테고리 설정"
-          >⚙ 카테고리 설정</button>
-        {/if}
-      </div>
+          <!-- 관리자: 카테고리 설정 버튼 상시 노출 -->
+          {#if data.isCms}
+            <button
+              class="admin-cat-btn"
+              onclick={() => { activeModal = 'categories' }}
+              aria-label="카테고리 설정"
+            >⚙ 카테고리 설정</button>
+          {/if}
+        </div>
+      
 
       <!-- Mobile: keyword pills — 설정값 없으면 섹션 자체 미노출 -->
       {#if displayKeywords.length > 0}
@@ -242,6 +402,28 @@
     </div>
 
     <!-- ── MOBILE SLIDER ───────────────────────────────────────────────────── -->
+    <!-- 카테고리 메뉴 선택 시(모바일): 헤더 슬라이드 대신 카테고리별 모바일 배너(가로 100% × 세로 200px) 노출.
+         모바일 이미지가 없으면 PC 이미지로 대체(2026-09-29, Stephen 지시) -->
+    {#if activeCategory !== 'all'}
+    <div class="m-banner-outer" style="position:relative">
+      {#if data.isCms}
+        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
+          ✦ 카테고리 배너 설정
+        </button>
+      {/if}
+      {#if activeBannerMobile}
+        {#if activeBannerMobile.link_url}
+          <a class="m-banner-link" href={activeBannerMobile.link_url} aria-label={activeBannerMobile.alt || '배너'}>
+            <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
+          </a>
+        {:else}
+          <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
+        {/if}
+      {:else if data.isCms}
+        <div class="m-banner-empty">등록된 카테고리 배너가 없습니다.</div>
+      {/if}
+    </div>
+    {:else}
     <div class="m-slider-outer" style="position:relative">
       {#if data.isCms}
         <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="헤더 상품 설정">
@@ -303,8 +485,32 @@
         {/each}
       </div>
     </div>
+    {/if}
 
     <!-- ── DESKTOP SLIDER ─────────────────────────────────────────────────── -->
+    <!-- 카테고리 메뉴 선택 시(PC): 헤더 슬라이드를 감추고 카테고리별 배너(가로 100% × 세로 150px) 노출
+         (2026-09-29, Stephen 지시 — 배너 관리는 '헤더 상품 설정' 모달 내) -->
+    {#if activeCategory !== 'all'}
+    <div class="d-banner-outer" style="position:relative">
+      {#if data.isCms}
+        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
+          ✦ 카테고리 배너 설정
+        </button>
+      {/if}
+      {#if activeBanner}
+        {#if activeBanner.link_url}
+          <a class="d-banner-link" href={activeBanner.link_url} aria-label={activeBanner.alt || '배너'}>
+            <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
+          </a>
+        {:else}
+          <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
+        {/if}
+      {:else if data.isCms}
+        <div class="d-banner-empty">등록된 카테고리 배너가 없습니다.</div>
+      {/if}
+    </div>
+    {/if}
+    {#if activeCategory === 'all'}
     <div class="d-slider-outer" style="position:relative">
       {#if data.isCms}
         <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="헤더 상품 설정">
@@ -316,18 +522,6 @@
         ontouchstart={onDSliderTouchStart}
         ontouchend={onDSliderTouchEnd}
       >
-        <!-- Prev button -->
-        <button
-          class="d-nav-btn d-nav-prev"
-          onclick={dPrev}
-          disabled={dPage === 0}
-          aria-label="이전"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M13 4L7 10L13 16" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-
         <!-- Cards -->
         {#key dPage}
         <div
@@ -382,18 +576,6 @@
           {/each}
         </div>
         {/key}
-
-        <!-- Next button -->
-        <button
-          class="d-nav-btn d-nav-next"
-          onclick={dNext}
-          disabled={dPage >= D_MAX_PAGE}
-          aria-label="다음"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M7 4L13 10L7 16" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
       </div>
 
       <!-- Page dots -->
@@ -408,81 +590,9 @@
         {/each}
       </div>
     </div>
+    {/if}
 
   </div><!-- /body-wrap -->
-
-  <!-- ─────────────────────────────────────────────────────────────────────── -->
-  <!-- MD 추천 상품 (DB 설정 시 표시) -->
-  <!-- ─────────────────────────────────────────────────────────────────────── -->
-  {#if data.mdProducts.length > 0}
-    <div class="md-picks-section" style="position:relative">
-      {#if data.isCms}
-        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'md_picks' }} aria-label="MD 추천 설정">
-          ✦ MD 추천 설정
-        </button>
-      {/if}
-      <div class="md-picks-header">
-        <span class="md-picks-label">MD 추천</span>
-      </div>
-      <div class="md-picks-track">
-        {#each data.mdProducts as prod}
-          <a href={productLink(prod)} class="md-pick-card">
-            <div class="md-pick-img-box">
-              <img src={productImg(prod)} alt={prod.name} class="abs-img"
-                style="width:100%;height:100%;object-fit:cover;left:0;top:0"
-                loading="lazy" />
-              {#if wishedSet.has(prod.id)}
-                <button
-                  class="mdp-clip active"
-                  aria-label="찜 해제"
-                  aria-pressed="true"
-                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 63 63" fill="none" aria-hidden="true">
-                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
-                  </svg>
-                </button>
-              {/if}
-            </div>
-            <div class="mdp-info">
-              {#if prod.category}
-                <p class="mdp-category">{categoryNameMap[prod.category] ?? prod.category}</p>
-              {/if}
-              <div class="mdp-price-row">
-                {#if prod.sale_only}
-                  <span class="mdp-price-group">
-                    <span class="mdp-price-label">Price</span>
-                    <span class="mdp-price-num">{formatPrice(prod.sale_price ?? 0)}</span>
-                  </span>
-                {:else}
-                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">Day</span>
-                      <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
-                    </span>
-                  {/if}
-                  {#if prod.price_12h}
-                    <span class="mdp-price-sep">/</span>
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">12H</span>
-                      <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
-                    </span>
-                  {/if}
-                {/if}
-              </div>
-              <p class="mdp-name">{prod.name}</p>
-            </div>
-          </a>
-        {/each}
-      </div>
-    </div>
-  {:else if data.isCms}
-    <div class="md-picks-section md-picks-empty">
-      <button class="admin-edit-btn admin-md-empty-btn" onclick={() => { activeModal = 'md_picks' }}>
-        ✦ MD 추천 상품 설정하기
-      </button>
-    </div>
-  {/if}
 
   <!-- ─────────────────────────────────────────────────────────────────────── -->
   <!-- PRODUCT LIST SECTION -->
@@ -490,7 +600,7 @@
 
   <!-- MOBILE list (white bg, rounded top-right) -->
   <div class="m-list">
-    <!-- Best Pick title (centered) -->
+    <!-- 목록 타이틀(centered) — 선택된 분류명 표시(전체/렌즈/카메라 등, PC 목록 헤더 .d-list-cat과 동일 값) -->
     <div class="m-best-pick-header" style="position:relative">
       {#if data.isCms}
         <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'grid' }} aria-label="상품 목록 설정">
@@ -498,8 +608,7 @@
         </button>
       {/if}
       <div class="m-best-pick-label">
-        <span class="m-best-text">Best Pick</span>
-        <span class="m-best-count">{useDbGrid ? data.gridProducts.length : 15}</span>
+        <span class="m-best-text">{activeCategoryLabel || '전체'}</span>
       </div>
       <div class="m-best-grad-bar"></div>
     </div>
@@ -507,21 +616,22 @@
     <!-- Product grid: first 6 -->
     <div class="m-prod-grid">
       {#if useDbGrid}
-        {#each data.gridProducts.slice(0, 6) as prod}
+        {#each mobileGrid.slice(0, 6) as prod (prod.id)}
           {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
           {@const d12 = prod.price_12h ?? null}
           {@const isSaleOnly = prod.sale_only}
           {@const salePrice = prod.sale_price}
-          <a href={productLink(prod)} class="m-prod-card">
+          <a href={productLink(prod)} class="m-prod-card" in:fade={{ duration: 700 }}>
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
                 style="width:100%;height:100%;object-fit:cover;left:0;top:0"
                 loading="lazy" />
-              {#if wishedSet.has(prod.id)}
+              {#if data.isLoggedIn}
                 <button
-                  class="mprod-clip active"
-                  aria-label="찜 해제"
-                  aria-pressed="true"
+                  class="mprod-clip"
+                  class:active={wishedSet.has(prod.id)}
+                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
+                  aria-pressed={wishedSet.has(prod.id)}
                   onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
                 >
                   <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
@@ -581,10 +691,11 @@
       {/if}
     </div>
 
-    <!-- CTA card: image LEFT, text RIGHT -->
-    <div class="m-cta-card">
+    <!-- CTA card(모바일 목록 중간 배너): 이미지·문구·링크·노출은 헤더 상품 설정 모달에서 관리(product_page_category_banners.mid_banner) -->
+    {#if midBanner.enabled}
+    <svelte:element this={midBanner.link_url ? 'a' : 'div'} class="m-cta-card" href={midBanner.link_url ?? undefined}>
       <div class="m-cta-img">
-        <img src="/images/products/ellipse.png" alt="크레이지샷 픽" loading="lazy" />
+        <img src={midBanner.image_url || '/images/products/ellipse.png'} alt={midBanner.title} loading="lazy" />
       </div>
       <div class="m-cta-text">
         <div class="m-cta-arrow-icon" aria-hidden="true">
@@ -592,34 +703,36 @@
             <path d="M2 10H36M36 10L26 2M36 10L26 18" stroke="#FF3535" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </div>
-        <p class="m-cta-title">촬영본능</p>
-        <p class="m-cta-pick">PICK!</p>
+        <p class="m-cta-title">{midBanner.title}</p>
+        <p class="m-cta-pick">{midBanner.sub}</p>
       </div>
       <div class="m-cta-chevron" aria-hidden="true">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
           <path d="M8 4L14 10L8 16" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-    </div>
+    </svelte:element>
+    {/if}
 
     <!-- Product grid: rest -->
     <div class="m-prod-grid">
       {#if useDbGrid}
-        {#each data.gridProducts.slice(6) as prod}
+        {#each mobileGrid.slice(6) as prod (prod.id)}
           {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
           {@const d12 = prod.price_12h ?? null}
           {@const isSaleOnly = prod.sale_only}
           {@const salePrice = prod.sale_price}
-          <a href={productLink(prod)} class="m-prod-card">
+          <a href={productLink(prod)} class="m-prod-card" in:fade={{ duration: 700 }}>
             <div class="m-prod-img-box">
               <img src={productImg(prod)} alt={prod.name} class="abs-img"
                 style="width:100%;height:100%;object-fit:cover;left:0;top:0"
                 loading="lazy" />
-              {#if wishedSet.has(prod.id)}
+              {#if data.isLoggedIn}
                 <button
-                  class="mprod-clip active"
-                  aria-label="찜 해제"
-                  aria-pressed="true"
+                  class="mprod-clip"
+                  class:active={wishedSet.has(prod.id)}
+                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
+                  aria-pressed={wishedSet.has(prod.id)}
                   onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
                 >
                   <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
@@ -678,6 +791,10 @@
         {/each}
       {/if}
     </div>
+    {#if hasMore}
+      <!-- 모바일 무한스크롤 감지 지점 — 도달 시 다음 10개 로드(PC와 동일) -->
+      <div class="d-load-sentinel" bind:this={mSentinelEl} aria-hidden="true"></div>
+    {/if}
   </div>
 
   <!-- DESKTOP list -->
@@ -691,12 +808,13 @@
               ✦ 상품 목록 설정
             </button>
           {/if}
-          <a href="/products" class="d-list-more">전체보기 →</a>
         </div>
       </div>
       <div class="d-prod-grid">
         {#if useDbGrid}
-          {#each data.gridProducts as prod}
+          {#each gridAll as prod (prod.id)}
+            <!-- 스크롤로 추가되는 카드는 이동 없이 서서히 나타남(페이드인) — 첫 렌더는 즉시 표시 -->
+            <div class="d-prod-item" in:fade={{ duration: 700 }}>
             <ProductDPCard
               id={prod.id}
               name={prod.name}
@@ -710,6 +828,7 @@
               wished={wishedSet.has(prod.id)}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             />
+            </div>
           {/each}
         {:else}
           {#each desktopProducts as prod}
@@ -721,10 +840,112 @@
           {/each}
         {/if}
       </div>
+      {#if hasMore}
+        <!-- 무한스크롤 감지 지점 — 도달 시 다음 10개 로드, MD추천·브랜드는 항상 목록 아래 유지 -->
+        <div class="d-load-sentinel" bind:this={sentinelEl} aria-hidden="true"></div>
+      {/if}
     </div>
   </div>
 
-  <BrandMarquee />
+  <!-- ─────────────────────────────────────────────────────────────────────── -->
+  <!-- MD 추천 상품 (DB 설정 시 표시) — 전체 상품 목록(모바일 .m-list / PC .d-list)
+       아래로 재배치 (2026-09-29, Stephen 지시 — 모바일에만 적용되고 PC에는
+       미적용이던 실수를 수정, PC·모바일 공통으로 목록 맨 아래 위치).
+       -->
+  <!-- ─────────────────────────────────────────────────────────────────────── -->
+  <!-- PC 무한스크롤 중(hasMore)에는 목록 끝에 닿을 수 없으므로, 스크롤이 멈추면 화면 하단에서
+       살짝 슬라이드업(팝업)되는 도크로 노출 — 스크롤 재개 시 다시 내려감. 목록이 끝나면 일반 흐름 배치 -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div bind:this={slotEl} style="height:0" aria-hidden="true"></div>
+  {#if endDock && !dockAuto}
+    <div style="height:{flowH}px" aria-hidden="true"></div>
+  {/if}
+  <div
+    class="bottom-dock"
+    bind:clientHeight={wrapH}
+    class:dock-on={dockOn}
+    class:dock-visible={dockVisible}
+    class:dock-expanded={dockExpanded}
+    class:dock-above-tab={tabBarShown}
+    onclickcapture={(e) => {
+      // 30%만 보이는 상태에서의 첫 클릭·터치는 내부 링크로 이동하지 않고 펼치기만 수행
+      if (dockOn && dockVisible && !dockExpanded) { e.preventDefault(); e.stopPropagation(); dockExpanded = true }
+    }}
+  >
+  {#if data.mdProducts.length > 0}
+    <div class="md-picks-section" style="position:relative">
+      {#if data.isCms}
+        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'md_picks' }} aria-label="MD 추천 설정">
+          ✦ MD 추천 설정
+        </button>
+      {/if}
+      <div class="md-picks-header">
+        <span class="md-picks-label">MD 추천</span>
+      </div>
+      <div class="md-picks-track">
+        {#each data.mdProducts as prod}
+          <a href={productLink(prod)} class="md-pick-card">
+            <div class="md-pick-img-box">
+              <img src={productImg(prod)} alt={prod.name} class="abs-img"
+                style="width:100%;height:100%;object-fit:cover;left:0;top:0"
+                loading="lazy" />
+              {#if data.isLoggedIn}
+                <button
+                  class="mdp-clip"
+                  class:active={wishedSet.has(prod.id)}
+                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
+                  aria-pressed={wishedSet.has(prod.id)}
+                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 63 63" fill="none" aria-hidden="true">
+                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
+                  </svg>
+                </button>
+              {/if}
+            </div>
+            <div class="mdp-info">
+              {#if prod.category}
+                <p class="mdp-category">{categoryNameMap[prod.category] ?? prod.category}</p>
+              {/if}
+              <div class="mdp-price-row">
+                {#if prod.sale_only}
+                  <span class="mdp-price-group">
+                    <span class="mdp-price-label">Price</span>
+                    <span class="mdp-price-num">{formatPrice(prod.sale_price ?? 0)}</span>
+                  </span>
+                {:else}
+                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">Day</span>
+                      <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
+                    </span>
+                  {/if}
+                  {#if prod.price_12h}
+                    <span class="mdp-price-sep">/</span>
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">12H</span>
+                      <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
+                    </span>
+                  {/if}
+                {/if}
+              </div>
+              <p class="mdp-name">{prod.name}</p>
+            </div>
+          </a>
+        {/each}
+      </div>
+    </div>
+  {:else if data.isCms}
+    <div class="md-picks-section md-picks-empty">
+      <button class="admin-edit-btn admin-md-empty-btn" onclick={() => { activeModal = 'md_picks' }}>
+        ✦ MD 추천 상품 설정하기
+      </button>
+    </div>
+  {/if}
+  
+
+  <BrandMarquee surface="home" />
+  </div>
 
 </div>
 
@@ -746,6 +967,8 @@
     <ProductHeroModal
       settingKey="product_page_hero"
       initialSettings={data.settings.hero}
+      categories={displayCats.map((c) => ({ id: c.id, name: c.name }))}
+      initialBanners={data.settings.categoryBanners}
       onclose={() => { activeModal = null }}
     />
   {/if}
@@ -783,7 +1006,8 @@
     max-width: 1240px;
     margin: 0 auto;
     padding: 0 25px;
-    padding-top: 90px;
+    /* 모바일 공통 GNB 아래 본문 시작 여백 토큰(120px) — 하입팩·테마·헬프·크레이지로그와 통일 */
+    padding-top: var(--layout-mob-gnb-offset);
     padding-bottom: 50px;
     display: flex;
     flex-direction: column;
@@ -795,20 +1019,6 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-  }
-
-  /* Desktop "Package" title – hidden on mobile */
-  .d-pkg-title-bar {
-    display: none;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 0 20px;
-  }
-  .d-pkg-title {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 20px;
-    color: #100b32;
-    letter-spacing: -0.5px;
   }
 
   /* Category icons grid */
@@ -874,8 +1084,24 @@
   .cat-custom-icon {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
+  /* ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 등록된 카테고리: 기존 배경색·오버레이 효과 대신
+     OFF/ON 두 이미지를 겹쳐 부드럽게 교차 전환 — ON 미등록 카테고리는 기존 효과 유지 */
+  .cat-icon-box.has-on,
+  .cat-btn:hover .cat-icon-box.has-on { background: transparent; }
+  .cat-icon-box.has-on::after { display: none; }
+  .cat-icon-box.has-on .cat-icon-off { transition: opacity 0.25s ease; }
+  .cat-icon-box.has-on .cat-icon-on {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+  }
+  .cat-btn:hover .cat-icon-box.has-on .cat-icon-on,
+  .cat-btn.active .cat-icon-box.has-on .cat-icon-on { opacity: 1; }
+  .cat-btn:hover .cat-icon-box.has-on .cat-icon-off,
+  .cat-btn.active .cat-icon-box.has-on .cat-icon-off { opacity: 0; }
   .cat-label {
     display: none;
     font-family: 'Noto Sans KR', sans-serif;
@@ -930,7 +1156,20 @@
   .m-sec-right { display: flex; align-items: center; gap: 15px; }
 
   /* ── MOBILE SLIDER ── */
-  .m-slider-outer { overflow: hidden; }
+  /* 모바일 슬라이더: 부모(.body-wrap) 좌우 25px 패딩을 상쇄해 화면 좌우 끝까지 노출(full-bleed)하고,
+     트랙 자체 패딩으로 시작·끝 여백 25px을 유지 — 크레이지로그 .m-carousel과 동일 방식(2026-09-29) */
+  .m-slider-outer { overflow: hidden; margin: 0 calc(var(--layout-mob-pad) * -1); }
+
+  /* 모바일 카테고리 배너 — 가로 100%(화면 좌우 끝까지, 부모 25px 패딩 상쇄) × 세로 200px.
+     화면 끝까지 닿는 형태라 모서리 라운드는 두지 않음 */
+  .m-banner-outer { margin: 0 calc(var(--layout-mob-pad) * -1); }
+  .m-banner-link { display: block; width: 100%; height: 200px; overflow: hidden; }
+  .m-banner-img { display: block; width: 100%; height: 200px; object-fit: cover; }
+  .m-banner-empty {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 200px; background: var(--cs-lilac); color: var(--cs-text-light);
+    font: var(--text-m-script-12);
+  }
 
   .m-slider-track {
     display: flex;
@@ -939,7 +1178,8 @@
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    padding-right: 40px;
+    padding: 0 var(--layout-mob-pad);
+    scroll-padding: 0 var(--layout-mob-pad);
   }
   .m-slider-track::-webkit-scrollbar { display: none; }
   .m-slider-track.slider-empty {
@@ -1010,7 +1250,7 @@
     padding: 36px 30px 26px;
   }
   .m-feat-name {
-    font: var(--text-m-title-18B);
+    font: var(--text-m-body-16B); /* 한 사이즈 작게: 18B → 16B (2026-09-29) */
     color: #100b32;
     letter-spacing: -0.3px;
     margin: 0;
@@ -1020,7 +1260,8 @@
     text-overflow: ellipsis;
   }
   .m-feat-desc {
-    font: var(--text-m-script-12);
+    font: var(--text-m-tag-11); /* 한 사이즈 작게: 12 → 11, 굵기 Medium 유지 */
+    font-weight: 500;
     color: #666;
     letter-spacing: -0.3px;
     margin: 0;
@@ -1036,20 +1277,86 @@
     flex-wrap: wrap;
     margin: 4px 0 0;
     color: var(--cs-red-badge, #FF3535);
+    letter-spacing: -0.8px; /* 자간 -0.8px(요청 2026-09-29) */
   }
   .m-feat-price-unit { display: flex; align-items: baseline; gap: 3px; }
-  .m-feat-plabel { font: var(--text-m-body-16B); }
+  /* 한 사이즈 작게(2026-09-29): 레이블·원·구분자 16B → 14B, 가격 숫자 24B → 20B */
+  .m-feat-plabel { font: var(--text-m-script-14B); }
   .m-feat-pnum {
-    font: var(--text-m-htitle-24B);
+    font: var(--text-m-htitle-20B);
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
-  .m-feat-pcur { font: var(--text-m-body-16B); }
-  .m-feat-psep { font: var(--text-m-body-16B); }
+  .m-feat-pcur { font: var(--text-m-script-14B); }
+  .m-feat-psep { font: var(--text-m-script-14B); }
 
   /* ── DESKTOP SLIDER – hidden on mobile ── */
+  .d-load-sentinel { height: 1px; }
+  .bottom-dock { display: contents; --dr: 30px; }  /* 모바일 카드 대 30px */
+  /* 모바일 MD추천↔브랜드 슬라이드 사이 여백 50% 축소: 위 하단 패딩 −20px + 브랜드 상단 내부 여백 −27px(합계 약 −47px, 기존 약 95px) — PC는 @media에서 해제 */
+  .bottom-dock :global(.brand-marquee-wrap) { margin-top: -27px; }
+  /* 모바일 일반 배치(목록 끝, 도크 아님): 위 상품 목록 영역과의 여백 +50% (상단 패딩 26px → 39px). 도크로 뜬 상태는 26px 유지 */
+  .bottom-dock:not(.dock-on) .md-picks-section { padding-top: 39px; }
+  /* 목록을 끝까지 불러와 도크가 일반 흐름 배치로 바뀐 상태(푸터 직전)에서도 동일 상단 라운드 유지 */
+  .bottom-dock:not(.dock-on) {
+    display: block;
+    position: relative;
+    background: var(--cs-lilac);
+  }
+  /* 일반 흐름 배치에서는 뒤(부모)가 라일락이라 border-radius가 보이지 않으므로,
+     위쪽 흰 목록 배경색으로 모서리 바깥을 채워 라운드를 시각적으로 구현 */
+  .bottom-dock:not(.dock-on)::before {
+    display: none;   /* 모바일: 위 .m-list가 이미 하단 라운드(50px)를 가지므로 모서리 채움 불필요 — PC만 @media에서 표시 */
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: var(--dr);
+    z-index: 1;
+    pointer-events: none;
+    background:
+      radial-gradient(circle var(--dr) at var(--dr) var(--dr), transparent calc(var(--dr) - 0.5px), #fff var(--dr)) left top / var(--dr) var(--dr) no-repeat,
+      radial-gradient(circle var(--dr) at 0 var(--dr), transparent calc(var(--dr) - 0.5px), #fff var(--dr)) right top / var(--dr) var(--dr) no-repeat;
+  }
+  .bottom-dock.dock-on {
+    display: block;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 40;
+    overflow: hidden;
+    max-height: 85vh;
+    background: var(--cs-lilac);
+    border-radius: var(--dr) var(--dr) 0 0;   /* PC 50px(card 대) / 모바일 30px(card 대 Mobile) — front-uiux.md §4 */
+    box-shadow: 0 -6px 28px rgba(16, 11, 50, 0.28);   /* 상단 바깥 그림자로 입체감 — PC·모바일 공통(기존 0.10보다 짙게, 2026-09-29) */
+    /* 전체가 아니라 상단 30%만 노출 — 목록을 가리는 면적 최소화 */
+    transform: translateY(100%);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease, bottom 0.3s ease;
+    pointer-events: none;
+  }
+  /* 모바일: BottomTabBar(높이 70px, z-index 50)가 노출 중이면 그 위로 배치 — PC는 탭바가 없어 @media에서 해제 */
+  .bottom-dock.dock-on.dock-above-tab { bottom: 70px; }
+  .bottom-dock.dock-on.dock-visible {
+    transform: translateY(70%);
+    opacity: 1;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  .bottom-dock.dock-on.dock-visible.dock-expanded {
+    transform: translateY(0);
+    overflow-y: auto;
+    cursor: auto;
+  }
+
   .d-slider-outer { display: none; }
+  .d-banner-outer { display: none; }
+  .d-banner-link { display: block; width: 100%; height: 150px; border-radius: var(--radius-xl); overflow: hidden; }
+  .d-banner-img { display: block; width: 100%; height: 150px; object-fit: cover; border-radius: var(--radius-xl); }
+  .d-banner-empty {
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 150px; border-radius: var(--radius-xl); background: var(--cs-lilac); color: var(--cs-text-light);
+    font: var(--text-pc-script-12);
+  }
 
   .d-slider-relative {
     position: relative;
@@ -1064,30 +1371,6 @@
     border-radius: var(--radius-2xl);
     background: var(--cs-surface-gray);
   }
-
-  .d-nav-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 10;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: rgba(16, 11, 50, 0.55);
-    border: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.2s, background 0.15s;
-    backdrop-filter: blur(4px);
-  }
-  .d-slider-relative:hover .d-nav-btn:not(:disabled) { opacity: 1; }
-  .d-nav-btn:hover:not(:disabled) { background: rgba(16, 11, 50, 0.88); }
-  .d-nav-btn:disabled { opacity: 0 !important; cursor: default; }
-  .d-nav-prev { left: 16px; }
-  .d-nav-next { right: 16px; }
 
   .d-slider-cards {
     /* 2026-09-15: 부드러운 슬라이드 전환(Stephen 지적 — PC만 즉시 컷 전환) 구현을 위해
@@ -1205,7 +1488,8 @@
     width: 100%;
     max-width: 1240px;
     margin: 0 auto;
-    padding: 0 25px 40px;
+    /* 상단 여백 추가(요청 2026-09-29) — 위 상품목록 섹션과 붙어 보이던 문제. 모바일 50px(--layout-section-gap), PC는 @media에서 20px 유지 */
+    padding: 26px 25px 20px;   /* PC와 동일 상단 26px · 하단 40→20px(모바일 MD추천↔브랜드 여백 50% 축소, 요청 2026-09-29) */
     overflow: hidden;
   }
   .md-picks-empty {
@@ -1218,7 +1502,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 20px;
+    margin-bottom: 30px;   /* PC와 동일 제목↔카드 30px */
   }
   .md-picks-label {
     font-family: 'Tilt Warp', sans-serif;
@@ -1236,14 +1520,16 @@
   .md-picks-track::-webkit-scrollbar { display: none; }
   .md-pick-card {
     flex: none;
-    width: 174px;
+    width: 139px;   /* PC 232px × 0.60(PC→모바일 카드 이미지 비율, front-uiux.md §24) ≈ 139px */
     text-decoration: none;
     display: flex;
     flex-direction: column;
     cursor: pointer;
     transition: transform 0.2s;
   }
-  .md-pick-card:hover { transform: scale(1.02); }
+  /* 호버: 카드(썸네일 틀) 자체 확대는 트랙 overflow로 잘려 깨지므로 내부 이미지만 1.04배 확대 — PC·모바일 공통(ProductDPCard와 동일 배율) */
+  .md-pick-img-box .abs-img { transition: transform 0.3s ease; }
+  .md-pick-card:hover .md-pick-img-box .abs-img { transform: scale(1.04); }
   .md-pick-img-box {
     width: 100%;
     aspect-ratio: 1 / 1;
@@ -1260,7 +1546,7 @@
     height: 22px;
     border-radius: 50%;
     border: none;
-    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
+    background: color-mix(in srgb, var(--cs-red-xlight) 80%, transparent); /* 비찜 상태 red-5 토큰(#FFEAEA), 알파 80% 유지 */
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1279,13 +1565,13 @@
      mdp-clip(22px) 그대로 쓰면 비율상 작아 보임(Stephen 2026-08-26 확인) — 이 카드만 확대 */
   .mprod-clip {
     position: absolute;
-    top: 12px;
-    right: 12px;
-    width: 36px;
-    height: 36px;
+    top: 11px;
+    right: 11px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     border: none;
-    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
+    background: color-mix(in srgb, var(--cs-red-xlight) 80%, transparent); /* 비찜 상태 red-5 토큰(#FFEAEA), 알파 80% 유지 */
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1294,7 +1580,8 @@
     transition: background 0.18s, transform 0.18s, color 0.18s;
     padding: 0;
   }
-  .mprod-clip svg { width: 30px; height: 30px; }
+  /* 카드 폭 157.5→139px(×0.88) 축소에 맞춰 버튼 36→32px·아이콘 30→26px 비례 축소(2026-09-29) */
+  .mprod-clip svg { width: 26px; height: 26px; }
   .mprod-clip:hover { background: #ffb8b8; transform: scale(1.1); }
   .mprod-clip.active { background: rgba(255, 207, 207, 0.8); color: #FF3535; }
   .mprod-clip.active svg path { fill: #FF3535; }
@@ -1302,8 +1589,9 @@
   .mdp-info {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-3);
-    padding: var(--spacing-3) 0 0;
+    /* 모바일 상품정보 표준 확정값(front-uiux.md §14-4, 2026-09-29) — 12px의 90% */
+    gap: 10.8px;
+    padding: 10.8px 0 0;
     width: 100%;
     min-width: 0;
   }
@@ -1323,28 +1611,27 @@
     gap: 3px;
     /* purple-90 컬러토큰 반영(ProductDPCard .pc-price-row와 통일) */
     color: var(--cs-purple-dark);
-    letter-spacing: -0.5px;
+    letter-spacing: -0.8px;   /* 모바일 확정 자간(PC는 @media에서 -0.5px 복원) */
     flex-wrap: wrap;
   }
   .mdp-price-group { display: flex; align-items: baseline; gap: 3px; }
-  .mdp-price-label { font: var(--text-m-script-12); line-height: 1; }
+  .mdp-price-label { font: var(--text-m-tag-11); font-weight: 500; line-height: 1; } /* 11px Medium — 모바일 확정값 */
   .mdp-price-num {
-    /* 한 사이즈 큰 폰트토큰 반영(요청, 2026-09-27) — 16px(--text-m-body-16B) →
-       18px(--text-m-title-18B), PC는 아래 미디어쿼리에서 --text-pc-title-18로 동일 비율 적용 */
-    font: var(--text-m-title-18B);
+    /* 모바일 확정값(2026-09-29): 16px Black — PC는 아래 미디어쿼리에서 --text-pc-title-18 유지 */
+    font: var(--text-m-body-16B);
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;
     /* purple-60 컬러토큰 반영(ProductDPCard .pc-price-num과 통일) */
     color: var(--cs-purple-light);
   }
-  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; }
+  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); } /* purple-20 */
   .mdp-name {
-    /* 볼드 없는 폰트토큰 적용(14px Medium, PC·모바일 동일) */
-    font: var(--text-m-script-14);
-    color: var(--cs-text-mid);
+    /* 모바일 확정값(2026-09-29): 12px Medium · purple-90 · 행간 112% — PC는 @media에서 기존 값 유지 */
+    font: var(--text-m-script-12);
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
-    line-height: 1;
+    line-height: 1.12;
     margin: 0;
     width: 100%;
     white-space: nowrap;
@@ -1357,7 +1644,7 @@
   /* ─────────────────────────────────────────────────────────────────── */
   .m-list {
     background: white;
-    border-radius: 50px 50px 0 0;
+    border-radius: 30px 30px 50px 50px; /* 상단 좌우 30px = 지침 card 대 Mobile(front-uiux.md §4, 2026-09-29) · 하단 50px는 기존(요청 2026-09-29) 유지 */
     padding: 70px 25px 100px;
     display: flex;
     flex-direction: column;
@@ -1378,19 +1665,8 @@
     align-items: center;
   }
   .m-best-text {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 500;
-    font-size: 16px;
+    font: var(--text-m-title-18B);   /* 기존 16px Medium(body-16L) → 한 단계 위 18px Bold 토큰(2026-09-29) */
     color: #666;
-    line-height: 1.6;
-    letter-spacing: -0.5px;
-  }
-  .m-best-count {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
-    color: #201857;
-    line-height: 1.6;
     letter-spacing: -0.5px;
   }
   .m-best-grad-bar {
@@ -1458,11 +1734,15 @@
     align-items: baseline;
     gap: 3px;
     color: var(--cs-purple-dark);
-    letter-spacing: -0.5px;
+    letter-spacing: -0.8px; /* 자간 미세 축소(요청 2026-09-29): -0.5px → -0.8px */
     flex-wrap: wrap;
   }
   .m-prod-price-group { display: flex; align-items: baseline; gap: 3px; }
-  .m-prod-price-label { font: var(--text-m-script-12); line-height: 1; }
+  /* 구분자 '/' — purple-20 컬러토큰 반영(2026-09-29) */
+  .m-prod-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); }
+  /* 한 사이즈 작게(12px → 11px, 요청 2026-09-29) — 모바일 토큰 중 12px 다음 단계는 --text-m-tag-11뿐이라
+     사용하되 굵기는 기존 Medium(500) 유지 */
+  .m-prod-price-label { font: var(--text-m-tag-11); font-weight: 500; line-height: 1; }
   .m-prod-price-num {
     font: var(--text-m-body-16B);
     font-weight: 900;
@@ -1470,13 +1750,15 @@
     font-variant-numeric: tabular-nums;
     color: var(--cs-purple-light);
   }
-  .m-prod-price-sep { font: var(--text-m-script-14B); line-height: 1; }
   .m-prod-name {
-    /* 볼드 제거 + 한 사이즈 작은 폰트토큰 적용(16px Bold → 14px Medium,
-       .pc-name·.mdp-name과 동일 토큰으로 통일) */
-    font: var(--text-m-script-14);
-    color: #1d183e;
+    /* 볼드 제거 + 한 사이즈 작은 폰트토큰 적용(16px Bold → 14px Medium → 12px Medium,
+       모바일 전용 추가 축소 요청 2026-09-29) */
+    font: var(--text-m-script-12);
+    /* purple-90 컬러토큰 반영(2026-09-29) — .pc-name과 동일 */
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
+    /* 행 간 30% 축소(요청, 2026-09-29) — 토큰 line-height 160% → 112% */
+    line-height: 1.12;
     margin: 0;
   }
   /* 정적 폴백(mobileProducts, useDbGrid=false) 전용 — 카테고리·분리가격 데이터가 없어
@@ -1494,6 +1776,8 @@
   /* Mobile CTA card: image LEFT, text CENTER, chevron RIGHT */
   .m-cta-card {
     width: 100%;
+    text-decoration: none;
+    color: inherit;
     border-radius: 30px;
     background: linear-gradient(135deg, #ff3535 0%, #3b2f8a 60%);
     padding: 25px;
@@ -1554,6 +1838,8 @@
     justify-content: space-between;
     width: 100%;
     padding: 0 10px;
+    /* 목록 제목↔상품 그리드 여백 30% 축소: 100px → 70px (요청 2026-09-29, 그리드 하단 여백은 그대로) */
+    margin-bottom: -30px;
   }
   .d-list-cat {
     font-family: 'Tilt Warp', sans-serif;
@@ -1561,15 +1847,6 @@
     color: #100b32;
     letter-spacing: -0.5px;
   }
-  .d-list-more {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    color: #553fe0;
-    text-decoration: none;
-    letter-spacing: -0.5px;
-  }
-
   .d-prod-grid {
     display: flex;
     flex-wrap: wrap;
@@ -1640,12 +1917,15 @@
   /* DESKTOP BREAKPOINT ≥641px */
   /* ─────────────────────────────────────────────────────────────────── */
   @media (min-width: 641px) {
+    /* 하단 도크 라운드: PC는 카드 대 50px */
+    .bottom-dock { --dr: 50px; }
+    .bottom-dock :global(.brand-marquee-wrap) { margin-top: 0; }
+    .bottom-dock:not(.dock-on) .md-picks-section { padding-top: 26px; }
+    .bottom-dock.dock-on.dock-above-tab { bottom: 0; }
+    .bottom-dock:not(.dock-on)::before { display: block; }
     .body-wrap {
       padding: 180px 0 60px;
     }
-
-    /* Desktop: "Package" title bar */
-    .d-pkg-title-bar { display: flex; }
 
     /* Category icons: single row, 100px each */
     .cat-icons {
@@ -1655,8 +1935,9 @@
       gap: 40px;
       margin-bottom: 20px;
     }
-    .cat-btn { height: 140px; justify-content: space-between; }
-    .cat-icon-box { width: 100px; height: 100px; min-width: 100px; min-height: 100px; border-radius: 30px; justify-content: center; align-items: center; }
+    /* PC 카테고리 버튼 크기(2026-09-29): 100→80px로 20% 축소 후 80→88px로 10% 확대 — 상자 88px·반경 26px, 버튼 높이 128px(라벨 영역 유지) */
+    .cat-btn { height: 128px; justify-content: space-between; }
+    .cat-icon-box { width: 88px; height: 88px; min-width: 88px; min-height: 88px; border-radius: 26px; justify-content: center; align-items: center; }
     .cat-label { display: block; }
     .cat-label.active { color: #3b2f8a; }
 
@@ -1664,20 +1945,23 @@
     .m-keywords { display: none; }
     .m-sec-header { display: none; }
     .m-slider-outer { display: none; }
+    .m-banner-outer { display: none; }
 
     /* Desktop slider */
     .d-slider-outer {
       display: block;
       padding: 0;
     }
+    .d-banner-outer { display: block; padding: 0; }
 
     /* Desktop list */
     .m-list { display: none; }
     .d-list { display: block; }
 
     /* MD picks: desktop layout */
-    .md-picks-section { padding: 20px 56px 40px; max-width: 100%; }
-    .md-pick-card { width: 290px; }
+    .md-picks-section { padding: 26px 56px 40px; max-width: 100%; }
+    .md-picks-header { margin-bottom: 30px; }  /* 제목↔카드 여백 20px → 30px (+50%, PC 전용, 요청 2026-09-29) */  /* 상단 패딩 20px → 26px (+30%, 요청 2026-09-29) */
+    .md-pick-card { width: 232px; }  /* PC 표준 290px 대비 20% 축소(요청 2026-09-29), 이미지는 1:1 유지 */
     .md-pick-img-box { border-radius: 33px 13px 33px 13px; }
     .mdp-clip { top: 14px; right: 14px; width: 44px; height: 44px; }
     .mdp-clip svg { width: 34px; height: 34px; }
@@ -1689,5 +1973,9 @@
     .mdp-price-num { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
     /* PC는 기존 14px Bold 유지(모바일만 축소 요청, 2026-09-27) */
     .mdp-price-label { font: var(--text-pc-body-14); line-height: 1; }
+    /* 모바일 확정값이 PC로 새지 않도록 기존 PC 값 복원(2026-09-29) */
+    .mdp-price-row { letter-spacing: -0.5px; }
+    .mdp-price-sep { color: inherit; }
+    .mdp-name { font: var(--text-m-script-14); color: var(--cs-purple-dark); letter-spacing: -0.5px; line-height: 1; margin: 0; }  /* ProductDPCard .pc-name 표준과 동일 */
   }
 </style>
