@@ -7,6 +7,62 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🟡 BOUNDARY: CMS 옵션상품·결합상품 자동완성 선택 시 즉시 추가로 UX 흐름 단순화 (2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+바로 위 블록("결합상품 검색 자동완성 정렬 개선")의 GATE E 검수 결과를 Stephen에게 전달하는
+과정에서, "검색결과가 없습니다" 모달을 같은 화면에서 다시 확인시켜준 것을 계기로 Stephen이
+"자동완성에서 후보를 골랐는데 왜 모달에서 또 한 번 클릭해야 하냐"는 UX 흐름 자체의 단순화를
+지시. 옵션상품·결합상품 두 검색창 모두 동일 결함 패턴이라 함께 수정.
+
+- **변경 전**: 자동완성 목록에서 후보를 클릭(`onselect`) → `bundleKeyword`/`optionKeyword`가
+  그 이름으로 채워진 채로 `searchBundleProducts()`/`searchOptionProducts()`가 다시 실행돼
+  "검색 결과" 모달이 열림 → 그 모달에서 카드를 한 번 더 클릭해야 비로소
+  `addBundleProduct`/`addOptionProduct`가 호출돼 실제로 추가됨. 총 2번의 클릭이 필요했음.
+- **변경 후**(`src/lib/components/cms/ProductDetailPanel.svelte`): `onOptionSuggestSelect`/
+  `onBundleSuggestSelect`가 선택된 항목을 받아 `addOptionProduct`/`addBundleProduct`를 즉시
+  호출하도록 변경 — 자동완성 후보 클릭 1번으로 바로 추가됨. `source="product_search"` 응답에
+  타입 선언(`SimilarNameItem`)에는 없지만 실제로 포함된 `image_url`·`price_24h`를 쓰기 위해
+  `ChatInput.svelte`의 `handlePopupProductSelect`와 동일한 확장 캐스팅 패턴
+  (`item as SimilarNameItem & { image_url?...; price_24h?... }`, `as unknown as` 아님)을
+  재사용. `stock_quantity`는 이 화면 어디에도 렌더링되지 않고 저장 페이로드에도 포함되지 않는
+  필드라 0 기본값 처리(기존 모달 경로도 이 값을 화면에 표시한 적 없음 — 실질적 정보 손실 없음).
+- **"검색" 버튼 + 모달은 그대로 유지**: 정확한 이름을 모른 채 키워드로 훑어보고 싶을 때를 위한
+  수동 검색 경로로 남겨둠(Stephen 요청 범위가 "자동완성에서 바로 추가"에 한정됨 — 모달 자체
+  제거는 요청받지 않음).
+- **자기 자신 추가 방지 가드 무변경**: `addBundleProduct`의 `item.id === product.id` 체크는
+  그대로 유지(자동완성 경로는 `excludeId={product.id}`로 서버에서 이미 제외되지만, "검색"
+  버튼 수동 경로는 이 가드에 계속 의존하므로 그대로 둠).
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` — 수정 파일 신규 에러 0건, 신규
+  경고 0건(전체 경고 수 422건 그대로, 기존 무관 에러 1건 `vite.config.ts`만 유지). DB 마이그레이션
+  없음, 다른 파일 무변경.
+- 최종 수정 파일 = 1개(`src/lib/components/cms/ProductDetailPanel.svelte`). git 쓰기는
+  Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (1회 통과, 블로킹 없음)
+
+- **종합 판정**: ✅ GATE E 통과. `ProductDetailPanel.svelte` 단일 파일 diff만 검토(다른
+  미커밋 변경분은 각각 별개 건으로 범위 밖 제외 — 커밋 시 이 파일 단독 스테이징 필요).
+- **규칙 정합성**: 순수 클라이언트 UI 로직 변경(서버 키·SQL·RLS·인증 무관, 해당 없음).
+  `item as SimilarNameItem & {...}` 캐스팅은 `as unknown as` 경유가 아닌 직접 확장 캐스팅으로
+  core-rules.md 위반 아님 — `ChatInput.svelte:287` `handlePopupProductSelect()`의 동일 선례와
+  정확히 같은 패턴임을 직접 대조 확인. diff 범위가 `onOptionSuggestSelect`/
+  `onBundleSuggestSelect` 2개 함수 + import 1줄로 정확히 한정됨(요청 범위 외 수정 없음).
+- **기술 부채**: `svelte-check` 재실행 결과 `2066 FILES 1 ERRORS 422 WARNINGS` — 에러 1건은
+  무관한 기존 `vite.config.ts`뿐, 변경된 두 함수(1201·1368행) 관련 신규 에러·경고 0건, 경고
+  총량도 변경 전과 동일(422건)함을 직접 재확인.
+- **세부 검증 7건 전부 코드로 직접 재확인 완료**: ① `stock_quantity` — `grep` 전체 12건이
+  전부 스크립트 내부이고 템플릿·저장 페이로드(`saveOptions`/`saveBundles`) 어디에도 없음,
+  0 기본값 안전 ② 캐스팅 패턴이 `ChatInput.svelte` 선례와 동일 ③ API 응답에 `image_url`·
+  `price_24h`가 실제로 병합돼 내려옴(`search-suggestions/+server.ts` 직접 확인, MiniSearch
+  폴백의 image_url null도 `?? null`로 안전 흡수) ④ `onselect` prop 타입(2-파라미터)에 1-파라미터
+  핸들러를 할당하는 것이 TS 구조적 타이핑상 정상(`ChatInput.svelte`의 동일 사용 사례로 실증)
+  ⑤ `addOptionProduct`/`addBundleProduct`의 기존 가드(중복 추가 방지, 결합상품 자기참조 방지)
+  무변경이라 우회되지 않음 ⑥ "검색" 버튼·모달 경로(`showOptionModal`/`showBundleModal` 등)
+  전부 diff 밖에서 무변경 — 회귀 없음 ⑦ 이 TASK.md 블록의 서술이 실제 diff·재실행 결과와
+  전부 정확히 일치.
+- 비블로킹 권고 없음. git 커밋 시 `src/lib/components/cms/ProductDetailPanel.svelte` 1개
+  파일만 정확히 스테이징할 것(다른 미커밋 파일은 별개 건).
+
 ## DONE — 🔴 CRITICAL: 하입팩(/hype-pack) 테마그룹 상품 미노출 + 카드 카테고리 라벨 누락 수정 (2026-09-29)
 
 ```
@@ -54,6 +110,19 @@ supabase/migrations/20260929000000_573_hype_pack_theme_groups_add_category.sql
 npm run check(svelte-check) — 세션 도입 신규 에러 0건(기존 vite.config.ts 1건만 잔존).
 Vercel 배포 상태 별도 점검(같은 세션) — stage/production 최근 배포 전부 state=READY
 확인(list_deployments, team=pseries/prj_K6PEw1WfblRxqqOlaqSep8KeNXxs).
+```
+
+### 후속 — Creator/Activity/Traveler 썸네일 오류 재확인·정리 (같은 세션, Stephen 지적)
+
+```
+Stephen이 "AI 설정 시 썸네일 오류"를 지적 — 확인 결과 CMS 수동 배정과 SQL 직접 배정은
+동일하게 products.image_urls[0]을 읽으므로 경로 차이가 아니라, 배정한 hypepack 카테고리
+상품 12개 중 9개가 애초에 사진이 1장도 업로드 안 된 상태(image_urls=[])였던 것이 원인.
+라이브 화면에 깨진 썸네일이 남지 않도록 사진 있는 3개(로드사이클링콤보·하이킹콤보·
+프리다이빙콤보)만 Activity(2)·Traveler(1)에 남기고 나머지 9개는 제외, Creator Pack은
+공란으로 되돌림. get_hype_pack_theme_groups_with_products() 재조회로 전 그룹에서
+image_urls 빈 상품이 0건임을 확인. 사진 업로드 후 CMS "테마그룹 관리"에서 재추가는
+Stephen 소관.
 ```
 
 ### 미실행 / 대기
@@ -475,7 +544,12 @@ harness-executor의 최종 완료 보고 텍스트 자체가 항목번호를 실
    즉시 stage에 직접 적용 후 재조회로 확인 완료(row_count=1).
 
 Migration #563·#564·#565 — 셋 다 stage(ezyvffjvuwmtuhpxdjrw) 적용·검증 완료.
-Production(vnbpmvxruyciuuaermyh) 3건 전부 미적용 — Stephen 최종 승인 필요.
+✅ 2026-09-29 갱신: Stephen이 "Production DB 마이그레이션 3건(#563/#564/#565) 적용"을
+명시 승인해 오케스트레이팅 세션이 즉시 production(vnbpmvxruyciuuaermyh)에 적용 완료.
+직접 SQL 재조회로 3건 전부 확인(search_products is_active 필터 반영 / rental_shipping_
+settings.max_rental_days 컬럼 존재(default 15) / rental_policy_settings 테이블 존재) —
+sp3-qa-agent 검수에서 이 줄(과거 "미적용" 서술)이 커밋 메시지와 모순된다고 지적해
+2026-09-29 재검증 후 정정. 이 줄 아래의 "미적용" 서술은 스테일 정보였음.
 
 [20] PICK모달 3개제한 — 재현 안 됨(MAX_PRODUCTS=10 코드 확인). Stephen이 실제로 재현되는
 경우를 다시 만나면 구체적 시나리오(브라우저·화면·클릭 순서) 공유 요청.

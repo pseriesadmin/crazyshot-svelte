@@ -14,6 +14,7 @@
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { buildProductQrPayload, renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   import { normalizeKeyValueList, serializeKeyValueList } from '$lib/utils/keyValueList'
+  import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 
   interface PriceRule {
     duration_type: string
@@ -1190,8 +1191,22 @@
     }))
   }
 
-  function onOptionSuggestSelect() {
-    void searchOptionProducts()
+  // UX 흐름 단순화(2026-09-29, Stephen 지시): 자동완성 후보를 고르면 그 이름으로 다시
+  // 검색해 모달을 여는 대신, 그 후보를 즉시 옵션상품으로 추가한다 — "타이핑→후보 클릭→
+  // 모달에서 또 한 번 클릭"이던 2단계를 1클릭으로 줄임. source="product_search" 응답에는
+  // SimilarNameItem 타입 선언에 없는 image_url·price_24h가 실제로 포함돼 있음
+  // (ChatInput.svelte handlePopupProductSelect와 동일한 확장 캐스팅 패턴 재사용).
+  // stock_quantity는 이 화면 어디에도 렌더링되지 않는 필드라 0 기본값으로 충분(저장
+  // 페이로드에도 포함 안 됨 — saveOptions() 참고).
+  function onOptionSuggestSelect(item: SimilarNameItem): void {
+    const extended = item as SimilarNameItem & { image_url?: string | null; price_24h?: number | null }
+    addOptionProduct({
+      id: extended.id,
+      name: extended.name,
+      price_24h: extended.price_24h ?? 0,
+      stock_quantity: 0,
+      image_url: extended.image_url ?? null,
+    })
   }
 
   function addOptionProduct(item: OptionSearchResult) {
@@ -1349,8 +1364,16 @@
     }))
   }
 
-  function onBundleSuggestSelect() {
-    void searchBundleProducts()
+  // UX 흐름 단순화(2026-09-29, Stephen 지시) — onOptionSuggestSelect와 동일 이유·동일 패턴.
+  function onBundleSuggestSelect(item: SimilarNameItem): void {
+    const extended = item as SimilarNameItem & { image_url?: string | null; price_24h?: number | null }
+    addBundleProduct({
+      id: extended.id,
+      name: extended.name,
+      price_24h: extended.price_24h ?? 0,
+      stock_quantity: 0,
+      image_url: extended.image_url ?? null,
+    })
   }
 
   function addBundleProduct(item: OptionSearchResult) {
