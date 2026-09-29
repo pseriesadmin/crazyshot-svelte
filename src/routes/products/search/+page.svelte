@@ -8,6 +8,7 @@
   import { recordSearchClick } from '$lib/services/searchService'
   import { toggleWish } from '$lib/utils/wishlist'
   import { page } from '$app/stores'
+  import { goto } from '$app/navigation'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -17,6 +18,12 @@
   let isSearching      = $state(false)
   let pickerSelectedId = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let suggestAbort: AbortController | null = null
+  /** 자동완성 드롭다운 호출 최소 글자수·디바운스 — 트래픽 절감용 */
+  const SUGGEST_MIN_CHARS = 2
+  const SUGGEST_DEBOUNCE_MS = 400
+  /** 마지막으로 실제 제출(Enter·검색 아이콘)된 검색어 — 결과 그리드 기준 */
+  let submittedQuery   = $state('')
   /** G-3: 현재 검색 세션의 log ID — recordSearchClick에 전달 */
   let searchLogId      = $state<string | null>(null)
 
@@ -32,6 +39,8 @@
     wished?: boolean
   }
   let searchResults      = $state<SearchProduct[]>([])
+  /** 자동완성 드롭다운 전용 — 결과 그리드(searchResults)와 분리 */
+  let suggestResults     = $state<SearchProduct[]>([])
   let recommendedProducts = $state<SearchProduct[]>([])
 
   /** API 응답 → 그리드 카드 (RPC 랭킹 순서 유지 — 클라이언트 재정렬 없음) */
@@ -70,19 +79,55 @@
   })
 
   const pickerOptions = $derived<SuggestPickerOption[]>(
-    searchResults.map(p => ({ id: p.id, label: p.name, meta: [p.price24h.toLocaleString('ko-KR') + '원/일'] }))
+    suggestResults.map(p => ({ id: p.id, label: p.name, meta: [p.price24h.toLocaleString('ko-KR') + '원/일'] }))
   )
 
+  /** 입력 중에는 결과 그리드를 건드리지 않고 자동완성 드롭다운만 (디바운스·2자 이상) 갱신 */
   function onPickerInput(val: string) {
     searchQuery = val
     if (debounceTimer) clearTimeout(debounceTimer)
-    if (!val.trim()) { searchResults = []; return }
-    debounceTimer = setTimeout(() => doSearch(val.trim()), 280)
+    suggestAbort?.abort()
+    const q = val.trim()
+    if (q.length < SUGGEST_MIN_CHARS) { suggestResults = []; return }
+    debounceTimer = setTimeout(() => fetchSuggestions(q), SUGGEST_DEBOUNCE_MS)
+  }
+
+  async function fetchSuggestions(q: string) {
+    suggestAbort?.abort()
+    const ctrl = new AbortController()
+    suggestAbort = ctrl
+    try {
+      const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=8`, { signal: ctrl.signal })
+      if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
+      const payload = await resp.json() as { results: Record<string, unknown>[] }
+      suggestResults = (payload.results ?? []).map(mapSearchApiRow)
+    } catch (e) {
+      if ((e as { name?: string }).name !== 'AbortError') suggestResults = []
+    }
+  }
+
+  /** Enter·검색 아이콘 — 결과 그리드 검색 실행 */
+  function submitSearch() {
+    const q = searchQuery.trim()
+    if (debounceTimer) clearTimeout(debounceTimer)
+    suggestAbort?.abort()
+    suggestResults = []
+    if (!q) { submittedQuery = ''; searchResults = []; return }
+    doSearch(q)
+  }
+
+  function onSearchKeydown(e: KeyboardEvent, pickerKeydown: (e: KeyboardEvent) => void) {
+    pickerKeydown(e)  // 드롭다운 항목 하이라이트 상태의 Enter는 SuggestPicker가 선택 처리(preventDefault)
+    if (e.key === 'Enter' && !e.defaultPrevented && !e.isComposing) {
+      e.preventDefault()
+      submitSearch()
+    }
   }
 
   async function doSearch(q: string) {
     isSearching = true
     searchLogId = null  // 새 검색 시 이전 log ID 초기화
+    submittedQuery = q
     try {
       // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
       // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
@@ -107,18 +152,20 @@
     }
   }
 
-  function onProductSelect(opt: SuggestPickerOption) {
-    // 드롭다운 선택 → 검색 결과 그리드 유지, 상세 이동 없음
-    // 상세 이동은 ProductDPCard 클릭으로만
-    searchQuery = opt.label
-  }
-
-  async function handleWishToggle(productId: string) {
-    const action = await toggleWish(productId)
+  async function handleWishToggle(id: string | undefined) {
+    if (!id) return
+    const action = await toggleWish(id)
     if (!action) return
     const wished = action === 'added'
-    searchResults = searchResults.map(p => p.id === productId ? { ...p, wished } : p)
-    recommendedProducts = recommendedProducts.map(p => p.id === productId ? { ...p, wished } : p)
+    const apply = (list: SearchProduct[]) => list.map(p => (p.id === id ? { ...p, wished } : p))
+    searchResults = apply(searchResults)
+    recommendedProducts = apply(recommendedProducts)
+  }
+
+  function onProductSelect(opt: SuggestPickerOption) {
+    // 드롭다운 선택 → 해당 상품 상세화면으로 바로 이동
+    const picked = suggestResults.find(p => p.id === opt.id)
+    goto(`/products/${picked?.slug ?? opt.id}`)
   }
 </script>
 
@@ -147,10 +194,6 @@
         >
           {#snippet field(c)}
             <div class="search-field-row">
-              <svg class="search-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                <circle cx="7.5" cy="7.5" r="6" stroke="#3B2F8A" stroke-width="2"/>
-                <path d="M12 12L16 16" stroke="#3B2F8A" stroke-width="2" stroke-linecap="round"/>
-              </svg>
               <input
                 type="search"
                 class="search-input"
@@ -158,7 +201,7 @@
                 placeholder={c.placeholder}
                 value={c.value}
                 oninput={c.oninput}
-                onkeydown={c.onkeydown}
+                onkeydown={(e) => onSearchKeydown(e, c.onkeydown)}
                 onfocus={c.onfocus}
                 onblur={c.onblur}
                 aria-autocomplete={c.ariaAutocomplete}
@@ -169,6 +212,12 @@
               {#if isSearching}
                 <span class="search-spinner" aria-hidden="true"></span>
               {/if}
+              <button type="button" class="search-icon-btn" aria-label="검색" onclick={submitSearch}>
+                <svg class="search-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                  <circle cx="7.5" cy="7.5" r="6" stroke="#3B2F8A" stroke-width="2"/>
+                  <path d="M12 12L16 16" stroke="#3B2F8A" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+              </button>
             </div>
           {/snippet}
         </SuggestPicker>
@@ -184,9 +233,9 @@
 
   <!-- ── 검색 결과 그리드 ── -->
   <SearchProductGrid
-    title={searchQuery.trim() ? `"${searchQuery}" 검색결과` : '추천 상품'}
-    products={searchQuery.trim() ? searchResults : recommendedProducts}
-    onProductClick={searchQuery.trim() ? handleProductClick : undefined}
+    title={submittedQuery ? `"${submittedQuery}" 검색결과` : '추천 상품'}
+    products={submittedQuery ? searchResults : recommendedProducts}
+    onProductClick={submittedQuery ? handleProductClick : undefined}
     onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
   />
 
@@ -236,6 +285,19 @@
   }
   .search-icon {
     flex-shrink: 0;
+  }
+  .search-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 44px;
+    min-height: 44px;
+    margin-right: -12px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
   }
   .search-input {
     flex: 1;

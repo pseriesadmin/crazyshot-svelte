@@ -5,6 +5,9 @@ import type { PageServerLoad } from './$types'
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
   const urlCategory = url.searchParams.get('category') ?? 'all'
+  // "더보기"(전체보기) 아이콘 전용 — 해당 분류 상품을 CMS 그리드 설정 개수 대신 최대 20개까지
+  // 한 화면에 노출한다(2026-09-29, Stephen 확정: 페이지네이션 없이 20개 단일화면 컷오프).
+  const viewAll = url.searchParams.get('view') === 'all'
 
   // CMS 역할 확인
   let isCms = false
@@ -81,18 +84,31 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       ? (locals.supabase.rpc as any)('get_products_by_ids', { p_ids: heroIds })
       : Promise.resolve({ data: [] as unknown[], error: null }),
 
-    // 상품 그리드 (search_products RPC)
-    // URL ?category= 파라미터가 CMS 그리드 설정보다 우선
-    (locals.supabase.rpc as any)('search_products', { // eslint-disable-line @typescript-eslint/no-explicit-any
-      p_query: '',
-      p_category: urlCategory !== 'all'
+    // 상품 그리드 — 노출 기준: 상품 상세 조회수 내림차순(가장 많이 본 상품, PC·모바일 공통)
+    // URL ?category= 파라미터가 CMS 그리드 설정보다 우선. RPC 실패 시 search_products(최신순)로 폴백
+    (async () => {
+      const gridCategory = urlCategory !== 'all'
         ? urlCategory
-        : (gridSettings.category === 'all' ? null : gridSettings.category),
-      p_page: 1,
-      p_limit: gridSettings.count === 0 ? 100 : (gridSettings.count || 16),
-      p_session_id: null,
-      p_user_id: session?.user.id ?? null,
-    }),
+        : (gridSettings.category === 'all' ? null : gridSettings.category)
+      const gridLimit = viewAll ? 20 : (gridSettings.count === 0 ? 100 : (gridSettings.count || 16))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const viewed = await (locals.supabase.rpc as any)('get_most_viewed_products', {
+        p_category: gridCategory,
+        p_limit: gridLimit,
+        p_days: null,
+      })
+      if (!viewed.error) return viewed
+      console.error('[products] get_most_viewed_products 실패 — search_products 폴백:', viewed.error.message)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (locals.supabase.rpc as any)('search_products', {
+        p_query: '',
+        p_category: gridCategory,
+        p_page: 1,
+        p_limit: gridLimit,
+        p_session_id: null,
+        p_user_id: session?.user.id ?? null,
+      })
+    })(),
 
     // MD 추천 픽
     mdIds.length
@@ -184,6 +200,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     isLoggedIn: !!session?.user.id,
     wishedIds,
     urlCategory,
+    viewAll,
     settings: {
       hero:       heroSettings,
       grid:       gridSettings,

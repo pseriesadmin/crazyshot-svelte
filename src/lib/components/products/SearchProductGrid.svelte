@@ -28,18 +28,16 @@
     onWishToggle,
   }: Props = $props()
 
-  let expanded = $state(true)
 </script>
 
 {#if products.length > 0}
 <section class="results-section">
   <div class="results-inner">
-    <button class="results-header" onclick={() => (expanded = !expanded)}>
-      <span class="results-title">{title}</span>
+    <div class="results-header">
+      <h2 class="results-title">{title}</h2>
       <span class="results-count">{products.length}</span>
-    </button>
+    </div>
 
-    {#if expanded}
       <!-- 표시 순서 = products 배열 순서(API search_products RPC 랭킹 그대로) -->
       <div class="product-grid">
         {#each products as p (p.id)}
@@ -59,7 +57,6 @@
           </div>
         {/each}
       </div>
-    {/if}
   </div>
 </section>
 {:else}
@@ -101,11 +98,9 @@
     align-items: center;
     justify-content: space-between;
     padding: 30px 0;
-    cursor: pointer;
-    background: none;
-    border: none;
   }
   .results-title {
+    margin: 0;
     font-size: 18px;
     font-weight: 500;
     line-height: 1.6;
