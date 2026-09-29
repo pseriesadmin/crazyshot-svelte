@@ -178,7 +178,7 @@
   --layout-pc-max:    1240px;        /* PC 콘텐츠 최대폭 */
   --layout-pc-pad:    40px;          /* PC 좌우 패딩 */
   --layout-tab-pad:   32px;          /* 태블릿 좌우 패딩 */
-  --layout-mob-pad:   20px;          /* 모바일 좌우 패딩 */
+  --layout-mob-pad:   25px;          /* 모바일 좌우 패딩 (2026-09-25 20→25 통일, front-uiux §24-3b) */
   --layout-section-gap: 50px;        /* 섹션 간격 */
   --layout-header-h:  100px;         /* 헤더 높이 */
   --layout-footer-h:  80px;          /* 하단 고정 바 높이 */

@@ -47,7 +47,7 @@
           </svg>
           <span class="sub-gnb-b-back">Back</span>
         </div>
-        <span class="sub-gnb-b-title">예약신청완료</span>
+        <span class="sub-gnb-b-title sub-gnb-b-title--kr">예약신청완료</span>
       </button>
     </div>
   </header>
@@ -352,7 +352,7 @@
     justify-content: space-between;
     gap: 16px;
     padding: 14px 40px;
-    border-radius: 25px;
+    border-radius: var(--radius-lg);
     width: 100%;
     max-width: none;
     min-width: 0;
@@ -385,6 +385,21 @@
     color: var(--cs-text);
     flex-shrink: 0;
     white-space: nowrap;
+  }
+  .sub-gnb-b-title--kr {
+    font: var(--text-pc-menu-kr-20);
+    font-size: 18px;
+  }
+
+  @media (max-width: 1024px) {
+    .sub-gnb-b-inner {
+      padding: 16px var(--layout-tab-pad);
+      gap: 20px;
+    }
+    .sub-gnb-b-pill {
+      padding: 14px 28px;
+      min-height: 56px;
+    }
   }
 
   /* 타이틀 */
