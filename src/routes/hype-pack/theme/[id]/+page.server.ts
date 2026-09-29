@@ -6,6 +6,7 @@ interface ThemeGroupProduct {
   id: string
   name: string
   slug: string | null
+  category: string | null
   image_urls: string[] | null
   base_price_daily: number
 }
