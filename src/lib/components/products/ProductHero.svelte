@@ -8,6 +8,7 @@
     name: string;
     sort_order: number;
     icon_url: string | null;
+    icon_active_url?: string | null;
   }
 
   interface Props {
@@ -87,11 +88,17 @@
         {#each iconCategories as cat (cat.id)}
           <button
             class="sub-gnb-b-cat-btn"
+            class:has-on={!!cat.icon_active_url}
+            class:active={cat.id === category}
             title={cat.name}
             type="button"
             onclick={() => goto(`/products?category=${cat.id}`)}
           >
-            <img class="sub-gnb-b-cat-icon" src={cat.icon_url} alt={cat.name} />
+            <img class="sub-gnb-b-cat-icon sub-gnb-b-cat-icon-off" src={cat.icon_url} alt={cat.name} />
+            {#if cat.icon_active_url}
+              <!-- ON 이미지(호버·현재 카테고리 공용, 상자 배경 포함 SVG) — /products 카테고리 메뉴와 동일 설정 공유 -->
+              <img class="sub-gnb-b-cat-icon sub-gnb-b-cat-icon-on" src={cat.icon_active_url} alt="" aria-hidden="true" />
+            {/if}
           </button>
         {/each}
       </div>
@@ -325,6 +332,15 @@
     height: 72px;
     object-fit: contain;
   }
+  /* ON 이미지가 있는 카테고리: 상자 배경 대신 OFF/ON 이미지 교차 전환 */
+  .sub-gnb-b-cat-btn.has-on { position: relative; background: transparent; }
+  .sub-gnb-b-cat-btn.has-on:hover { background: transparent; }
+  .sub-gnb-b-cat-btn.has-on .sub-gnb-b-cat-icon { position: absolute; inset: 0; width: 100%; height: 100%; transition: opacity 0.25s ease; }
+  .sub-gnb-b-cat-btn.has-on .sub-gnb-b-cat-icon-on { opacity: 0; }
+  .sub-gnb-b-cat-btn.has-on:hover .sub-gnb-b-cat-icon-on,
+  .sub-gnb-b-cat-btn.has-on.active .sub-gnb-b-cat-icon-on { opacity: 1; }
+  .sub-gnb-b-cat-btn.has-on:hover .sub-gnb-b-cat-icon-off,
+  .sub-gnb-b-cat-btn.has-on.active .sub-gnb-b-cat-icon-off { opacity: 0; }
 
   /* Bottom */
   .hero-bottom {

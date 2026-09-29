@@ -2,6 +2,9 @@
   import { invalidateAll } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import {
+    HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB, HELP_HERO_TITLE_MAX, HELP_HERO_SUB_MAX,
+  } from '$lib/constants/helpHero'
 
   interface ImageItem {
     url: string
@@ -11,17 +14,24 @@
   interface Props {
     initialImages: ImageItem[]
     initialMode: 'random' | 'fixed'
+    initialTitle?: string
+    initialSub?: string
     onclose: () => void
   }
 
-  let { initialImages, initialMode, onclose }: Props = $props()
+  let { initialImages, initialMode, initialTitle = '', initialSub = '', onclose }: Props = $props()
 
   let images = $state<ImageItem[]>(initialImages.map((img) => ({ ...img })))
   let mode = $state<'random' | 'fixed'>(initialMode)
+  // 메인·서브 문구 — 줄바꿈(Enter) 그대로 화면에 반영, 비우면 기본 문구 사용
+  let title = $state(initialTitle)
+  let sub = $state(initialSub)
 
   $effect(() => {
     images = initialImages.map((img) => ({ ...img }))
     mode = initialMode
+    title = initialTitle
+    sub = initialSub
   })
   let isUploading = $state(false)
   let isSaving = $state(false)
@@ -71,7 +81,7 @@
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: err } = await (supabase.rpc as any)('upsert_product_page_setting', {
         p_key: 'help_hero_bg_images',
-        p_value: { images, mode },
+        p_value: { images, mode, title: title.trim(), sub: sub.trim() },
       })
       if (err) { error = err.message; return }
       await invalidateAll()
@@ -86,13 +96,24 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="도움말 히어로 배경 이미지 관리">
+<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="도움말 히어로 배경·문구 관리">
   <div class="modal-header">
-    <span class="modal-title">도움말 배경 이미지 관리</span>
+    <span class="modal-title">도움말 히어로 관리 (배경·문구)</span>
     <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
   </div>
 
   <div class="modal-body">
+    <!-- 메인·서브 문구 -->
+    <div class="section">
+      <p class="section-label">메인 문구 <span class="hint">{title.length}/{HELP_HERO_TITLE_MAX} · 줄바꿈 가능</span></p>
+      <textarea class="text-input" rows="3" maxlength={HELP_HERO_TITLE_MAX} placeholder={HELP_HERO_DEFAULT_TITLE} bind:value={title}></textarea>
+    </div>
+    <div class="section">
+      <p class="section-label">서브 문구 <span class="hint">{sub.length}/{HELP_HERO_SUB_MAX} · 줄바꿈 가능</span></p>
+      <textarea class="text-input" rows="3" maxlength={HELP_HERO_SUB_MAX} placeholder={HELP_HERO_DEFAULT_SUB} bind:value={sub}></textarea>
+      <p class="hint">비워두면 기본 문구가 표시됩니다.</p>
+    </div>
+
     <!-- 노출 방식 -->
     <div class="section">
       <p class="section-label">노출 방식</p>
@@ -230,6 +251,19 @@
     color: var(--cs-text-light);
   }
 
+  .text-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    resize: vertical;
+    line-height: 1.6;
+  }
+  .text-input::placeholder { color: var(--cs-text-light); }
   .radio-group { display: flex; gap: 16px; }
   .radio-opt {
     display: flex;

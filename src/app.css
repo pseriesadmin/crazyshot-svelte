@@ -181,6 +181,7 @@
   --layout-mob-pad:   25px;          /* 모바일 좌우 패딩 (2026-09-25 20→25 통일, front-uiux §24-3b) */
   --layout-section-gap: 50px;        /* 섹션 간격 */
   --layout-header-h:  100px;         /* 헤더 높이 */
+  --layout-mob-gnb-offset: 120px;    /* 모바일: 공통 GNB(fixed) 아래 본문 시작 위 여백 — 하입팩·테마·헬프·크레이지로그·상품목록 공통(2026-09-29 95→120px) */
   --layout-footer-h:  80px;          /* 하단 고정 바 높이 */
 
   /* ── 반경 ── */

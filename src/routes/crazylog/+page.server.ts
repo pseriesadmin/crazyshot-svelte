@@ -65,6 +65,7 @@ type BannerPostRow = {
 	view_count: number
 	status: string
 	is_public: boolean
+	first_text: string | null
 }
 
 const BANNER_SLOTS = [
@@ -87,7 +88,8 @@ async function loadBannerSlots(
 ): Promise<BannerSlotResult[]> {
 	// database.ts는 마이그레이션 210 신규 RPC를 아직 반영하지 않음 — rpc 호출부만 국소 캐스트
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { data: settingsData } = await (supabase.rpc as any)('get_crazylog_banner_settings')
+	const { data: settingsData, error: settingsError } = await (supabase.rpc as any)('get_crazylog_banner_settings')
+	if (settingsError) console.error('[crazylog] get_crazylog_banner_settings 실패 — 배너 비움:', settingsError.message)
 	const settings = (settingsData ?? {}) as BannerSettingsRow
 
 	const allIds = new Set<string>()
@@ -99,16 +101,17 @@ async function loadBannerSlots(
 	let postMap = new Map<string, BannerPost>()
 	if (allIds.size > 0) {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { data: postsData } = await (supabase.rpc as any)('get_crazylog_posts_by_ids', {
+		const { data: postsData, error: postsError } = await (supabase.rpc as any)('get_crazylog_posts_by_ids', {
 			p_ids: [...allIds],
 		})
+		if (postsError) console.error('[crazylog] get_crazylog_posts_by_ids 실패 — 배너 비움:', postsError.message)
 		for (const row of (postsData ?? []) as BannerPostRow[]) {
 			postMap.set(row.id, {
 				id: row.id,
 				title: row.title,
 				logType: row.log_type,
 				img: row.thumbnail_url,
-				desc: null,
+				desc: row.first_text || null,   // 본문 첫 텍스트 요약(#583) — 헤더 부제에 실제 내용 표시
 			})
 		}
 	}

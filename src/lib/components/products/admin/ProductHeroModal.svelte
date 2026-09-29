@@ -4,6 +4,7 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
 
   interface ProductItem {
     id: string
@@ -17,17 +18,154 @@
     mode: 'random' | 'fixed'
   }
 
+  // 카테고리 선택 시 헤더 슬라이드 대신 노출되는 배너(가로 100% × 세로 150px) — 카테고리별 1개
+  interface CategoryBanner {
+    category_id: string
+    image_url: string | null
+    /** 모바일 전용 배너 이미지(가로 100% × 세로 200px) — 없으면 PC 이미지로 대체 노출 */
+    mobile_image_url?: string | null
+    link_url: string | null
+    alt: string
+    enabled: boolean
+  }
+  interface BannerRow extends CategoryBanner {
+    _preview: string | null
+    _file: File | null
+    _mPreview: string | null
+    _mFile: File | null
+  }
+
+  // 모바일 목록 중간 배너(촬영본능 PICK! 카드) — 이미지·문구·링크·노출 관리
+  interface MidBanner {
+    enabled: boolean
+    image_url: string | null
+    title: string
+    sub: string
+    link_url: string | null
+  }
+
   interface Props {
     settingKey?: string
     initialSettings: HeroSettings
+    /** 배너 설정 대상 카테고리(헤더 슬라이드 설정 모달에서만 사용) */
+    categories?: { id: string; name: string }[]
+    initialBanners?: { items: CategoryBanner[]; mid_banner?: MidBanner | null }
     onclose: () => void
   }
 
   let {
     settingKey = 'product_page_hero',
     initialSettings,
+    categories = [],
+    initialBanners = { items: [] },
     onclose,
   }: Props = $props()
+
+  const BANNER_KEY = 'product_page_category_banners'
+  const isHero = settingKey === 'product_page_hero'
+  const showBanners = $derived(isHero && categories.length > 0)
+
+  // 모바일 목록 중간 배너 — 저장값이 없으면 기존 하드코딩 값(촬영본능 / PICK! / ellipse.png)을 기본으로 사용
+  const MID_DEFAULT_IMAGE = '/images/products/ellipse.png'
+  const midInit = initialBanners.mid_banner
+  let midEnabled = $state<boolean>(midInit?.enabled ?? true)
+  let midImageUrl = $state<string | null>(midInit?.image_url ?? null)
+  let midTitle = $state<string>(midInit?.title ?? '촬영본능')
+  let midSub = $state<string>(midInit?.sub ?? 'PICK!')
+  let midLink = $state<string>(midInit?.link_url ?? '')
+  let midFile = $state<File | null>(null)
+  let midPreview = $state<string | null>(null)
+
+  function onMidFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    const v = validateUploadFile(file)
+    if (!v.ok || !file.type.startsWith('image/')) { error = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
+    const sz = validateUploadFileSize(file)
+    if (!sz.ok) { error = sz.error ?? null; return }
+    error = null
+    if (midPreview) URL.revokeObjectURL(midPreview)
+    midFile = file
+    midPreview = URL.createObjectURL(file)
+  }
+
+  async function uploadMidImage(): Promise<string | null> {
+    if (!midFile) return midImageUrl
+    const ext  = getMimeExtension(midFile.type)
+    const path = `product-mid-banner/mid-${Date.now()}.${ext}`
+    const { error: upErr } = await supabase.storage
+      .from('cms-assets')
+      .upload(path, midFile, { upsert: true, contentType: midFile.type })
+    if (upErr) throw new Error(`목록 중간 배너 이미지 업로드 실패: ${upErr.message}`)
+    return supabase.storage.from('cms-assets').getPublicUrl(path).data.publicUrl
+  }
+
+  let bannerRows = $state<BannerRow[]>(
+    categories.map((c) => {
+      const saved = initialBanners.items?.find((b) => b.category_id === c.id)
+      return {
+        category_id: c.id,
+        image_url:   saved?.image_url ?? null,
+        mobile_image_url: saved?.mobile_image_url ?? null,
+        link_url:    saved?.link_url ?? null,
+        alt:         saved?.alt ?? '',
+        enabled:     saved?.enabled ?? false,
+        _preview:    null,
+        _file:       null,
+        _mPreview:   null,
+        _mFile:      null,
+      }
+    })
+  )
+  const catName = (id: string) => categories.find((c) => c.id === id)?.name ?? id
+
+  function onBannerFile(id: string, e: Event, variant: 'pc' | 'mobile' = 'pc') {
+    const input = e.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    const v = validateUploadFile(file)
+    if (!v.ok || !file.type.startsWith('image/')) { error = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
+    const sz = validateUploadFileSize(file)
+    if (!sz.ok) { error = sz.error ?? null; return }
+    error = null
+    bannerRows = bannerRows.map((r) => {
+      if (r.category_id !== id) return r
+      if (variant === 'mobile') {
+        if (r._mPreview) URL.revokeObjectURL(r._mPreview)
+        return { ...r, _mFile: file, _mPreview: URL.createObjectURL(file), enabled: true }
+      }
+      if (r._preview) URL.revokeObjectURL(r._preview)
+      return { ...r, _file: file, _preview: URL.createObjectURL(file), enabled: true }
+    })
+  }
+
+  function patchBanner(id: string, patch: Partial<BannerRow>) {
+    bannerRows = bannerRows.map((r) => (r.category_id === id ? { ...r, ...patch } : r))
+  }
+
+  // 링크는 사이트 내 경로(/…) 또는 http(s)://만 허용(javascript: 등 차단). 비우면 링크 없음
+  function normalizeLink(raw: string | null | undefined, label: string): string | null {
+    const t = (raw ?? '').trim()
+    if (!t) return null
+    // 백슬래시·공백·제어문자는 브라우저가 "/"로 해석하거나 제거해 //외부도메인 으로 바뀔 수 있어 거부
+    if (!/[\x00-\x20\\]/.test(t) && (/^\/(?![/\\])/.test(t) || /^https?:\/\//i.test(t))) return t
+    throw new Error(`[${label}] 링크는 "/"로 시작하는 사이트 내 경로 또는 http(s)://로 시작하는 주소만 입력할 수 있어요.`)
+  }
+
+  async function uploadBanner(r: BannerRow, variant: 'pc' | 'mobile' = 'pc'): Promise<string | null> {
+    const file = variant === 'mobile' ? r._mFile : r._file
+    if (!file) return variant === 'mobile' ? (r.mobile_image_url ?? null) : r.image_url
+    const ext  = getMimeExtension(file.type)
+    const path = `product-category-banner/${r.category_id}${variant === 'mobile' ? '-m' : ''}-${Date.now()}.${ext}`
+    const { error: upErr } = await supabase.storage
+      .from('cms-assets')
+      .upload(path, file, { upsert: true, contentType: file.type })
+    if (upErr) throw new Error(`[${catName(r.category_id)}] 배너 이미지 업로드 실패: ${upErr.message}`)
+    return supabase.storage.from('cms-assets').getPublicUrl(path).data.publicUrl
+  }
 
   let mode = $state<'random' | 'fixed'>(initialSettings.mode)
   let selected = $state<ProductItem[]>([])
@@ -152,6 +290,17 @@
   async function save() {
     isSaving = true
     error = null
+    // 링크 형식은 어떤 저장보다 먼저 검증 — 잘못된 링크로 헤더 설정만 먼저 저장되는 일 방지
+    if (isHero) {
+      try {
+        for (const r of bannerRows) normalizeLink(r.link_url, catName(r.category_id))
+        normalizeLink(midLink, '목록 중간 배너')
+      } catch (e) {
+        error = e instanceof Error ? e.message : '링크 형식이 올바르지 않습니다.'
+        isSaving = false
+        return
+      }
+    }
     const value: HeroSettings = {
       products: selected.map((p, i) => ({ id: p.id, order: i })),
       mode,
@@ -163,10 +312,48 @@
     })
     if (err) {
       error = (err as { message: string }).message
-    } else {
-      await invalidateAll()
-      onclose()
+      isSaving = false
+      return
     }
+    if (isHero) {
+      try {
+        const items: CategoryBanner[] = []
+        for (const r of bannerRows) {
+          const image_url = await uploadBanner(r, 'pc')
+          const mobile_image_url = await uploadBanner(r, 'mobile')
+          if (!image_url && !mobile_image_url && !r.link_url && !r.alt) continue
+          items.push({
+            category_id: r.category_id,
+            image_url,
+            mobile_image_url,
+            link_url: normalizeLink(r.link_url, catName(r.category_id)),
+            alt: r.alt.trim(),
+            enabled: r.enabled && (!!image_url || !!mobile_image_url),
+          })
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: bErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
+          p_key: BANNER_KEY,
+          p_value: {
+            items,
+            mid_banner: {
+              enabled: midEnabled,
+              image_url: await uploadMidImage(),
+              title: midTitle.trim(),
+              sub: midSub.trim(),
+              link_url: normalizeLink(midLink, '목록 중간 배너'),
+            } satisfies MidBanner,
+          },
+        })
+        if (bErr) throw new Error((bErr as { message: string }).message)
+      } catch (e) {
+        error = e instanceof Error ? e.message : '배너 저장에 실패했습니다.'
+        isSaving = false
+        return
+      }
+    }
+    await invalidateAll()
+    onclose()
     isSaving = false
   }
 </script>
@@ -258,6 +445,99 @@
       </div>
     {:else}
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
+    {/if}
+
+    <!-- 카테고리 선택 시 노출 배너 — 카테고리별 1개, 가로 100% × 세로 150px -->
+    {#if showBanners}
+      <div class="section banner-section">
+        <p class="section-label">카테고리 배너 <span class="count-badge">가로 100% × 세로 150px</span></p>
+        <p class="banner-help">카테고리 메뉴를 선택하면 헤더 슬라이드 대신 해당 카테고리의 배너가 노출됩니다. 권장 이미지 크기 1240×150px(가로 세로 약 8:1).</p>
+        {#each bannerRows as row (row.category_id)}
+          <div class="banner-row">
+            <div class="banner-row-head">
+              <span class="banner-cat">{catName(row.category_id)}</span>
+              <label class="radio-opt">
+                <input type="checkbox" checked={row.enabled} disabled={!row.image_url && !row._preview && !row.mobile_image_url && !row._mPreview}
+                  onchange={(e) => patchBanner(row.category_id, { enabled: e.currentTarget.checked })} />
+                <span>노출</span>
+              </label>
+            </div>
+            <p class="banner-sub">PC 이미지 (1240×150px)</p>
+            <div class="banner-thumb" class:banner-thumb-empty={!(row._preview ?? row.image_url)}>
+              {#if row._preview ?? row.image_url}
+                <img src={row._preview ?? row.image_url} alt="{catName(row.category_id)} 배너 미리보기" />
+              {:else}
+                <span>이미지 없음</span>
+              {/if}
+            </div>
+            <div class="banner-actions">
+              <label class="banner-file-btn">
+                이미지 선택
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={(e) => onBannerFile(row.category_id, e)} hidden />
+              </label>
+              {#if row.image_url || row._preview}
+                <button type="button" class="remove-btn" aria-label="{catName(row.category_id)} 배너 이미지 제거"
+                  onclick={() => patchBanner(row.category_id, { image_url: null, _file: null, _preview: null, enabled: !!(row.mobile_image_url || row._mPreview) && row.enabled })}>✕</button>
+              {/if}
+            </div>
+            <p class="banner-sub">모바일 이미지 (가로 100% × 세로 200px, 권장 680×400px)</p>
+            <div class="banner-thumb banner-thumb-m" class:banner-thumb-empty={!(row._mPreview ?? row.mobile_image_url)}>
+              {#if row._mPreview ?? row.mobile_image_url}
+                <img src={row._mPreview ?? row.mobile_image_url} alt="{catName(row.category_id)} 모바일 배너 미리보기" />
+              {:else}
+                <span>이미지 없음 (PC 이미지로 대체 노출)</span>
+              {/if}
+            </div>
+            <div class="banner-actions">
+              <label class="banner-file-btn">
+                모바일 이미지 선택
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={(e) => onBannerFile(row.category_id, e, 'mobile')} hidden />
+              </label>
+              {#if row.mobile_image_url || row._mPreview}
+                <button type="button" class="remove-btn" aria-label="{catName(row.category_id)} 모바일 배너 이미지 제거"
+                  onclick={() => patchBanner(row.category_id, { mobile_image_url: null, _mFile: null, _mPreview: null })}>✕</button>
+              {/if}
+            </div>
+            <input type="text" class="f-input" placeholder="연결 링크 (예: /products/abc 또는 https://…)" maxlength="500"
+              value={row.link_url ?? ''} oninput={(e) => patchBanner(row.category_id, { link_url: e.currentTarget.value })} />
+            <input type="text" class="f-input" placeholder="대체 텍스트 (접근성)" maxlength="100"
+              value={row.alt} oninput={(e) => patchBanner(row.category_id, { alt: e.currentTarget.value })} />
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- 모바일 목록 중간 배너(촬영본능 PICK! 카드) 관리 -->
+    {#if isHero}
+      <div class="section banner-section">
+        <p class="section-label">모바일 목록 중간 배너 <span class="count-badge">모바일 전용</span></p>
+        <p class="banner-help">모바일 상품 목록 중간의 "촬영본능 PICK!" 카드입니다. 이미지·문구·링크를 바꾸거나 노출을 끌 수 있습니다.</p>
+        <div class="banner-row">
+          <div class="banner-row-head">
+            <span class="banner-cat">목록 중간 배너</span>
+            <label class="radio-opt">
+              <input type="checkbox" checked={midEnabled} onchange={(e) => (midEnabled = e.currentTarget.checked)} />
+              <span>노출</span>
+            </label>
+          </div>
+          <div class="banner-thumb banner-thumb-mid">
+            <img src={midPreview ?? midImageUrl ?? MID_DEFAULT_IMAGE} alt="목록 중간 배너 이미지 미리보기" />
+          </div>
+          <div class="banner-actions">
+            <label class="banner-file-btn">
+              이미지 선택
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={onMidFile} hidden />
+            </label>
+            {#if midImageUrl || midPreview}
+              <button type="button" class="remove-btn" aria-label="목록 중간 배너 이미지 제거(기본 이미지로 복원)"
+                onclick={() => { if (midPreview) URL.revokeObjectURL(midPreview); midPreview = null; midFile = null; midImageUrl = null }}>✕</button>
+            {/if}
+          </div>
+          <input type="text" class="f-input" placeholder="타이틀 (예: 촬영본능)" maxlength="20" bind:value={midTitle} />
+          <input type="text" class="f-input" placeholder="서브 텍스트 (예: PICK!)" maxlength="20" bind:value={midSub} />
+          <input type="text" class="f-input" placeholder="연결 링크 (예: /hype-pack 또는 https://…, 비우면 링크 없음)" maxlength="500" bind:value={midLink} />
+        </div>
+      </div>
     {/if}
 
     {#if error}
@@ -491,4 +771,28 @@
   }
   .btn-save:hover:not(:disabled) { background: var(--cs-red); }
   .btn-save:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+  .banner-help { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
+  .banner-row {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px;
+  }
+  .banner-row-head { display: flex; align-items: center; justify-content: space-between; }
+  .banner-cat { font: var(--text-pc-title-16); color: var(--cs-text); }
+  .banner-thumb {
+    width: 100%; aspect-ratio: 1240 / 150; border-radius: var(--radius-sm); overflow: hidden;
+    background: var(--cs-white); display: flex; align-items: center; justify-content: center;
+  }
+  .banner-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .banner-thumb-empty span { font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .banner-sub { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 4px 0 0; }
+  .banner-thumb-mid { aspect-ratio: 1 / 1; max-width: 120px; border-radius: 50%; }
+  .banner-thumb-m { aspect-ratio: 680 / 400; max-width: 260px; }
+  .banner-actions { display: flex; align-items: center; gap: 8px; }
+  .banner-file-btn {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 14px;
+    background: var(--cs-purple); color: var(--cs-white); border-radius: var(--radius-md);
+    font: var(--text-pc-body-14); cursor: pointer;
+  }
+  .banner-file-btn:hover { background: var(--cs-purple-hover); }
 </style>

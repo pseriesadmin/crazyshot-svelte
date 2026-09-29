@@ -61,12 +61,16 @@
   <div class="pc-img-wrap">
     <img src={imageUrl} alt={name} loading="lazy" class="pc-img" />
 
-    {#if onWishToggle !== undefined && isWished}
+    <!-- 찜 버튼: 로그인 상태(onWishToggle 전달)면 찜 여부와 무관하게 항상 표시.
+         비찜=기본(흰 아이콘), 찜=.active(빨강). 2026-08-27 커밋 21a5479에서 "찜된 상품만 표시"로
+         잘못 바뀌어 비찜 상품에서 찜 추가 수단이 사라졌던 회귀를 복구(2026-09-29) -->
+    {#if onWishToggle !== undefined}
       <button
-        class="pc-clip active"
+        class="pc-clip"
+        class:active={isWished}
         onclick={handleWish}
-        aria-label="찜 해제"
-        aria-pressed="true"
+        aria-label={isWished ? '찜 해제' : '찜하기'}
+        aria-pressed={isWished}
       >
         <svg width="34" height="34" viewBox="0 0 63 63" fill="none" aria-hidden="true">
           <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
@@ -157,7 +161,7 @@
     height: 22px;
     border-radius: 50%;
     border: none;
-    background: rgba(255, 207, 207, 0.8); /* var(--cs-chat-in-bg) #FFCFCF 80% 투명도 */
+    background: color-mix(in srgb, var(--cs-red-xlight) 80%, transparent); /* 비찜 상태 red-5 토큰(#FFEAEA), 알파 80% 유지 */
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -189,8 +193,9 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--spacing-3);
-    padding: var(--spacing-3) 0 0;
+    /* 모바일 상품정보 표준(front-uiux.md §14-4 확정값, 2026-09-29) — 12px(--spacing-3)의 90% */
+    gap: 10.8px;
+    padding: 10.8px 0 0;
     width: 100%;
     min-width: 0;
   }
@@ -213,7 +218,7 @@
     gap: 3px;
     /* purple-90 컬러토큰 반영 */
     color: var(--cs-purple-dark);
-    letter-spacing: -0.5px;
+    letter-spacing: -0.8px;   /* 모바일 자간(PC는 아래 @media에서 -0.5px 복원) */
     flex-wrap: wrap;
   }
   .pc-price-group {
@@ -222,7 +227,8 @@
     gap: 3px;
   }
   .pc-price-label {
-    font: var(--text-m-script-14B);        /* 14px Bold */
+    font: var(--text-m-tag-11);            /* 11px — 모바일 확정값, 굵기 Medium 유지 */
+    font-weight: 500;
     line-height: 1;
   }
   .pc-price-num {
@@ -236,15 +242,15 @@
   .pc-price-sep {
     font: var(--text-m-script-14B);        /* 14px Bold */
     line-height: 1;
+    color: var(--cs-purple-pale);          /* purple-20 (모바일 확정값) */
   }
 
   .pc-name {
-    /* 볼드 없는 폰트토큰 적용(14px Medium, PC·모바일 동일) */
-    font: var(--text-m-script-14);
-    /* purple-90 컬러토큰 반영 */
+    /* 모바일 확정값(2026-09-29): 12px Medium · purple-90 · 행간 112%(PC는 아래 @media에서 14px/line-height 1 유지) */
+    font: var(--text-m-script-12);
     color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
-    line-height: 1;
+    line-height: 1.12;
     margin: 0;
     width: 100%;
     white-space: nowrap;
@@ -279,10 +285,10 @@
     .pc-category   { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); line-height: 1; margin: 0; }
     .pc-price-row  { gap: 5px; }
     .pc-price-group{ gap: 5px; }
-    .pc-price-row   { flex-wrap: nowrap; gap: 5px; }
-    .pc-price-label { font: var(--text-pc-body-14); line-height: 1; }     /* 14px Bold */
+    .pc-price-row   { flex-wrap: nowrap; gap: 5px; letter-spacing: -0.5px; }
+    .pc-price-label { font: var(--text-pc-body-14); font-weight: 700; line-height: 1; }     /* 14px Bold */
     .pc-price-num   { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; } /* 18px Bold */
-    .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; }     /* 14px Bold */
+    .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; color: inherit; }     /* 14px Bold */
     /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
     .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
   }

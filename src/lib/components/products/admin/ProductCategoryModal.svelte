@@ -18,15 +18,18 @@
     icon_key:     string
     sort_order:   number
     name:         string
-    icon_url:     string | null   // 저장된 커스텀 아이콘 URL
+    icon_url:     string | null   // 저장된 커스텀 아이콘 URL (OFF: 기본 상태)
+    icon_active_url: string | null // 저장된 ON 아이콘 URL (호버·선택 상태, 상자 배경 포함 SVG)
     _preview:     string | null   // 로컬 blob preview (미업로드)
     _file:        File   | null   // 대기 중 파일
+    _aPreview:    string | null   // ON 이미지 로컬 preview
+    _aFile:       File   | null   // ON 이미지 대기 중 파일
   }
 
   interface Props {
     categories: CategoryItem[]
     initialSettings: {
-      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null }[]
+      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null; icon_active_url?: string | null }[]
     }
     initialKeywordsSettings: { items: string[] }
     onclose: () => void
@@ -53,8 +56,11 @@
         sort_order: item.sort_order,
         name:       cat.name,
         icon_url:   item.icon_url ?? null,
+        icon_active_url: item.icon_active_url ?? null,
         _preview:   null,
         _file:      null,
+        _aPreview:  null,
+        _aFile:     null,
       })
     }
     return matched
@@ -126,8 +132,11 @@
         sort_order: selected.length,
         name:       cat.name,
         icon_url:   null,
+        icon_active_url: null,
         _preview:   null,
         _file:      null,
+        _aPreview:  null,
+        _aFile:     null,
       },
     ]
     pickerSelectedId = null
@@ -136,29 +145,38 @@
   function removeItem(codeId: string) {
     const item = selected.find((s) => s.code_id === codeId)
     if (item?._preview) URL.revokeObjectURL(item._preview)
+    if (item?._aPreview) URL.revokeObjectURL(item._aPreview)
     selected = selected.filter((s) => s.code_id !== codeId)
   }
 
-  function onFileChange(codeId: string, e: Event) {
+  function onFileChange(codeId: string, e: Event, variant: 'off' | 'on' = 'off') {
     const input  = e.target as HTMLInputElement
     const file   = input.files?.[0]
     if (!file) return
     const old = selected.find((s) => s.code_id === codeId)
-    if (old?._preview) URL.revokeObjectURL(old._preview)
     const preview = URL.createObjectURL(file)
+    if (variant === 'on') {
+      if (old?._aPreview) URL.revokeObjectURL(old._aPreview)
+      selected = selected.map((s) =>
+        s.code_id === codeId ? { ...s, _aPreview: preview, _aFile: file } : s
+      )
+      return
+    }
+    if (old?._preview) URL.revokeObjectURL(old._preview)
     selected = selected.map((s) =>
       s.code_id === codeId ? { ...s, _preview: preview, _file: file } : s
     )
   }
 
-  async function uploadIcon(item: SelectedItem): Promise<string | null> {
-    if (!item._file) return item.icon_url
-    const ext  = item._file.name.split('.').pop() ?? 'png'
-    const path = `product-cat-icons/${item.icon_key}-${Date.now()}.${ext}`
+  async function uploadIcon(item: SelectedItem, variant: 'off' | 'on' = 'off'): Promise<string | null> {
+    const file = variant === 'on' ? item._aFile : item._file
+    if (!file) return variant === 'on' ? item.icon_active_url : item.icon_url
+    const ext  = file.name.split('.').pop() ?? 'png'
+    const path = `product-cat-icons/${item.icon_key}${variant === 'on' ? '-on' : ''}-${Date.now()}.${ext}`
     const { error: upErr } = await supabase.storage
       .from('cms-assets')
-      .upload(path, item._file, { upsert: true, contentType: item._file.type })
-    if (upErr) throw new Error(`[${item.name}] 아이콘 업로드 실패: ${upErr.message}`)
+      .upload(path, file, { upsert: true, contentType: file.type })
+    if (upErr) throw new Error(`[${item.name}] ${variant === 'on' ? 'ON ' : ''}아이콘 업로드 실패: ${upErr.message}`)
     const { data } = supabase.storage.from('cms-assets').getPublicUrl(path)
     return data.publicUrl
   }
@@ -168,12 +186,13 @@
     error    = null
     try {
       const resolved = await Promise.all(
-        selected.map(async (s) => ({ ...s, icon_url: await uploadIcon(s) }))
+        selected.map(async (s) => ({ ...s, icon_url: await uploadIcon(s, 'off'), icon_active_url: await uploadIcon(s, 'on') }))
       )
       const items = resolved.map((s, i) => ({
         code_id:    s.code_id,
         icon_key:   s.icon_key,
         icon_url:   s.icon_url ?? null,
+        icon_active_url: s.icon_active_url ?? null,
         sort_order: i,
       }))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -248,6 +267,7 @@
         카테고리 추가목록
         <span class="hint">드래그로 순서 변경</span>
       </p>
+      <p class="hint icon-guide">OFF = 기본 상태 · ON = 마우스 올림·선택 상태(공용). 둥근 상자 배경까지 포함한 1:1 SVG 권장. ON을 올리지 않으면 기존 효과가 적용됩니다.</p>
       <div class="order-list">
         <CmsDragList bind:items={selected} class="order-drag">
           {#snippet renderItem(item)}
@@ -262,17 +282,37 @@
                 {/if}
               </div>
 
+              <!-- ON 아이콘 미리보기(호버·선택 상태) -->
+              <div class="cat-card-icon cat-card-icon-on" title="ON 이미지(호버·선택)">
+                {#if item._aPreview}
+                  <img src={item._aPreview} alt="{item.name} ON" class="icon-img" />
+                {:else if item.icon_active_url}
+                  <img src={item.icon_active_url} alt="{item.name} ON" class="icon-img" />
+                {/if}
+              </div>
+
               <!-- 카테고리 이름 -->
               <span class="cat-card-name">{item.name}</span>
 
               <!-- 아이콘 이미지 선택 -->
-              <label class="btn-icon-pick" title="아이콘 이미지 선택 (SVG, PNG)">
-                <span class="pick-label">이미지</span>
+              <label class="btn-icon-pick" title="OFF(기본) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
+                <span class="pick-label">OFF</span>
                 <input
                   type="file"
                   accept="image/svg+xml,image/png"
                   class="sr-only"
                   onchange={(e) => onFileChange(item.code_id, e)}
+                />
+              </label>
+
+              <!-- ON 아이콘 이미지 선택 (호버·선택 상태 공용) -->
+              <label class="btn-icon-pick" title="ON(호버·선택) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
+                <span class="pick-label">ON</span>
+                <input
+                  type="file"
+                  accept="image/svg+xml,image/png"
+                  class="sr-only"
+                  onchange={(e) => onFileChange(item.code_id, e, 'on')}
                 />
               </label>
 

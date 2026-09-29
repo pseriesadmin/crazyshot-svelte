@@ -2084,6 +2084,27 @@ hover/선택: background var(--cs-purple-op10)
 └──────────────┘
 ```
 
+#### Mobile 상품정보 텍스트 — 폰트 + 컬러 토큰 확정값 (2026-09-29, Stephen 확정) ★
+
+> 위 "Mobile 버전 스펙" 표의 텍스트 토큰·컬러를 아래 값으로 **갱신**한다(카드 크기·이미지·찜 버튼 값은 위 표 그대로).
+> 정본 적용처: `/products` 모바일 목록 카드 `.m-prod-info`(`src/routes/products/+page.svelte`).
+
+| 요소 | 클래스 | 폰트 토큰 | 컬러 토큰 | 비고 |
+|---|---|---|---|---|
+| 카테고리 | `.m-prod-category` | `--text-m-script-12` + weight 700 | `--cs-text-light` (#AAA) | line-height 1 |
+| 가격 행 | `.m-prod-price-row` | — | `--cs-purple-dark` (purple-90 #201857) | letter-spacing **-0.8px** · `align-items: baseline` · gap 3px |
+| 가격 레이블 (Day·12H) | `.m-prod-price-label` | `--text-m-tag-11` (11px) + weight **500** | 행 상속(purple-90) | 12px 다음 단계 토큰이 tag-11뿐이라 사용, 굵기만 Medium 유지 |
+| 가격 숫자 | `.m-prod-price-num` | `--text-m-body-16B` + weight 900 | `--cs-purple-light` (purple-60 #553FE0) | tabular-nums · line-height 1 |
+| 구분자 `/` | `.m-prod-price-sep` | `--text-m-script-14B` | `--cs-purple-pale` (purple-20 #C1BBEC) | Day·12H 둘 다 있을 때만 표시 |
+| 상품명 | `.m-prod-name` | `--text-m-script-12` (12px Medium) | `--cs-purple-dark` (purple-90) | letter-spacing -0.5px · line-height **1.12**(토큰 160%의 70%) |
+| 정보 블록 | `.m-prod-info` | — | — | gap·padding-top **10.8px**(12px의 90%), 좌우·하단 패딩 0 |
+
+```
+⛔ 위 표의 컬러는 이전 §14-4 Mobile 스펙(레이블·숫자 --cs-text / 상품명 --cs-text-mid)을 대체한다.
+⚠️ ProductDPCard.svelte 모바일 값(레이블 14B·상품명 14 Medium 등)은 이 갱신을 아직 반영하지 않았다 —
+   전역 동기화는 Stephen 지시 시 별도 진행(요청 범위 외 수정 금지).
+```
+
 #### 반응형 적용 (`@media`)
 
 ```svelte
@@ -3309,3 +3330,80 @@ Stephen 실화면 확인 후 표준으로 확정. `uiux-index.md`에 트리거 �
 *2026-09-25 §24 신설 — 실측 비율표에서 관행이 뚜렷한 카드 이미지·카드 반경(대)만 0.60 기준으로
 확정. 반경 중 등급·이미지 반경은 기존 표 유지, 예외 목록 병기.*
 *2026-09-25(같은 날 후속) §24-3b 추가 — 좌우 패딩 모바일 25px(PC 40px, 0.63) 확정. 토큰 `--layout-mob-pad`(20px)는 변경하지 않고 신규 화면은 25px 직접 명시, 예외 목록 병기.*
+
+---
+
+## 25. 삭제(휴지통) 아이콘 버튼 — front 영역 전체 '삭제' 표준 규격 ★★★ (2026-09-29 확정)
+
+> **front(USER 화면) 어디서든 "삭제" 동작 버튼은 이 규격을 쓴다.** 새 화면에서 삭제 버튼을 만들 때 텍스트형·자체 스타일
+> 삭제 버튼을 새로 만들지 말고 공용 컴포넌트를 그대로 재사용한다. (CMS 화면은 `cms-uiux.md §0-10-B` 삭제 안전 토스트 +
+> 기존 CMS 삭제 버튼 규격을 따른다 — 이 절은 USER 화면 전용)
+
+**정본 컴포넌트**: `src/lib/components/common/DeleteIconButton.svelte` (Stephen 제공 휴지통 SVG, `fill="currentColor"`)
+
+| 항목 | 값 |
+|---|---|
+| 형태 | 원형(`border-radius: 50%`) 아이콘 버튼 — 텍스트 없음 |
+| 원형 BG | **red-5** `--cs-red-xlight` (#FFEAEA) |
+| 휴지통 아이콘 색 | **red-80** `--cs-red-badge` (#FF3535) |
+| 크기 | 시각 32×32px · 아이콘 14×16px · 터치 타겟 44×44px(`::before` inset:-6px로 확보) |
+| 호버 | BG만 red-30 `--cs-red-light`로 변경 (outline·box-shadow 금지) |
+| 무장(1차 클릭 후, `confirming`) | BG red-100 `--cs-red` + 흰 휴지통 |
+| disabled(처리 중) | `opacity: 0.5`, `cursor: not-allowed` |
+| 배치 | 부모 flex 행의 오른쪽 끝(`margin-left: auto` 기본 내장) — 카드 메타 줄(작성자·날짜 옆) 등 |
+| 접근성 | `aria-label`(예: "내 댓글 삭제")·`title` 필수, 무장 시 "한 번 더 누르면 삭제됩니다" 안내 |
+
+**재확인(2단계 삭제) 규칙 — 삭제 안전 토스트 재사용**
+
+```
+✅ 삭제 동작은 반드시 `createDeleteSafetyToast()`(`$lib/utils/deleteSafetyToast.svelte.ts`)를 재사용한다
+   — 폼 액션이 아닌 RPC·fetch 삭제는 `handleAction(항목키, perform)`을 사용 (항목별로 무장 상태 구분)
+✅ 1차 클릭: 삭제하지 않고 csToast.warning("한번 더 누르면 삭제됩니다.") + 버튼 무장(confirming)
+✅ 2차 클릭(무장된 같은 항목): 실제 삭제 → 성공 csToast.success / 실패 csToast.error(실패 사유 포함)
+✅ 다른 항목의 삭제 버튼을 누르면 그 항목이 새로 무장되고 이전 항목은 풀린다(실수 삭제 방지)
+❌ confirm()/alert() 등 다른 방식의 재확인 금지 · 3초 자동 해제 등 임의 규칙 추가 금지
+```
+
+```svelte
+<script lang="ts">
+  import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+
+  const deleteSafety = createDeleteSafetyToast({
+    successMessage: '댓글이 삭제됐습니다.',
+    errorMessage: '댓글 삭제에 실패했습니다.',
+  })
+  function del(id: string) {
+    return deleteSafety.handleAction(id, async () => {
+      const { data: ok, error } = await supabase.rpc('delete_own_xxx', { p_id: id })
+      if (error) throw new Error(error.message)      // 실패 사유가 토스트에 함께 표시됨
+      if (!ok) throw new Error('본인 항목이 아니거나 이미 삭제되었습니다.')
+      items = items.filter((i) => i.id !== id)       // 성공 시 목록에서 제거
+      return true
+    })
+  }
+</script>
+
+<DeleteIconButton
+  ariaLabel="내 댓글 삭제"
+  confirming={deleteSafety.pendingKey === item.id}
+  disabled={deleteSafety.busyKey === item.id}
+  onclick={() => del(item.id)}
+/>
+```
+
+**서버 규칙(본인 항목 삭제)**: 사용자 화면의 "본인 글 삭제"는 직접 DML·RLS DELETE 정책을 열지 않고 `SECURITY DEFINER` RPC
+(`user_id = auth.uid()`만 삭제, anon 실행 불가)로만 제공한다(H-01). 본인 여부(`isMine`)는 서버가 판정해 boolean만 내려주고
+`user_id` 자체는 클라이언트로 내려보내지 않는다.
+**적용처(2026-09-29)**: 크레이지로그 댓글(`/crazylog/view/[slug]`, PC·모바일 · Migration #580) ·
+상품 후기(`/products/[id]`, 후기 탭·하단 후기 영역 · Migration #581).
+
+**GATE C**
+```
+[ ] USER 화면 삭제 버튼이 DeleteIconButton(원형 red-5 BG · 휴지통 red-80 · 32px/터치 44px)인가? 텍스트형·자체 스타일이 아닌가?
+[ ] 삭제가 createDeleteSafetyToast 재사용(1차 경고 토스트 → 2차 삭제 → 성공/실패 토스트)인가?
+[ ] 항목별 무장(pendingKey) — 다른 항목 클릭이 이전 무장 항목을 지우지 않는가?
+[ ] 본인 삭제가 SECURITY DEFINER RPC 경유이며 isMine만 클라이언트로 내려가는가?
+```
+
+*2026-09-29 §25 신설 — front 영역 전체 삭제 버튼 표준(원형 red-5 BG·red-80 휴지통·삭제 안전 토스트 재확인). 크레이지로그 댓글·상품 후기 적용.*

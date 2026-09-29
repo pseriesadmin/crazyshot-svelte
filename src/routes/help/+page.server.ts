@@ -40,7 +40,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.eq('key', 'help_hero_bg_images')
 		.maybeSingle()
 
-	type HeroBgValue = { images?: HeroImageItem[]; mode?: 'random' | 'fixed' }
+	type HeroBgValue = { images?: HeroImageItem[]; mode?: 'random' | 'fixed'; title?: string; sub?: string }
 	const heroBgValue = ((heroBgSettingRow as { value: unknown } | null)?.value ?? {}) as HeroBgValue
 	const heroBgImages: HeroImageItem[] = heroBgValue.images ?? []
 	const heroBgMode: 'random' | 'fixed' = heroBgValue.mode ?? 'random'
@@ -54,5 +54,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 	}
 
-	return { isCms, faqItems, heroBgImages, heroBgMode, heroBgUrl }
+	// 메인·서브 문구(CMS 히어로 관리) — 없으면 기본 문구
+	const heroTitle = (heroBgValue.title ?? '').trim()
+	const heroSub = (heroBgValue.sub ?? '').trim()
+
+	return { isCms, faqItems, heroBgImages, heroBgMode, heroBgUrl, heroTitle, heroSub }
 }

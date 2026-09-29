@@ -181,6 +181,7 @@ Mobile: --text-m-htitle-24B  (24px Black)  제목
 | **ChevronIcon**(`arrow01`) | `$lib/components/common/ChevronIcon.svelte` | `direction`: `right`(기본)/`left`/`up`/`down` | props: `size`(기본 8) · `color`(기본 `#aaaaaa`) — 흰 카드 위 리스트 이동 화살표 표준 |
 | **Arrow02Icon**(`arrow02`) | `$lib/components/common/Arrow02Icon.svelte` | 방향 고정(우측, 직선+화살촉형) | props: `size`(기본 16) · `color`(기본 `currentColor`) — 랜딩·상세이동 버튼용 심플 화살표 표준(2026-08-07, `AdminChatPanel.svelte` `.cs-detail-link` 최초 적용) |
 | **close-red**(강조닫기버튼) | 클래스 `.close-btn`/`.rep-close-btn` (CMS 전용, 컴포넌트 파일 없음) | 배치: `flex`(margin-left:auto) 또는 `absolute`(카드 코너) | cms-uiux.md §0-10-A · 28×28px · `✕` 문자(SVG 금지) · hover 시 `--cs-red-badge` 강조 |
+| **DeleteIconButton**(front 삭제 아이콘 버튼) | `$lib/components/common/DeleteIconButton.svelte` | — | **USER 화면 '삭제' 표준(2026-09-29)**: 원형 BG red-5(`--cs-red-xlight`)·휴지통 red-80(`--cs-red-badge`)·시각 32px/터치 44px·호버 BG만 red-30·무장 시 red-100+흰 아이콘. 재확인은 `createDeleteSafetyToast().handleAction()`(삭제 안전 토스트) 재사용. 정본 → `front-uiux.md §25` |
 | **CalendarGrid**(날짜선택 그리드) | `$lib/components/common/CalendarGrid.svelte` | — | CMS `CmsDatePicker.svelte` + front `ProfileTabContent.svelte`·`cart/+page.svelte` 3곳 공용. **환경분리 예외 적용 컴포넌트**(위 "⛔ 환경 분리" 절 예외 참고) — 날짜 숫자 서체에 front 전용 토큰 `--font-en-display` 사용, CMS 포함 전체에 적용됨(Stephen 확정) |
 
 > ⛔ `<select>` 금지 — 드롭다운 목록 선택은 `SuggestPicker` 단독 표준

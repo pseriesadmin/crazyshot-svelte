@@ -1,13 +1,18 @@
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
+import { attachCardPrices, fetchGridRows, mapGridRows, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
   const urlCategory = url.searchParams.get('category') ?? 'all'
-  // "더보기"(전체보기) 아이콘 전용 — 해당 분류 상품을 CMS 그리드 설정 개수 대신 최대 20개까지
-  // 한 화면에 노출한다(2026-09-29, Stephen 확정: 페이지네이션 없이 20개 단일화면 컷오프).
-  const viewAll = url.searchParams.get('view') === 'all'
+  // "전체" 목록 무한스크롤 — 처음 INFINITE_INITIAL개만 서버에서 내려주고, 이후 10개씩은 클라이언트가
+  // 목록 전용 엔드포인트(/products/_more)로 가져온다(페이지 전체 load 재실행 없음). 카테고리 미선택(all)에서만 적용.
+  const INFINITE_INITIAL = 20
+  const infiniteMode = urlCategory === 'all'
+  const infiniteLimit = infiniteMode ? INFINITE_INITIAL : 0
+  // 랜덤 순서 시드 — 이후 추가 조회에서도 같은 순서를 유지하려고 클라이언트가 그대로 다시 보낸다
+  const seed = url.searchParams.get('seed') ?? Math.random().toString(36).slice(2, 10)
 
   // CMS 역할 확인
   let isCms = false
@@ -34,12 +39,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   type MdSettings       = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
   type CatSettings      = { items: { code_id: string; icon_key: string; sort_order: number }[] }
   type KeywordsSettings = { items: string[] }
+  type CategoryBannerSettings = {
+    items: { category_id: string; image_url: string | null; mobile_image_url?: string | null; link_url: string | null; alt: string; enabled: boolean }[]
+    mid_banner?: { enabled: boolean; image_url: string | null; title: string; sub: string; link_url: string | null } | null
+  }
 
   const heroSettings     = (settings['product_page_hero']       as HeroSettings)     ?? { products: [], mode: 'fixed' }
-  const gridSettings     = (settings['product_page_grid']       as GridSettings)     ?? { category: 'all', count: 16, sort: 'latest' }
+  const gridSettings     = (settings['product_page_grid']       as GridSettings)     ?? { category: 'all', count: 16, sort: 'views' }
   const mdSettings       = (settings['product_page_md_picks']   as MdSettings)       ?? { products: [], mode: 'fixed' }
   const catSettings      = (settings['product_page_categories'] as CatSettings)      ?? { items: [] }
   const keywordsSettings = (settings['product_page_keywords']   as KeywordsSettings) ?? { items: [] }
+  const categoryBannerSettings = (settings['product_page_category_banners'] as CategoryBannerSettings) ?? { items: [] }
 
   // 관심집중 키워드 — 동적 랭킹(검색 조회수 + 상품 상세 접근수 합산, 최근 7일)
   // 결과가 없으면 CMS 수동 설정 → +page.svelte KEYWORDS_FALLBACK 순으로 폴백
@@ -74,6 +84,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     )
   }
 
+  // 모바일 목록·카테고리 선택 시 목록은 기존 CMS 그리드 설정 개수 그대로 사용
+  const mobileGridCount = gridSettings.count === 0 ? 100 : (gridSettings.count || 16)
+
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)
 
@@ -84,31 +97,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       ? (locals.supabase.rpc as any)('get_products_by_ids', { p_ids: heroIds })
       : Promise.resolve({ data: [] as unknown[], error: null }),
 
-    // 상품 그리드 — 노출 기준: 상품 상세 조회수 내림차순(가장 많이 본 상품, PC·모바일 공통)
-    // URL ?category= 파라미터가 CMS 그리드 설정보다 우선. RPC 실패 시 search_products(최신순)로 폴백
-    (async () => {
-      const gridCategory = urlCategory !== 'all'
+    // 상품 그리드 — 노출 기준: CMS 노출 순서 설정(최신/랜덤/조회수/렌탈 많은 순, PC·모바일 공통)
+    // URL ?category= 파라미터가 CMS 그리드 설정보다 우선. RPC 실패 시 search_products(최신순)로 폴백(공용 모듈)
+    fetchGridRows(locals.supabase, {
+      category: urlCategory !== 'all'
         ? urlCategory
-        : (gridSettings.category === 'all' ? null : gridSettings.category)
-      const gridLimit = viewAll ? 20 : (gridSettings.count === 0 ? 100 : (gridSettings.count || 16))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const viewed = await (locals.supabase.rpc as any)('get_most_viewed_products', {
-        p_category: gridCategory,
-        p_limit: gridLimit,
-        p_days: null,
-      })
-      if (!viewed.error) return viewed
-      console.error('[products] get_most_viewed_products 실패 — search_products 폴백:', viewed.error.message)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (locals.supabase.rpc as any)('search_products', {
-        p_query: '',
-        p_category: gridCategory,
-        p_page: 1,
-        p_limit: gridLimit,
-        p_session_id: null,
-        p_user_id: session?.user.id ?? null,
-      })
-    })(),
+        : (gridSettings.category === 'all' ? null : gridSettings.category),
+      sort: resolveGridSort(gridSettings.sort),
+      limit: infiniteMode ? infiniteLimit : mobileGridCount,
+      seed,
+      userId: session?.user.id ?? null,
+    }),
 
     // MD 추천 픽
     mdIds.length
@@ -118,27 +117,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   ])
 
   const heroProducts: ProductCard[] = applyProductOrder((heroRes.data ?? []) as ProductCard[], heroSettings)
-  const gridProducts: ProductCard[] = ((gridRes.data ?? []) as Record<string, unknown>[]).map((r) => ({
-    id:               String(r['product_id'] ?? r['id'] ?? ''),
-    name:             String(r['name'] ?? ''),
-    slug:             (r['slug'] as string | null) ?? null,
-    category:         String(r['category'] ?? ''),
-    image_urls:       r['image_urls'] != null
-                        ? (r['image_urls'] as string[])
-                        : r['image_url'] != null
-                          ? [String(r['image_url'])]
-                          : null,
-    base_price_daily: Number(r['base_price_daily'] ?? r['price_min'] ?? 0),
-    product_caption:  (r['product_caption'] as string | null) ?? null,
-    is_active:        Boolean(r['is_active'] ?? true),
-    price_12h:        null,
-    price_24h:        null,
-    sale_only:        false,
-    sale_price:       null,
-  }))
+  const gridProducts: ProductCard[] = mapGridRows((gridRes.data ?? []) as Record<string, unknown>[])
   const mdProducts: ProductCard[] = applyProductOrder((mdRes.data ?? []) as ProductCard[], mdSettings)
 
-  // 12H·24H 실가격 배치 조회 — 전체 상품 ID 수집 후 price_rules 단일 쿼리
+  // 12H·24H 실가격·판매전용 정보 합성 — 공용 모듈(추가 조회 엔드포인트와 동일 로직)
   const allIds = [
     ...heroProducts.map((p) => p.id),
     ...gridProducts.map((p) => p.id),
@@ -147,89 +129,37 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, allIds)
 
-  const price12hMap: Record<string, number> = {}
-  const price24hMap: Record<string, number> = {}
-  if (allIds.length > 0) {
-    const { data: priceRules } = await locals.supabase
-      .from('price_rules')
-      .select('product_id, duration_type, price')
-      .in('product_id', allIds)
-      .in('duration_type', ['12h', '24h'])
-      .eq('is_active', true)
-      .is('deleted_at', null)
-    for (const r of (priceRules ?? []) as { product_id: string; duration_type: string; price: number }[]) {
-      if (r.duration_type === '12h') price12hMap[r.product_id] = Number(r.price)
-      if (r.duration_type === '24h') price24hMap[r.product_id] = Number(r.price)
-    }
-  }
-
-  // 판매전용(sale_only) 상품은 대여가격(price_rules) 자체가 없는 게 정상이라(products.md §2-9),
-  // search_products RPC의 price_min/base_price_daily만으로는 가격이 전혀 안 나온다 —
-  // sale_price/sale_only를 별도로 조회해 카드에 실어준다.
-  const salePriceMap: Record<string, number> = {}
-  const saleOnlyMap: Record<string, boolean> = {}
-  if (allIds.length > 0) {
-    const { data: saleRows } = await locals.supabase
-      .from('products')
-      .select('id, sale_only, sale_price')
-      .in('id', allIds)
-    for (const r of (saleRows ?? []) as { id: string; sale_only: boolean | null; sale_price: number | null }[]) {
-      saleOnlyMap[r.id] = !!r.sale_only
-      if (r.sale_price != null) salePriceMap[r.id] = Number(r.sale_price)
-    }
-  }
-
-  // 2026-09-09: CMS 가격정책(price_rules)이 항상 우선 — price_rules 24h 값이 있으면 그 값을
-  // 쓰고, price_rules 자체가 없는 상품(레거시 미설정)만 옛 base_price_daily로 폴백한다.
-  // products/[id]/+page.server.ts attachPrices()와 동일한 우선순위 수정(동일 버그 패턴).
-  const mergePrice = (cards: ProductCard[]): ProductCard[] =>
-    cards.map((c) => {
-      const rule24h = price24hMap[c.id]
-      const price_24h = rule24h != null ? rule24h : (c.base_price_daily > 0 ? c.base_price_daily : null)
-      return {
-        ...c,
-        price_12h: price12hMap[c.id] ?? null,
-        price_24h,
-        sale_only: saleOnlyMap[c.id] ?? false,
-        sale_price: salePriceMap[c.id] ?? null,
-      }
-    })
+  const pricedAll = await attachCardPrices(locals.supabase, [...heroProducts, ...gridProducts, ...mdProducts])
+  const pricedHero = pricedAll.slice(0, heroProducts.length)
+  const pricedGrid = pricedAll.slice(heroProducts.length, heroProducts.length + gridProducts.length)
+  const pricedMd = pricedAll.slice(heroProducts.length + gridProducts.length)
 
   return {
     isCms,
     isLoggedIn: !!session?.user.id,
     wishedIds,
     urlCategory,
-    viewAll,
+    infiniteMode,
+    infiniteLimit,
+    seed,
+    mobileGridCount,
     settings: {
       hero:       heroSettings,
       grid:       gridSettings,
       mdPicks:    mdSettings,
       categories: catSettings,
+      categoryBanners: categoryBannerSettings,
       keywords:   trendingKeywords.length > 0
                     ? { items: trendingKeywords }
                     : keywordsSettings,
       keywordsRaw: keywordsSettings,
     },
     categories:   CMS_CATEGORIES,
-    heroProducts: mergePrice(heroProducts),
-    gridProducts: mergePrice(gridProducts),
-    mdProducts:   mergePrice(mdProducts),
+    heroProducts: pricedHero,
+    gridProducts: pricedGrid,
+    mdProducts:   pricedMd,
   }
 }
 
-// 클라이언트/서버 공유 타입
-export interface ProductCard {
-  id: string
-  name: string
-  slug: string | null
-  category: string
-  image_urls: string[] | null
-  base_price_daily: number
-  product_caption: string | null
-  is_active: boolean
-  price_12h: number | null
-  price_24h: number | null
-  sale_only: boolean
-  sale_price: number | null
-}
+// 클라이언트/서버 공유 타입 — 정의는 공용 모듈로 이동(추가 조회 엔드포인트와 공유)
+export type { ProductCard } from '$lib/server/products/productGrid'

@@ -12,6 +12,8 @@ export interface CatSettingsItem {
   icon_key: string
   sort_order: number
   icon_url?: string | null
+  /** ON 아이콘(호버·선택 공용, 상자 배경 포함 SVG) — 없으면 기존 CSS 효과 */
+  icon_active_url?: string | null
 }
 
 export interface CategoryGroup {
@@ -27,6 +29,7 @@ export interface DisplayCategory {
   name: string
   sort_order: number
   icon_url: string | null
+  icon_active_url: string | null
 }
 
 /**
@@ -84,6 +87,7 @@ export function joinDisplayCategories(catItems: CatSettingsItem[], groups: Categ
         name: group.name,
         sort_order: item.sort_order,
         icon_url: item.icon_url ?? null,
+        icon_active_url: item.icon_active_url ?? null,
       }]
     })
 }

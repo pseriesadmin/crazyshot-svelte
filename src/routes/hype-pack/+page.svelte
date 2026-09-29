@@ -339,13 +339,14 @@
   /* 모바일 바디 전체 */
   .m-body {
     background: var(--cs-lilac);
-    padding-top: 87px;
+    padding-top: var(--layout-mob-gnb-offset);
     overflow-x: hidden;
   }
 
   /* ── ScrollMenuBar ── */
   .m-scroll-menu {
-    padding: 20px 25px 0;
+    padding: 0 25px;   /* 위 20px 제거(2026-09-29) — GNB 아래 간격은 .m-body padding-top(--layout-mob-gnb-offset)만 담당, 좌우 25px 유지 */
+    padding-bottom: 0;
   }
   .m-scroll-menu-top {
     display: flex;
@@ -662,6 +663,13 @@
     letter-spacing: -0.5px;
     line-height: 2;
     text-align: center;
+  }
+  /* "추천 Package" 타이틀만 — Category 타이틀(/products d-pkg-title)과 동일 폰트 크기·굵기로
+     축소 + 좌측 정렬(2026-09-29). "Pack 테마목록"(.theme-pick-head)은 기존 25px/center 유지 */
+  .d-title-bar:not(.theme-pick-head) .d-section-title {
+    font-size: 20px;
+    font-weight: 500;
+    text-align: left;
   }
 
   .d-ad-banner {

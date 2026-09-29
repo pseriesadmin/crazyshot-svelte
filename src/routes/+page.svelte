@@ -7,6 +7,10 @@
   import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
   import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
+  import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
+  import {
+    HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB, HELP_HERO_DEFAULT_BG,
+  } from '$lib/constants/helpHero'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -64,6 +68,7 @@
   let catProductsTabId        = $state('')
   let catProductsTabName      = $state('')
   let showMdPickModal         = $state(false)
+  let showHelpHeroModal       = $state(false)
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -133,6 +138,7 @@
           label:    cat.name,
           icon:     CATEGORY_ICON_BY_CODE[cat.code] ?? 'wrench',
           icon_url: (item as { icon_url?: string | null }).icon_url ?? null,
+          icon_active_url: (item as { icon_active_url?: string | null }).icon_active_url ?? null,
         }]
       })
   })())
@@ -177,11 +183,6 @@
     setTimeout(() => { poppingTab = null }, 700)
   }
 
-  let sliderEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
-  function scrollSlider(dir: 'left' | 'right') {
-    sliderEl?.scrollBy({ left: dir === 'right' ? 330 : -330, behavior: 'smooth' })
-  }
-
   // 취향직격 테마 원형탭(PC) — 최대 3개만 노출, 나머지는 슬라이드로 이동
   let themeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
   function scrollThemeTabs(dir: 'left' | 'right') {
@@ -211,7 +212,38 @@
 
 <svelte:head>
   <title>CRAZYSHOT — 비대면 AI 검수 렌탈 플랫폼</title>
+  <!-- 홈 모바일(≤640px)에서만 전역 푸터(+layout.svelte .site-footer, 전역 규칙으로 모바일 숨김)를 다시 노출(2026-09-29).
+       <svelte:head> 스타일은 홈 화면을 벗어나면 제거되므로 다른 화면의 모바일 푸터 숨김에는 영향 없음.
+       하단 고정 탭바(70px)에 푸터 끝이 가리지 않도록 하단 패딩 확보 -->
+  <style>
+    @media (max-width: 640px) {
+      .site-footer { display: block !important; padding-bottom: 70px; }
+    }
+  </style>
 </svelte:head>
+
+{#snippet faqHero(extra: string)}
+  <section class="mh-hero {extra}">
+    <img src={data.faqHeroBgUrl || HELP_HERO_DEFAULT_BG} alt="" class="mh-hero-bg" />
+    {#if data.isCms}
+      <button class="mh-hero-edit-btn" onclick={() => (showHelpHeroModal = true)} aria-label="헬프 히어로 배경·문구 관리">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        BG 관리
+      </button>
+    {/if}
+    <div class="mh-hero-gradient"></div>
+    <div class="mh-hero-content">
+      <div class="mh-hero-heading">
+        <img src="/logo-bi-hero.svg" alt="크레이지샷" class="mh-hero-logo" width="109" height="72" />
+        <h2 class="mh-hero-title">{data.faqHeroTitle || HELP_HERO_DEFAULT_TITLE}</h2>
+        <p class="mh-hero-sub">{data.faqHeroSub || HELP_HERO_DEFAULT_SUB}</p>
+      </div>
+    </div>
+  </section>
+{/snippet}
 
 <!-- ═══════════════════════════════════════════════════════════════
      DESKTOP (md↑)
@@ -400,8 +432,12 @@
     <div class="cat-tabs">
       {#each CATEGORY_TABS as tab}
         <button class="cat-tab" class:active={activeTab === tab.id} onclick={() => activeTab = tab.id}>
-          <div class="cat-tab-icon" style="background:{activeTab === tab.id ? purple : purplePale}">
-            {#if tab.icon_url}
+          <div class="cat-tab-icon" class:has-on={!!(tab.icon_url && tab.icon_active_url)} style={tab.icon_url && tab.icon_active_url ? '' : `background:${activeTab === tab.id ? purple : purplePale}`}>
+            {#if tab.icon_url && tab.icon_active_url}
+              <!-- ON 이미지(호버·선택 공용, 상자 배경 포함 SVG) — OFF 위에 겹쳐 교차 전환. /products 카테고리 메뉴와 동일 설정 공유 -->
+              <img src={tab.icon_url} alt={tab.label} class="cat-tab-custom-icon cat-tab-icon-off" />
+              <img src={tab.icon_active_url} alt="" aria-hidden="true" class="cat-tab-custom-icon cat-tab-icon-on" />
+            {:else if tab.icon_url}
               <img src={tab.icon_url} alt={tab.label} class="cat-tab-custom-icon" />
             {:else if tab.icon === 'package'}
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/><path d="M16 7V5a2 2 0 00-8 0v2" stroke={activeTab === tab.id ? red : purple} stroke-width="1.8"/></svg>
@@ -426,19 +462,9 @@
       {/each}
     </div>
 
-    <!-- 미칠 PICK 헤딩 -->
-    <div class="michil-heading">
-      <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
-    </div>
-
     <!-- 활성 카테고리 타이틀 바 -->
     <div class="pkg-bar">
       <span class="pkg-bar-label">{CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? 'Category'}</span>
-      <div class="pkg-bar-icon">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path d="M5 2l5 5-5 5" stroke="{purpleLight}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
     </div>
 
     {#if data.isCms}
@@ -453,13 +479,7 @@
     <!-- 상품 슬라이더 (Phase 4: DB 큐레이션 데이터) -->
     {#if activeCatProds.length > 0}
       <div class="prod-slider-wrap">
-        <button class="slider-arrow left" onclick={() => scrollSlider('left')} aria-label="이전">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M15 18l-6-6 6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
-
-        <div bind:this={sliderEl} class="prod-slider">
+        <div class="prod-slider">
           {#each activeCatProds as p}
             <div
               class="prod-card"
@@ -488,12 +508,6 @@
             </div>
           {/each}
         </div>
-
-        <button class="slider-arrow right" onclick={() => scrollSlider('right')} aria-label="다음">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M9 18l6-6-6-6" stroke="{navy}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
       </div>
     {:else if data.isCms}
       <p class="cat-empty-notice">⚙ 상품 큐레이션에서 이 카테고리의 상품을 추가하세요.</p>
@@ -503,8 +517,8 @@
   <!-- ⑤ 크레이지로그 -->
   <div class="d-section d-blog-section">
     <div class="section-head">
-      <svg width="34" height="16" viewBox="0 0 34 16" fill="none" aria-hidden="true">
-        <path d="M2 8 Q8.5 2 17 8 Q25.5 14 32 8" stroke="#ff3535" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <svg width="34" height="19" viewBox="0 0 38 21" fill="none" aria-hidden="true">
+        <path d="M17.8899 0.218353C18.6016 -0.0728023 19.3988 -0.072768 20.1106 0.218353L20.262 0.28476L20.387 0.349213C20.995 0.681504 21.3406 1.19289 21.5178 1.47714C21.7224 1.80539 21.9327 2.22721 22.1321 2.62265L24.2747 6.87363L28.9592 5.30624C29.4012 5.15823 29.8653 5.00075 30.2551 4.90878C30.6075 4.8257 31.3078 4.68499 32.052 4.96542C32.9 5.28515 33.5462 5.97536 33.8196 6.82675C34.058 7.57012 33.8969 8.25404 33.801 8.60507C33.6952 8.99225 33.5215 9.45227 33.3567 9.89511L31.8293 13.9967L36.8264 16.2633C37.8322 16.7196 38.2776 17.9049 37.8215 18.9107C37.3651 19.9163 36.1798 20.3621 35.1741 19.9059L29.7776 17.4586C29.5783 17.3682 29.3209 17.2523 29.1028 17.1314C28.8626 16.9983 28.5301 16.7857 28.2366 16.4303C27.8561 15.9694 27.6248 15.4047 27.5706 14.8131C27.5289 14.3582 27.6129 13.9752 27.6877 13.7125C27.756 13.4731 27.8555 13.2084 27.9329 13.0006L29.2639 9.42148L25.134 10.8053C24.9449 10.8686 24.6962 10.9535 24.47 11.0103C24.2191 11.0734 23.8562 11.1416 23.427 11.0953C22.8646 11.0345 22.3332 10.8121 21.8958 10.4586C21.5626 10.1893 21.3547 9.88693 21.2219 9.6666C21.1019 9.46734 20.9848 9.23285 20.8938 9.05234L18.9993 5.2955L17.1067 9.05136V9.05234C17.0157 9.23282 16.8986 9.46742 16.7786 9.6666C16.6458 9.8869 16.4377 10.1894 16.1047 10.4586C15.6673 10.8119 15.1358 11.0346 14.5735 11.0953C14.1442 11.1415 13.7813 11.0734 13.5305 11.0103C13.3042 10.9534 13.0556 10.8686 12.8665 10.8053L8.7356 9.42148L10.0676 13.0006C10.145 13.2085 10.2445 13.4731 10.3127 13.7125C10.3876 13.9752 10.4716 14.3581 10.4299 14.8131C10.3757 15.4046 10.1444 15.9694 9.76392 16.4303C9.47044 16.7855 9.13786 16.9983 8.89771 17.1314C8.67964 17.2522 8.42204 17.3683 8.2229 17.4586L2.82642 19.9059C1.82066 20.3619 0.635292 19.9164 0.178955 18.9107C-0.277049 17.905 0.168563 16.7197 1.17407 16.2633L6.17017 13.9967L4.6438 9.89511C4.479 9.45221 4.30527 8.99228 4.19946 8.60507C4.10357 8.25406 3.94252 7.57005 4.18091 6.82675L4.23657 6.66953C4.53582 5.89099 5.15351 5.26527 5.94849 4.96542L6.08716 4.91757C6.77856 4.70212 7.41493 4.83087 7.74536 4.90878C8.13518 5.00072 8.59918 5.1582 9.04126 5.30624L13.7249 6.87363L15.8684 2.62265C16.0677 2.22732 16.2781 1.80535 16.4827 1.47714C16.6716 1.17402 17.0524 0.611777 17.7385 0.28476L17.8899 0.218353Z" fill="#FF3535"/>
       </svg>
       <span class="section-title" style="color:{redDeep}">요즘 크레이지·로그</span>
     </div>
@@ -526,6 +540,9 @@
           </div>
           <div class="blog-main-footer">
             <p class="blog-main-caption">{data.crazylogPosts[0].title}</p>
+            {#if data.crazylogPosts[0].desc}
+              <p class="blog-main-sub">{data.crazylogPosts[0].desc}</p>
+            {/if}
           </div>
         </div>
         {#if data.crazylogPosts.length >= 2}
@@ -533,6 +550,16 @@
             {#if data.crazylogPosts[1].img}
               <img src={data.crazylogPosts[1].img} alt={data.crazylogPosts[1].title} class="blog-img"/>
             {/if}
+            <div class="blog-sub-header" style="background:{data.crazylogPosts[1].catBg}">
+              <span class="blog-cat-label">{data.crazylogPosts[1].cat}</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <div class="blog-sub-footer">
+              <p class="blog-main-caption blog-sub-caption">{data.crazylogPosts[1].title}</p>
+              {#if data.crazylogPosts[1].desc}
+                <p class="blog-main-sub">{data.crazylogPosts[1].desc}</p>
+              {/if}
+            </div>
           </div>
         {/if}
         {#if data.crazylogPosts.length >= 3}
@@ -544,6 +571,12 @@
               <span class="blog-cat-label">{data.crazylogPosts[2].cat}</span>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </div>
+            <div class="blog-sub-footer">
+              <p class="blog-main-caption blog-sub-caption">{data.crazylogPosts[2].title}</p>
+              {#if data.crazylogPosts[2].desc}
+                <p class="blog-main-sub">{data.crazylogPosts[2].desc}</p>
+              {/if}
+            </div>
           </div>
         {/if}
       </div>
@@ -552,18 +585,13 @@
 
   <!-- ⑥ FAQ -->
   <div class="d-section d-faq-section">
-    <div class="faq-brand-box" style="{data.faqHeroBgUrl ? `background-image:url('${data.faqHeroBgUrl}');background-size:cover;background-position:center` : `background:${purplePale}`}">
-      <div class="faq-logo">
-        <span class="logo-crazy-lg">CRAZY</span>
-        <span class="logo-shot-lg">SHOT</span>
-      </div>
-      <div class="faq-brand-text" style="color:{navy}">다양한 영상장비 쉽고 빠른<br/>렌탈 마법 가이드</div>
-    </div>
+    <!-- PC도 모바일과 동일한 히어로(BG 이미지+로고+문구, CMS BG 관리) — 가로폭 480px 유지, 세로만 약간 확대(2026-09-29) -->
+    {@render faqHero('mh-hero--pc')}
     <div class="faq-col">
       {#if data.isCms}
         <a href="/help" class="cms-section-link" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
       {/if}
-      <p class="faq-intro">크레이샷만의 빠른 예약, 장비 수령, 반납까지 자주 묻는 질문을 바로 확인하세요.</p>
+      <p class="faq-intro">FAQ ·자주 묻는 질문</p>
       <div class="faq-list">
         {#each data.topFaqs as item}
           <div class="faq-item">
@@ -690,7 +718,7 @@
 
       {#if activeThemeProducts.length > 0}
         <!-- 표준 상품슬라이드 디자인(m-prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
-        <div class="m-snap-slider theme-m-prod-slider">
+        <div class="m-snap-slider theme-m-prod-slider" class:m-slider-static={activeThemeProducts.length <= 1}>
           {#each activeThemeProducts as prod}
             <div
               class="m-prod-card"
@@ -773,8 +801,10 @@
           ✦ MD 추천 설정
         </button>
       {/if}
-      <div class="md-picks-header">
-        <span class="md-picks-label">MD 추천</span>
+      <!-- 미칠 PICK 헤딩 — 모바일 전용 노출(PC 홈에서는 제거, 2026-09-29) -->
+      <div class="michil-heading">
+        <img src="/logo-bi-shadow.svg" alt="크레이지샷" class="michil-logo" width="103" height="68" />
+        <h2 class="michil-title"><span style="color:{redDeep}">미·칠</span> PICK!</h2>
       </div>
       <div class="md-picks-track">
         {#each data.mdProducts as prod}
@@ -782,17 +812,33 @@
             <div class="md-pick-img-box">
               <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="md-pick-img" loading="lazy" />
             </div>
-            <div class="md-pick-info">
-              <p class="md-pick-name">{prod.name}</p>
-              <p class="md-pick-price">
+            <div class="mdp-info">
+              {#if prod.category}
+                <p class="mdp-category">{CATEGORY_TABS.find((t) => t.id === prod.category)?.label ?? prod.category}</p>
+              {/if}
+              <div class="mdp-price-row">
                 {#if prod.sale_only}
-                  Price {(prod.sale_price ?? 0).toLocaleString('ko-KR')}
+                  <span class="mdp-price-group">
+                    <span class="mdp-price-label">Price</span>
+                    <span class="mdp-price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
+                  </span>
                 {:else}
-                  {#if prod.price_24h}Day {prod.price_24h.toLocaleString('ko-KR')}{/if}
-                  {#if prod.price_24h && prod.price_12h} / {/if}
-                  {#if prod.price_12h}12H {prod.price_12h.toLocaleString('ko-KR')}{/if}
+                  {#if prod.price_24h}
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">Day</span>
+                      <span class="mdp-price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>
+                    </span>
+                  {/if}
+                  {#if prod.price_24h && prod.price_12h}<span class="mdp-price-sep">/</span>{/if}
+                  {#if prod.price_12h}
+                    <span class="mdp-price-group">
+                      <span class="mdp-price-label">12H</span>
+                      <span class="mdp-price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>
+                    </span>
+                  {/if}
                 {/if}
-              </p>
+              </div>
+              <p class="mdp-name">{prod.name}</p>
             </div>
           </a>
         {/each}
@@ -809,8 +855,8 @@
   <!-- ④ 요즘 크레이지로그 -->
   <div class="m-blog-section">
     <div class="section-head">
-      <svg width="34" height="16" viewBox="0 0 34 16" fill="none" aria-hidden="true">
-        <path d="M2 8 Q8.5 2 17 8 Q25.5 14 32 8" stroke="white" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      <svg width="34" height="19" viewBox="0 0 38 21" fill="none" aria-hidden="true">
+        <path d="M17.8899 0.218353C18.6016 -0.0728023 19.3988 -0.072768 20.1106 0.218353L20.262 0.28476L20.387 0.349213C20.995 0.681504 21.3406 1.19289 21.5178 1.47714C21.7224 1.80539 21.9327 2.22721 22.1321 2.62265L24.2747 6.87363L28.9592 5.30624C29.4012 5.15823 29.8653 5.00075 30.2551 4.90878C30.6075 4.8257 31.3078 4.68499 32.052 4.96542C32.9 5.28515 33.5462 5.97536 33.8196 6.82675C34.058 7.57012 33.8969 8.25404 33.801 8.60507C33.6952 8.99225 33.5215 9.45227 33.3567 9.89511L31.8293 13.9967L36.8264 16.2633C37.8322 16.7196 38.2776 17.9049 37.8215 18.9107C37.3651 19.9163 36.1798 20.3621 35.1741 19.9059L29.7776 17.4586C29.5783 17.3682 29.3209 17.2523 29.1028 17.1314C28.8626 16.9983 28.5301 16.7857 28.2366 16.4303C27.8561 15.9694 27.6248 15.4047 27.5706 14.8131C27.5289 14.3582 27.6129 13.9752 27.6877 13.7125C27.756 13.4731 27.8555 13.2084 27.9329 13.0006L29.2639 9.42148L25.134 10.8053C24.9449 10.8686 24.6962 10.9535 24.47 11.0103C24.2191 11.0734 23.8562 11.1416 23.427 11.0953C22.8646 11.0345 22.3332 10.8121 21.8958 10.4586C21.5626 10.1893 21.3547 9.88693 21.2219 9.6666C21.1019 9.46734 20.9848 9.23285 20.8938 9.05234L18.9993 5.2955L17.1067 9.05136V9.05234C17.0157 9.23282 16.8986 9.46742 16.7786 9.6666C16.6458 9.8869 16.4377 10.1894 16.1047 10.4586C15.6673 10.8119 15.1358 11.0346 14.5735 11.0953C14.1442 11.1415 13.7813 11.0734 13.5305 11.0103C13.3042 10.9534 13.0556 10.8686 12.8665 10.8053L8.7356 9.42148L10.0676 13.0006C10.145 13.2085 10.2445 13.4731 10.3127 13.7125C10.3876 13.9752 10.4716 14.3581 10.4299 14.8131C10.3757 15.4046 10.1444 15.9694 9.76392 16.4303C9.47044 16.7855 9.13786 16.9983 8.89771 17.1314C8.67964 17.2522 8.42204 17.3683 8.2229 17.4586L2.82642 19.9059C1.82066 20.3619 0.635292 19.9164 0.178955 18.9107C-0.277049 17.905 0.168563 16.7197 1.17407 16.2633L6.17017 13.9967L4.6438 9.89511C4.479 9.45221 4.30527 8.99228 4.19946 8.60507C4.10357 8.25406 3.94252 7.57005 4.18091 6.82675L4.23657 6.66953C4.53582 5.89099 5.15351 5.26527 5.94849 4.96542L6.08716 4.91757C6.77856 4.70212 7.41493 4.83087 7.74536 4.90878C8.13518 5.00072 8.59918 5.1582 9.04126 5.30624L13.7249 6.87363L15.8684 2.62265C16.0677 2.22732 16.2781 1.80535 16.4827 1.47714C16.6716 1.17402 17.0524 0.611777 17.7385 0.28476L17.8899 0.218353Z" fill="#FF3535"/>
       </svg>
       <span class="section-title" style="color:white">요즘 크레이지로그!</span>
     </div>
@@ -822,7 +868,7 @@
          기존 data.crazylogPosts의 catBg(§ +page.server.ts LOG_TYPE_COLORS/SLOT_FALLBACK_COLORS)
          값을 그대로 사용, 3개 슬롯 분리 없이 단일 슬라이드로 구성 -->
     {#if data.crazylogPosts.length > 0}
-      <div class="m-blog-carousel">
+      <div class="m-blog-carousel" class:m-slider-static={data.crazylogPosts.length <= 1}>
         {#each data.crazylogPosts as post, ci}
           <a href={'/crazylog/view/' + post.id} class="m-blog-card">
             <div class="m-blog-card-bg">
@@ -890,16 +936,8 @@
 
   <!-- ⑥ FAQ -->
   <div class="m-section m-faq-section">
-    <div class="m-faq-brand" style="{data.faqHeroBgUrl ? `background-image:url('${data.faqHeroBgUrl}');background-size:cover;background-position:center` : `background:${purplePale}`}">
-      <div class="faq-logo"><span class="logo-crazy-lg">CRAZY</span><span class="logo-shot-lg">SHOT</span></div>
-    </div>
-    <div class="m-faq-intro-wrap">
-      {#if data.isCms}
-        <a href="/help" class="cms-section-link" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
-      {/if}
-      <div class="faq-brand-text" style="color:{navy}">다양한 영상장비 쉽고 빠른 렌탈 마법 가이드</div>
-      <p class="faq-intro" style="color:{purple}">크레이샷만의 빠른 예약, 장비 수령, 반납까지 자주 묻는 질문을 바로 확인하세요.</p>
-    </div>
+    <!-- 모바일 FAQ 헤더 — /help 히어로(BG 이미지 + 메인·서브 문구 + 카테고리 카드) 구조 그대로, CMS "BG 관리"로 배경·문구 관리 -->
+    {@render faqHero('')}
     <div class="faq-list">
       {#each data.topFaqs as item}
         <div class="faq-item">
@@ -1012,6 +1050,16 @@
   />
 {/if}
 
+{#if data.isCms && showHelpHeroModal}
+  <HelpHeroBgModal
+    initialImages={data.faqHeroBgImages}
+    initialMode={data.faqHeroBgMode}
+    initialTitle={data.faqHeroTitle}
+    initialSub={data.faqHeroSub}
+    onclose={() => (showHelpHeroModal = false)}
+  />
+{/if}
+
 <style>
   /* ── CMS 배너 관리 버튼 ───────────────────────────── */
   /* /products의 admin-edit-btn + admin-float-btn 위치·스타일 규칙과 통일 */
@@ -1093,7 +1141,27 @@
 
   /* ── 반응형 래퍼 ── */
   .desktop-wrap { display: none; background: var(--cs-lilac); overflow-x: hidden; }
-  .mobile-wrap  { display: block; background: var(--cs-lilac); padding-bottom: 80px; overflow-x: hidden; }
+  /* 하단 탭바 완충 여백(padding-bottom 80px)에만 purple-20 배경 — 위 브랜드 마퀴 그라데이션 끝색(--cs-purple-pale)과 이어지게 함(2026-09-29) */
+  .mobile-wrap  {
+    display: block;
+    background: linear-gradient(to bottom, var(--cs-lilac) calc(100% - 80px), var(--cs-purple-pale) calc(100% - 80px));
+    padding-bottom: 80px;
+    overflow-x: hidden;
+  }
+  /* 모바일 홈 마퀴 좌우 페이드 — 공용 컴포넌트는 단색 라일락이라 마퀴 배경(라일락→purple-20 세로 그라데이션) 위에서 좌우가 띠처럼 떠 보임.
+     페이드에 같은 세로 그라데이션을 깔고 가로 방향은 마스크로 투명 처리해 배경과 이어지게 함(2026-09-29). 공용 컴포넌트·PC·/products는 그대로 */
+  .mobile-wrap :global(.brand-marquee-wrap.surface-home .marquee-fade-left),
+  .mobile-wrap :global(.brand-marquee-wrap.surface-home .marquee-fade-right) {
+    background: linear-gradient(to bottom, var(--cs-lilac), var(--cs-purple-pale));
+  }
+  .mobile-wrap :global(.brand-marquee-wrap.surface-home .marquee-fade-left) {
+    -webkit-mask-image: linear-gradient(to right, #000, transparent);
+    mask-image: linear-gradient(to right, #000, transparent);
+  }
+  .mobile-wrap :global(.brand-marquee-wrap.surface-home .marquee-fade-right) {
+    -webkit-mask-image: linear-gradient(to left, #000, transparent);
+    mask-image: linear-gradient(to left, #000, transparent);
+  }
   @media (min-width: 768px) {
     .desktop-wrap { display: block; }
     .mobile-wrap  { display: none; }
@@ -1453,7 +1521,15 @@
   .m-theme-circle-tabs--capped .theme-circle-tab { scroll-snap-align: start; }
   .m-theme-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
   /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 m-prod-card를 재사용(.m-snap-slider/.m-prod-card) */
-  .theme-m-prod-slider { padding-left: 0; }
+  /* /crazylog(m-carousel) 슬라이드 좌우 구조 반영(2026-09-29) — 전폭 스크롤 + 좌우 25px 패딩 + scroll-padding + snap start
+     (섹션 좌우 패딩 20px를 음수 마진으로 상쇄해 뷰포트 끝까지 스크롤). 카드 1개면 스크롤 잠금(.m-slider-static) */
+  .theme-m-prod-slider {
+    margin: 0 -20px;
+    padding: 0 25px 8px;
+    scroll-padding: 0 25px;
+  }
+  .theme-m-prod-slider .m-prod-card { scroll-snap-align: start; }
+  .m-slider-static { overflow-x: hidden; }
   .m-prod-card--sample { opacity: 0.6; cursor: default; }
 
   /* ── CATEGORY + SLIDER ── */
@@ -1466,11 +1542,6 @@
     background: var(--cs-lilac);
   }
   .pkg-bar-label { font-family: var(--font-en-display); font-size: 18px; color: var(--cs-dark); }
-  .pkg-bar-icon {
-    width: 22px; height: 22px; border-radius: 7px;
-    background: #e1def3;
-    display: flex; align-items: center; justify-content: center;
-  }
   .cat-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -1486,15 +1557,15 @@
     background: none;
     border: none;
     cursor: pointer;
-    width: 100px;
+    width: 88px;   /* PC 카테고리 버튼: 100→80px 축소 후 88px로 10% 확대(2026-09-29, /products와 동기화) */
     min-height: 44px;
   }
   .cat-tab-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 100px; height: 100px;
-    border-radius: 30px;
+    width: 88px; height: 88px;
+    border-radius: 26px;
     transition: background 0.18s, filter 0.18s;
   }
   /* 호버·선택 인터랙션 — 테두리(box-shadow 링) 대신 filter(밝기·채도) 컬러 톤 변화로 표현.
@@ -1511,7 +1582,15 @@
      — .cat-tab-icon(부모, 100x100)에 꽉 채워야 실제 글리프가 정상 크기로 보임.
      40x40으로 축소하면 아이콘 내부 여백까지 함께 줄어들어 실제 그림 부분만 40px의 절반
      이하로 쪼그라들어 매우 작게 보이던 버그(2026-08-26 실사용 중 발견) */
-  .cat-tab-custom-icon { width: 100px; height: 100px; object-fit: contain; border-radius: 30px; }
+  .cat-tab-custom-icon { width: 88px; height: 88px; object-fit: contain; border-radius: 26px; }
+  /* ON 이미지가 있는 카테고리: 상자 배경·filter 효과 대신 OFF/ON 이미지 교차 전환 */
+  .cat-tab-icon.has-on { position: relative; background: transparent; filter: none !important; }
+  .cat-tab-icon.has-on .cat-tab-custom-icon { position: absolute; inset: 0; transition: opacity 0.25s ease; }
+  .cat-tab-icon.has-on .cat-tab-icon-on { opacity: 0; }
+  .cat-tab:hover .cat-tab-icon.has-on .cat-tab-icon-on,
+  .cat-tab.active .cat-tab-icon.has-on .cat-tab-icon-on { opacity: 1; }
+  .cat-tab:hover .cat-tab-icon.has-on .cat-tab-icon-off,
+  .cat-tab.active .cat-tab-icon.has-on .cat-tab-icon-off { opacity: 0; }
   .cat-tab-label {
     font-family: var(--font-kr);
     font-size: 15px;
@@ -1520,7 +1599,11 @@
   }
   /* cat-tabs(카테고리 아이콘 탭)와의 간격 확보 — 부모 .d-cat-section의 공용 gap(32px) 외에
      이 지점에만 추가 여백을 더함(margin-top으로 국소 적용, 다른 형제 요소 간격엔 영향 없음) */
-  .michil-heading { display: flex; justify-content: center; margin-top: 24px; }
+  .michil-heading { display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 24px; }
+  .michil-logo { height: 68px; width: auto; flex-shrink: 0; }   /* 34px(제목 높이) 대비 100% 확대(2026-09-29) */
+  .md-picks-section .michil-heading { margin-bottom: 16px; }   /* 제거한 'MD 추천' 라벨 줄(margin-bottom 16px)을 대체 */
+  /* 모바일 홈 MD 추천 영역 — 제목 크기는 모바일 토큰(32px→24px)으로 적용 */
+  .md-picks-section .michil-title { font: var(--text-m-ad-kr-24); }
   .michil-title {
     font-family: var(--font-kr-heading);
     font-size: 32px;
@@ -1530,26 +1613,6 @@
 
   /* 슬라이더 */
   .prod-slider-wrap { position: relative; }
-  .slider-arrow {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 10;
-    width: 40px; height: 40px;
-    border-radius: 9999px;
-    background: white;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    transition: transform 0.15s;
-    min-width: 44px; min-height: 44px;
-  }
-  .slider-arrow:hover { transform: translateY(-50%) scale(1.1); }
-  .slider-arrow.left  { left: -22px; }
-  .slider-arrow.right { right: -22px; }
   .prod-slider {
     display: flex;
     gap: 24px;
@@ -1599,6 +1662,18 @@
   .prod-card-price .price-sep   { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
   .prod-card-desc { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
 
+  /* 카테고리 상품 슬라이더(PC) — /products 헤더 카드 슬라이더(.d-slider-relative/.d-slider-cards/.d-feat-card) 컨테이너 값 반영(2026-09-29)
+     높이 500px(세로폭 Stephen 지정, /products는 580px) · 카드 3장 균등(gap 20px, 최소 300px) · 반경 50/20/50/20 · 카드 안쪽은 기존 prod-card 스타일 유지.
+     .prod-slider-wrap 범위로 한정 — 취향직격 테마 슬라이더(.theme-prod-slider)의 300×300 카드는 그대로 */
+  .prod-slider-wrap .prod-slider { gap: 20px; padding: 0; height: 500px; }
+  .prod-slider-wrap .prod-card {
+    flex: 0 0 calc((100% - 40px) / 3);
+    min-width: 300px;
+    width: auto;
+    height: 500px;
+    border-radius: 50px 20px 50px 20px;
+  }
+
   /* ── BLOG GRID ── */
   .d-blog-section { align-items: center; gap: 32px; }
   .blog-grid {
@@ -1642,7 +1717,17 @@
     padding: 40px;
     background: linear-gradient(to top, rgba(16,11,50,0.8) 0%, transparent 100%);
   }
+  /* 우측 카드(2·3): /crazylog 헤더 카드2·3과 동일하게 분류 헤더 + 하단 제목·부제 — 카드 높이가 작아 여백·제목 크기를 줄임 */
+  .blog-sub-footer {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 24px 40px;
+    background: linear-gradient(to top, rgba(16,11,50,0.8) 0%, transparent 100%);
+  }
+  .blog-sub-caption { font-size: 18px; }
   .blog-main-caption { font-family: var(--font-kr); font-size: 22px; font-weight: 900; color: white; line-height: 1.5; }
+  /* /crazylog 헤더 카드의 부제(d-shotlog-writing-sub)와 동일 톤 — 본문 첫 문단 요약 */
+  .blog-main-sub { margin: 4px 0 0; font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: white; line-height: 1.5; letter-spacing: -0.5px; }
 
   /* ── FAQ ── */
   .d-faq-section {
@@ -1904,70 +1989,85 @@
      기존 .m-prod-name/.m-prod-info(흰 글자, 이미지 오버레이용)와 완전히 다른 레이아웃
      (어두운 글자, 이미지 박스 아래 별도 텍스트 영역)이라 이름 충돌 방지를 위해 전용
      클래스로 분리 */
-  .md-picks-section { padding-top: 64px; }
+  .md-picks-section { padding-top: 64px; padding-bottom: 80px; }   /* 하단 40px → 80px(+100%) — 아래 크레이지로그 섹션과의 간격(2026-09-29) */
   .md-picks-empty {
     display: flex;
     align-items: center;
     justify-content: center;
     min-height: 80px;
   }
-  .md-picks-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-  }
-  .md-picks-label {
-    font-family: var(--font-kr-heading);
-    font-size: 20px;
-    font-weight: 900;
-    color: var(--cs-dark);
-    letter-spacing: -0.5px;
-  }
+  /* 좌우 스크롤 해제(요청 2026-09-29) — 2열 그리드로 화면 폭 안에 배치, 카드는 표준 174px를 최대로 폭에 맞춰 축소 */
   .md-picks-track {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 15px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
+    justify-items: center;
   }
-  .md-picks-track::-webkit-scrollbar { display: none; }
+  /* /products "MD 추천"(모바일) 썸네일 카드 스타일 반영(요청 2026-09-29) — 찜 버튼 등 기능은 제외, 스타일만 이식 */
   .md-pick-card {
-    flex: none;
-    width: 160px;
+    width: 100%;
+    max-width: 174px;   /* 표준 상품카드 모바일 썸네일 크기(ProductDPCard 174px, front-uiux.md §14-4) — 재적용 2026-09-29 */
     text-decoration: none;
     display: flex;
     flex-direction: column;
+    cursor: pointer;
+    transition: transform 0.2s;
   }
-  .md-pick-card:active { transform: scale(0.97); }
+  /* 호버: 카드 자체 확대는 트랙 overflow로 잘려 이미지만 1.04배 */
+  .md-pick-img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
+  .md-pick-card:hover .md-pick-img { transform: scale(1.04); }
   .md-pick-img-box {
     width: 100%;
-    height: 160px;
-    border-radius: 20px 20px 0 0;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
     overflow: hidden;
     position: relative;
     background: var(--cs-lilac);
   }
-  .md-pick-img { width: 100%; height: 100%; object-fit: cover; }
-  .md-pick-info { padding: 8px 4px 0; }
-  .md-pick-name {
-    font-family: var(--font-kr);
+  .mdp-info {
+    display: flex;
+    flex-direction: column;
+    gap: 10.8px;
+    padding: 10.8px 0 0;
+    width: 100%;
+    min-width: 0;
+  }
+  .mdp-category {
+    font: var(--text-m-script-12);
     font-weight: 700;
-    font-size: 14px;
-    color: var(--cs-text, #1d183e);
-    line-height: 1.4;
+    color: var(--cs-text-light);
+    line-height: 1;
+    margin: 0;
+    text-transform: uppercase;
+  }
+  .mdp-price-row {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    color: var(--cs-purple-dark);
+    letter-spacing: -0.8px;
+    flex-wrap: wrap;
+  }
+  .mdp-price-group { display: flex; align-items: baseline; gap: 3px; }
+  .mdp-price-label { font: var(--text-m-tag-11); font-weight: 500; line-height: 1; }
+  .mdp-price-num {
+    font: var(--text-m-body-16B);
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--cs-purple-light);
+  }
+  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); }
+  .mdp-name {
+    font: var(--text-m-script-12);
+    color: var(--cs-purple-dark);
     letter-spacing: -0.5px;
-    margin: 0 0 2px;
+    line-height: 1.12;
+    margin: 0;
+    width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .md-pick-price {
-    font-family: var(--font-kr);
-    font-weight: 700;
-    font-size: 13px;
-    color: var(--cs-purple, #3b2f8a);
-    margin: 0;
   }
   /* CMS 관리 버튼 — 기존 .hero-cms-btn/.cat-cms-btn과 동일 위치·스타일 규칙 통일 */
   .md-picks-cms-btn {
@@ -1988,6 +2088,10 @@
   .md-picks-cms-btn--empty { position: static; }
 
   /* ── MOBILE BLOG ── */
+  /* 모바일 크레이지로그 섹션 제목 28px → 한 사이즈 작은 토큰 --text-m-ad-kr-24(24px, 2026-09-29) */
+  .m-blog-section .section-title { font: var(--text-m-ad-kr-24); }
+  /* 부제 15px → 한 사이즈 큰 토큰 --text-m-body-16B(16px, 2026-09-29) */
+  .m-blog-section .section-sub { font: var(--text-m-body-16B); }
   .m-blog-section {
     background: #ffb3b3;
     border-radius: 0 50px 0 0;
@@ -2000,10 +2104,13 @@
   /* /crazylog(m-carousel/m-card) 슬라이드 구조 그대로 반영 */
   .m-blog-carousel {
     display: flex;
-    gap: 24px;
-    width: 100%;
+    gap: 50px;   /* /crazylog .m-carousel과 동일 */
+    /* 섹션 좌우 패딩(24px)을 상쇄해 뷰포트 전폭 스크롤 + 좌우 25px 패딩 + scroll-padding (/crazylog 구조 그대로) */
+    width: calc(100% + 48px);
+    margin: 0 -24px;
     overflow-x: auto;
-    padding-bottom: 4px;
+    padding: 0 25px 20px;
+    scroll-padding: 0 25px;
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -2012,9 +2119,9 @@
   .m-blog-card {
     position: relative;
     flex-shrink: 0;
-    width: 300px;
+    width: min(340px, calc(100vw - 50px));   /* /crazylog .m-card 폭 340px — 좁은 화면은 좌우 25px 패딩에 맞춰 축소 */
     height: 380px;
-    min-width: 300px;
+    min-width: min(340px, calc(100vw - 50px));
     border-radius: 30px;
     box-shadow: 4px 4px 0 rgba(39,27,122,0.5);
     display: flex;
@@ -2075,6 +2182,8 @@
 
   /* ── MOBILE ARTICLES (실데이터: data.recentLogPosts, /crazylog/list m-post-card와 동일 UI 언어) ── */
   .m-articles-section { gap: 24px; }
+  /* 콘텐츠 카드 사이 여백 24px → 36px(+50%, 2026-09-29) — 제목↔첫 카드 간격(24px)은 유지하려 카드 사이에만 추가 */
+  .m-article-card + .m-article-card { margin-top: 12px; }
   .m-articles-head {
     display: flex;
     align-items: center;
@@ -2082,7 +2191,7 @@
     padding: 20px 0;
     text-decoration: none;
   }
-  .m-articles-heading { font-family: var(--font-kr); font-size: 20px; font-weight: 700; color: var(--cs-dark); }
+  .m-articles-heading { font: var(--text-m-title-18B); color: var(--cs-dark); }   /* 20px → 한 사이즈 작은 토큰 18px(2026-09-29) */
   .m-articles-more-btn {
     width: 22px; height: 22px;
     border-radius: 7px;
@@ -2153,15 +2262,68 @@
   .m-articles-empty { font-family: var(--font-kr); font-size: 14px; color: var(--cs-text-light); text-align: center; padding: 24px 0; margin: 0; }
 
   /* ── MOBILE FAQ ── */
-  .m-faq-section { gap: 24px; }
-  .m-faq-brand {
-    border-radius: 50px;
-    min-height: 180px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .m-faq-section { gap: 0; }   /* 히어로 ↔ FAQ 목록 간격 24px → 0(2026-09-29) */
+  /* 모바일 FAQ 헤더 — /help 히어로(hero-section·hero 계열·cat-card) 모바일 값 그대로(클래스만 mh- 접두사) */
+  .mh-hero {
+    position: relative; width: 100%; overflow: hidden; border-radius: 30px 30px 0 0; min-height: 600px;   /* 하단 좌우 라운드 제거(2026-09-29) */
+    /* 하단 36%를 투명 그라데이션으로 페이드아웃 — 64%부터 시작, 82% 지점 투명도 55%로 더 빠르게(2026-09-29) — 히어로 전체(이미지·텍스트)에 마스크가 걸리므로
+       텍스트는 아래 .mh-hero-content 하단 여백으로 30% 위에 배치해 페이드 구간을 피한다 */
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 64%, rgba(0,0,0,0.45) 82%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 64%, rgba(0,0,0,0.45) 82%, transparent 100%);
   }
-  .m-faq-intro-wrap { display: flex; flex-direction: column; gap: 8px; }
+  /* PC 홈 FAQ 히어로 — 기존 좌측 브랜드 박스(폭 480px) 자리, 폭 유지 + 높이 400→480px */
+  .mh-hero--pc { flex-shrink: 0; width: 480px; min-height: 528px; }   /* 480 → 528px(+10%, 2026-09-29) */
+  .mh-hero--pc .mh-hero-content { min-height: 528px; padding-top: 40px; padding-bottom: 77px; }   /* 하단 여백 130px → 77px: 히어로 높이(528px)의 10%(≈53px)만큼 다시 내림(2026-09-29) */
+  /* PC: 하단 투명 페이드(마스크) 대신 purple-100(--cs-dark #100B32)으로 끝나는 그라데이션 */
+  .mh-hero--pc { -webkit-mask-image: none; mask-image: none; border-radius: var(--radius-2xl); }   /* 4모서리 모두 카드 대 PC 50px(front-uiux.md §4, --radius-2xl) */
+  .mh-hero--pc .mh-hero-gradient {
+    background: linear-gradient(to bottom, transparent 0%, rgba(16, 11, 50, 0.4) 50%, var(--cs-dark) 100%);
+  }
+  /* PC 크기 확대(2026-09-29): 로고 72→108px(+50%), 메인 24→35px(두 사이즈 위: 24→30→35, --text-pc-ad-kr-35), 서브 13→16px(두 사이즈 위: 13→14→16, --text-pc-title-16) */
+  .mh-hero--pc .mh-hero-logo { height: 108px; }
+  .mh-hero--pc .mh-hero-title { font: var(--text-pc-ad-kr-35); line-height: 1.3; }   /* 행 간격 160% → 130% (2026-09-29) */
+  .mh-hero--pc .mh-hero-sub { font: var(--text-pc-title-16); line-height: 1.5; }   /* 행 간격 200% → 150% (2026-09-29) */
+  .mh-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .mh-hero-gradient {
+    position: absolute; inset: 0;
+    background: linear-gradient(to bottom, transparent 0%, rgba(16,11,50,0.4) 50%, rgba(16,11,50,0.85) 100%);
+  }
+  .mh-hero-edit-btn {
+    position: absolute; top: 16px; right: 16px; z-index: 10;
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 14px;
+    background: rgba(16, 11, 50, 0.65);
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: var(--radius-xl);
+    font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background 0.15s, color 0.15s;
+    min-height: 44px;
+  }
+  .mh-hero-edit-btn:hover { background: rgba(59, 47, 138, 0.85); color: #fff; border-color: rgba(255, 255, 255, 0.4); }
+  .mh-hero-content {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    gap: 24px;
+    padding: 96px 20px 84px;   /* 하단 24px + 히어로 높이(600px)의 10%(60px) — 30% 올렸던 문구를 20%(120px) 아래로 재배치(2026-09-29) */
+    min-height: 600px;
+  }
+  .mh-hero-heading { display: flex; flex-direction: column; gap: 12px; color: white; }
+  .mh-hero-logo { height: 72px; width: auto; align-self: flex-start; }   /* 제목 위 로고 — 48px에서 50% 확대, 히어로 전용 BI(logo-bi-hero.svg, 2026-09-29) */
+  .mh-hero-title {
+    white-space: pre-line;
+    font: var(--text-m-ad-kr-24);   /* 28px → 한 사이즈 작은 토큰 24px/700(kr-heading), 2026-09-29 */
+    margin: 0;
+    text-shadow: 0 1px 6px rgba(16, 11, 50, 0.3);   /* 옅은 글자 그림자(2026-09-29) — 배경 사진 위 가독성 */
+  }
+  .mh-hero-sub {
+    white-space: pre-line;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 900; font-size: 13px; line-height: 1.6;
+    color: rgba(255,255,255,0.9); margin: 0;
+  }
 
   /* ── MOBILE TAB BAR ── */
   .m-tab-bar {
