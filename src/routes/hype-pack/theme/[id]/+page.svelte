@@ -42,6 +42,7 @@
           <ProductDPCard
             id={prod.id}
             name={prod.name}
+            category={prod.category ?? undefined}
             imageUrl={productImg(prod)}
             price24h={prod.price24h}
             price12h={prod.price12h}
