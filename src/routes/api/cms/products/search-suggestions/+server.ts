@@ -38,6 +38,32 @@ import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 // (nlsearch.md §2, /api/search/products/+server.ts와 동일 임계값)
 const WEAK_MATCH_THRESHOLD = 3
 
+// 자동완성 정렬 우선순위 — 상품명 시작일치 > 브랜드 정확/토큰 일치 > 브랜드 시작일치 >
+// 상품명 부분일치 > 캡션 부분일치 > 설명 부분일치. 패키지 상품이 brand 컬럼에
+// "CANON|SONY|ULANZI"처럼 여러 브랜드를 구분자로 이어붙여 저장하는 관행 때문에, 단순
+// 가나다순 정렬만으로는 진짜 단독 브랜드 상품이 limit 밖으로 밀려나 자동완성에서 아예
+// 안 보이는 결함이 있었음(2026-09-29, 결합상품 검색 자동완성에서 실사용 중 발견).
+function relevanceTier(
+  row: { name: string; brand: string | null; description: string | null; product_caption: string | null },
+  kw: string
+): number {
+  const needle = kw.trim().toLowerCase()
+  if (!needle) return 6
+  const name = row.name.toLowerCase()
+  const brand = (row.brand ?? '').toLowerCase()
+  const caption = (row.product_caption ?? '').toLowerCase()
+  const desc = (row.description ?? '').toLowerCase()
+  const brandTokens = brand.split(/[|,/]/).map((t) => t.trim()).filter(Boolean)
+
+  if (name.startsWith(needle)) return 0
+  if (brand === needle || brandTokens.includes(needle)) return 1
+  if (brand.startsWith(needle)) return 2
+  if (name.includes(needle)) return 3
+  if (caption.includes(needle)) return 4
+  if (desc.includes(needle)) return 5
+  return 6
+}
+
 // ── GET: 상품 검색 제안 ────────────────────────────────────────────────────────
 export const GET: RequestHandler = async ({ url, locals }) => {
   // CMS 인증: 파트너 포함 모든 CMS 역할 허용 (security-auth.md getCmsRoleForAction 패턴)
@@ -78,11 +104,17 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     ilikeQ = ilikeQ.or(productSearchOrFilter(q))
   }
 
+  // 정렬을 DB가 아닌 relevanceTier로 다시 매기므로, 후보군은 limit보다 넉넉히 가져와야
+  // 진짜 관련도 높은 상품이 후보군 자체에서 빠지는 일이 없다(2026-09-29, 결합상품 검색
+  // 자동완성이 8건으로 잘려 패키지 상품에 밀려 안 보이던 결함 — limit 자체도 문제였지만,
+  // 정렬 없이 잘랐다는 게 근본 원인이라 여기서 후보군을 확보해 relevanceTier로 재정렬).
+  const candidatePoolSize = Math.min(100, Math.max(limit * 5, 50))
+
   ilikeQ = ilikeQ
     .is('deleted_at', null)
     .is('parent_product_id', null)
     .order('name')
-    .limit(limit)
+    .limit(candidatePoolSize)
 
   // H-1: category 필터
   if (category) ilikeQ = ilikeQ.eq('category', category)
@@ -110,13 +142,21 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   const ilikeRows = (ilikeData ?? []) as ProductRow[]
 
+  // relevanceTier로 재정렬 후 요청 limit만큼만 최종 노출 — 후보군(candidatePoolSize)은
+  // 랭킹 재료일 뿐 화면에 그대로 나가지 않는다.
+  const rankedRows = [...ilikeRows].sort((a, b) => {
+    const diff = relevanceTier(a, q) - relevanceTier(b, q)
+    return diff !== 0 ? diff : a.name.localeCompare(b.name, 'ko')
+  })
+  const limitedRows = rankedRows.slice(0, limit)
+
   // L1 QA Fix: 확장 아이템 타입 (image_url·slug 포함)
   type ExtendedItem = SimilarNameItem & { image_url: string | null; slug: string | null }
 
   // ilike 결과를 SimilarNameItem 형태로 변환 (match_label 포함)
   // H-2 초성: match_label에 '초성' 표시
   const matchLabelForChosung = '초성 매칭'
-  const ilikeItems: ExtendedItem[] = ilikeRows.map((row) => ({
+  const ilikeItems: ExtendedItem[] = limitedRows.map((row) => ({
     id: row.id,
     name: row.name,
     brand: row.brand,
