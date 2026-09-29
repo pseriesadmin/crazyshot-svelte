@@ -1462,6 +1462,20 @@
       : (tabsFilter ? ALL_TABS.filter(t => tabsFilter.includes(t.key)) : ALL_TABS)
   )
 
+  // 탭메뉴 수량 배지(2026-09-29, Stephen 지시) — 목록형 탭 6종(옵션상품·결합상품·구성품·
+  // 이미지·사양·이력)에만 적용. 각 탭이 이미 들고 있는 로컬 state 배열의 길이를 그대로
+  // 보여주는 순수 표시 전용 파생값 — 탭 내부 저장·로드·검증 로직은 전혀 참조하지 않는다.
+  // '이력' 탭은 지연 로드(historyLoaded)라 아직 열어보지 않았으면 0으로 보임 — 이 배지
+  // 표시를 위해 이력을 미리 로드하는 등 기존 지연로드 로직을 바꾸지 않는다(요청 조건 ①).
+  const TAB_ITEM_COUNTS: Partial<Record<TabKey, number>> = $derived({
+    options: localOptions.length,
+    bundles: localBundles.length,
+    components: localComponents.length,
+    images: localImages.length,
+    specs: localSpecs.length,
+    history: historyRecords.length,
+  })
+
   // ─── 상품 삭제 (삭제 안전 토스트 — $lib/utils/deleteSafetyToast.svelte.ts, cms-uiux.md §0-10-B 정본) ──
   // 삭제 성공 시 패널을 닫은 뒤 목록을 재조회해 삭제된 상품이 목록에서 즉시 사라지게 한다
   const deleteSafety = createDeleteSafetyToast({
@@ -1712,7 +1726,7 @@
         class:active={activeTab === tab.key}
         onclick={() => switchTab(tab.key)}
         type="button"
-      >{tab.label}</button>
+      >{tab.label}{#if TAB_ITEM_COUNTS[tab.key] !== undefined}<span class="tab-count-badge" class:is-empty={TAB_ITEM_COUNTS[tab.key] === 0}>{TAB_ITEM_COUNTS[tab.key]}</span>{/if}</button>
     {/each}
   </div>
   {/if}
@@ -3480,21 +3494,49 @@
 
   /* 탭 */
   .tab-nav {
-    display: flex; gap: 2px; padding: 10px 16px 0;
-    /* 탭 10개 — 폭이 모자라면 탭명 줄바꿈 대신 가로 스크롤(safe: 넘칠 때 왼쪽 탭이 잘리지 않게) */
-    justify-content: safe center; overflow-x: auto;
+    display: flex; gap: 0; padding: 10px 10px 0;
+    /* 2026-09-29 Stephen 지시로 가로 스크롤 제거 — 탭 10개가 컨테이너 폭에 맞춰
+       균등 축소(flex:1)되어 한 줄에 전부 보이도록 변경(기존 overflow-x:auto 폐기) */
     border-bottom: 1px solid var(--cs-surface-gray);
     flex-shrink: 0; background: var(--cs-white);
   }
   .tab-btn {
-    padding: 8px 16px; border: none; border-bottom: 2px solid transparent;
+    flex: 1 1 0; min-width: 0;
+    padding: 8px 4px; border: none; border-bottom: 2px solid transparent;
     background: transparent; color: var(--cs-text-mid);
     font: var(--text-pc-body-14); cursor: pointer; min-height: 40px;
-    white-space: nowrap; flex-shrink: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-align: center;
     transition: color 0.12s, border-color 0.12s; margin-bottom: -1px;
   }
   .tab-btn:hover { color: var(--cs-text); }
   .tab-btn.active { color: var(--cs-purple); border-bottom-color: var(--cs-purple); font-weight: 700; }
+
+  /* 탭메뉴 수량 배지 — 탭 라벨(--text-pc-body-14, 14px Bold)보다 작고 볼드 없는
+     --text-pc-descript-10(10px, weight 300 — script-12보다 한 단계 작은 토큰, 2026-09-29
+     재조정. tag-11은 weight 700이라 "볼드 없음" 조건과 맞지 않아 제외) 토큰 적용.
+     등록 있음: red-5%bg/red-100 텍스트(2026-09-29 재조정), 등록 없음: --cs-surface-gray
+     bg(정확한 "grey-5%" 명명 토큰이 디자인 시스템에 없어 Stephen이 기존 토큰 중 직접
+     선택, 2026-09-29)/grey-70% 텍스트(무변경) */
+  .tab-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    margin-left: 5px;
+    padding: 0 5px;
+    border-radius: var(--radius-full, 99px);
+    font: var(--text-pc-descript-10);
+    line-height: 18px;
+    background: var(--cs-red-xlight);
+    color: var(--cs-red);
+    vertical-align: middle;
+  }
+  .tab-count-badge.is-empty {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+  }
 
   /* 탭 콘텐츠 */
   .tab-content { padding: 26px 26px 65px; }
@@ -4819,7 +4861,12 @@
     white-space: nowrap;
   }
   .btn-bulk-apply:hover { background: rgba(59,47,138,0.06); }
-  .selected-option-list { display: flex; flex-direction: column; gap: 8px; }
+  /* CmsDragList에 class prop으로 전달된 문자열은 그 컴포넌트 자신의 스코프 해시를 받으므로
+     여기서 스코프된 셀렉터로는 절대 매치되지 않는다(Svelte 스코프 CSS 특성 — 부모가 자식
+     컴포넌트 내부에 렌더링되는 DOM에 직접 스타일을 주려면 :global 필수). 이 때문에 gap이
+     선언은 돼 있었지만 실제로는 한 번도 적용된 적이 없어 선택된 옵션상품·결합상품 카드가
+     서로 붙어 보이던 결함이었음(2026-09-29 Stephen 제보로 발견·수정) */
+  :global(.selected-option-list) { display: flex; flex-direction: column; gap: 8px; }
   .selected-option-card {
     display: flex;
     align-items: flex-start;

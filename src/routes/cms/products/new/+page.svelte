@@ -2317,8 +2317,10 @@
   }
   .btn-bulk-apply:hover { background: rgba(59,47,138,0.08); }
 
-  /* 선택된 옵션 카드 */
-  .selected-option-list {
+  /* 선택된 옵션 카드 — CmsDragList에 class prop으로 전달된 문자열은 그 컴포넌트 자신의
+     스코프 해시를 받으므로 스코프된 셀렉터로는 매치되지 않아 :global 필수
+     (ProductDetailPanel.svelte 동일 결함, 2026-09-29 Stephen 제보로 발견·수정) */
+  :global(.selected-option-list) {
     display: flex;
     flex-direction: column;
     gap: 8px;

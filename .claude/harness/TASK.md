@@ -7,6 +7,115 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🟡 BOUNDARY: 옵션상품·결합상품 선택 카드 목록 간 여백 누락 결함 수정 (Svelte 스코프 CSS 버그, 2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건, 탭메뉴 배지 블록과 함께 검수), git commit은 Stephen 대기)
+
+Stephen이 상품상세 패널 "결합상품" 탭의 선택된 카드 목록(Canon RF 24-70mm F2.8L / Manfrotto 055
+/ Sony FX6-12)이 카드 사이 여백 없이 서로 붙어 보이는 것을 지적, "옵션상품 목록도 동일한
+상태라면 함께 여백 추가"를 지시.
+
+- **근본원인(Svelte 스코프 CSS 함정)**: `ProductDetailPanel.svelte`/`cms/products/new/+page.svelte`
+  둘 다 `<CmsDragList ... class="selected-option-list">`처럼 `class` prop 문자열을 자식
+  컴포넌트(`CmsDragList.svelte`)에 전달하고, 부모 쪽 `<style>`에 `.selected-option-list {
+  gap: 8px }` 규칙을 선언해뒀었다. 하지만 그 `class` 문자열이 실제로 렌더링되는 `<div>`는
+  `CmsDragList.svelte`의 템플릿 안에서 생성되므로, Svelte 컴파일러가 그 div에 붙이는
+  스코프 해시는 `CmsDragList` 자신의 것(예: `svelte-17qavox`)이지 부모(`ProductDetailPanel`)의
+  해시가 아니다 — 부모의 스코프된 `.selected-option-list` 규칙은 이 해시 불일치로 단 한 번도
+  실제로 매치된 적이 없었다(선언은 있었지만 죽은 CSS였음). `svelte-check`가 이 규칙들을
+  "Unused CSS selector"로 계속 경고하고 있었는데도 그동안 놓치고 있었음.
+- **영향 범위**: `class="selected-option-list"`를 쓰는 모든 지점 — `ProductDetailPanel.svelte`
+  옵션상품 탭(2032행)·결합상품 탭(2171행) 2곳, `cms/products/new/+page.svelte`(신규 상품
+  등록 화면) 옵션상품·결합상품 선택 목록 2곳, 총 2개 파일 4개 사용처 전부 동일 결함.
+- **수정**: 두 파일의 `.selected-option-list { ... }` 규칙을 `:global(.selected-option-list)
+  { ... }`로 변경 — 스코프 해시 요구 없이 클래스명만으로 매치되도록 해 실제로 `gap: 8px`가
+  적용되게 함. `gap` 값 자체(8px)는 원래 의도된 값 그대로 유지, 다른 스타일(카드 패딩·보더·
+  반경 등)은 무변경.
+- **적용 안 한 범위**: `.specs-drag-list`(구성품·사양 탭)·`.policy-drag-list`(구독)·
+  `CmsDragList`의 다른 사용처(배너·테마그룹 등 10여곳)는 이번 요청이 "상품 카드 목록"에
+  한정돼 있어 손대지 않음 — 동일 함정이 있는지 여부도 이번 세션에서 확인하지 않음(필요 시
+  별도 확인 요청 바람).
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` — 신규 에러 0건, 경고 **422→420건
+  으로 2건 감소**(두 파일의 "Unused CSS selector .selected-option-list" 경고가 실제로
+  적용되기 시작하면서 사라짐 — 수정이 유효했다는 방증). 무관한 기존 에러 1건
+  `vite.config.ts`만 유지. DB 마이그레이션 없음.
+- 최종 수정 파일 = 2개(`src/lib/components/cms/ProductDetailPanel.svelte`,
+  `src/routes/cms/products/new/+page.svelte`). git 쓰기는 Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (탭메뉴 배지+가로스크롤 제거 블록과 함께 1회 통과)
+
+- **종합 판정**: ✅ GATE E 통과, 블로킹 0건. `CmsDragList.svelte`(원리 검증용, 미변경 확인)까지
+  포함해 3개 파일 대조.
+- Svelte 스코프 CSS 원리 서술을 `CmsDragList.svelte` 직접 읽어 재확인 — `<div class="drag-list
+  {cls}">`가 컴포넌트 자신의 스코프 해시를 받고, `.drag-list`에 gap 선언 자체가 없음을 확인.
+- `selected-option-list` 클래스명 전역 grep 결과 이 2개 파일(4개 사용처) 외 사용처 0건 —
+  `:global()` 전환이 CmsDragList의 다른 10여개 사용처(배너·테마그룹 모달 등)에 영향 없음을
+  실증 확인.
+- svelte-check 경고 422→420(2건 감소)가 정확히 이 두 파일의 "Unused CSS selector
+  .selected-option-list" 경고 소멸 때문임을 재실행+grep으로 재확인.
+- `.specs-drag-list`·`.policy-drag-list`는 diff에 등장하지 않음(요청 범위 외 미접촉 확인).
+- 비블로킹 참고 1건: `.specs-drag-list`·`.policy-drag-list`도 동일 함정을 가질 가능성 있음 —
+  이번 범위 밖이라 손대지 않은 것은 맞으나, 향후 유사 신고 시 같은 원인일 가능성 있음.
+
+## DONE — 🟢 ROUTINE: CMS 상품패널 탭메뉴 6종에 수량 배지 추가 + 탭바 가로스크롤 제거 (2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+Stephen이 상품상세 패널 탭 6개(옵션상품·결합상품·구성품·이미지·사양·이력) 탭명 우측에,
+그 탭에 등록된 목록 개수를 보여주는 원형 배지 UI를 요청. "탭 내부 어떠한 로직에도 영향
+없이 단순 표시 전용"이라는 제약을 명시.
+
+- **파일**: `src/lib/components/cms/ProductDetailPanel.svelte` 1개만 수정.
+- **구현**: `TAB_ITEM_COUNTS`(`$derived`) 신설 — 각 탭이 이미 들고 있던 로컬 state 배열의
+  `.length`만 그대로 참조(`localOptions`·`localBundles`·`localComponents`·`localImages`·
+  `localSpecs`·`historyRecords`). 새 쿼리·새 로직·기존 로드/저장 흐름 변경 전혀 없음(요청
+  조건 ① 그대로 충족) — '이력' 탭은 기존처럼 지연 로드(`historyLoaded`)라 아직 열어보지
+  않았으면 0으로 표시되는데, 이 배지를 위해 이력을 미리 로드하도록 바꾸지 않음(기존 로직
+  불변 원칙 우선).
+- **UI 스펙(Stephen 확정, 4회에 걸쳐 지시·재조정)**: 원형 배지, 탭 라벨 폰트토큰
+  (`--text-pc-body-14`, 14px Bold)보다 작고 볼드 없는 숫자 폰트 적용.
+    - 등록 1개 이상: 배경 `--cs-red-xlight`(red-5%, 2026-09-29 3차 지시로 red-10%→red-5%
+      재조정) / 글자 `--cs-red`(red-100%)
+    - 등록 0개: 배경 `--cs-text-light`(grey-30%)로 1차 적용했다가, 4차 지시("grey-5" 적용)로
+      `--cs-surface-gray`(#f6f6f6)로 재조정 — 디자인 시스템에 정확히 "grey-5%"로 명명된
+      토큰이 없어(30/70/90%만 존재) 임의로 새 hex값을 계산하지 않고 AskUserQuestion으로
+      기존 토큰 후보 3가지(`--cs-surface-gray`/`--cs-bg-row-hover`/신규 토큰 추가)를 제시,
+      Stephen이 `--cs-surface-gray` 선택. 글자색 `--cs-text-mid`(grey-70%)는 변경 없음 —
+      "0"도 숨기지 않고 항상 표시하는 정책 자체도 무변경.
+    - 숫자 폰트: `--text-pc-script-12`(12px Regular)로 1차 적용했다가, 3차 지시로
+      "한 사이즈 더 작게" → `--text-pc-descript-10`(10px, weight 300)로 재조정.
+      `--text-pc-tag-11`(11px)도 존재하지만 weight 700(볼드)이라 "볼드 없음" 조건에 맞지
+      않아 제외하고 그다음 작은 논볼드 토큰을 선택.
+  전부 기존 app.css 토큰을 그대로 재사용(신규 컬러값·폰트값 추가 없음).
+- **적용 범위**: 요청받은 6개 탭에만 배지 노출(기본정보·가격정책·대여정책·상품설명은
+  목록형이 아니라 제외 — Stephen이 선택한 영역과 정확히 일치).
+- **5차 후속(2026-09-29, 같은 세션)**: 수량 배지 추가로 탭 10개(옵션상품 등 6개는 배지까지)가
+  한 줄에 다 안 들어가면서 `.tab-nav`의 기존 `overflow-x: auto` 폴백이 실제로 발동해 탭바가
+  가로로 스크롤되는 상태가 됨 — Stephen이 "매우 잘못된 UX"로 지적, 스크롤 완전 제거 +
+  탭 폭을 줄여 전부 한 줄에 보이도록 지시.
+    - `.tab-nav`: `overflow-x: auto`/`justify-content: safe center` 폐기, 좌우 패딩
+      16px→10px 축소.
+    - `.tab-btn`: `flex-shrink: 0`(고정폭, 스크롤 유발 원인) → `flex: 1 1 0; min-width: 0`
+      (컨테이너 폭에 맞춰 10개가 균등 축소)로 전환. 좌우 패딩 16px→4px 축소,
+      `text-align: center` 추가. 만에 하나도 넘칠 극단적으로 좁은 경우를 대비해
+      `overflow: hidden; text-overflow: ellipsis` 안전판 추가(CMS는 최소 1280px PC 전용이라
+      실제 발동 가능성은 낮음).
+    - 탭 라벨 폰트·배지 스펙(1~4차 결과)은 무변경 — 레이아웃(폭 분배 방식)만 수정.
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` — 1~5차 전 단계 재실행, 매번 신규
+  에러 0건·신규 경고 0건(전체 422건 그대로, 무관한 기존 에러 1건 `vite.config.ts`만 유지).
+  DB 마이그레이션 없음. Claude Browser로 실제 렌더링 확인은 CLAUDE.md 기본값 금지 정책상
+  수행하지 않음 — Stephen 실화면 확인 필요.
+- git 쓰기는 Stephen 직접 실행 대기.
+
+### GATE E 검수 결과 — sp3-qa-agent (선택 카드 여백 결함 수정 블록과 함께 1회 통과)
+
+- **종합 판정**: ✅ GATE E 통과, 블로킹 0건.
+- `TAB_ITEM_COUNTS`가 참조하는 6개 키 전부 기존 state 선언 위치를 직접 확인, `.length`만
+  읽음(새 쿼리·부수효과 없음). `historyLoaded` 지연로드 로직(436·452·754·787행) 무변경 확인
+  — 배지가 `loadHistory()`를 트리거하지 않음.
+- 색상·폰트 토큰 4종(`--cs-red-xlight`·`--cs-red`·`--cs-surface-gray`·`--cs-text-mid`·
+  `--text-pc-descript-10`)이 app.css 정의값·요청 스펙과 정확히 일치함을 코드로 직접 대조.
+- `.tab-nav`에서 `overflow-x: auto`/`justify-content: safe center` 완전 제거, `.tab-btn`이
+  `flex: 1 1 0; min-width: 0`로 전환돼 부모에 overflow 속성이 없으므로 스크롤이 구조적으로
+  발생하지 않는 표준 flexbox 패턴임을 확인.
+- ALL_TABS 10개 중 배지 대상 6개만 매핑되고 나머지 4개는 자동 제외되는 로직 확인.
+
 ## DONE — 🟡 BOUNDARY: CMS 옵션상품·결합상품 자동완성 선택 시 즉시 추가로 UX 흐름 단순화 (2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
 
 바로 위 블록("결합상품 검색 자동완성 정렬 개선")의 GATE E 검수 결과를 Stephen에게 전달하는
