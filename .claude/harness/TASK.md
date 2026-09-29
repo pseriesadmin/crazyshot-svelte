@@ -7,6 +7,242 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: 하입팩(/hype-pack) 테마그룹 상품 미노출 + 카드 카테고리 라벨 누락 수정 (2026-09-29)
+
+```
+[CONTEXT BRIDGE]
+배경: production hype_pack_theme_groups 5개 테마(Idol/Creator/Activity/Analog/Traveler) 전부
+     product_ids가 비어 상품이 하나도 노출되지 않던 문제(2026-09-28 세션에서 원인 확정,
+     코드는 정상·CMS "테마그룹 관리" 모달도 정상 — 단순 데이터 미배정). Stephen 지시로
+     hypepack 카테고리 실상품을 실제 배정.
+```
+
+### 완료 내역
+
+```
+✅ Idol Pack — "Idol SET01~18" 명명 상품 18개 존재 확인, 연결. 이후 병행 작업 중이던 다른
+   세션이 실제 CMS 모달로 8개로 재큐레이션(정상 — 관리자 판단, 되돌리지 않음).
+✅ Creator/Activity/Traveler Pack — 남은 hypepack 카테고리 상품 12개를 상품 특성 기준으로
+   배정(Creator 2·Activity 5·Traveler 5), Analog Pack은 적합 상품 없어 공란 유지(Stephen 승인).
+⚠️ 자체 발견·수정한 실수: 위 배정을 raw UPDATE로 쓸 때 최초에는 plain UUID 문자열 배열
+   (`["uuid", ...]`)로 저장했는데, 실제 CMS/RPC는 `[{"id":"uuid","order":N}]` 객체 배열
+   포맷을 쓰고 `get_hype_pack_theme_groups_with_products`가 `elem->>'id'`로 파싱한다 —
+   plain 문자열에는 `->>'id'`가 NULL을 반환해 화면에 상품이 하나도 안 뜨는 동일 클래스
+   버그를 스스로 만들 뻔했음. RPC 직접 호출로 즉시 재검증 후 포맷 수정해 확인 완료.
+✅ [카드 카테고리 라벨 누락] `/hype-pack/theme/[id]` 상품카드가 `/products`와 동일
+   컴포넌트(ProductDPCard.svelte)를 쓰는데도 카테고리 줄이 안 보이던 원인 확정 — 컴포넌트
+   자체는 정상(`{#if category}` 가드 + 카테고리→요금→상품명 순서 + 폰트토큰 전부 기존
+   그대로), `get_hype_pack_theme_groups_with_products` RPC가 애초에 category 필드를
+   반환하지 않아 prop 전달 자체가 불가능했던 것이 근본원인(Migration #573로 RPC에
+   `'category', p.category` 추가, DROP 불필요 — RETURNS JSONB라 시그니처 변경 없음).
+   +page.server.ts ThemeGroupProduct 타입에 category 추가, +page.svelte에
+   `category={prod.category ?? undefined}` 전달.
+```
+
+### DB 마이그레이션 — Stage·Production 둘 다 적용·검증 완료
+
+```
+supabase/migrations/20260929000000_573_hype_pack_theme_groups_add_category.sql
+  → Stage(ezyvffjvuwmtuhpxdjrw)✅ Production(vnbpmvxruyciuuaermyh)✅
+  (prosrc에 category 포함 확인 + get_hype_pack_theme_groups_with_products() 직접 호출로
+  5개 그룹 상품·카테고리 정상 반환 확인)
+```
+
+### 검증
+
+```
+npm run check(svelte-check) — 세션 도입 신규 에러 0건(기존 vite.config.ts 1건만 잔존).
+Vercel 배포 상태 별도 점검(같은 세션) — stage/production 최근 배포 전부 state=READY
+확인(list_deployments, team=pseries/prj_K6PEw1WfblRxqqOlaqSep8KeNXxs).
+```
+
+### 미실행 / 대기
+
+```
+git commit — Stephen 직접 실행 대기(수정 파일: +page.server.ts·+page.svelte 각 1곳 +
+신규 마이그레이션 1건).
+```
+
+
+## DONE — 🟡 BOUNDARY: CMS 결합상품 검색 자동완성 정렬 개선 + 노출개수 20개 확장 (2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+Stephen이 실서버(crazyshot.kr, production vnbpmvxruyciuuaermyh) `/cms/products` 상품상세
+패널 "결합상품" 탭의 검색창(`bnd-search`, "결합상품 검색")에서 "ULANZI"를 검색해도 실제
+ULANZI 단독 브랜드 상품이 안 뜨고 "Idol SET01...+Ulanzi OMBRA 2" 추천패키지 상품 1건만
+뜨는 문제를 신고. 이 세션에서 3단계로 원인을 좁혀나갔다(1차: 일반 상품목록 검색 조사 →
+스테이지 DB 데이터 부재로 오판, 2차: 카테고리+검색어 조합 조사 → 실서버 기준 재현 안 됨/
+정상 동작 확인, 3차: 결합상품 검색 전용 자동완성창 조사 → 실제 코드 결함 확진).
+
+- **근본원인**: `src/routes/api/cms/products/search-suggestions/+server.ts`의 자동완성
+  쿼리가 `.order('name').limit(8)`(정렬 기준 없이 상품명 가나다순 + 최대 8건)로 결과를
+  잘라서 반환. "ULANZI" 검색 시 production DB에 실제로 14건이 매칭되는데, 그중 10건이
+  이름이 "Idol..."로 시작하는 추천패키지 상품(brand 컬럼에 "CANON|SONY|ULANZI"처럼 여러
+  브랜드를 구분자로 이어붙여 저장하는 관행 때문에 ilike 매칭 노이즈 발생)이라 가나다순
+  앞자리를 독점, 이름이 "ULANZI"/"Ulanzi"로 시작하는 진짜 단독 브랜드 상품 4건이 9~14위로
+  밀려 8건 제한에 완전히 잘려나감. 데이터 문제 아님 — 정렬 기준 부재 + 노출개수 과소 설정이
+  복합된 화면 로직 결함.
+  (참고: 같은 탭의 "검색" 버튼(모달, `searchBundleProducts()`)은 별도 쿼리로 `.limit(20)`만
+  쓰고 정렬이 없어 14건 전부 반환 — 이쪽은 결함 없음. 자동완성 드롭다운 경로만 문제였음.)
+- **수정 1 — 정렬 개선**(`search-suggestions/+server.ts`): `relevanceTier()` 함수 신설 —
+  ① 상품명이 검색어로 시작 ② 브랜드가 검색어와 정확히 일치 또는 `|`,`,`,`/` 구분자로 쪼갠
+  토큰 중 하나가 정확히 일치 ③ 브랜드가 검색어로 시작 ④ 상품명에 검색어 포함 ⑤ 상품 캡션에
+  포함 ⑥ 설명에 포함, 순으로 우선순위를 매겨 재정렬. DB에서 가져오는 후보군도 `limit(limit)`
+  대신 `candidatePoolSize`(`limit*5`, 최소 50~최대 100)로 넉넉히 확보한 뒤 JS에서
+  `relevanceTier` + 상품명 가나다 tie-break로 정렬해 최종 `limit`만큼만 잘라 반환하도록
+  변경(기존 초성 검색 경로는 relevanceTier가 전부 최하위 tier로 수렴해 기존 가나다순 동작과
+  동일 — 회귀 없음).
+- **수정 2 — 노출개수 확장**(`src/lib/components/cms/ProductDetailPanel.svelte`): bnd-search
+  `CmsSimilarNameInput`에 `limit={20}` prop 명시 추가(기존 기본값 8 → 20). 드롭다운 레이어는
+  이미 `max-height:280px; overflow-y:auto`로 스크롤 가능한 구조라 별도 CSS 수정 없이 스크롤
+  목록으로 20건까지 노출됨.
+- **적용 범위**: 정렬 로직 개선은 같은 API를 공유하는 다른 자동완성 검색(옵션상품 검색 등)에도
+  동일하게 좋은 방향으로 적용됨(공용 파일 수정이라 자연히 함께 개선 — 별도 코드 추가 없음).
+  노출개수 20건 확장은 요청받은 결합상품 검색(`bnd-search`)에만 적용, 다른 검색창(옵션상품
+  검색 `opt-search` 등)은 기존 8건 그대로 유지(요청 범위 외 미변경).
+- **검증**: `npx svelte-check --tsconfig ./tsconfig.json` 실행 — 수정한 2개 파일 신규 에러
+  0건(전체 프로젝트에 있는 기존 무관 에러 1건 `vite.config.ts`만 존재, 이번 수정과 무관).
+  `search-suggestions` 엔드포인트 전용 기존 테스트 없음(신규 회귀 테스트 미작성 — QA 검수
+  시 확인 필요).
+- **DB 마이그레이션 없음** — 애플리케이션 코드 2개 파일만 수정. git 쓰기(add/commit/push)는
+  Stephen 직접 실행 대기.
+- **이번 세션 조사만 하고 코드 수정 안 한 건(참고, 혼동 방지)**: (1) `/cms/products` 일반
+  상품목록 검색(카테고리 필터 없이 q만) — 최초 스크린샷이 스테이지 DB였다고 오판했다가 이후
+  production으로 정정, 재조사 결과 이 화면 자체는 결함 없음(§ 아래 (2)에서 재확인). (2)
+  `/cms/products?category=...&q=ULANZI`(카테고리+검색어 조합, "악세서리" 탭) — production
+  DB 직접 재현 결과 정상 동작 확인(쿼리 결합 로직에 버그 없음, 사용자가 본 화면은 캐시 또는
+  이전 시점 상태였을 가능성). 이 두 건은 코드 변경 없이 조사로 종결.
+
+### GATE E 검수 결과 — sp3-qa-agent (1회 통과, 블로킹 없음)
+
+- **종합 판정**: ✅ GATE E 통과. 대상 2개 파일(diff)만 검수(다른 미커밋 변경·이전 커밋 건은
+  범위 밖으로 제외).
+- **검수 1(규칙 정합성)**: 서버 키·인증 게이트 무변경, ilike/Supabase 빌더 파라미터화 유지로
+  SQL 인젝션 위험 없음. core-rules.md/security-auth.md/products.md/uiux-index.md와 저촉 없음
+  (검색 랭킹 로직이라 해당 도메인 규칙과 무관한 영역). `any`/`as unknown as T`·`$state(prop)`
+  패턴 없음. **요청 범위 준수 직접 확인** — `opt-search`(옵션상품 검색)는 diff에 없음, 손대지
+  않았음을 재확인.
+- **검수 2(기술 부채)**: `console.log` 신규 0건, `any` 0건, TODO 없음. `svelte-check`·`eslint`
+  둘 다 두 파일 신규 에러/경고 0건(3회 재실행 확인). 기존 관련 유닛테스트
+  `src/__tests__/server/cmsProductSearchSuggestions.test.ts` 23/23 GREEN(회귀 없음) — 세션
+  요약의 "관련 기존 테스트 없음"은 부정확했고, 실제로는 존재(다만 엔드포인트 자체가 아니라
+  내부 공용 유틸 `productSearchOrFilter`/`resolveProductSearchMatchLabel`을 테스트하는 파일).
+- **검수 3(로직 정확성, 직접 시뮬레이션 검증)**: production 시나리오(패키지 10건 brand=
+  "CANON|SONY|ULANZI", 단독 ULANZI 4건)를 Node로 재현해 `relevanceTier`+tie-break 정렬을
+  그대로 실행 → 단독 ULANZI 4건이 전부 tier 0(상품명 시작일치)으로 최상위, 패키지 10건은
+  tier 1(브랜드 토큰 정확일치)로 그 다음 배치됨을 확인. 14건 전부 새 노출개수 20건 이내라
+  전부 노출됨 — 신고된 증상이 로직상 정확히 해결됨을 실증. `shouldFallback`·동의어확장·
+  MiniSearch 폴백과의 상호작용도 부작용 없음 확인. `searchBundleProducts()`(검색 버튼 모달)는
+  이 diff와 무관한 별도 쿼리이고 14건이 그 `.limit(20)` 이하라 애초에 결함 없었다는 서술도
+  재검증 완료.
+- **검수 3-보완(비블로킹)**: 초성 검색(isChosungQuery) 경로가 "완전 회귀 없음"은 아니고
+  미세한 차이 있음 — DB `.order('name')`(Postgres 콜레이션) 대신 JS `localeCompare('ko')`로
+  재정렬되어, 두 콜레이션이 100% 동일하지 않아 극히 드물게 동률 항목 노출 순서가 미세하게
+  달라질 수 있음(항목 누락 등 기능적 문제는 없음, 체감 가능성 낮음 — 비블로킹 판정).
+- **TASK.md 기록 대조**: 이 블록의 근본원인·수정 1·수정 2·적용범위·검증·조사종결 서술 전부
+  실제 diff와 정확히 일치함을 한 줄씩 대조 완료.
+- **비블로킹 권고 4건**(후속 참고, GATE E 통과에 영향 없음): ① 위 테스트 파일 존재 사실을
+  향후 기록 시 정확히 언급할 것 ② `relevanceTier()`를 export해 "패키지 vs 단독 브랜드" 랭킹
+  우선순위를 고정하는 회귀 테스트 추가 권장(현재는 Node 시뮬레이션 검증만 존재) ③
+  `candidatePoolSize` 상한(100)을 넘는 초고빈도 매칭이 실제로 발생하면 동일 클래스 절단
+  문제가 재발할 수 있음 — 카탈로그 규모상 현재 리스크 낮음, 향후 유사 신고 시 상한 재검토
+  ④ 현재 워킹트리에 이 2개 파일 외 다른 미커밋 변경(하입팩 관련 등, 별건)이 공존 — 커밋 시
+  `git add`를 이 2개 파일로 한정할 것.
+- 최종 수정 파일 = 2개(`src/routes/api/cms/products/search-suggestions/+server.ts`,
+  `src/lib/components/cms/ProductDetailPanel.svelte`). git 쓰기는 Stephen 직접 실행 대기.
+
+## DONE — 🔴 CRITICAL: `/cms/rentals` 형제상품 조회 500 오류 + 고객 마이페이지·전자계약 서명·푸시알림 동반 결함 수정 (PGRST201 관계 모호성, 2026-09-29, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 1차 검수에서 블로킹 1건 발견·즉시 수정·재검증 완료, git commit은 Stephen 대기)
+
+Stephen이 `/cms/rentals?selected=150`에서 `/api/cms/reservations/150/rental-siblings` 500 오류를
+콘솔 캡처(네트워크 탭 포함)로 신고. 원인을 프로덕션(vnbpmvxruyciuuaermyh)에서 직접 재현·확진.
+
+- **근본원인**: 2026-09-27 Migration #553("판매전용 재고 자동 비활성 + 마커 기록")이 추가한
+  `products.auto_deactivated_reservation_id → rental_reservations(id)` FK가 기존
+  `rental_reservations.product_id → products(id)` FK와 겹쳐, `rental_reservations` ↔ `products`
+  사이에 관계 경로가 2개가 됨. PostgREST의 비한정(`products(...)`) 임베드 select 전부가
+  PGRST201("more than one relationship was found")로 즉시 거부됨. RLS 이전 단계에서 발생하는
+  오류라 anon/authenticated/service_role 어떤 역할로 호출해도 동일하게 실패 — anon 키로 직접
+  curl 재현해 확진(`.../rest/v1/rental_reservations?select=id,products(parent_product_id)&id=eq.150`
+  → `PGRST201`/HTTP 300, 응답 바디에 두 관계 후보와 disambiguation 힌트까지 명시됨).
+- **영향 범위 전수조사(9개 파일 11개 지점, 전부 재현·확진 후 수정)**:
+  1. `src/routes/api/cms/reservations/[id]/rental-siblings/+server.ts` (신고 건, 2곳)
+  2. `src/routes/api/cms/reservations/[id]/order-siblings/+server.ts` (1곳)
+  3. `src/routes/account/+page.server.ts` (2곳 — 마이페이지 최근 대여 요약 + PC 패널 대여 목록)
+  4. `src/routes/account/rental/+page.server.ts` (1곳 — 대여 목록)
+  5. `src/routes/account/rental/[id]/+page.server.ts` (1곳 — **오류를 확인하지 않고 "예약 없음"으로
+     오판해 고객을 `/account/rental`로 조용히 리다이렉트시키던 결함 동반**)
+  6. `src/routes/account/rental/[id]/contract/+page.server.ts` (1곳)
+  7. `src/routes/account/rental/[id]/return-method/+page.server.ts` (1곳)
+  8. `src/routes/account/rental/[id]/history/+page.server.ts` (1곳)
+  9. `src/lib/server/push.ts` `sendReservationLifecyclePush()` (1곳 — **fail-soft(try-catch)
+     설계 때문에 2026-09-27 이후 예약 라이프사이클 브라우저 푸시 전체가 눈에 띄지 않게 조용히
+     미발송됐을 가능성 — 채팅카드(`send_rental_chat_notification` RPC)는 별도 SQL 경로라
+     무관, 브라우저 푸시(FCM)만 영향(service-operations.md §15 "채팅카드≠브라우저푸시" 참고)**)
+- **수정**: 9곳 전부 `products(...)` → `products!rental_reservations_product_id_fkey(...)`로
+  FK 명시(응답 JSON 키는 기존과 동일하게 `products`로 유지돼 다운스트림 파싱 코드 무변경).
+  DB 마이그레이션 없음 — 애플리케이션 코드만 수정.
+- **검증**: 수정한 select 문법으로 Production에 동일 curl 재검증 → 200 OK 정상 응답 확인(서로
+  다른 select 형태 8종 전부). `svelte-check` 신규 에러 0건(기존 `vite.config.ts` 1건만 무관하게
+  유지). 관련 vitest 9개 파일 61개 테스트 GREEN(`accountRentalContractPage`·`approvalNotifications`·
+  `trackingNotifyDispatch`·`returnRemindSms`·`rentalActionLog`·`customerSelfCancel`·
+  `rentalCompletePointsQrTrigger`·`rentalQrTransitionProductCode`·`rentalCompletePointsManualTrigger`·
+  `dheroAutoAdvance`·`dheroChatNotify`).
+- git 쓰기(add/commit/push)는 Stephen 직접 실행 대기. 수정 파일 9개(위 목록), 신규 파일 없음.
+
+### GATE E 검수 결과 — sp3-qa-agent (1차: 블로킹 발견 → 즉시 수정 → 검증 완료)
+
+- **1차 검수 결과(❌ 재검수 필요)**: 위 9개 파일 자체의 수정 품질은 문제없음을 확인했으나,
+  코드베이스 전체 재스캔에서 **정확히 동일한 결함(PGRST201) 1곳이 이번 9곳 전수조사에서
+  누락됐음을 발견** — `src/routes/contract/[token]/+page.server.ts` 45행. 원 grep 패턴이
+  `products(`(공백 없음)만 찾도록 짜여있었는데, 이 지점은 `products ( name, category,
+  product_code )`처럼 괄호 앞에 공백이 있는 형태인 데다 `.from('rental_reservations')`
+  직접 호출이 아니라 **다른 테이블(계약서명) 조회 안에 중첩된 임베드**라서 원 전수조사
+  스크립트(`.from('rental_reservations')` 직접 호출 기준)가 놓쳤다.
+- **영향도(QA가 직접 재현·확진)**: Stage anon key로 curl 재현 → 수정 전 `HTTP 300`(PGRST201)
+  동일 오류, 수정 후 `HTTP 200`. 독립 증거로 기존 vitest `paymentContractOrderRedesign.test.ts`
+  3건이 이 파일의 `load()`를 직접 호출해 실행 시점부터 계속 실패 중이었음(기대 302 redirect,
+  실제 404)도 함께 확인 — **이 페이지는 고객이 전자계약에 서명하러 들어오는 랜딩페이지라,
+  Migration #553이 Production에 적용된 2026-09-27부터 지금까지 유효한 서명 링크를 열어도
+  전부 404가 떴을 가능성이 매우 높다.** 계약서명은 service-operations.md §9(결제완료 AND
+  계약서명 완료 게이팅)의 필수 관문이라 예약승인(confirmed) 전환 자체를 막는 파급력이 있어,
+  이번 9곳보다 영향도가 오히려 더 컸던 결함.
+- **즉시 수정(같은 패턴)**: `products ( name, category, product_code )` →
+  `products!rental_reservations_product_id_fkey ( name, category, product_code )` 1곳만
+  추가 수정(10번째 파일). 코드베이스 전체를 "중첩 임베드 + 공백 포함 변형"까지 포함해
+  재스캔했으나 동일 결함의 추가 잔존 지점은 없음을 확인.
+  → `paymentContractOrderRedesign.test.ts` 재실행 **23/23 GREEN**(기존 3건 실패 포함 전부
+  통과 전환), `svelte-check` 신규 에러 0건 재확인.
+- **비블로킹 발견·권고(QA)**:
+  - `push.ts`의 fail-soft 영향 범위가 최초 보고("브라우저 푸시만 영향")보다 넓을 수 있음 —
+    `sendReservationLifecyclePush()`가 쿼리 실패 시 `sendPushToUser()` 호출 자체에 도달하기
+    전에 조용히 return되므로, 그 이후에만 실행되는 **SMS 폴백 안전망도 함께 불발됐을
+    가능성**(`reservation_approval`·`return_remind` 등). 미발송 이력을 남기는 로그가 없어
+    사후 감사가 구조적으로 불가능 — 이미 벌어진 과거 일이라 코드로 되돌릴 수 없으므로,
+    Stephen에게 "영향범위가 푸시+SMS 둘 다였을 수 있다"는 점만 정확히 알리고 별도 조치
+    필요 여부는 Stephen 판단에 맡기는 것을 권고(이번 9곳 수정 자체는 정확·충분).
+  - 테스트 카운트 보고 오차(경미): "9개 파일 61개"가 아니라 실제로는 **11개 파일 66개**
+    (`trackingNotifyDispatch`·`rentalCompletePointsManualTrigger`·`dheroAutoAdvance`·
+    `dheroChatNotify` 4개가 `__tests__/server/`에 위치 — 기록 정정 차원, 실질 문제 아님).
+  - `account/rental/[id]/+page.server.ts`의 "쿼리 실패해도 조용히 `/account/rental`로
+    리다이렉트" 패턴은 QA 확인 결과 **의도된 보안 설계**(타인 예약 ID 시도 시 존재 여부
+    비노출) — 이번 PGRST201 수정 범위를 벗어나는 별건 설계 이슈라 손대지 않음, 발견사항으로만
+    기록.
+  - 마이그레이션 전수조사: `products`↔`rental_reservations` 외에 최근 신규로 생긴 이중 FK
+    경로는 없음을 확인. 예전부터 있던 유사 구조(`rental_reservations`↔`pickup_points`,
+    `deposit_holds`↔`payment_transactions`, `user_coupons`↔`orders`)는 현재 앰비규어스하게
+    임베드하는 코드가 0건이라 당장 위험 아님(latent risk로만 기록).
+  - 조사 중 발견한 무관한 기존 실패(참고용, 이번 GATE E 판정과 무관): `contractSigningGate.
+    test.ts`의 통합 카드 발송 테스트 1건이 Stage에서 별개 사유로 실패 중 — `products(...)`
+    임베드와 무관함을 확인, 별도 이슈로 남김.
+- **최종 수정 파일 = 10개**(위 9개 + `src/routes/contract/[token]/+page.server.ts`).
+
+### 같은 세션 내 선행 수정(참고 — 별건, 이미 커밋·배포 완료)
+
+- `/cms/set/rental` 순서저장 4곳(대여기간·할인구간·대여방식·필수동의문) 드래그 저장 실패 시
+  무응답 문제 수정 — `src/routes/cms/set/rental/+page.svelte`의 `savePeriodOrder`/`saveTierOrder`/
+  `saveMethodOrder`/`saveConsentOrder` 4개 함수에 `deserialize` 기반 성공/실패 판정 추가(같은 파일
+  `saveManualHoliday`·`ProductDetailPanel.svelte` `saveOptions`/`saveContent`와 동일 패턴 재사용).
+  Stephen 커밋(`c4e190b`) → Stage·Production 배포 완료(Vercel API로 두 환경 모두 READY 직접 확인).
+
 ## DONE — 🔴 CRITICAL(정밀검증 중 발견·즉시 수정): '서비스 기본 정보' CMS 설정 신설 + 계약서·PC/모바일 푸터 연동 + 저장 100% 실패 결함 2건 수정 (Migration #566·#567·#568, 2026-09-28, 이 세션'만', ✅ GATE E 조건부 통과 — sp3-qa-agent 독립검수 완료(블로킹 0건), Stage·Production 적용 완료, git commit은 Stephen 대기)
 
 플랜 문서(`~/.cursor/plans/서비스_기본_정보_cms_설정_신설_3ca37cda.plan.md`) 리뷰 후 즉시 구현.

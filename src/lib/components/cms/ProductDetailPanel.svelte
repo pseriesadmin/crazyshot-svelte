@@ -2060,6 +2060,7 @@
               source="product_search"
               activeOnly={true}
               excludeId={product.id}
+              limit={20}
               placeholder="상품명 또는 키워드 입력 후 검색..."
               categoryLabels={{}}
               onselect={onBundleSuggestSelect}
