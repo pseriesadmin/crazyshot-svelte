@@ -7,6 +7,64 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🔴 CRITICAL: 요금 미등록 상품 처리 — 장바구니 폴백(150000·24h×0.6) 제거 + 12h 없음 24시간 단위 올림 + 24h 없음 "요금 미정"·예약 신청 차단 (Migration #584, 2026-09-30, 이 세션'만', ✅ GATE B 승인 — Stephen 진행 지시, Migration #584·#585 Stage·Production 모두 적용 완료(Production 2026-09-30 15:01 KST 적용·검증) · ✅ GATE E 3차 통과 — sp3-qa-agent 독립검수(블로킹 0건, #585 무료옵션 포함), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 다른 세션 소관 미커밋 변경은 미수정.
+
+Stephen 확정 정책:
+  ① CMS 상품에서 요금을 미입력·의도적으로 비우면 사용자 화면 미노출·장바구니 대여요금 연산 불가가 될 수 있고 이는 관리자 영역.
+  ② 이를 강제/자동 로직으로 추정값·예측값·대체값으로 채우는 것은 절대 금지.
+  ③ 24h만 있고 12h가 없는 상품 → 24시간 단위 올림 계산: 방문·퀵·무인보관함 등 시간이 들어가도 하루(24h)로 계산, 단 1분이라도 24시간을 넘으면 1일 추가(25시간 → 2일). 배송 수령은 기존대로 (날짜차+1)일.
+  ④ 24h 요금이 없는 상품 → 150,000원 폴백 제거, "요금 미정" 표시 + 예약 신청 차단.
+
+전수 조사 결과(수정 전, 장바구니 폴백): itemRate24h 150000 / itemRate12h 24h×0.6 / cardRate 24h×8(호출처 없는 죽은 코드) / 장바구니 서버조회 is_active·deleted_at 필터 누락 / 서버 compute_reservation_line_amount는 12h 없으면 v_half=0(반나절 무료 청구)·본상품 요금 조회에 삭제/비활성 필터 없음.
+  - 실증: sync_price_rules_to_children 트리거가 부모 요금 삭제를 자식에게 soft-delete로 전파 → 필터 없이는 삭제된 12h/24h 요금이 계속 청구에 쓰인다(현재 운영 DB 76건은 전부 같은 값의 활성 요금이 공존해 실영향 0).
+
+수행 작업:
+  [1] 서버 Migration 584(compute_reservation_line_amount): 본상품 요금 조회에 is_active·deleted_at 필터 추가 / 12h 없음 → CEIL(총분/1440)일 × 24h / 24h 없음 → 대여요금 0 / 옵션은 본상품 v_days 공유(무변경 구조). 12h 있는 상품·배송 잠금·휴무일 연장·옵션·판매전용·반환 컬럼·권한 무변경. Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, Production(vnbpmvxruyciuuaermyh)은 Stephen 승인 대기(적용 전 Stage=Production 함수 md5 동일 확인 — c5dfeac7…).
+  [2] cartRentalFee.ts: RentalFeeInput.halfDayPrice number|null(null → 24h 올림) / calcRentalPeriodParts(totalMinutes, hasHalfRate=true) — 기본값 true라 계약서(rentalDaysLabel)·contract-data 호출부 무변경.
+  [3] cart/+page.server.ts: 본상품·옵션 12h/24h 요금 조회에 is_active·deleted_at 필터(서버 함수와 동일 기준, 상세·목록·홈과도 동일).
+  [4] cart/+page.svelte: itemRate24h/12h가 number|null(폴백 제거) / itemRentalFee·otHolidayExtraFee는 24h null이면 0 / 옵션은 본상품 12h 없음이면 동일 올림 일수 / 카드 Day·12H 표시(PC·모바일 2곳): 12h 없으면 12H 숨김, 24h 없으면 "요금 미정", 구매 라인은 판매금액(Price) 표시 / priceUnsetBlocked → readyToSubmit 차단 + 안내문 / "총 대여기간" 라벨은 체크된 대여 라인이 전부 12h 없음일 때만 일수 표기 / 죽은 코드 cardRate·itemCardRate 제거.
+  [5] CalendarTimePicker(상품상세 계산기): 12h 없음 → 24시간 올림 계산(앞선 "–" 표시 방식을 새 규칙에 맞춰 정정).
+  [6] TDD: cartRentalFee.test.ts +15건(HL-1~10, HP-1~5) / computeReservationLineAmountHalfless.test.ts(Stage 라이브, 전용 임시 상품·사용자 사용) SV-1~9 + 무료옵션 F-1~11 = 20건.
+  [7] 무료(is_free) 옵션 — Stephen 확정(2026-09-30): ① 본상품의 무료 옵션은 대여방식·기간·시간과 무관하게 무조건 0원 ② 무료 판정은 "그 본상품 링크"에서만(같은 옵션이 다른 본상품에서 유료면 영향 없음).
+      서버 Migration 585(compute_reservation_line_amount): 예약 상품을 부모로 환산(COALESCE(parent_product_id,id))해 product_option_links(pol.product_id=부모, option_product_id, deleted_at IS NULL, is_free)로 판정 → 옵션요금·옵션 휴무일 가산 0(판매전용 분기 포함). 저장된 unit_price가 0이 아니어도 0. 그 외 산식·반환·권한 무변경. Stage 적용 완료.
+      클라이언트 cart/+page.server.ts: 무료 판정 키를 `본상품(부모):옵션` 쌍으로(과거 옵션 id만으로 판정해 다른 본상품까지 번질 수 있던 M-1 해소), 무료면 unitPrice=0·unitPrice12h=null 고정, 삭제된 링크는 무료로 보지 않음. 종전 다른 세션의 optionIsFreeMap 변경을 이 방식으로 대체·통합(Stephen 2차 검수 대상 포함 지시).
+      2차 QA B-1(화면 0원 vs 서버 12h 정가 청구)은 서버 #585로 해소.
+      3차 QA(2026-09-30): 블로킹 0 / MEDIUM 2 / LOW 4. 잔여(미수정·Stephen 결정 대기): ① 서버 create_reservation_order 24h 없음 미차단(클라이언트 우회 시 0원 주문) ② set_reservation_options(#569)가 자식 id 예약에서 부모 링크를 못 찾아 저장 unit_price 0 강제 못함(청구·화면은 #585로 0이라 실피해 없음, 저장값 표기만 불일치) / LOW: 자식 id 링크 무시 케이스 테스트 없음·F-2/F-3의 저장 단가 0 조합·serverProducts 누락 시 클라이언트 폴백과 서버 부모환산 차이·함수 원문 대조는 라이브 테스트로 간접 확인.
+      [Production 선행조건 점검 결과 — 2026-09-30, 읽기 전용 조회] ✅ compute_reservation_line_amount md5 c5dfeac7…(#584 이전 기준과 동일)·SECURITY DEFINER·search_path=public·ACL {postgres, service_role}(anon/authenticated 없음) / ✅ Stage=#585 적용본 md5 7ded4ca1… / ✅ product_option_links.is_free·deleted_at 컬럼 존재(#569·#570이 오늘 04:20 UTC에 Production 적용됨) / ✅ Production에 #584·#585 미적용(마지막 #570) / ✅ 무료 링크 0건(전체 23건, 자식 id 링크 7건은 is_free 아님) / ✅ 12h만 없는 활성 대여 상품 0·24h 없는 활성 대여 상품 0·삭제/비활성 요금만 있는 상품 0 / ✅ 진행중 예약 14건(draft 6·confirmed 7·in_use 1) 중 무료 적용 대상 옵션 0, 활성 12h 없는 2건은 24h만 있는 QA-TEST 자식(1일·시각 null → 24h 배수라 금액 불변) / ⚠️ create_reservation_order는 Stage·Production md5가 다르나 차이는 주석뿐으로 보임(기능 동일) — 문서(sync 위임 서술)와 실제 정의가 다른 기존 문서 불일치, 이번 변경 무관.
+      ✅ [Production 적용 완료 — 2026-09-30, Stephen 지시] 적용 전 스냅샷 저장(.claude/harness/learnings/compute_reservation_line_amount_production_snapshot_2026-09-30.sql, md5 c5dfeac7… DB와 일치 검증) → #584 적용(version 20260930060149) → #585 적용(20260930060224). 검증: 함수 md5 = Stage #585본 7ded4ca1…와 동일 / SECURITY DEFINER·search_path=public·시그니처·ACL{postgres,service_role} 불변 / 진행중 예약 14건 계산값 해시 적용 전·#584 후·#585 후 모두 942d6e74… 동일(금액 변동 0). 남은 것: 코드 배포(커밋·푸시·머지, Stephen).
+      Production 적용 전 선행(완료): DB 먼저(#584 → #585) 후 코드 배포 / 함수 정의·ACL 스냅샷 저장·Stage 대조(md5 c5dfeac7…) / is_free 컬럼 재조회(Production 확인됨, 무료 링크 0건) / 12h 없는 활성 대여 부모·삭제·비활성 요금만 있는 상품·진행중 예약 조회 / 적용 후 anon 42501·정상 예약 1건 금액 확인 / DRIFT_CHECK 1~4 실행.
+
+수정 파일: supabase/migrations/20260930010000_584_compute_reservation_line_amount_halfless_days.sql, supabase/migrations/20260930020000_585_compute_reservation_line_amount_free_options.sql, src/lib/utils/cartRentalFee.ts, src/routes/cart/+page.svelte, src/routes/cart/+page.server.ts, src/lib/components/products/CalendarTimePicker.svelte, src/__tests__/services/cartRentalFee.test.ts, src/__tests__/services/computeReservationLineAmountHalfless.test.ts, .claude/rules-ref/rental-fee-policy.md
+알려진 범위 외(미수정·Stephen 확인 대기): 계약서 "총 대여기간" 라벨(rentalDaysLabel·contract-data)은 12h 없음 상품에도 기존 12시간 라벨 / 상품상세 24h 없는 상품의 base_price_daily 0 표시 / 서버 create_reservation_order 24h 없음 차단(현재 클라이언트 차단만) / syncOrderAfterCompositionChange.test EC-2는 요금 규칙이 없는 임의 상품 2개를 골라 총액 0이 되는 기존 결함(이번 변경 무관).
+QA 결과(2026-09-30): 블로킹 0 / MEDIUM 4 / LOW 5. 조치: [해소] 마이그레이션 #584 파일에 ROLLBACK 섹션 추가, 라이브 테스트 SV-7(배송 잠금)·SV-8/9(옵션 조합) 추가(총 9건 GREEN). [Stephen 결정 대기] ① cart/+page.server.ts의 `is_free` 옵션 변경(optionIsFreeMap, 다른 세션 작성 — Stephen이 2차 검수 대상에 포함 지시) → 2차 QA: 🔴 BLOCKING 1건(B-1: 서버 compute_reservation_line_amount에 is_free 처리가 없어, 12h 있는 상품+무료옵션(12h 활성 규칙 보유)+반나절 블록(예 25h)이면 화면 0원 vs 서버 옵션 12h 정가 청구 — (B)가 '일관된 과청구'를 '안 보이는 불일치'로 바꿈, Stage 현재 데이터는 해당 규칙이 soft-delete라 미발현) + MEDIUM(무료 판정이 메인상품 범위 없음 / product_option_links deleted_at 필터 없음 / 예약 후 무료 토글 변경 시 기존 예약 불일치 / 회귀 테스트 없음) → 선택지: (가) (B)+서버 #585(is_free 옵션은 12h 제외) 한 세트 승인 (나) (B) 보류하고 (A)만 커밋(이 파일에서 (B) 분리 필요). → ✅ Stephen이 (가) 선택 — 위 [7]로 해소(서버 #585 + 클라이언트 본상품 범위 판정). Production에 product_option_links.is_free(#569) 적용 여부 미확인. [원 기록] 서버 함수에 is_free 처리가 없어 12h 있는 상품+무료옵션에서 화면(0)과 서버(12h 정가) 합계가 어긋날 수 있음 → 출처 세션 확인 필요, 이 파일 커밋 시 두 변경이 함께 들어감 / ② 서버 create_reservation_order 24h 없음 미차단(직접 API 호출 시 0원 라인) / ③ Production 적용 전 선행: Production 함수 정의·ACL 스냅샷 저장·Stage 대조(md5 c5dfeac7…), 12h 없는 활성 대여 부모 0개·삭제/비활성 요금만 있는 상품·진행중 예약 재확인, 적용 순서는 DB 먼저 → 코드 배포.
+git: Stephen 대기.
+
+## DONE — 🟢 ROUTINE: 상품상세 12H 요금 24h×0.7 잔재 계산 제거 (2026-09-30, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 정정본 재검수 완료(블로킹 0건), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 실제로 수정한 것은 `src/routes/products/[id]/+page.svelte`·`src/lib/components/products/CalendarTimePicker.svelte` 2개 파일(+ 이 기록). 검색 화면 12H 수정(0ab3718)은 이전 세션 산출물(이미 main·Vercel 운영 배포 완료)이라 재수정 없음.
+
+배경(조사 결과 — 코드·DB 수정 없이 재검증):
+  - 홈(+page.server.ts)·/products 목록(productGrid.ts attachCardPrices)·상세(attachPrices)는 모두 price_rules 12h 활성값을 직접 읽음.
+  - 실서비스 DB(vnbpmvxruyciuuaermyh) 부모 165개: 12h 활성 중복 0건. idol-set17 = 12h 95,000 / 24h 105,000 (0.7배면 73,500 = 예전 검색화면 오표시값).
+  - 12h 규칙 없는 부모 2개는 전부 판매전용(instax film 2종). 상세만 24h×0.7로 채우던 잔재가 유일한 계산 잔존 경로였음.
+
+수행 작업:
+  [1] +page.svelte `price12h`: `base_price_12h ?? Math.round(base_price_daily*0.7)` → `base_price_12h ?? null` (CMS 실값 전용).
+  [2] 12H 표시 블록(구 943행): price12h가 null이면 "/ 12H …원" 통째 숨김(홈·목록과 동일 동작).
+  [3] (2026-09-30 정정 — Stephen 정책 재확인: 요금 미입력은 관리자 영역, 추정값·예측값 주입 절대 금지) 최초 구현의 `halfDayForPicker`(12h 없으면 1일 요금 대체)는 추정값이라 제거.
+      CalendarTimePicker `halfDayPrice`를 `number|null`(기본 null, 구 기본값 25000 제거)로 변경 — 12h 블록이 필요한 구간에서 12h가 null이면 예상요금을 산출하지 않고 '–' 표시. 상세 페이지는 실값 또는 null만 전달.
+  [4] 조사만(미수정·Stephen 확인 대기): 장바구니 cart/+page.svelte itemRate24h 폴백 150000 / itemRate12h 폴백 24h×0.6, CalendarTimePicker dailyPrice 기본값 35000, 상세 base_price_daily 0 폴백 표시. 서버 compute_reservation_line_amount는 요금 없으면 COALESCE 0(추정 아님).
+
+수정 파일: src/routes/products/[id]/+page.svelte, src/lib/components/products/CalendarTimePicker.svelte
+DB 마이그레이션: 없음. git: Stephen 대기.
+
+GATE C 자가점검:
+  [x] 0.7 잔재 grep 0건(해당 파일)  [x] svelte-check — 신규 오류 0(기존 vite.config.ts test 옵션 오류 1건은 무관)
+  [ ] 실화면 확인은 미수행(Claude Browser 사용 금지 정책) — 12h 규칙 없는 대여상품은 현재 DB에 0개라 실화면 재현 대상 없음.
+
+
 ## DONE — 🔴 CRITICAL: /products 화면 개편 — PC·모바일 무한스크롤·하단 MD추천 도크·카테고리 배너·노출순서 연동·카테고리 아이콘 ON/OFF 동기화 (Migration #577·#578, 2026-09-29, 이 세션'만', GATE E 검수 대기)
 
 ⚠️ 세션 스코프: 이 블록은 "이 세션이 실제로 수정한 것"만 기록. 같은 작업폴더의 병행 세션 소관(ProductCategoryModal.svelte의 ON 아이콘 업로드 슬롯,

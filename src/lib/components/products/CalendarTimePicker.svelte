@@ -7,7 +7,8 @@
     startHour?: number;
     endHour?: number;
     dailyPrice?: number;
-    halfDayPrice?: number;
+    /** 12h 요금 실값. 미등록이면 null — 12시간 블록이 없으므로 24시간 단위 올림 일수 × dailyPrice로 계산(추정값 금지, 장바구니·서버와 동일 규칙) */
+    halfDayPrice?: number | null;
     optionsTotal?: number;
     mode?: 'product' | 'cart';
     rentalMethods?: RentalOption[];
@@ -30,7 +31,7 @@
     startHour = $bindable(12),
     endHour = $bindable(13),
     dailyPrice = 35000,
-    halfDayPrice = 25000,
+    halfDayPrice = null,
     optionsTotal = 0,
     mode = 'product',
     rentalMethods = [],
@@ -184,6 +185,13 @@
 
   let estimatedFee = $derived.by(() => {
     if (!startDate || !endDate) return optionsTotal;
+
+    // 12h 요금 미등록: 12시간 블록을 만들 수 없어 24시간(1440분) 단위 올림 일수 × 24h 요금
+    // (25시간 → 2일 — 단 1분이라도 24시간을 넘으면 1일 추가. 장바구니 calcRentalFee·서버 Migration 584와 동일)
+    if (halfDayPrice === null) {
+      if (totalRentalMinutes <= 0) return optionsTotal;
+      return Math.ceil(totalRentalMinutes / 1440) * dailyPrice + optionsTotal;
+    }
 
     if (isSameDayRental) {
       // 당일 대여: 시간 기준

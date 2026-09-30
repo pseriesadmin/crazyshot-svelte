@@ -294,6 +294,10 @@ export const load: PageServerLoad = async ({ locals }) => {
             .select('product_id, duration_type, price, deposit_amount')
             .in('product_id', productIds)
             .in('duration_type', ['12h', '24h'])
+            // 활성·미삭제 요금만(2026-09-30) — 삭제된 요금이 화면·청구에 남는 것을 막는다.
+            // 서버 compute_reservation_line_amount(Migration 584)와 동일 기준. 상세·목록·홈과도 동일.
+            .eq('is_active', true)
+            .is('deleted_at', null)
         : Promise.resolve({ data: [] as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }> }),
       // 옵션상품 + 수량 (Migration 176 reservation_options) — 상품 상세에서 선택한 옵션이 카드에 노출되도록
       supabase
@@ -385,6 +389,8 @@ export const load: PageServerLoad = async ({ locals }) => {
         .select('product_id, price')
         .in('product_id', optionProductIds)
         .eq('duration_type', '12h')
+        .eq('is_active', true)
+        .is('deleted_at', null)
       for (const p of (optionPriceRules ?? []) as Array<{ product_id: string; price: number }>) {
         optionPrice12hMap.set(p.product_id, p.price)
       }
@@ -403,16 +409,32 @@ export const load: PageServerLoad = async ({ locals }) => {
     // OPT-QTYLOCK-1(2026-09-28): 수량이 본상품 수량에 잠기는 옵션인지 — products/[id]와 동일
     // 판정 기준(product_option_links.qty_follows_main)을 카트 화면 스테퍼 비활성화에도 사용.
     const optionQtyFollowsMainMap = new Map<string, boolean>()
+    // 무료 제공(is_free) 옵션 — 본상품 범위에서만, 대여방식·기간·시간과 무관하게 무조건 0원
+    // (2026-09-30, Stephen 확정 · 서버 compute_reservation_line_amount Migration 585와 동일 판정).
+    //   ① 무료 판정 키는 "본상품(부모) id : 옵션상품 id" 쌍 — 같은 옵션이 다른 본상품에서 유료이면 그쪽은
+    //      영향받지 않는다(과거엔 옵션 id만으로 판정해 다른 본상품까지 무료로 번질 수 있었다).
+    //   ② 무료면 저장된 unit_price와 무관하게 unitPrice=0, unitPrice12h=null로 고정 → itemOptionFee의
+    //      flat 폴백(unitPrice × qty)과 옵션 휴무일 가산 제외(unitPrice12h==null)가 모두 0으로 귀결된다.
+    //   ③ 삭제된 링크(deleted_at)는 무료로 보지 않는다(서버 set_reservation_options와 동일).
+    // 예약 상품이 재고(자식)일 수 있어 본상품은 parent_product_id ?? id 로 환산한다(옵션 링크는 부모 기준).
+    const mainParentByReservation = new Map<string, string>()
+    for (const rr of rawReservations) {
+      if (rr.product_id == null) continue
+      const prod = serverProducts.find(pp => pp.id === rr.product_id)
+      mainParentByReservation.set(String(rr.id), (prod?.parent_product_id as string | null | undefined) ?? rr.product_id)
+    }
+    const freeOptionKeys = new Set<string>()
     if (optionProductIds.length > 0) {
       const { data: optionLinkRows } = await supabase
         .from('product_option_links')
-        .select('option_product_id, delivery_rental_disabled, is_required, min_select_required, qty_follows_main')
+        .select('product_id, option_product_id, delivery_rental_disabled, is_required, min_select_required, qty_follows_main, is_free, deleted_at')
         .in('option_product_id', optionProductIds)
-      for (const l of (optionLinkRows ?? []) as Array<{ option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null; qty_follows_main: boolean | null }>) {
+      for (const l of (optionLinkRows ?? []) as Array<{ product_id: string; option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null; qty_follows_main: boolean | null; is_free: boolean | null; deleted_at: string | null }>) {
         if (l.delivery_rental_disabled) optionDeliveryDisabledMap.set(l.option_product_id, true)
         if (l.is_required) optionRequiredMap.set(l.option_product_id, true)
         if (l.min_select_required) optionMinSelectMap.set(l.option_product_id, true)
         if (l.qty_follows_main) optionQtyFollowsMainMap.set(l.option_product_id, true)
+        if (l.is_free && !l.deleted_at) freeOptionKeys.add(`${l.product_id}:${l.option_product_id}`)
       }
     }
 
@@ -420,12 +442,17 @@ export const load: PageServerLoad = async ({ locals }) => {
     for (const row of optionRows) {
       const key = String(row.reservation_id)
       const list = optionsByReservation[key] ?? []
+      // 이 예약의 본상품 링크에서 무료로 지정된 옵션 — 저장된 unit_price와 무관하게 0원 고정
+      const isFreeForThisMain = !!row.option_product_id
+        && freeOptionKeys.has(`${mainParentByReservation.get(key) ?? ''}:${row.option_product_id}`)
       list.push({
         optionProductId: row.option_product_id,
         name:            row.option_name,
         qty:             row.qty,
-        unitPrice:       row.unit_price,
-        unitPrice12h:    row.option_product_id ? optionPrice12hMap.get(row.option_product_id) ?? null : null,
+        unitPrice:       isFreeForThisMain ? 0 : row.unit_price,
+        unitPrice12h:    row.option_product_id && !isFreeForThisMain
+          ? optionPrice12hMap.get(row.option_product_id) ?? null
+          : null,
         imageUrl:        row.option_product_id ? optionImageMap.get(row.option_product_id) ?? null : null,
         deliveryRentalDisabled: row.option_product_id ? (optionDeliveryDisabledMap.get(row.option_product_id) ?? false) : false,
         isRequired:      row.option_product_id ? (optionRequiredMap.get(row.option_product_id) ?? false) : false,

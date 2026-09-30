@@ -287,3 +287,78 @@ describe('computeCartTotalMinutes — "총 대여기간" 배수 합산 버그 �
     expect(expected).toBe(5760) // (3+1)일 × 1440분
   })
 })
+
+/**
+ * 12시간 요금 미등록(halfDayPrice=null) 상품 — 24시간 단위 올림 계산 (2026-09-30, Stephen 확정)
+ *
+ * 정책: 12시간 요금이 없으면(관리자 미입력 = 관리자 영역) 12시간 블록을 만들 수 없으므로
+ * 총 대여시간을 24시간(1440분) 단위로 올림해 일수×24h요금으로 청구한다. 단 1분이라도
+ * 24시간을 넘으면 1일이 추가된다(25시간 → 2일). 추정값(24h×0.6 등)은 절대 쓰지 않는다.
+ * 12시간 요금이 있는 상품의 기존 계산(위 describe들)은 전혀 바뀌지 않는다.
+ */
+describe('calcRentalFee — 12h 요금 없음(halfDayPrice=null) → 24시간 단위 올림', () => {
+  const D = 100000
+  const base = { dailyPrice: D, halfDayPrice: null as number | null }
+
+  it('HL-1: 당일 9시간 → 1일 요금(시간이 들어가도 하루로 계산)', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-01', pickupTime: '10:00', returnTime: '19:00' })).toBe(D)
+  })
+
+  it('HL-2: 정확히 24시간 → 1일', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-02', pickupTime: '10:00', returnTime: '10:00' })).toBe(D)
+  })
+
+  it('HL-3: 25시간(24시간 + 1시간) → 2일 (1시간이라도 넘으면 1일 추가)', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-02', pickupTime: '10:00', returnTime: '11:00' })).toBe(D * 2)
+  })
+
+  it('HL-4: 24시간 + 1분 → 2일', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-02', pickupTime: '10:00', returnTime: '10:01' })).toBe(D * 2)
+  })
+
+  it('HL-5: 36시간 → 2일 (12h 요금 있을 때의 "1일+12h" 대신 일 단위 올림)', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-02', pickupTime: '10:00', returnTime: '22:00' })).toBe(D * 2)
+  })
+
+  it('HL-6: 정확히 48시간 → 2일, 49시간 → 3일', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-03', pickupTime: '10:00', returnTime: '10:00' })).toBe(D * 2)
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-03', pickupTime: '10:00', returnTime: '11:00' })).toBe(D * 3)
+  })
+
+  it('HL-7: 반납이 수령보다 빠르면(역전) 0원', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-01', endDate: '2026-09-01', pickupTime: '12:00', returnTime: '10:00' })).toBe(0)
+  })
+
+  it('HL-8: 날짜 미선택 → 0원', () => {
+    expect(calcRentalFee({ ...base, startDate: '', endDate: '', pickupTime: null, returnTime: null })).toBe(0)
+  })
+
+  it('HL-9: 배송 잠금(deliveryLocked) — 기존과 동일하게 (날짜차+1)일, 시각 무시', () => {
+    expect(calcRentalFee({ ...base, startDate: '2026-09-09', endDate: '2026-09-10', pickupTime: '12:00', returnTime: '13:00', deliveryLocked: true })).toBe(D * 2)
+  })
+
+  it('HL-10 [회귀]: 12h 요금이 있는 상품은 기존 12시간 블록 산식 그대로(9h→half, 25h→daily+half)', () => {
+    const withHalf = { dailyPrice: D, halfDayPrice: 60000 }
+    expect(calcRentalFee({ ...withHalf, startDate: '2026-09-01', endDate: '2026-09-01', pickupTime: '10:00', returnTime: '19:00' })).toBe(60000)
+    expect(calcRentalFee({ ...withHalf, startDate: '2026-09-01', endDate: '2026-09-02', pickupTime: '10:00', returnTime: '11:00' })).toBe(D + 60000)
+  })
+})
+
+describe('calcRentalPeriodParts — 12h 요금 없음 표시 라벨(hasHalfRate=false)', () => {
+  it('HP-1: 540분(9시간) → 1일 (12시간 라벨 대신)', () => {
+    expect(calcRentalPeriodParts(540, false)).toEqual([{ num: 1, unit: '일' }])
+  })
+  it('HP-2: 1500분(25시간) → 2일', () => {
+    expect(calcRentalPeriodParts(1500, false)).toEqual([{ num: 2, unit: '일' }])
+  })
+  it('HP-3: 1440분(정확히 24시간) → 1일', () => {
+    expect(calcRentalPeriodParts(1440, false)).toEqual([{ num: 1, unit: '일' }])
+  })
+  it('HP-4: 0분 이하 → 빈 배열(날짜 미선택)', () => {
+    expect(calcRentalPeriodParts(0, false)).toEqual([])
+  })
+  it('HP-5 [회귀]: 인자 생략(기본 true) 시 기존 라벨과 동일 — 계약서·CMS 등 다른 호출부 무영향', () => {
+    expect(calcRentalPeriodParts(540)).toEqual([{ num: 12, unit: '시간' }])
+    expect(calcRentalPeriodParts(1500)).toEqual([{ num: 1, unit: '일' }, { num: 12, unit: '시간' }])
+  })
+})
