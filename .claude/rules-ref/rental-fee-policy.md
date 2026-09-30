@@ -111,6 +111,39 @@ deliveryLocked = true(조건①·②, 수령이 배송)인 경우 — 시각을 
 
 ---
 
+## 3-1. 요금 미등록 상품 처리 (2026-09-30, Stephen 확정 — Migration 584)
+
+```
+원칙: CMS에서 요금을 미입력·비우는 것은 관리자 영역이다. 없는 요금을 추정값·예측값·대체값
+     (예: 150000, 24h×0.6, 24h×0.7, 1일 요금으로 12h 대체)으로 채우는 자동화는 절대 금지.
+     요금 조회는 항상 활성(is_active)·미삭제(deleted_at IS NULL) 규칙만 사용한다
+     (부모 요금을 비우면 sync_price_rules_to_children 트리거가 자식 요금을 soft-delete로 전파).
+
+12h 요금만 없음(24h 있음): 12시간 블록을 만들 수 없으므로 총 대여시간(분)을 1440분 단위로 올림.
+  일수 = CEIL(총분 / 1440), 요금 = 일수 × 24h요금. 단 1분이라도 24시간을 넘으면 1일 추가.
+  예) 9시간→1일 / 24시간→1일 / 25시간→2일 / 36시간→2일 / 48시간→2일 / 49시간→3일
+  배송 수령(is_delivery_type)은 기존과 동일 (날짜차+1)일(시각 무시).
+  옵션상품은 본상품의 올림 일수를 그대로 따른다(옵션 자체 12h 유무와 무관, v_has_half=false).
+
+24h 요금 없음: 대여요금 산정 불가 — 서버 0원, 장바구니는 "요금 미정" 표시 + 예약 신청 차단
+  (priceUnsetBlocked, 체크 해제·삭제 시 진행 가능). 구매(판매전용) 라인은 대상 아님.
+
+무료(is_free) 옵션 (2026-09-30, Migration 585): 본상품의 무료 옵션은 대여방식·기간·시간과 무관하게
+  옵션요금·옵션 휴무일 가산 무조건 0원(저장된 unit_price가 0이 아니어도). 판정은 "예약의 본상품(재고면 부모로
+  환산) + 옵션상품" 쌍의 product_option_links(deleted_at IS NULL, is_free=true)로만 한다 — 같은 옵션이 다른
+  본상품에서 유료이면 그쪽에는 영향이 없다. 서버 compute_reservation_line_amount ↔ cart/+page.server.ts
+  (freeOptionKeys 키 `부모:옵션`, 무료면 unitPrice=0·unitPrice12h=null)가 같은 규칙.
+  미해결(별건): 예약 이후 무료 토글을 바꾸면 서버는 현재 링크 기준으로 재계산 — 이미 저장된 unit_price와 무관.
+
+⛔ 다시 추가하지 말 것: 150000 / 24h×0.6 폴백, 12h 없음 시 반나절 무료 청구, 삭제 요금 청구.
+동기화: cartRentalFee.calcRentalFee(halfDayPrice=null) ↔ compute_reservation_line_amount(v_half_missing)
+       ↔ CalendarTimePicker(상품상세 계산기) — 세 곳이 같은 규칙. 하나만 고치지 말 것.
+테스트: cartRentalFee.test.ts(HL/HP) · computeReservationLineAmountHalfless.test.ts(SV·F, Stage 라이브 20건)
+알려진 미반영: 계약서 "총 대여기간" 라벨(rentalDaysLabel·contract-data)은 12h 없음 상품에도 12시간 라벨.
+```
+
+---
+
 ## 4. 구현 파일 참조
 
 ```

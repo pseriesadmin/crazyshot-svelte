@@ -27,6 +27,9 @@ function timeToMinutes(time: string | null | undefined): number {
 /** 12시간 = 1블록. 대여요금·표시라벨 둘 다 이 블록 단위로 올림(ceil) 처리한다. */
 const BLOCK_MINUTES = 720
 
+/** 24시간 = 1일. 12h 요금이 없는 상품은 이 단위로 올림(ceil) 처리한다. */
+const DAY_MINUTES = 1440
+
 /**
  * 총 대여일수(표시용, 레거시 — 시간 정보 없이 달력일수만 필요한 경우에만 사용).
  * 당일 대여(startDate === endDate)는 1일로 표시한다.
@@ -101,7 +104,8 @@ export interface RentalFeeInput {
   pickupTime: string | null
   returnTime: string | null
   dailyPrice: number
-  halfDayPrice: number
+  /** 12h 요금. 미등록이면 null — 12시간 블록을 만들 수 없어 24시간(1440분) 단위 올림 일수 × dailyPrice로 계산(추정값 금지) */
+  halfDayPrice: number | null
   /** 배송(왕복 배송료) 잠금 예약 — calcRentalMinutes 참고, 12시간 블록 산식을 건너뛰고 N일만 청구 */
   deliveryLocked?: boolean
 }
@@ -118,6 +122,12 @@ export function calcRentalFee(input: RentalFeeInput): number {
   const { startDate, endDate, pickupTime, returnTime, dailyPrice, halfDayPrice, deliveryLocked } = input
   const totalMinutes = calcRentalMinutes(startDate, endDate, pickupTime, returnTime, deliveryLocked)
   if (totalMinutes <= 0) return 0
+
+  // 12h 요금 미등록(2026-09-30, Stephen 확정): 서버 compute_reservation_line_amount(Migration 584)와
+  // 동일하게 24시간 단위 올림 — 단 1분이라도 24시간을 넘으면 1일 추가(25시간 → 2일).
+  if (halfDayPrice === null) {
+    return Math.ceil(totalMinutes / DAY_MINUTES) * dailyPrice
+  }
 
   const blocks = Math.ceil(totalMinutes / BLOCK_MINUTES)
   const days = Math.floor(blocks / 2)
@@ -138,8 +148,12 @@ export interface RentalPeriodPart {
  *   12시간 초과~24시간  → [{num:1, unit:'일'}]
  *   24시간 초과(3블록)  → [{num:1, unit:'일'}, {num:12, unit:'시간'}]
  */
-export function calcRentalPeriodParts(totalMinutes: number): RentalPeriodPart[] {
+export function calcRentalPeriodParts(totalMinutes: number, hasHalfRate = true): RentalPeriodPart[] {
   if (totalMinutes <= 0) return []
+
+  // 12h 요금이 없는 상품(hasHalfRate=false): 12시간 블록이 없으므로 24시간 단위 올림 일수로만 표기
+  // (calcRentalFee의 halfDayPrice=null 경계와 동일). 기본값 true — 기존 호출부(계약서·CMS)는 무변경.
+  if (!hasHalfRate) return [{ num: Math.ceil(totalMinutes / DAY_MINUTES), unit: '일' }]
 
   const blocks = Math.ceil(totalMinutes / BLOCK_MINUTES)
   const days = Math.floor(blocks / 2)

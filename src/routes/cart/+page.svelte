@@ -1045,13 +1045,6 @@
   }
   const DUR_TYPES: DurationType[] = ['12h', '24h', '1day', 'purchase']
 
-  // 기간 유형별 단가 반환 (카드 표시용 — 실제 합계는 calculate_cart_total RPC 기준)
-  function cardRate(daily: number, half: number, dur: DurationType): number {
-    if (dur === '12h') return half
-    if (dur === 'purchase') return daily * 8  // 임시값 — 구매(판매) 요금정책 연동 예정
-    return daily  // '24h' | '1day'
-  }
-
   // CMS 대여관리(/cms/set/rental)에서 설정한 실제 이름을 우선 사용 — 아래 맵은 CMS 데이터가
   // 아직 로드되지 않았거나 해당 method_key가 CMS 목록에 없을 때만 쓰는 최후 폴백
   const DELIVERY_LABELS: Record<DeliveryMethod, string> = {
@@ -1073,24 +1066,30 @@
     return m ? (DELIVERY_LABELS[m] ?? m) : '';
   }
 
-  // 단가: 실제 요금정책(price_rules) 기준 (없으면 기본 단가 폴백)
+  // 단가: 실제 요금정책(price_rules) 기준. 없는 요금은 null — 추정값·대체값을 절대 만들지 않는다
+  // (2026-09-30, Stephen 정책: 요금 미입력은 관리자 영역. 종전의 150000 / 24h×0.6 폴백 제거).
+  //   · 24h가 null → "요금 미정" 표시 + 예약 신청 차단(itemPriceUnset/priceUnsetBlocked)
+  //   · 12h만 null → 24시간 단위 올림 계산(calcRentalFee halfDayPrice=null, 서버 Migration 584와 동일)
   // 2026-08-28: 그룹 병합 이후 카드 렌더링은 전부 CartLineGroup 기준으로 동작
-  function itemRate24h(line: CartLineGroup | undefined): number {
-    if (!line) return 150000
-    return sdPriceRules[line.productId ?? '']?.price24h ?? line.price24h ?? 150000
+  function itemRate24h(line: CartLineGroup | undefined): number | null {
+    if (!line) return null
+    return sdPriceRules[line.productId ?? '']?.price24h ?? line.price24h ?? null
   }
-  function itemRate12h(line: CartLineGroup | undefined, rate24: number): number {
-    if (!line) return Math.round(rate24 * 0.6)
-    return sdPriceRules[line.productId ?? '']?.price12h ?? line.price12h ?? Math.round(rate24 * 0.6)
+  function itemRate12h(line: CartLineGroup | undefined): number | null {
+    if (!line) return null
+    return sdPriceRules[line.productId ?? '']?.price12h ?? line.price12h ?? null
   }
-  // 판매전용(sale_only) 상품 카드 표시요율 — 대여요율(daily/half)과 무관하게 실제 판매금액을
-  // 그대로 보여준다(Migration #416, 실제 결제금액 계산 함수 compute_reservation_line_amount와
-  // 정합). "구매" 카드는 durationType==='purchase'로만 진입하므로 이 분기가 우선한다.
-  function itemCardRate(line: CartLineGroup | undefined, durType: DurationType): number {
-    if (durType === 'purchase') return line?.product?.sale_price ?? 0
-    const r24 = itemRate24h(line)
-    const r12 = itemRate12h(line, r24)
-    return cardRate(r24, r12, durType)
+  // 대여 라인인데 24h 요금이 없는 경우 — 대여요금 산정 불가("요금 미정"). 구매(판매전용) 라인은 대상 아님.
+  function itemPriceUnset(line: CartLineGroup | undefined): boolean {
+    if (!line || !isRentalLine(line.durationType ?? null)) return false
+    return itemRate24h(line) === null
+  }
+  // 카드 요금 표시용 — 구매 라인은 실제 판매금액, 대여 라인은 등록된 24h/12h 실값(없으면 null)
+  function itemPriceDisplay(line: CartLineGroup | undefined):
+    | { kind: 'purchase'; price: number }
+    | { kind: 'rental'; day: number | null; half: number | null } {
+    if (line?.durationType === 'purchase') return { kind: 'purchase', price: line.product?.sale_price ?? 0 }
+    return { kind: 'rental', day: itemRate24h(line), half: itemRate12h(line) }
   }
   // 대여료(실제 결제금액 계산 RPC와 정합) — calcRentalFee(cartRentalFee.ts)가
   // calculate_cart_total RPC와 동일 산식으로 일수×24h요율 + 잔여시간 12h요율 가산을 계산한다.
@@ -1150,7 +1149,8 @@
   ): number {
     if (line?.durationType === 'purchase') return line.product?.sale_price ?? 0
     const r24 = itemRate24h(line)
-    const r12 = itemRate12h(line, r24)
+    if (r24 === null) return 0   // 24h 요금 미등록 — 산정 불가(추정 금지), 예약 신청은 priceUnsetBlocked로 차단
+    const r12 = itemRate12h(line)
     const ext = itemHolidayExtension(it)
     const fullFee = calcRentalFee({
       startDate: ext.effectiveStart,
@@ -1205,7 +1205,9 @@
       pickupTime: it.rentalTime,
       returnTime: it.returnTime,
       dailyPrice: o.unitPrice,
-      halfDayPrice: o.unitPrice12h,
+      // 본상품이 12h 요금 없음이면 옵션도 본상품과 동일하게 24시간 단위 올림 일수를 따른다
+      // (서버 compute_reservation_line_amount는 옵션에 본상품의 v_days·v_has_half를 그대로 쓴다)
+      halfDayPrice: itemRate12h(line) === null ? null : o.unitPrice12h,
       deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
     })
     const extensionDays = ext.pickupExtraDays + ext.returnExtraDays
@@ -1559,7 +1561,12 @@
       durationType: groupsById.get(it.id)?.durationType ?? null,
     }))
   )
-  const readyToSubmit = $derived(canProceed && methodSelectionValid)
+  // 24h 요금이 등록되지 않은 대여 상품이 체크돼 있으면 예약 신청 불가(2026-09-30, Stephen 확정).
+  // 화면은 "요금 미정"으로 표시하고, 체크 해제·삭제하면 다시 진행할 수 있다.
+  const priceUnsetBlocked = $derived(
+    itemsState.some(it => !it.deleted && it.checked && itemPriceUnset(groupsById.get(it.id)))
+  )
+  const readyToSubmit = $derived(canProceed && methodSelectionValid && !priceUnsetBlocked)
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
   // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
@@ -1594,6 +1601,7 @@
       const line = groupsById.get(it.id)
       if (line?.durationType === 'purchase') return sum
       const r24 = itemRate24h(line)
+      if (r24 === null) return sum   // 24h 요금 미등록 — 산정 불가
       const ext = itemHolidayExtension(it)
       const mainExtra = calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24)
       const optionsExtra = calcOptionsHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, line?.options ?? [])
@@ -1903,7 +1911,15 @@
   const otTotalMinutes = $derived(
     computeCartTotalMinutes(otHasQualifyingItem, bulkDate, bulkReturnDate, bulkTime, bulkReturnTime, isDeliveryTypeMethod(bulkOpts.rentalMethod))
   )
-  const otRentalPeriodParts = $derived(calcRentalPeriodParts(otTotalMinutes))
+  // 체크된 대여 라인이 전부 12h 요금 없음이면 라벨도 24시간 단위 일수로 표기(하나라도 12h가 있으면 기존 라벨)
+  const otAllLinesHalfless = $derived.by(() => {
+    const lines = itemsState
+      .filter(it => !it.deleted && it.checked)
+      .map(it => groupsById.get(it.id))
+      .filter(line => !!line && isRentalLine(line.durationType ?? null))
+    return lines.length > 0 && lines.every(line => itemRate12h(line) === null)
+  })
+  const otRentalPeriodParts = $derived(calcRentalPeriodParts(otTotalMinutes, !otAllLinesHalfless))
   const otHasPurchaseItem = $derived(
     itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType === 'purchase')
   )
@@ -2342,6 +2358,9 @@
       {#if canProceed && !methodSelectionValid}
         <p class="footer-method-warning">수령·반납 방식을 다시 선택해주세요.</p>
       {/if}
+      {#if priceUnsetBlocked}
+        <p class="footer-method-warning">요금이 등록되지 않은 상품이 있어 예약 신청할 수 없습니다. 해당 상품을 선택 해제하거나 삭제해 주세요.</p>
+      {/if}
       <button
         class="footer-cta"
         class:footer-cta-active={readyToSubmit && !isConfirming}
@@ -2722,8 +2741,7 @@
 
 {#snippet OrderCard(item: CartItemUiState, line: CartLineGroup | undefined)}
   {#if !item.deleted}
-    {@const rate24 = itemRate24h(line)}
-    {@const rate12 = itemRate12h(line, rate24)}
+    {@const pd = itemPriceDisplay(line)}
     <div class="order-card" class:selected={item.checked}>
       <div class="order-card-inner">
         <!-- Check & Delete -->
@@ -2769,17 +2787,31 @@
               {/each}
             </div>
             <div class="dual-price-row">
-              <div class="price-unit">
-                <span class="price-unit-label">Day</span>
-                <span class="price-amount">{fmtKrw(rate24 * (line?.qty ?? 1))}</span>
-                <span class="price-currency">원</span>
-              </div>
-              <span class="price-sep">/</span>
-              <div class="price-unit">
-                <span class="price-unit-label">12H</span>
-                <span class="price-amount">{fmtKrw(rate12 * (line?.qty ?? 1))}</span>
-                <span class="price-currency">원</span>
-              </div>
+              {#if pd.kind === 'purchase'}
+                <div class="price-unit">
+                  <span class="price-unit-label">Price</span>
+                  <span class="price-amount">{fmtKrw(pd.price * (line?.qty ?? 1))}</span>
+                  <span class="price-currency">원</span>
+                </div>
+              {:else if pd.day === null}
+                <div class="price-unit">
+                  <span class="price-amount">요금 미정</span>
+                </div>
+              {:else}
+                <div class="price-unit">
+                  <span class="price-unit-label">Day</span>
+                  <span class="price-amount">{fmtKrw(pd.day * (line?.qty ?? 1))}</span>
+                  <span class="price-currency">원</span>
+                </div>
+                {#if pd.half !== null}
+                  <span class="price-sep">/</span>
+                  <div class="price-unit">
+                    <span class="price-unit-label">12H</span>
+                    <span class="price-amount">{fmtKrw(pd.half * (line?.qty ?? 1))}</span>
+                    <span class="price-currency">원</span>
+                  </div>
+                {/if}
+              {/if}
             </div>
           </div>
           <div class="qty-wrap">
@@ -2850,8 +2882,7 @@
 {/snippet}
 
 {#snippet ItemListCard(item: CartItemUiState, line: CartLineGroup | undefined)}
-  {@const rate24 = itemRate24h(line)}
-  {@const rate12 = itemRate12h(line, rate24)}
+  {@const pd = itemPriceDisplay(line)}
   <div class="item-card" class:selected={item.checked} role="listitem">
     <div class="item-card-topbar">
       <button class="item-card-check checkbox-btn-terms" class:checked={item.checked} onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
@@ -2880,17 +2911,31 @@
           <p class="item-name">{line?.product?.name ?? '상품'}</p>
           <div class="item-info-top">
             <div class="dual-price-row">
-              <div class="price-unit">
-                <span class="price-unit-label">Day</span>
-                <span class="price-amount">{fmtKrw(rate24 * (line?.qty ?? 1))}</span>
-                <span class="price-currency">원</span>
-              </div>
-              <span class="price-sep">/</span>
-              <div class="price-unit">
-                <span class="price-unit-label">12H</span>
-                <span class="price-amount">{fmtKrw(rate12 * (line?.qty ?? 1))}</span>
-                <span class="price-currency">원</span>
-              </div>
+              {#if pd.kind === 'purchase'}
+                <div class="price-unit">
+                  <span class="price-unit-label">Price</span>
+                  <span class="price-amount">{fmtKrw(pd.price * (line?.qty ?? 1))}</span>
+                  <span class="price-currency">원</span>
+                </div>
+              {:else if pd.day === null}
+                <div class="price-unit">
+                  <span class="price-amount">요금 미정</span>
+                </div>
+              {:else}
+                <div class="price-unit">
+                  <span class="price-unit-label">Day</span>
+                  <span class="price-amount">{fmtKrw(pd.day * (line?.qty ?? 1))}</span>
+                  <span class="price-currency">원</span>
+                </div>
+                {#if pd.half !== null}
+                  <span class="price-sep">/</span>
+                  <div class="price-unit">
+                    <span class="price-unit-label">12H</span>
+                    <span class="price-amount">{fmtKrw(pd.half * (line?.qty ?? 1))}</span>
+                    <span class="price-currency">원</span>
+                  </div>
+                {/if}
+              {/if}
             </div>
           </div>
           <div class="qty-wrap qty-wrap--sm">

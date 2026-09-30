@@ -742,9 +742,9 @@
   });
 
   const isSaleOnly = $derived(!!(product as ProductRow).sale_only);
-  let price12h = $derived(
-    (product as ProductRow).base_price_12h ?? Math.round(product.base_price_daily * 0.7)
-  );
+  // 12h는 CMS price_rules 실값만 사용 — 규칙이 없으면 null(12H 표시 생략). 24h×0.7 추정 계산 금지
+  let price12h = $derived((product as ProductRow).base_price_12h ?? null);
+  // 요금 계산기에는 12h 실값만 전달(없으면 null → 계산기가 24시간 단위 올림으로 계산). 추정값·대체값 주입 금지
 
   // 사양: 순서 보존 배열 / 레거시 객체 모두 표시 (keyValueList.ts)
   const productSpecs = $derived(normalizeKeyValueList((product as unknown as { specifications?: unknown }).specifications));
@@ -937,12 +937,14 @@
               <span class="price-amount">{fmt(product.base_price_daily)}</span>
               <span class="price-currency">원</span>
             </div>
-            <span class="price-sep">/</span>
-            <div class="price-unit">
-              <span class="price-period-label">12H</span>
-              <span class="price-amount">{fmt(price12h)}</span>
-              <span class="price-currency">원</span>
-            </div>
+            {#if price12h !== null}
+              <span class="price-sep">/</span>
+              <div class="price-unit">
+                <span class="price-period-label">12H</span>
+                <span class="price-amount">{fmt(price12h)}</span>
+                <span class="price-currency">원</span>
+              </div>
+            {/if}
           {/if}
         </div>
 
@@ -1023,7 +1025,7 @@
           bind:selectedMethodId
           bind:selectedPeriodId
           dailyPrice={product.base_price_daily * qty}
-          halfDayPrice={price12h * qty}
+          halfDayPrice={price12h === null ? null : price12h * qty}
           {optionsTotal}
           rentalMethods={data.rentalMethods}
           shippingPolicy={data.shippingPolicy}
@@ -1051,7 +1053,7 @@
         bind:selectedMethodId
         bind:selectedPeriodId
         dailyPrice={product.base_price_daily * qty}
-        halfDayPrice={price12h * qty}
+        halfDayPrice={price12h === null ? null : price12h * qty}
         {optionsTotal}
         rentalMethods={data.rentalMethods}
         shippingPolicy={data.shippingPolicy}
