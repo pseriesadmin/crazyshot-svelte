@@ -1751,10 +1751,12 @@
   }
   .m-hero-bg {
     position: absolute;
-    top: 20px;
+    top: 0;
     left: 0;
     width: 100%;
-    height: 680px;
+    /* 히어로(.m-hero 720px) 전체를 채운다 — 예전 top:20px/height:680px은 위아래 20px 배경색 띠를 노출시켰음.
+       배너 등록 권장 규격: 1170×2160px(390×720의 3배, HomeBannerModal 안내문과 동일) */
+    height: 720px;
     object-fit: cover;
     object-position: top;
     pointer-events: none;

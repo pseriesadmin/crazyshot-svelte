@@ -329,6 +329,10 @@
           <span>랜덤 노출</span>
         </label>
       </div>
+      <p class="spec-note">
+        권장 규격 1170×2160px (세로형, 390×720의 3배). 위 약 80px(상단바)·아래 약 100px(부제 문구 자리)와
+        좌우 약 10%에는 중요한 글자를 두지 마세요. 폰 화면 폭에 따라 가장자리가 조금 잘릴 수 있습니다.
+      </p>
     </div>
 
     {#if localMobile.length > 0}
@@ -492,6 +496,14 @@
     font: var(--text-pc-script-12);
     font-weight: 400;
     color: var(--cs-text-light);
+  }
+
+  .spec-note {
+    font: var(--text-pc-script-12);
+    font-weight: 400;
+    color: var(--cs-text-mid);
+    line-height: 1.6;
+    margin: 0;
   }
 
   .radio-group { display: flex; gap: 16px; }
