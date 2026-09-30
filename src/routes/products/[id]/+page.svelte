@@ -23,6 +23,7 @@
   import { csToast } from '$lib/utils/toast';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
+  import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
   type ProductRow = Tables<'products'> & {
@@ -85,7 +86,7 @@
       reviews: ReviewItem[];
       depositAmount: number | null;
       rentalPeriods: { id: string; name: string }[];
-      rentalMethods: { id: string; name: string; method_key: string | null }[];
+      rentalMethods: { id: string; name: string; method_key: string | null; is_delivery_type?: boolean | null; deadline_time?: string | null }[];
       shippingPolicy: { items: { label: string; fee: number }[]; guide: string } | null;
       shotlogs: ShotlogItem[];
       popularProducts: PopularItem[];
@@ -440,28 +441,17 @@
 
     // 예약 일시 리드타임 검증 — 날짜가 있는 경우에만 (draft 경로는 날짜 없어 skip, 실제 검증은 FE-4 체크아웃 승격 시점에 재수행)
     if (e.startDate) {
-      // 택배(외부 courier)만 2일 리드타임 필요
-      // 택배(크레이지배송(택배)): 대여일이 오늘로부터 2일 이후여야 예약 가능
-      // 방문·퀵·무인보관함·자체배송(크레이지배송(자체배송)): 당일 대여 시 대여시각이 현재시각 기준 3시간 이후여야 예약 가능
-      const TWO_DAY_LEADTIME_KEYS = new Set(['delivery', 'epost']);
-      const needsTwoDayLeadtime = !!selectedMethod?.method_key && TWO_DAY_LEADTIME_KEYS.has(selectedMethod.method_key);
-      const nowTime = new Date();
-      if (needsTwoDayLeadtime) {
-        const twoDaysLater = new Date(nowTime.getFullYear(), nowTime.getMonth(), nowTime.getDate() + 2);
-        const startDateOnly = new Date(`${e.startDate}T00:00:00`);
-        if (startDateOnly < twoDaysLater) {
-          csToast.warning('택배 대여는 대여일 2일 전 예약 가능합니다.');
+      // 2026-09-30 — 방식별 신청 마감(리드타임)을 장바구니와 같은 공용 함수(pickupLeadTime.ts, KST)로 판정:
+      // 방문·퀵·무인보관함 "1일 전 오후 7시까지", 배송형(is_delivery_type) "2일 전 오후 7시까지".
+      // (과거엔 레거시 키 'delivery'/'epost'만 2일 규칙이고 나머지는 "당일 3시간 전" 규칙이라 장바구니와 어긋났음)
+      if (selectedMethod) {
+        const leadRule = resolveLeadRule({
+          isDeliveryType: !!selectedMethod.is_delivery_type,
+          deadlineText: selectedMethod.deadline_time ?? null,
+        });
+        if (isPickupDateBlocked(e.startDate, leadRule, Date.now())) {
+          csToast.warning(leadTimeMessage(leadRule));
           return;
-        }
-      } else {
-        const todayIso = `${nowTime.getFullYear()}-${String(nowTime.getMonth() + 1).padStart(2, '0')}-${String(nowTime.getDate()).padStart(2, '0')}`;
-        if (e.startDate === todayIso) {
-          const startDateTime = new Date(`${e.startDate}T${String(e.startHour).padStart(2, '0')}:${String(e.startMin).padStart(2, '0')}:00`);
-          const threeHoursLater = new Date(nowTime.getTime() + 3 * 60 * 60 * 1000);
-          if (startDateTime < threeHoursLater) {
-            csToast.warning('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.');
-            return;
-          }
         }
       }
     }
@@ -560,7 +550,7 @@
 
         const outcome = await createMultiUnitReservation(qty, { createUnit: createDraftUnit, cancelUnit });
         if (!outcome.success) {
-          csToast.error(outcome.errorMessage ?? '예약을 생성할 수 없습니다.');
+          csToast.error(stripServerGuardPrefix(outcome.errorMessage) ?? '예약을 생성할 수 없습니다.');
           return;
         }
 
@@ -626,7 +616,7 @@
 
         const outcome = await createMultiUnitReservation(qty, { createUnit: createHoldUnit, cancelUnit });
         if (!outcome.success) {
-          csToast.error(outcome.errorMessage ?? '예약 가능한 장비가 없습니다.');
+          csToast.error(stripServerGuardPrefix(outcome.errorMessage) ?? '예약 가능한 장비가 없습니다.');
           return;
         }
 

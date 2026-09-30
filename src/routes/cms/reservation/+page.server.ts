@@ -21,6 +21,8 @@ import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 
 export interface RentalListRow {
+  /** 고객이 취소했고 관리자 취소확인 전("예약취소" 배지·헤더 [예약취소]=취소확인) — /cms/rentals 로더가 부착 */
+  cancel_pending?:   boolean
   reservation_id:    number
   reservation_code:  string | null
   status:            string

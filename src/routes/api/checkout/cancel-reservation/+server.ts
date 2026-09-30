@@ -19,7 +19,8 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { RequestHandler } from './$types'
 import { cancelReservationWithRefund } from '$lib/server/cancelReservationWithRefund'
-import { canCancelReservation } from '$lib/utils/canCancelReservation'
+import { getCancelKind, worstCancelKind } from '$lib/utils/canCancelReservation'
+import { loadOrderSiblingKinds, ruleFromMethodRow } from '$lib/server/cancelPolicyLoader'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -80,31 +81,52 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     }
   }
 
-  // ─── 수령 방식 배송 여부 조회 ─────────────────────────────────────────
-  let isDeliveryType = false
+  // ─── 수령 방식 신청 마감 규칙 조회 ─────────────────────────────────────
+  let methodRow: { is_delivery_type?: boolean | null; deadline_time?: string | null } | null = null
   if (reservation.pickup_method) {
     const { data: methodOpts } = await admin
       .from('rental_method_options')
-      .select('is_delivery_type')
+      .select('is_delivery_type, deadline_time')
       .eq('method_key', reservation.pickup_method)
       .maybeSingle()
-    isDeliveryType = (methodOpts as { is_delivery_type?: boolean | null } | null)?.is_delivery_type === true
+    methodRow = (methodOpts as { is_delivery_type?: boolean | null; deadline_time?: string | null } | null)
   }
 
   // ─── 취소가능 조건 서버 재계산 (클라이언트 canCancel 신뢰 금지) ───────
-  const canCancel = canCancelReservation({
+  // 2026-09-30 정책: hold=언제든 / confirmed=수령 신청 마감 전 즉시취소(전액환불),
+  // 마감 후·대여 시작일 이후는 고객센터 문의. 같은 주문의 형제 예약은 주문 전체가 함께 취소·환불되므로
+  // 가장 엄격한 판정을 따른다.
+  const nowMs = Date.now()
+  const ownKind = getCancelKind({
     status: reservation.status,
     trackingNumber: reservation.tracking_number,
-    isDeliveryType,
     startDate: reservation.start_date,
-    pickupTime: reservation.pickup_time,
+    rule: ruleFromMethodRow(methodRow),
+    nowMs,
   })
+  const siblingKinds = orderId != null && ownKind === 'free' && reservation.status === 'confirmed'
+    ? await loadOrderSiblingKinds(admin, orderId, reservationId, nowMs)
+    : []
+  const cancelKind = worstCancelKind([ownKind, ...siblingKinds])
 
-  if (!canCancel) {
-    return json(
-      { ok: false, error: '현재는 예약신청취소가 어렵습니다.\n고객센터 채팅으로 문의해주세요.' },
-      { status: 403 },
-    )
+  if (cancelKind !== 'free') {
+    const error = cancelKind === 'after_start'
+      ? '대여가 시작된 예약은 바로 취소할 수 없습니다.\n고객센터 채팅으로 문의해주세요.'
+      : cancelKind === 'after_deadline'
+        ? '수령 신청 마감이 지나 바로 취소할 수 없습니다.\n고객센터 채팅으로 문의해주세요.'
+        : '현재는 예약신청취소가 어렵습니다.\n고객센터 채팅으로 문의해주세요.'
+    return json({ ok: false, error }, { status: 403 })
+  }
+
+  // 고객 취소 표식(fail-soft) — 마이페이지에서 "취소중"(관리자 취소확인 대기)으로 표시하기 위함.
+  // 이번 요청으로 실제 cancelled 전이된 예약만 표식한다(주문 전체 취소 시 형제 포함 — 이전에 관리자가
+  // 취소·거부해 이미 cancelled였던 형제를 "고객 취소"로 잘못 표식하지 않도록 전이된 id만 받는다).
+  const markCustomerCancelled = async (ids: number[]): Promise<void> => {
+    try {
+      await admin.rpc('mark_customer_cancelled', { p_reservation_ids: [...new Set(ids)] })
+    } catch {
+      // fail-soft — 표식 실패해도 취소 자체는 이미 완료됨(목록에서는 바로 "취소" 화면에 표시됨)
+    }
   }
 
   // ─── hold 상태: Toss 불필요 → update_reservation_status만 ───────────
@@ -120,6 +142,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     if (!parsed?.ok) {
       return json({ ok: false, error: parsed?.error ?? '취소 처리 중 오류가 발생했습니다.' }, { status: 500 })
     }
+
+    await markCustomerCancelled([reservationId])
 
     // 알림 (fail-soft)
     try {
@@ -157,6 +181,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       { status: statusMap[result.code] ?? 500 },
     )
   }
+
+  await markCustomerCancelled(result.cancelledIds?.length ? result.cancelledIds : [reservationId])
 
   return json({ ok: true })
 }

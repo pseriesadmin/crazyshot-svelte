@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * Stage 4 — HOLD 만료 정책 전면 개편 이후의 D-1(계약발송 타이머)·D-3(결제완료 예외) TDD (EC-5)
@@ -54,6 +55,7 @@ async function ensureTestProductId(): Promise<string> {
     .limit(1)
     .single()
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`)
+  await ensure24hPriceRule(admin, data.id as string)
   return data.id as string
 }
 

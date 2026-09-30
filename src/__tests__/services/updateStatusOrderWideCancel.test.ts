@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * updateStatus 액션 — 주문 전체 예약취소 / 계약취소 TDD (RED 단계)
@@ -70,6 +71,7 @@ async function ensureTestProduct(): Promise<string> {
     .limit(1)
     .single()
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`)
+  await ensure24hPriceRule(admin, data.id as string)
   return data.id as string
 }
 

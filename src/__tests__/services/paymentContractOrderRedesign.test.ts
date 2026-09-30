@@ -5,6 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+server';
 import { POST as payMock } from '../../routes/api/contracts/[token]/pay-mock/+server';
 import { load as contractPageLoad } from '../../routes/contract/[token]/+page.server';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * TASK.md "예약 결제·계약서명 순서 재설계"(2026-08-21) — Phase F TDD 스위트
@@ -39,6 +40,7 @@ beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
   testProductId = (data as { id: string }).id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 function randomFutureDateRange(): { start: string; end: string } {

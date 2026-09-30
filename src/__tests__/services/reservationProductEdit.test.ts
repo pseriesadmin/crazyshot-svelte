@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * Stage 1 — CMS 예약상품 편집 RPC 6종 TDD 통합 테스트
@@ -95,6 +96,7 @@ async function createChildUnit(parentId: string, label: string): Promise<string>
     .select('id')
     .single();
   if (error || !data) throw new Error(`child product 생성 실패(${label}): ${error?.message}`);
+  await ensure24hPriceRule(admin, data.id as string);
   return data.id as string;
 }
 

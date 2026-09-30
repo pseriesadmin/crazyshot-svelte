@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * TossPayments v2 주문 그룹 결제 RPC — TDD (2026-08-29)
@@ -85,6 +86,7 @@ beforeAll(async () => {
     .single();
   if (!prod) throw new Error('테스트용 상품이 없습니다. Stage DB에 부모 상품을 등록해주세요.');
   testProductId = prod.id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 afterAll(async () => {

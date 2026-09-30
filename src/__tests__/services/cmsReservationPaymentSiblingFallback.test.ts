@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { GET as getPayment } from '../../routes/api/cms/reservations/[id]/payment/+server';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * GET /api/cms/reservations/[id]/payment — 형제 예약 결제정보 조회 CRITICAL 수정
@@ -32,6 +33,7 @@ beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
   testProductId = (data as { id: string }).id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 // 날짜 충돌 방지(rental_reservations_product_dates_excl) — tossPaymentGroupRpc.test.ts와

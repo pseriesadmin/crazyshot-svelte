@@ -1,0 +1,3 @@
+-- Production(vnbpmvxruyciuuaermyh) set_reservation_options 적용 전 스냅샷 (Migration 586 롤백용)
+-- md5(pg_get_functiondef)=28d99e90da915ecd3b11c9d30835f87f / ACL {postgres,service_role,authenticated} — Migration 569 본문과 동일 정의
+-- 롤백: 20260928110000_569_option_links_is_free.sql 의 set_reservation_options 정의를 CREATE OR REPLACE (ACL 불변)

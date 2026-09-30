@@ -1,0 +1,10 @@
+-- Production(vnbpmvxruyciuuaermyh) create_hold_reservation / promote_draft_reservation 적용 전 스냅샷 (Migration 588 롤백용)
+-- create_hold_reservation      : full md5 0e418b65ba4295276f1ba9cea6fc4656 / 주석·공백 제거 md5 5cb5eb8113bffd338d4eaa872e617531 / ACL {postgres,anon,authenticated,service_role}
+-- promote_draft_reservation    : full md5 df7676ab1017575e4c9f198ffd95bc85 / 주석·공백 제거 md5 b6cf614c2530d11597ea7eab989f18f8 / ACL {postgres,authenticated,service_role}
+-- 헬퍼 3종(parse_lead_rule_text, get_pickup_lead_rule, assert_reservation_lead_and_period)은 적용 전 존재하지 않음.
+-- 롤백: 두 함수의 '-- PICKUP-LEAD-GUARD' 주석 + PERFORM assert_reservation_lead_and_period(...) 3줄을 제거해 재생성하고 헬퍼 3종 DROP.
+--   DO $x$ DECLARE v text; r regprocedure; BEGIN
+--     FOR r IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('create_hold_reservation','promote_draft_reservation') LOOP
+--       v := regexp_replace(pg_get_functiondef(r), E'  -- PICKUP-LEAD-GUARD[^\n]*\n  PERFORM assert_reservation_lead_and_period[^\n]*\n\n', '', 'g'); EXECUTE v;
+--     END LOOP; END $x$;
+--   DROP FUNCTION public.assert_reservation_lead_and_period(uuid,date,date,text), public.get_pickup_lead_rule(text), public.parse_lead_rule_text(text);
