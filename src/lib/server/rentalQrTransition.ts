@@ -5,6 +5,7 @@
 
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 
 // QR-CONTENT-1: UUID vs product_code 판별 (qr/[product_id]/+page.server.ts와 동일 정규식)
@@ -68,10 +69,13 @@ export async function processRentalQrTransition(
     })
   } catch { /* 로그 실패는 무시 */ }
 
-  // 대여완료 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+  // 대여완료·정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
   if (newStatus === 'returned') {
     try {
       await awardRentalCompletePoints(admin, reservationId)
+    } catch { /* 포인트 적립 실패는 무시 */ }
+    try {
+      await awardOnTimeReturnPoints(admin, reservationId)
     } catch { /* 포인트 적립 실패는 무시 */ }
   }
 

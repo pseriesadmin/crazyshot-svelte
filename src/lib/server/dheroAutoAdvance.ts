@@ -15,6 +15,7 @@
 import { nextStatus } from '$lib/utils/rentalTransition'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySupabaseClient = { from: (table: string) => any; rpc: (...args: any[]) => any }
@@ -92,10 +93,13 @@ export async function maybeAutoAdvanceOnDheroDelivered(
       return
     }
 
-    // 포인트 적립 (rentalQrTransition.ts:69-71과 동일 패턴, fail-soft)
+    // 포인트 적립 (rentalQrTransition.ts와 동일 패턴, fail-soft)
     if (newStatus === 'returned') {
       try {
         await awardRentalCompletePoints(admin, reservationId)
+      } catch { /* 포인트 적립 실패는 무시 */ }
+      try {
+        await awardOnTimeReturnPoints(admin, reservationId)
       } catch { /* 포인트 적립 실패는 무시 */ }
     }
 

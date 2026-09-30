@@ -394,6 +394,7 @@
                   <button type="button" class="tog" class:tog-on={ruleEdits[r.event_type].is_active}
                     role="switch" aria-checked={ruleEdits[r.event_type].is_active}
                     aria-label="활성화 토글"
+                    disabled={r.event_type === 'referrer' || r.event_type === 'referee'}
                     onclick={() => { ruleEdits[r.event_type].is_active = !ruleEdits[r.event_type].is_active }}>
                     <span class="tog-thumb"></span>
                   </button>
@@ -580,6 +581,7 @@ td { padding: 10px 16px; vertical-align: middle; }
   cursor: pointer; transition: background 0.2s; flex-shrink: 0;
 }
 .tog.tog-on { background: var(--cs-purple); }
+.tog:disabled { opacity: 0.5; cursor: not-allowed; }
 .tog-thumb {
   position: absolute; top: 2px; left: 2px;
   width: 18px; height: 18px; border-radius: 50%;
