@@ -23,18 +23,26 @@ import type { SearchDocument } from '$lib/server/searchEngine/core/types'
 // ── 1. productSearchOrFilter / toIlikePattern ────────────────────────────────
 
 describe('productSearchOrFilter — 4필드 ilike OR 필터 생성', () => {
-  it('기본 키워드를 4필드 ilike OR 필터로 변환', () => {
+  it('기본 키워드를 4필드 ilike OR 필터로 변환 (PostgREST DSL 안전을 위해 큰따옴표로 감쌈)', () => {
     const filter = productSearchOrFilter('카메라')
-    expect(filter).toContain('name.ilike.%카메라%')
-    expect(filter).toContain('brand.ilike.%카메라%')
-    expect(filter).toContain('description.ilike.%카메라%')
-    expect(filter).toContain('product_caption.ilike.%카메라%')
+    expect(filter).toContain('name.ilike."%카메라%"')
+    expect(filter).toContain('brand.ilike."%카메라%"')
+    expect(filter).toContain('description.ilike."%카메라%"')
+    expect(filter).toContain('product_caption.ilike."%카메라%"')
   })
 
   it('LIKE 와일드카드 문자(%,_,\\) 이스케이프 — 회귀: QR-CASE-1 유사 보호', () => {
     const filter = productSearchOrFilter('50%')
-    // % 는 \\% 로 이스케이프되어야 함
-    expect(filter).toContain('name.ilike.%50\\%%')
+    // SQL 레벨 이스케이프(\%) 후 PostgREST 인용 규칙상 백슬래시 자체가 다시 이스케이프(\\)됨
+    expect(filter).toContain("name.ilike.\"%50\\\\%%\"")
+  })
+
+  it('괄호를 포함한 키워드 — 회귀: 2026-09-29 "(T154)" 검색 매칭 실패 버그(프로덕션 실사용 중 발견)', () => {
+    // PostgREST or() 필터 DSL은 `(` `)`를 문법기호로 해석해, 큰따옴표로 감싸지 않으면
+    // "ULANZI Ombra XIANG II (T154)"처럼 상품명에 괄호가 포함된 경우 항상 0건 매칭으로
+    // 조용히 실패했다(에러 없음 — production REST API 직접 재현으로 확진).
+    const filter = productSearchOrFilter('ULANZI Ombra XIANG II (T154)')
+    expect(filter).toContain('name.ilike."%ULANZI Ombra XIANG II (T154)%"')
   })
 
   it('쉼표를 포함한 키워드는 공백으로 정규화', () => {
@@ -44,10 +52,11 @@ describe('productSearchOrFilter — 4필드 ilike OR 필터 생성', () => {
     expect(filter).not.toContain('카메라, 렌즈')
   })
 
-  it('toIlikePattern: 패턴 양쪽에 % 붙임 + 특수문자 이스케이프', () => {
-    expect(toIlikePattern('abc')).toBe('%abc%')
-    expect(toIlikePattern('a_b')).toBe('%a\\_b%')
-    expect(toIlikePattern('a\\b')).toBe('%a\\\\b%')
+  it('toIlikePattern: 패턴 양쪽에 %를 붙이고 PostgREST DSL 안전을 위해 큰따옴표로 감싼다', () => {
+    expect(toIlikePattern('abc')).toBe("\"%abc%\"")
+    expect(toIlikePattern('a_b')).toBe("\"%a\\\\_b%\"")
+    expect(toIlikePattern('a\\b')).toBe("\"%a\\\\\\\\b%\"")
+    expect(toIlikePattern('a(b)c')).toBe("\"%a(b)c%\"")
   })
 })
 
@@ -273,8 +282,8 @@ describe('회귀 확인 — brand/product_name 소스의 유틸 함수 무변경
     // 이 테스트는 productSearchOrFilter가 brand 필드를 포함하는 것을 확인하지만
     // brand 소스 코드 자체에는 productSearchOrFilter를 사용하지 않음을 문서화
     const filter = productSearchOrFilter('소니')
-    // brand 필드가 포함됨 (product_search 소스용 OR 필터)
-    expect(filter).toContain('brand.ilike.%소니%')
+    // brand 필드가 포함됨 (product_search 소스용 OR 필터, PostgREST DSL 안전을 위해 큰따옴표로 감쌈)
+    expect(filter).toContain('brand.ilike."%소니%"')
     // 하지만 brand 소스는 brand만 ilike 검색 → 별도 Supabase 쿼리 (컴포넌트 내 독립 코드)
     // → 이번 K-2 변경으로 brand 분기가 건드려지지 않았음을 단언
   })
