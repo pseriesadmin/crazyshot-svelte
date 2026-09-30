@@ -2,6 +2,7 @@ import { redirect, fail } from '@sveltejs/kit'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
+import { loadMyActivity } from '$lib/server/account/loadMyActivity'
 
 export interface UserProfile {
   id: string
@@ -77,7 +78,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     // fail-soft — RPC 실패해도 나머지 화면 로드는 계속 진행
   }
 
-  const [profileRes, addressRes, coupons] = await Promise.all([
+  const [profileRes, addressRes, coupons, myActivity] = await Promise.all([
     locals.supabase
       .from('user_profiles')
       .select('id, email, full_name, avatar_url, phone, birth_date, address, member_code, member_type, membership_grade, credit_score, rental_count, points, allow_rental_alert, allow_benefit_alert, allow_privacy_consent, allow_third_party_consent, identity_type, identity_doc_url, identity_verified_at, identity_approved_at, is_foreign, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_stay_type, foreign_verified_at, foreign_approved_at, created_at, withdrawal_status, withdrawal_requested_at, withdrawal_purge_at, withdrawal_purged_at')
@@ -91,6 +92,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true }),
     loadUserCoupons(locals.supabase, session.user.id),
+    loadMyActivity(locals.supabase, session.user.id),
   ])
 
   if (profileRes.error) {
@@ -102,6 +104,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     authEmail: session.user.email ?? null,
     addresses: (addressRes.data ?? []) as ShippingAddress[],
     coupons,
+    myActivity,
   }
 }
 

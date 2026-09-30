@@ -1,16 +1,8 @@
 <script lang="ts">
-  interface LogItem {
-    date: string
-    title: string
-    status: string
-    duration: string
-  }
+  import type { MyLogItem } from '$lib/server/account/loadMyActivity'
 
-  const logs: LogItem[] = [
-    { date: '2024.03.15', title: '스타벅스 텀블러 500ml', status: '반납완료', duration: '3일' },
-    { date: '2024.02.28', title: '나이키 캐리어 28인치',  status: '반납완료', duration: '7일' },
-    { date: '2024.01.10', title: '소니 미러리스 카메라',   status: '반납완료', duration: '2일' },
-  ]
+  interface Props { logs?: MyLogItem[] }
+  let { logs = [] }: Props = $props()
 </script>
 
 <div class="flex flex-col gap-[10px] w-full md:max-w-[640px] md:mx-auto">
@@ -26,7 +18,12 @@
         </p>
       </div>
 
-      {#each logs as log}
+      {#if logs.length === 0}
+        <p class="bg-[var(--cs-surface-gray)] rounded-[20px] px-[20px] py-[20px] text-center font-['Noto_Sans_KR',sans-serif] font-medium text-[14px] text-[var(--cs-text-light)] tracking-[-0.5px] leading-[1.6]">
+          아직 대여 이용 내역이 없어요
+        </p>
+      {/if}
+      {#each logs as log (log.id)}
         <div class="bg-[#f6f6f6] rounded-[20px] px-[20px] py-[15px] flex items-center justify-between">
           <div class="flex flex-col gap-[6px]">
             <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#aaa] tracking-[-0.5px] leading-[1.6]">
@@ -36,7 +33,7 @@
               {log.title}
             </p>
             <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#444] tracking-[-0.5px] leading-[1.6]">
-              {log.duration} 대여
+              {#if log.duration}{log.duration} 대여{/if}
             </p>
           </div>
           <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[#444] bg-white rounded-[20px] px-[12px] py-[6px] tracking-[-0.5px] shrink-0">

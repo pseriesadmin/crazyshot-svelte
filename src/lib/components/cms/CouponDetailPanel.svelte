@@ -1,10 +1,16 @@
 <script lang="ts">
-  import { enhance } from '$app/forms'
+  import { enhance, deserialize } from '$app/forms'
+  import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import type { Coupon } from '$lib/types/database'
+  import { FREE_SHIPPING_FULL_WAIVER, isFullShippingWaiver } from '$lib/utils/couponFreeShipping'
+  import {
+    splitDistributionTargets, countStatuses, buildConfirmMessage, formatResultSummary, statusLabel,
+    type PreviewStatus, type DistributeStatus, type DistributionCounts,
+  } from '$lib/utils/couponDistribution'
 
   interface Props {
     coupon:  Coupon
@@ -124,6 +130,8 @@
   let u_subscription         = $state(cc.is_subscription_only === true)
   let u_allow_points         = $state(cc.allow_with_points !== false)
   let u_allow_stacking       = $state(cc.allow_stacking === true)
+  // 쿠폰끼리 중복 허용 — 컬럼 기본값 true(정책상 기본 허용), 명시적으로 false일 때만 끔
+  let u_allow_coupon_stacking = $state(cc.allow_coupon_stacking !== false)
 
   function toggleCat(c: string) {
     u_categories = u_categories.includes(c)
@@ -158,6 +166,7 @@
     u_subscription        = ccEff.is_subscription_only === true
     u_allow_points        = ccEff.allow_with_points !== false
     u_allow_stacking      = ccEff.allow_stacking === true
+    u_allow_coupon_stacking = ccEff.allow_coupon_stacking !== false
   })
 
   // 2026-09-23 추가(Stephen 지시) — "정보 저장" 버튼을 변경사항 유무에 따라 활성/비활성
@@ -185,6 +194,7 @@
     subscription: cc.is_subscription_only === true,
     allowPoints: cc.allow_with_points !== false,
     allowStacking: cc.allow_stacking === true,
+    allowCouponStacking: cc.allow_coupon_stacking !== false,
   })
   const isDirtyInfo = $derived(
     u_discount_type !== origInfo.discountType ||
@@ -208,7 +218,8 @@
     u_walk_in !== origInfo.walkIn ||
     u_subscription !== origInfo.subscription ||
     u_allow_points !== origInfo.allowPoints ||
-    u_allow_stacking !== origInfo.allowStacking
+    u_allow_stacking !== origInfo.allowStacking ||
+    u_allow_coupon_stacking !== origInfo.allowCouponStacking
   )
 
   // ─ 특정 사용자 수동 지급(2026-09-23 재설계) ─
@@ -220,11 +231,64 @@
   let distUuids    = $state('')
   let distLoading  = $state(false)
 
-  let distTargetMeta = $derived(
-    distUuids.trim()
-      ? JSON.stringify({ user_ids: distUuids.split('\n').map((s: string) => s.trim()).filter(Boolean) })
-      : null
-  )
+  // B-8: 지급 전 사전 조회(확인창) → 확정 시 지급 → 실제 결과 안내. 서버 액션: ?/previewDistribute, ?/distributeCoupon
+  type PreviewItem = { input: string; userId: string | null; status: PreviewStatus }
+  type ResultItem = { input: string; userId: string | null; status: DistributeStatus }
+  let previewOpen   = $state(false)
+  let previewItems  = $state<PreviewItem[]>([])
+  let previewCounts = $state<DistributionCounts | null>(null)
+  let distResultItems   = $state<ResultItem[]>([])
+  let distResultSummary = $state('')
+  const previewConfirm = $derived(previewCounts ? buildConfirmMessage(previewCounts) : null)
+
+  async function postAction(action: string, fields: Record<string, string>): Promise<Record<string, unknown> | null> {
+    const fd = new FormData()
+    for (const [k, v] of Object.entries(fields)) fd.append(k, v)
+    const res = await fetch(`?/${action}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+    const result = deserialize(await res.text())
+    if (result.type === 'success' || result.type === 'failure') return (result.data ?? null) as Record<string, unknown> | null
+    return { ok: false, error: '요청에 실패했습니다.' }
+  }
+
+  async function runPreview() {
+    const inputs = splitDistributionTargets(distUuids)
+    // §0-10-E: 사전 차단 — 버튼은 클릭 가능하게 두고 짧은 경고 토스트로 사유 안내
+    if (inputs.length === 0) { csToast.warning('지급 대상(이메일 또는 UUID)을 입력해 주세요.'); return }
+    distLoading = true
+    const data = await postAction('previewDistribute', { coupon_id: coupon.id, target_meta: JSON.stringify({ user_ids: inputs }) })
+    distLoading = false
+    if (!data?.ok) { csToast.error(String(data?.error ?? '대상 조회에 실패했습니다.')); return }
+    const p = data.preview as { items: PreviewItem[]; counts: DistributionCounts }
+    previewItems = p.items
+    previewCounts = p.counts
+    distResultItems = []
+    previewOpen = true
+  }
+
+  async function confirmDistribute() {
+    // 이미 보유·회원 없음 대상은 제외하고 지급 가능한 대상만 실행
+    const targets = previewItems.filter((i) => i.status === 'will_issue').map((i) => i.input)
+    if (targets.length === 0) return
+    distLoading = true
+    const data = await postAction('distributeCoupon', {
+      coupon_id: coupon.id, target_type: 'specific_user', target_meta: JSON.stringify({ user_ids: targets }),
+    })
+    distLoading = false
+    previewOpen = false
+    if (!data?.ok) { csToast.error(String(data?.error ?? '지급에 실패했습니다.')); return }
+    const items = (data.items as ResultItem[] | undefined) ?? []
+    // 확인창에서 제외한 대상(이미 보유·회원 없음)도 결과 목록에 함께 보여 운영자가 전체 결과를 한눈에 본다
+    const excluded: ResultItem[] = previewItems
+      .filter((i) => i.status !== 'will_issue')
+      .map((i) => ({ input: i.input, userId: i.userId, status: (i.status === 'will_issue' ? 'issued' : i.status) as DistributeStatus }))
+    distResultItems = [...items, ...excluded]
+    const counts = countStatuses(distResultItems.map((i) => i.status))
+    distResultSummary = formatResultSummary(counts)
+    if (counts.issuable > 0) csToast.success(distResultSummary)
+    else csToast.warning(distResultSummary)
+    distUuids = ''
+    await invalidateAll()
+  }
 
   function typeLabel(type: string): string {
     const MAP: Record<string, string> = {
@@ -360,7 +424,8 @@
       </div>
       <form id="form-coupon-info" method="POST" action="?/updateCoupon"
         use:enhance={({ cancel }) => {
-          if (!u_discount_value || u_discount_value <= 0) {
+          // 무료배송은 할인값을 비워도 된다(비우면 서버가 '배송비 전액 면제' 상한값으로 저장)
+          if (u_discount_type !== 'free_shipping' && (!u_discount_value || u_discount_value <= 0)) {
             csToast.error('할인값을 입력해주세요.')
             cancel()
             return
@@ -410,8 +475,19 @@
             </select>
           </div>
           <div class="form-field">
-            <label for="uc-dval">할인값</label>
-            {#if u_discount_type === 'percentage'}
+            <label for="uc-dval">{u_discount_type === 'free_shipping' ? '할인값 (선택 — 비우면 배송비 전액 면제)' : '할인값'}</label>
+            {#if u_discount_type === 'free_shipping'}
+              <!-- B-7: 전액 면제 상한값(9,999,999)은 금액으로 노출하지 않고 빈칸으로 보여준다 -->
+              <input id="uc-dval" type="text" inputmode="numeric"
+                class="f-input" placeholder="비워두면 배송비 전액 면제"
+                value={isFullShippingWaiver(u_discount_value) || !u_discount_value ? '' : u_discount_value.toLocaleString('ko-KR')}
+                oninput={(e) => {
+                  const digits = (e.currentTarget as HTMLInputElement).value.replace(/[^0-9]/g, '')
+                  u_discount_value = digits ? parseInt(digits, 10) : FREE_SHIPPING_FULL_WAIVER
+                }} />
+              <!-- 표시용 입력(콤마 포함)과 제출값을 분리 — 제출은 항상 숫자 -->
+              <input type="hidden" name="discount_value" value={u_discount_value} />
+            {:else if u_discount_type === 'percentage'}
               <!-- 결함 6번: 정률은 소수점 1자리까지 허용(coupon/new의 parsePercentRaw와 동일 로직) -->
               <input id="uc-dval" name="discount_value" type="text" inputmode="decimal"
                 class="f-input" value={u_discount_value}
@@ -575,10 +651,13 @@
           <button type="button" class="s-chip" class:s-chip--on={u_allow_points}
             onclick={() => u_allow_points = !u_allow_points}>포인트 결합 사용 허용</button>
           <button type="button" class="s-chip" class:s-chip--on={u_allow_stacking}
-            onclick={() => u_allow_stacking = !u_allow_stacking}>쿠폰 중복 사용 허용</button>
+            onclick={() => u_allow_stacking = !u_allow_stacking}>멤버십 할인과 중복 허용</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_allow_coupon_stacking}
+            onclick={() => u_allow_coupon_stacking = !u_allow_coupon_stacking}>쿠폰끼리 중복 허용</button>
          </div>
          <input type="hidden" name="allow_with_points" value={String(u_allow_points)} />
          <input type="hidden" name="allow_stacking" value={String(u_allow_stacking)} />
+         <input type="hidden" name="allow_coupon_stacking" value={String(u_allow_coupon_stacking)} />
         </div>
 
         <div class="form-field admin-memo-field">
@@ -600,35 +679,31 @@
         "정보" 탭의 "필수 회원 분류"로 자동 처리됩니다. 여기서는 그 기준과 무관하게 특정 고객
         1명(또는 여러 명)에게만 예외적으로 쿠폰을 지급할 때 사용하세요.
       </p>
-      <form method="POST" action="?/distributeCoupon"
-        use:enhance={() => {
-          distLoading = true
-          return async ({ result, update }) => {
-            distLoading = false
-            const payload = result.type === 'success'
-              ? (result.data as { ok?: boolean; error?: string } | undefined)
-              : undefined
-            if (payload?.ok) csToast.success('지급되었습니다.')
-            else if (result.type === 'success') csToast.error(payload?.error ?? '지급에 실패했습니다.')
-            await update()
-          }
-        }}
-      >
-        <input type="hidden" name="coupon_id" value={coupon.id} />
-        <div class="form-field">
-          <label for="dist-uuids">사용자 이메일 또는 UUID (줄바꿈 구분)</label>
-          <textarea id="dist-uuids" class="f-input ta" rows="4"
-            placeholder="user@example.com&#10;uuid-1234-..." bind:value={distUuids}></textarea>
-          <span class="hint">이메일과 UUID를 섞어서 입력할 수 있습니다.</span>
+      <div class="form-field">
+        <label for="dist-uuids">사용자 이메일 또는 UUID (줄바꿈 구분)</label>
+        <textarea id="dist-uuids" class="f-input ta" rows="4"
+          placeholder="user@example.com&#10;uuid-1234-..." bind:value={distUuids}></textarea>
+        <span class="hint">이메일과 UUID를 섞어서 입력할 수 있습니다. 지급 전에 이미 보유한 회원을 먼저 확인합니다.</span>
+      </div>
+      <div class="panel-actions">
+        <button type="button" class="btn-primary" disabled={distLoading} onclick={runPreview}>
+          {distLoading ? '처리 중...' : '지급 실행'}
+        </button>
+      </div>
+
+      {#if distResultItems.length > 0}
+        <div class="dist-result">
+          <p class="dist-result-summary">{distResultSummary}</p>
+          <ul class="dist-target-list">
+            {#each distResultItems as it (it.input)}
+              <li>
+                <span class="dist-target-input">{it.input}</span>
+                <span class="dist-chip dist-chip-{it.status}">{statusLabel(it.status)}</span>
+              </li>
+            {/each}
+          </ul>
         </div>
-        <input type="hidden" name="target_type" value="specific_user" />
-        <input type="hidden" name="target_meta" value={distTargetMeta ?? ''} />
-        <div class="panel-actions">
-          <button type="submit" class="btn-primary" disabled={distLoading || !distTargetMeta}>
-            {distLoading ? '지급 중...' : '지급 실행'}
-          </button>
-        </div>
-      </form>
+      {/if}
 
       <!-- 2026-09-23(Stephen 지시) — "배포(사용)" 탭 — manage 컨텍스트에도 사용된 코드품번
            목록을 함께 보여준다. 기존에는 이 목록이 report(사용량리포트) 컨텍스트 전용
@@ -644,6 +719,38 @@
 
   </div>
 </div>
+
+{#if previewOpen && previewCounts && previewConfirm}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="dist-modal-bg" onclick={() => (previewOpen = false)} role="presentation">
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <div class="dist-modal-box" role="dialog" aria-modal="true" aria-label="쿠폰 지급 확인" tabindex="-1"
+      onclick={(e) => e.stopPropagation()}>
+      <p class="dist-modal-title">쿠폰 지급 확인</p>
+      <p class="dist-modal-msg">{previewConfirm.message}</p>
+      <ul class="dist-target-list">
+        {#each previewItems as it (it.input)}
+          <li>
+            <span class="dist-target-input">{it.input}</span>
+            <span class="dist-chip dist-chip-{it.status}">{statusLabel(it.status)}</span>
+          </li>
+        {/each}
+      </ul>
+      <div class="dist-modal-actions">
+        <button type="button" class="dist-btn-cancel" onclick={() => (previewOpen = false)}>
+          {previewConfirm.kind === 'blocked' ? '닫기' : '취소'}
+        </button>
+        {#if previewConfirm.kind === 'confirm'}
+          <button type="button" class="btn-primary" disabled={distLoading} onclick={confirmDistribute}>
+            {distLoading ? '지급 중...' : previewConfirm.confirmLabel}
+          </button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && previewOpen) previewOpen = false }} />
 
 <style>
   /* 패널 루트 (cms-uiux.md §목록카드+DetailPanel 필수 구조) */
@@ -847,4 +954,43 @@
   }
   .btn-primary:hover    { background: var(--cs-purple-hover); }
   .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+
+  /* ─ B-8: 수동 지급 확인 모달·결과 목록 (쿠폰 목록 페이지 .modal-bg/.modal-box 규격과 동일) ─ */
+  .dist-modal-bg {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(16,11,50,0.45);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .dist-modal-box {
+    background: var(--cs-white); border-radius: var(--cms-radius-lg);
+    padding: 28px 32px; width: 100%; max-width: 480px; max-height: 80vh;
+    display: flex; flex-direction: column; gap: 12px; overflow: hidden;
+  }
+  .dist-modal-title { font: var(--text-pc-title-16); color: var(--cs-text); margin: 0; }
+  .dist-modal-msg   { font: var(--text-pc-body-14); font-weight: 500; color: var(--cs-text); margin: 0; line-height: 1.6; }
+  .dist-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+  .dist-btn-cancel {
+    height: 44px; padding: 0 20px; border: none; border-radius: var(--radius-md);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    font: var(--text-pc-body-14); cursor: pointer; transition: background 0.12s;
+  }
+  .dist-btn-cancel:hover { background: var(--cs-lilac); }
+  .dist-target-list {
+    list-style: none; margin: 0; padding: 0; overflow-y: auto; max-height: 240px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .dist-target-list li {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 12px; background: var(--cs-surface-gray); border-radius: var(--cms-radius-sm);
+  }
+  .dist-target-input { font: var(--text-pc-script-12); color: var(--cs-text); word-break: break-all; }
+  .dist-chip {
+    flex-shrink: 0; padding: 2px 8px; border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12); font-weight: 700;
+  }
+  .dist-chip-will_issue, .dist-chip-issued { background: var(--cs-purple-op10); color: var(--cs-purple); }
+  .dist-chip-already_held, .dist-chip-already_used { background: var(--cs-white); color: var(--cs-text-mid); }
+  .dist-chip-not_found { background: var(--cs-red-xlight); color: var(--cs-red-badge); }
+  .dist-result { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .dist-result-summary { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); margin: 0; }
 </style>

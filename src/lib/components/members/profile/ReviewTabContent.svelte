@@ -1,25 +1,8 @@
 <script lang="ts">
-  interface ReviewItem {
-    date: string
-    item: string
-    rating: number
-    content: string
-  }
+  import type { MyReviewItem, MyCommentItem } from '$lib/server/account/loadMyActivity'
 
-  const reviews: ReviewItem[] = [
-    {
-      date: '2024.03.16',
-      item: '스타벅스 텀블러 500ml',
-      rating: 5,
-      content: '상태가 깨끗하고 사용하기 편했어요. 다음에도 이용하고 싶습니다.',
-    },
-    {
-      date: '2024.02.29',
-      item: '나이키 캐리어 28인치',
-      rating: 4,
-      content: '바퀴가 약간 소음이 있지만 전반적으로 만족스러웠습니다.',
-    },
-  ]
+  interface Props { reviews?: MyReviewItem[]; comments?: MyCommentItem[] }
+  let { reviews = [], comments = [] }: Props = $props()
 </script>
 
 <div class="flex flex-col gap-[10px] w-full md:max-w-[640px] md:mx-auto">
@@ -35,7 +18,13 @@
         </p>
       </div>
 
-      {#each reviews as r}
+      {#if reviews.length === 0 && comments.length === 0}
+        <p class="bg-[var(--cs-surface-gray)] rounded-[20px] px-[20px] py-[20px] text-center font-['Noto_Sans_KR',sans-serif] font-medium text-[14px] text-[var(--cs-text-light)] tracking-[-0.5px] leading-[1.6]">
+          아직 작성한 후기·댓글이 없어요
+        </p>
+      {/if}
+
+      {#each reviews as r (r.id)}
         <div class="bg-[#f6f6f6] rounded-[20px] px-[20px] py-[15px] flex flex-col gap-[10px]">
           <div class="flex items-center justify-between">
             <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[13px] text-[#100b32] tracking-[-0.5px] leading-[1.6]">
@@ -45,13 +34,29 @@
               {r.date}
             </p>
           </div>
-          <div class="flex gap-[2px]">
-            {#each Array.from({ length: 5 }, (_, i) => i) as idx}
-              <span class="text-[14px]" class:text-star-on={idx < r.rating} class:text-star-off={idx >= r.rating}>★</span>
-            {/each}
-          </div>
+          {#if r.title}
+            <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[13px] text-[var(--cs-text-dark)] tracking-[-0.5px] leading-[1.6]">
+              {r.title}
+            </p>
+          {/if}
           <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[13px] text-[#444] tracking-[-0.5px] leading-[1.6]">
             {r.content}
+          </p>
+        </div>
+      {/each}
+
+      {#each comments as c (c.id)}
+        <div class="bg-[var(--cs-surface-gray)] rounded-[20px] px-[20px] py-[15px] flex flex-col gap-[10px]">
+          <div class="flex items-center justify-between">
+            <p class="font-['Noto_Sans_KR',sans-serif] font-bold text-[13px] text-[var(--cs-text)] tracking-[-0.5px] leading-[1.6]">
+              {c.postTitle}
+            </p>
+            <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[12px] text-[var(--cs-text-light)] tracking-[-0.5px] leading-[1.6]">
+              {c.date}
+            </p>
+          </div>
+          <p class="font-['Noto_Sans_KR',sans-serif] font-medium text-[13px] text-[var(--cs-text-dark)] tracking-[-0.5px] leading-[1.6]">
+            {c.content}
           </p>
         </div>
       {/each}
@@ -59,8 +64,3 @@
     </div>
   </div>
 </div>
-
-<style>
-  .text-star-on { color: #FFE500; }
-  .text-star-off { color: #ddd; }
-</style>

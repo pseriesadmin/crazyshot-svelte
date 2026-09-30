@@ -49,6 +49,8 @@
   - reservationApprovalNotify.test.ts 7건 실패(예약 생성 시 상품·날짜 겹침 제약) — 이번 작업 무관 추정, 수정 전 상태와 비교 미실시
   - Production/Stage 마이그레이션 목록 차이(558·562·556b는 Stage에만) — 이번 작업 이전부터, 별도 확인 필요
 
+GATE E 3차(2026-10-01, sp3-qa-agent) ✅ 조건부 통과 — 블로킹 0·미디엄 0·로우 3(--cs-purple-op10은 불투명 #E1DEF3이라 기존 rgba보다 약간 진함·모달 오버레이 rgba는 cms-uiux 문서화 패턴·후기 별점 제거 Stephen 확인 대기). 지적된 문서 정합성 2건(service-operations 푸터 v1.9·§23 GATE C 항목) 및 §23 권한 이력 서술(497=기본권한 잔존, 532=authenticated 명시 GRANT) 정정 완료. QA는 DB 도구가 없어 DB 대조 불가 — 해시·권한은 본 세션 직접 대조값(2차 기록) 유효. 대상: ①Low A1 3건 수정(CouponDetailPanel `.dist-chip-*` 토큰화·coupon/new `.code-preview-hint` PC 토큰·LogTab/ReviewTab 새 줄 hex→토큰)
+  ②문서 보완(service-operations.md §22 취소 형제·구독 min_purchase 기준 변경·NULL 예약 행, §23 신설 607~610·558·562 권한 잠금/드리프트 정렬) ③Stage 2099 잔존 fixture·간헐 실패·후기 별점 제거는 Stephen 결정/별도 태스크로 남김
 GATE E: sp3-qa-agent 독립검수 결과(조건부 통과, 블로킹 0건)
   - 자동 게이트: utils 108건·라이브 서비스 51건 통과, svelte-check 신규 오류 0, build 성공, console.log/any/TODO/Svelte4 문법 추가 없음
   - M-1(MEDIUM): use_coupons(Migration 532)가 authenticated 실행 가능하고 p_user_id=auth.uid() 검증이 없다. 호출은 서버 admin(consumeCoupons.ts)뿐이라
@@ -73,12 +75,27 @@ GATE E: sp3-qa-agent 독립검수 결과(조건부 통과, 블로킹 0건)
         → ✅ 562 Production 적용 완료(2026-10-01, Stephen 승인): 코드(6bac472)는 2026-09-28 main 배포됐으나 DB 미적용 상태였음(코드 배포≠DB 적용 재현). Production Easy pack01(월 제한 횟수 비움=무제한 의도, 가입자 1명)이
           월 1회로 잘못 제한되던 것 해소. 적용 후 Production 함수 해시 e8322505=Stage, 권한 service_role 전용 일치. 사용 기록 0건이라 기존 피해 없음.
           ※ Production Crazy pack(플랜 11)의 월 제한 횟수는 0(무제한 의도라면 입력란을 비워야 함 — 0은 '0회 허용'이라 항상 거부, 가입자 0명, 미수정)
+      ✅ 나머지 드리프트 정렬 완료(2026-10-01, Stephen 승인): Migration #558을 Production에 적용(단일 계층 부모 code_series 유일 인덱스, 적용 전 위반 0건 재확인) + Migration #610 신규(저장소 파일 생성,
+        Stage·Production 적용): user_coupons.coupon_id FK를 저장소 Migration 16 정의대로 ON DELETE RESTRICT로(Production CASCADE 제거 — 쿠폰 물리삭제 시 보유기록 연쇄삭제 위험 제거),
+        idx_user_coupons_user_id·coupon_id 인덱스 Production 생성, order_items FK는 실서비스(Production) 동작(order CASCADE·reservation SET NULL)에 Stage를 맞춤(앱의 물리삭제 경로 없음, 잠복 차이 해소).
+        검증: 양쪽 DB FK 3종·인덱스 3종 정의 동일, FK 검증 완료(convalidated), Stage 회귀 테스트 42건 통과(1회 간헐 실패 후 재실행 통과 — 다른 세션 테스트 데이터 충돌 추정, 원인 미특정).
+        ※ 610 파일은 처음 권한 분류기에 거부돼 Stage DB 적용이 파일보다 먼저 이뤄졌고, Stephen 허용 후 파일 생성·Production 적용으로 마무리.
       ②FK 삭제 동작 차이: order_items_order_id_fkey(Prod CASCADE/Stage 없음)·order_items_reservation_id_fkey(Prod SET NULL/Stage 없음)·user_coupons_coupon_id_fkey(Prod CASCADE/Stage RESTRICT)
       ③RLS 차이: Production coupons_user_select는 auth.uid() IS NOT NULL 조건이 없어 비로그인(anon)도 활성 쿠폰 조회 가능(Stage는 로그인 필요) → ✅ Migration #609로 해소(Stage·Production):
         Production 정책에 auth.uid() IS NOT NULL 추가(Stage는 이미 동일 정의라 실질 변경 없음, 양쪽 정책 이름을 모두 처리하는 멱등 DO 블록). 앱의 coupons 직접 조회는 전부 service_role 또는 로그인 사용자 세션이라 영향 없음(익명 로그인도 auth.uid 존재).
         검증: Production anon 조회 12건→0건, authenticated 12건 유지, coupons_admin_all 불변, Stage 쿠폰 회귀 테스트 5파일 41건 통과. (나머지 정책 이름 차이·CHECK 절 차이는 기능 영향 없어 미수정)
       ④Production 인덱스 idx_user_coupons_coupon_id·idx_user_coupons_user_id 없음(Stage만)
     · 절차5(코드↔DB 배포 교차검증)는 요청 범위 밖 — 앱 코드 미배포(미커밋)라 해당 없음
+  - ✅ GATE E 2차 독립검수(sp3-qa-agent, 2026-10-01): 조건부 통과·블로킹 0건. 1차 미검증 범위 결과 — A1 UI 표준(Low: CouponDetailPanel .dist-chip rgba 하드코딩·coupon/new .code-preview-hint 모바일 토큰·LogTab/ReviewTab 빈 상태 hex·후기 별점 표시 제거 여부 확인 필요),
+    A2 내정보 본인 데이터 한정 통과(locals.supabase 세션 클라이언트·user_id 필터·RLS), A3 TS↔SQL 식 일치(Low: 취소 형제 가중치·구독 min_purchase 기준 변경·테스트 공백(다중쿠폰 무료배송 경로·min_purchase>0)·멱등 유니크 제약 없음(기존)),
+    A4 문서 정합성(§22 보완·607~610 미기재 → 본 세션이 §22·§23으로 반영), A5 reservationApprovalNotify 7건 원인 확정: Stage 2099-01~12 hold 예약 12건(id 21846~21857) 잔존 fixture(이번 변경 무관, 삭제는 Stephen 확인 대기),
+    간헐 실패는 테스트 파일 간 고정 날짜·상품 공유 충돌(3회 중 1회 syncOrderAfterCompositionChange EC-1) — 별도 태스크 권장.
+  - ✅ 2차 QA Low(A1) 3건 수정 완료(이 세션이 추가한 줄만): CouponDetailPanel `.dist-chip-will_issue/issued` rgba→`var(--cs-purple-op10)`, coupon/new `.code-preview-hint` `--text-m-script-12`→`--text-pc-script-12`(CMS PC 전용),
+    LogTab/ReviewTab 새 빈 상태·댓글·제목 줄의 hex→`var(--cs-surface-gray|--cs-text|--cs-text-dark|--cs-text-light)`. 검증: svelte-check 신규 0·build 성공·Tailwind v4가 var() 클래스 생성,
+    브라우저 계산 스타일이 기존 hex와 동일(rgb 246/68/170/16,11,50). 후기 별점 표시 제거는 product_reviews에 별점 컬럼이 없어 의도한 변경(Stephen 확인 대기).
+  - QA의 DB 대조 불가분은 본 세션이 직접 수행: 10개 함수 본문 해시·권한 Stage=Production 일치(use_coupons 19fa2943·use_coupon ab54805c·sync 12e18c76·validate 8c13d73c·award e1770e5f·create_reservation_order 93a6c21b·
+    apply_subscription_free_shipping e8322505·cms_set_allow_coupon_stacking 285c0a0f·preview 4467abf5·distribute 96261ebd), 서버 전용 7종 anon/authenticated=false, Production coupons 정책 2개뿐(609 잔여 정책 없음),
+    orders·order_items Production 추가 정책은 쓰기 false·조회 본인만으로 Stage와 기능 동일
   - L-1 coupon/+page.server.ts `db: any` eslint-disable(기존 패턴), L-2 check-rpc-error-handling 기존 위반 5건(create-order:52는 2026-09-25 커밋분),
     L-3 validate_order_coupons 롤백 프로브 전용 부작용 검증 테스트 없음(couponStackingRules 간접 검증) — 차단 아님
   - QA 미검증 범위: 화면 코드 UI 표준 준수, 내정보 조회 본인 행 한정, A-1 TS↔SQL 식 라인별·문서 정합성, reservationApprovalNotify 7건 실패 원인, create_reservation_order 앵커 패치 결과

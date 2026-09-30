@@ -600,6 +600,91 @@ CMS에서 상품을 새로 만드는 모든 경로(신규 등록·"새 상품으
 
 ---
 
+## 21. 쿠폰 다중 선택 — 쿠폰끼리 중복 허용·조건부 쿠폰 노출 (2026-10-01 구현, Migration 531~534 복원 + 605)
+
+```
+장바구니는 쿠폰을 여러 장 동시에 선택할 수 있다(이전엔 1장). DB 백엔드(order_coupons·use_coupons·다중쿠폰
+create_reservation_order/sync, Migration 531~534)는 2026-09-23에 Stage·Production에 적용됐고 코드만 되돌려져 있었다 —
+이번에 531~534 마이그레이션 파일을 저장소로 복원하고 앱 코드를 현재 HEAD 기준으로 다시 연결했다.
+
+중복 규칙(쿠폰 CMS 설정 2개로 분리, Stephen 확정):
+  · coupons.allow_stacking       = "멤버십 할인과 중복 허용"  (라벨만 정정, 동작 불변 — Migration 510/511)
+  · coupons.allow_coupon_stacking = "쿠폰끼리 중복 허용"      (신규, 기본 true — 정책상 쿠폰끼리 중복 허용)
+  2장 이상 선택에 allow_coupon_stacking=false 쿠폰이 섞이면: 화면은 안내창(이 쿠폰만 적용할까요?)으로 확인받고,
+  서버는 create_reservation_order(COUPON_STACKING_NOT_ALLOWED)와 use_coupons(COUPON_STACK_REJECTED:…:COUPON_STACKING_NOT_ALLOWED)가
+  이중으로 거부한다. 설정 저장은 cms_set_allow_coupon_stacking RPC(쿠폰 생성·수정 액션이 호출).
+
+할인 산식(서버 정본과 화면이 동일, 단위 테스트 대상 couponStacking.ts):
+  정액 합산(F) → 정률은 coupon_id 오름차순 순차 적용(잔액·최대 한도 단계별) → 무료배송은 배송비 한도.
+
+조건부 쿠폰 노출(B-1): 최소 대여금액·최소 대여기간·방문 전용은 주문 의존 조건이라 서버 로더가 판정할 수 없다(날짜 미선택
+draft 예약은 금액이 0이고 수령 방식은 체크아웃 전까지 DB에 없음). 서버는 사용자 의존 조건만 걸러(isCouponUserEligible) 쿠폰과
+조건 필드를 내려주고, 장바구니가 현재 선택 상태로 판정해(couponOrderConditions.ts) 미충족 쿠폰은 숨기지 않고 사유와 함께 비활성
+표시한다. 대여일수는 DB rental_days(박 수, 당일=0)와 같은 기준으로 센다.
+최종 방어: create-order API가 주문 생성 직후 validate_order_coupons(부작용 없는 사전검증)를 호출해 부적격 쿠폰만 제외하고 주문을
+다시 계산(droppedCoupons 응답) → 화면은 금액이 달라졌음을 안내하고 재신청하게 한다. 결제 소진은 use_coupons(all-or-nothing).
+
+필수 회원 분류(user_grade_required)는 Migration 528부터 general/student/subscriber 값이다 — membership_grade와 직접 비교하지 말고
+matchesUserGradeRequired()를 쓴다(장바구니·계약서 2곳 교정).
+
+⛔ 사고 교훈: create_reservation_order의 다중쿠폰 경로는 출력 컬럼 order_id와 order_coupons.order_id가 이름이 같아
+"column reference order_id is ambiguous"로 항상 실패하고 있었다(Migration 533) — 2026-09-23 배포 후 되돌려진 원인으로 추정.
+605에서 DELETE를 별칭으로 한정하고 ON CONFLICT를 제약 이름으로 지정해 수정. RETURNS TABLE 출력 컬럼명과 같은 이름의 테이블 컬럼을
+다루는 함수는 항상 별칭/제약 이름을 써야 한다.
+```
+→ 상세: `supabase/migrations/20261001020000_605_coupon_stacking_rules_and_order_validation.sql` ·
+`src/lib/utils/couponStacking.ts` · `couponOrderConditions.ts` · `src/lib/server/coupons/consumeCoupons.ts` ·
+`src/__tests__/services/couponStackingRules.test.ts`(Stage 라이브 4건) · `couponMultiStacking.test.ts`(5건)
+
+---
+
+## 22. 렌탈완료 포인트 적립 — 차감 후 기준금액 × (공통 적립률 + 구독회원 "더블 적립") (2026-10-01, Migration 603·606)
+
+```
+적립 기준금액(예약 1건, 부가세 포함가) =
+    그 예약의 상품+옵션 금액 + 휴무일 연장요금
+  − (멤버십 할인 + 상품분 쿠폰 할인 + 실제 사용 포인트) 중 이 예약의 몫
+제외: 배송비·무료배송 쿠폰이 깎은 배송비분·구매(판매전용) 예약(적립 대상 아님)·보증금. 회원 등급 배율은 없다(정책상 등급 없음).
+할인 풀은 주문의 모든 라인(대여+구매) 가중치(상품금액+휴무일요금) 비율로 나누고, 예약 id 오름차순 누적 반올림으로 배분해
+예약별 몫의 합이 풀과 정확히 같다(무상태 계산 — 부분 취소·금액 변경 후에도 지급 시점 주문 데이터로 다시 계산). 기준금액 ≤ 0이면 0p.
+포인트 = ROUND(기준금액 × 적립률). 사용 포인트는 point_transactions(type='use', ref_type='order')의 실제 차감액.
+
+적립률: 공통(point_earn_rules.rental_complete) — 전 회원 동일.
+구독 회원: 같은 기준금액에 구독상품 "적립포인트"(tier_benefits.LOYALTY_POINTS, 구독료 결제 적립과 같은 값) 비율을 추가 적립
+  (ref_type='rental_complete_sub_bonus' 별도 행, 더블 적립). 두 지급은 서로 독립이고 멱등키도 별개다.
+ref_type 컬럼은 varchar(30) — 새 ref_type은 30자 이내.
+
+취소된 형제 예약: 606은 예약 status를 보지 않는다(order_items는 취소해도 지워지지 않고 sync가 같은 기준으로 합산한다). 그래서 한 주문의 예약 하나가
+  취소돼도 주문 금액이 재계산되지 않는 한 남은 예약은 "자기 몫의 할인"만 차감된다. 주문 금액이 바뀌면(부분 취소·상품 변경 후 sync) 지급 시점의 주문 데이터로 그대로 반영된다.
+구독 보너스 최소 구매금액(tier_benefits.LOYALTY_POINTS.min_purchase_amount)은 603에서는 line_total과, 606부터는 차감 후 기준금액(v_base)과 비교한다(동작 변경, 장바구니 표시 미반영).
+order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 SQL 가중치에서 제외되고 장바구니 계산에는 없다 — 발생 가능성은 매우 낮다.
+같은 식 세 곳(항상 함께 바꿀 것): ① SQL award_rental_complete_points(Migration 606) ② 장바구니 표시 src/lib/utils/cartEarnPoints.ts
+  (calcEarnBase·calcEarnPoints·allocatePoolByCumulativeRounding) ③ 테스트 rentalCompleteNetBase.test.ts(라이브 8건) + cartEarnPoints.test.ts.
+장바구니 "적립 예정 포인트"(cart/+page.svelte otEarnPoints)는 주문 전체로 한 번 계산한 값이라 여러 예약 주문은 서버가 예약별로
+  반올림해 지급하는 값과 1~2p 차이가 날 수 있다. earnRate(cart/+page.server.ts)는 공통률 + 구독 보너스율의 단순 합산이며
+  구독 보너스의 min_purchase_amount·max_points_per_order 상한은 반영하지 않는다(정확한 금액은 서버 RPC).
+```
+→ 상세: `supabase/migrations/20261001030000_606_award_rental_complete_points_net_base.sql` ·
+`supabase/migrations/20261001000000_603_award_rental_complete_points_subscriber_rate.sql`(파일명은 초안 이름, DB 등록명은 603_award_rental_complete_points_double_stack)
+
+---
+
+## 23. 쿠폰·주문 RPC 권한 잠금과 구조 드리프트 정렬 (2026-10-01, Migration 607~610·558·562)
+
+```
+서버 전용이어야 하는 함수는 REVOKE FROM PUBLIC만으로는 부족하다 — Supabase 기본 권한이 anon·authenticated에 직접 EXECUTE를 남긴다(Migration 497의 sync_order_after_composition_change가 실제로 그 상태였음).
+또 새 함수가 기존 함수의 GRANT를 "동일하게" 따라가면 불필요한 권한이 그대로 복제된다 — Migration 532는 use_coupons·use_coupon에 authenticated를 명시적으로 GRANT했다(기존 단일 use_coupon 권한 승계).
+서버 전용 함수는 REVOKE ALL FROM PUBLIC + REVOKE EXECUTE FROM anon, authenticated + GRANT EXECUTE TO service_role 로 명시하고,
+적용 뒤 has_function_privilege('anon'|'authenticated'|'service_role', …)로 실제 상태를 확인한다.
+  607 use_coupons / 608 sync_order_after_composition_change·use_coupon → service_role 전용(앱 호출은 서버 admin 클라이언트뿐, DB 내부 호출자는 SECURITY DEFINER)
+  609 coupons 고객 조회 정책에 auth.uid() IS NOT NULL 추가(Production만 누락돼 비로그인 조회 가능했음; 익명 로그인은 auth.uid 존재)
+  610 user_coupons.coupon_id FK ON DELETE RESTRICT(저장소 Migration 16 정의, Production CASCADE 제거)+인덱스 2개, order_items FK를 Production 동작(order CASCADE·reservation SET NULL)에 Stage 정렬
+  558 단일 계층 부모 code_series 유일 인덱스·562 구독 무료배송 월 한도 NULL=무제한을 Production에 적용(코드는 이미 배포돼 있었음 — 코드 배포≠DB 적용)
+검증 절차: DRIFT_CHECK_PROCEDURE.md 1~4(함수 본문 해시·권한·제약·이력 대조). 새 서버 전용 함수를 추가할 때마다 권한을 이 방식으로 확인한다.
+```
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
@@ -640,6 +725,10 @@ CMS에서 상품을 새로 만드는 모든 경로(신규 등록·"새 상품으
     UI 리마인더 중 하나를 사용했는가?
 [ ] CMS 상품 등록 경로를 추가·수정했다면(§20) — 동일 부모 코드품번 상품이 생길 수 있는 경로가
     생기지 않았는가? 복제·재고 추가의 수량/순번 상한 제한이 서버에서 집행되는가?
+[ ] 서버 전용 함수(§23)를 새로 만들거나 바꿀 때 — REVOKE ALL FROM PUBLIC에 더해 anon·authenticated도 명시적으로 REVOKE하고 service_role에만 GRANT했는가? 적용 뒤 has_function_privilege로 실제 상태를 확인했는가? 기존 함수 권한을 "동일하게" 복사하지 않았는가?
+[ ] 렌탈 적립(§22)의 계산식을 바꿀 때 — SQL 함수·장바구니 cartEarnPoints.ts·두 테스트를 함께 고쳤는가? 할인 풀에서 무료배송 쿠폰 분과 구매 라인 몫을 빼먹지 않았는가?
+[ ] 쿠폰 다중 선택(§21) 변경 시 — 주문 의존 조건 판정을 서버 로더로 되돌리지 않았는가? 중복 불가 쿠폰 혼합이
+    화면(안내창)·create_reservation_order·use_coupons 세 곳에서 모두 막히는가?
 [ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
     설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
 [ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?
@@ -648,7 +737,7 @@ CMS에서 상품을 새로 만드는 모든 경로(신규 등록·"새 상품으
 
 ---
 
-*service-operations.md v1.8 | 2026-09-24 §20 신설 — CMS 상품 등록·복제·재고 추가 코드품번 제한 정책(동일 부모 코드품번 금지·복제 범위·재고 추가 50개/순번 상한 사전 차단, 정본 products.md §2-13) | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.9 | 2026-10-01 §21(쿠폰 다중 선택·쿠폰끼리 중복 허용·조건부 쿠폰 노출)·§22(렌탈완료 적립 차감 후 기준금액·구독 더블 적립)·§23(쿠폰·주문 RPC 권한 잠금과 구조 드리프트 정렬, Migration 605~610·558·562) 신설 | 2026-09-24 §20 신설 — CMS 상품 등록·복제·재고 추가 코드품번 제한 정책(동일 부모 코드품번 금지·복제 범위·재고 추가 50개/순번 상한 사전 차단, 정본 products.md §2-13) | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·

@@ -87,9 +87,9 @@
       {#if activeTab === 'coupon'}
         <CouponTabContent coupons={data.coupons} />
       {:else if activeTab === 'log'}
-        <LogTabContent />
+        <LogTabContent logs={data.myActivity?.logs ?? []} />
       {:else if activeTab === 'review'}
-        <ReviewTabContent />
+        <ReviewTabContent reviews={data.myActivity?.reviews ?? []} comments={data.myActivity?.comments ?? []} />
       {:else if activeTab === 'profile'}
         <ProfileTabContent
           profile={data.profile}

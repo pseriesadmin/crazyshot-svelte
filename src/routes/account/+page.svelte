@@ -304,9 +304,9 @@
             {:else if activePcSection === 'coupon'}
               <CouponTabContent coupons={data.coupons} />
             {:else if activePcSection === 'log'}
-              <LogTabContent />
+              <LogTabContent logs={data.myActivity?.logs ?? []} />
             {:else if activePcSection === 'review'}
-              <ReviewTabContent />
+              <ReviewTabContent reviews={data.myActivity?.reviews ?? []} comments={data.myActivity?.comments ?? []} />
             {:else if activePcSection === 'profile'}
               <ProfileTabContent
                 profile={data.profile}
