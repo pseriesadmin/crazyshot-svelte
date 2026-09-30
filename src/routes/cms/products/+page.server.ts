@@ -1113,6 +1113,19 @@ export const actions: Actions = {
       let bundle_links: unknown[] = []
       if (bundlesStr) { try { bundle_links = JSON.parse(bundlesStr) } catch { /* ignore */ } }
 
+      // #575 정책: 결합상품 분류(is_bundle_product)는 등록 시점에만 결정 — 단품에는 링크를 저장하지 않는다.
+      // (빈 목록 저장 = 정리는 허용)
+      if (Array.isArray(bundle_links) && bundle_links.length > 0) {
+        const { data: bundleFlagRow } = await admin
+          .from('products')
+          .select('is_bundle_product')
+          .eq('id', productId)
+          .maybeSingle()
+        if (!bundleFlagRow?.is_bundle_product) {
+          return fail(400, { error: '결합상품으로 등록된 상품만 결합상품을 구성할 수 있습니다.' })
+        }
+      }
+
       const { error: updateError } = await admin
         .rpc('upsert_product_bundle_links', {
           p_product_id:    productId,
@@ -1129,6 +1142,7 @@ export const actions: Actions = {
         if (msg.includes('BUNDLE_CHILD_PRODUCT'))    return fail(400, { error: '재고 단위 상품은 결합상품으로 추가할 수 없습니다.' })
         if (msg.includes('BUNDLE_DELETED_PRODUCT'))  return fail(400, { error: '삭제된 상품은 결합상품으로 추가할 수 없습니다.' })
         if (msg.includes('BUNDLE_NESTING_FORBIDDEN')) return fail(400, { error: '이미 결합상품 목록을 가진 상품은 결합상품으로 추가할 수 없습니다.' })
+        if (msg.includes('BUNDLE_IS_PART_OF_PACKAGE')) return fail(400, { error: '이미 다른 패키지의 결합상품으로 쓰이는 상품은 자신의 결합상품을 구성할 수 없습니다.' })
         return fail(500, { error: `결합상품 수정에 실패했습니다: ${msg}` })
       }
     }
