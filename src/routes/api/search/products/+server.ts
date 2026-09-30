@@ -30,6 +30,7 @@ import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { getPriceMinForProducts } from '$lib/server/getPriceMinForProducts'
+import { getPrice12hForProducts } from '$lib/server/getPrice12hForProducts'
 import type { RequestHandler } from './$types'
 
 // RPC 결과 "약한 매칭" 기준 — 이 건수 이하면 자연어 폴백 보강 실행
@@ -105,7 +106,15 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
     )
     const wishedSet = new Set(wishedIds)
-    const results = rpcResults.map((r) => ({ ...r, wished: wishedSet.has(String(r['product_id'] ?? r['id'] ?? '')) }))
+    // 12h 실값(CMS price_rules) — 화면이 24h×0.7로 계산하지 않도록 함께 내려준다
+    const price12hMap = await getPrice12hForProducts(
+      locals.supabase,
+      rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+    )
+    const results = rpcResults.map((r) => {
+      const id = String(r['product_id'] ?? r['id'] ?? '')
+      return { ...r, price_12h: price12hMap[id] ?? null, wished: wishedSet.has(id) }
+    })
     return json({ results, query: q, page, limit, search_log_id: searchLogId })
   }
 
@@ -194,11 +203,16 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
   )
   const wishedSet = new Set(wishedIds)
+  const price12hMap = await getPrice12hForProducts(
+    locals.supabase,
+    finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+  )
   const results = finalResults.map((r) => {
     const id = String(r['product_id'] ?? r['id'] ?? '')
     return {
       ...r,
       price_min: r['price_min'] ?? priceMinMap[id] ?? null,
+      price_12h: price12hMap[id] ?? null,
       wished: wishedSet.has(id),
     }
   })
