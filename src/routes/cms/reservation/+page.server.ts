@@ -16,6 +16,7 @@ import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cm
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
@@ -530,11 +531,14 @@ export const actions: Actions = {
       })
     } catch { /* 로그 실패는 무시 */ }
 
-    // 대여완료 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+    // 대여완료·정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
     // QR 반납 경로(rentalQrTransition.ts)도 동일하게 배선됨(log_rental_action과 동일 이중 배선)
     if (newStatus === 'returned') {
       try {
         await awardRentalCompletePoints(admin, reservationId)
+      } catch { /* 포인트 적립 실패는 무시 */ }
+      try {
+        await awardOnTimeReturnPoints(admin, reservationId)
       } catch { /* 포인트 적립 실패는 무시 */ }
     }
 

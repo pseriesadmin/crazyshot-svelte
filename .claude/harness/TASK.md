@@ -7,6 +7,91 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🔴 CRITICAL: CMS 포인트 적립 규칙 보완 — 리뷰·정시반납·생일 실제 지급 구현 + 추천인/피추천인 준비중 고정 (Migration #596~#600, 2026-09-30, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0건, MEDIUM 2건 이번 세션 내 즉시 해소, LOW 4건 중 3건 해소·1건은 기존 코드베이스 전반의 허용된 리스크 패턴이라 미조치), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 다른 세션 소관 미커밋 변경은 미수정.
+
+배경: 이전 점검(별도 조사 세션)에서 point_earn_rules(7개 규칙) 중 "렌탈 완료"만 실제
+지급 코드가 있고, 나머지 5개(리뷰 작성·정시 반납·추천인·피추천인·생일 축하)는 CMS 화면
+토글을 켜도 실제로 지급되지 않는 "관리 레이어만 있고 지급 로직이 없는" 공백이 발견됨
+(Migration #407 주석에 이미 기록돼 있던 기존 설계 공백). Stephen 지시: 리뷰·정시반납·
+생일 3건은 이번에 실제 구현, 추천인·피추천인은 추천코드 발급·추적 시스템 자체가 없어
+별도 신규 기능 건으로 분리하고 이번엔 "준비중(비활성)" 고정만 적용.
+
+Stephen 확정 정책(plan_source: /Users/stevenmac/.claude/plans/misty-scribbling-wand.md):
+  ① 리뷰 작성 적립 — 실제 대여(반납/완료) 이력이 있는 고객만, 같은 상품 최초 1회만 지급
+     (기간 제한 없음 — DB 시드 문구의 "14일 이내"는 반납완료 시각을 기록하는 컬럼 자체가
+     없어 구현하려면 핵심 예약 RPC를 건드려야 해서 스코프 폭증 → Stephen이 기간제한
+     없이 진행 선택)
+  ② 정시 반납 적립 — 반납 예정일(end_date) 이전(조기 반납 포함) 또는 당일까지 반납 완료
+     시 정시 인정(DB 시드 문구의 "당일만"보다 완화)
+  ③ 생일 축하 적립 — DB 시드 설명("생일 당월 자동 지급") 기준 월(月) 단위 매칭으로 최종
+     확정(최초 계획의 "월+일 정확 일치"에서 구현 중 정정, plan 파일도 사후 동기화)
+  ④ 추천인/피추천인 — update_point_earn_rule RPC 레벨에서 is_active를 항상 false로 강제
+     (CMS 토글·API 직접 호출 어느 경로로도 활성화 불가)
+
+수행 작업:
+  [1] Migration #596(`create_product_review` 내부에 리뷰 적립 로직 추가) — 별도 서버
+      라우트 신설 없이 기존 SECURITY DEFINER 함수를 CREATE OR REPLACE(파라미터 개수
+      불변, products.md 오버로드 함정과 무관). 자격 검증은
+      `rental_reservations.product_id(자식) → products.parent_product_id = 리뷰의 product_id`
+      조인, 중복 방지는 `point_transactions(ref_type='review', ref_id=상품id, user_id)`.
+      지급 로직 전체를 `BEGIN...EXCEPTION WHEN OTHERS THEN NULL`으로 감싸 fail-soft(지급
+      실패가 리뷰 등록 자체를 막지 않음 — PL/pgSQL 암묵적 세이브포인트).
+  [2] Migration #597(`award_on_time_return_points` 신규 RPC, service_role 전용) +
+      `src/lib/server/awardOnTimeReturnPoints.ts`(fail-soft 헬퍼, `awardRentalCompletePoints.ts`
+      와 동일 패턴) — 3개 호출지점(`rentalQrTransition.ts`·`dheroAutoAdvance.ts`·
+      `cms/reservation/+page.server.ts`)의 기존 `awardRentalCompletePoints` 호출부 옆에
+      나란히 배선. 멱등성은 `ref_type='on_time_return', ref_id=예약id`.
+  [3] Migration #598(`award_birthday_points_batch` 신규 RPC) + 신규 Vercel Cron
+      `/api/cron/birthday-points`(`vercel.json`에 `0 0 * * *` 등록, return-remind와 동일
+      CRON_SECRET·배치루프 패턴) — `user_profiles.birth_date`(Migration #135, 실제
+      갱신되는 현재 활성 필드) 기준, marketing_rules가 쓰던 `auth.users` stale 메타데이터는
+      사용 안 함. 멱등성은 자연키가 없는 이벤트라 `ref_type='birthday',
+      ref_id=user_id||'-'||연도` 인조키로 "연 1회만" 보장. 구현 중 RETURNS TABLE의 출력
+      컬럼명(user_id, amount)이 함수 본문 내 동명 컬럼 참조와 충돌해 "ambiguous" 컴파일
+      에러가 발생 → 전부 테이블 별칭으로 명시해 해소(TDD로 재현·수정 확인).
+  [4] Migration #599(`update_point_earn_rule` RPC에 referrer/referee 강제 비활성 가드 +
+      description을 "준비중" 안내로 갱신) + `+page.svelte` 토글 버튼에 `disabled` 추가
+      (UI는 보조 수단, 실제 강제는 RPC — TDD로 RPC 직접 호출 우회 불가 확인).
+  [5] Migration #600(sp3-qa-agent 검수 MEDIUM-1 반영) — review·on_time_return의
+      description도 referrer/referee와 동일하게 실제 구현 기준으로 갱신(기존 "14일 이내"·
+      "당일만" 문구가 실제 동작과 달라 CMS 관리자에게 오인을 줄 수 있던 문제 해소).
+  [6] TDD 4개 파일 신설(Stage DB 라이브 통합테스트, 16건 전부 GREEN):
+      `reviewPointsAward.test.ts`(4건)·`onTimeReturnPointsAward.test.ts`(5건)·
+      `birthdayPointsAward.test.ts`(4건)·`pointEarnRuleReferrerRefereeLock.test.ts`(3건).
+      기존 회귀 테스트 8개 파일(dheroAutoAdvance 등, 3개 호출지점 관련) 32건도 재확인 GREEN.
+
+마이그레이션 번호 충돌 처리: 원래 #588~#591로 작성했으나, 세션 작업 도중 다른 세션이
+동일 번호로(`588_server_pickup_lead_and_period_guard.sql`,
+`589_customer_cancel_confirmation.sql`) 이미 커밋한 것을 뒤늦게 발견(sp3-qa-agent 검수
+LOW-1) — 그 두 파일은 이번 세션과 무관하므로 손대지 않고, 이번 세션 파일만 #596~#600으로
+재번호(파일명·내부 주석·테스트 describe 문구 전부 동기화 완료).
+
+수정 파일: supabase/migrations/20260930050000_596_award_review_points.sql,
+supabase/migrations/20260930060000_597_award_on_time_return_points.sql,
+supabase/migrations/20260930070000_598_award_birthday_points_batch.sql,
+supabase/migrations/20260930080000_599_point_earn_rules_referrer_referee_lock.sql,
+supabase/migrations/20260930090000_600_point_earn_rules_description_sync.sql,
+src/lib/server/awardOnTimeReturnPoints.ts(신규), src/routes/api/cron/birthday-points/+server.ts(신규),
+src/lib/server/rentalQrTransition.ts, src/lib/server/dheroAutoAdvance.ts,
+src/routes/cms/reservation/+page.server.ts, vercel.json, src/routes/cms/promotion/point/+page.svelte,
+src/__tests__/services/reviewPointsAward.test.ts(신규), src/__tests__/services/onTimeReturnPointsAward.test.ts(신규),
+src/__tests__/services/birthdayPointsAward.test.ts(신규), src/__tests__/services/pointEarnRuleReferrerRefereeLock.test.ts(신규)
+
+알려진 범위 외(미수정·Stephen 확인 대기): 2/29생 회원은 평년에 생일 적립을 못 받는 윤년
+엣지케이스(발생빈도 매우 낮아 이번 스코프 미보정) / 리뷰 적립의 SELECT-then-UPDATE
+TOCTOU 이론적 경쟁조건(award_rental_complete_points #407을 비롯해 코드베이스 전반의
+기존 허용 패턴과 동일 클래스라 이번 건만 신규로 고치지 않음, sp3-qa-agent LOW-4).
+
+QA 결과(2026-09-30, sp3-qa-agent): 블로킹 0 / MEDIUM 2 / LOW 4. 조치: [해소] MEDIUM-1(설명
+문구 불일치, Migration #600) / MEDIUM-2(plan_source 생일 매칭 기준 문서 동기화) /
+LOW-1(마이그레이션 번호 충돌, #596~#600 재번호) / LOW-2(테스트 내 user_profiles 컬럼 사용
+스타일 통일, `id`→`user_id`) / LOW-3(birthday-points 크론에 `console.error` 로깅 추가,
+point-expiry·return-remind와 동일 수준). [미조치, 근거 있음] LOW-4(리뷰 적립 TOCTOU —
+기존 허용 리스크 패턴과 동일 클래스).
+git: Stephen 대기.
+
 ## NOW — 🔴 CRITICAL: 요금 미등록 상품 처리 — 장바구니 폴백(150000·24h×0.6) 제거 + 12h 없음 24시간 단위 올림 + 24h 없음 "요금 미정"·예약 신청 차단 (Migration #584, 2026-09-30, 이 세션'만', ✅ GATE B 승인 — Stephen 진행 지시, Migration #584·#585 Stage·Production 모두 적용 완료(Production 2026-09-30 15:01 KST 적용·검증) · ✅ GATE E 3차 통과 — sp3-qa-agent 독립검수(블로킹 0건, #585 무료옵션 포함), git commit은 Stephen 대기)
 
 ⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 다른 세션 소관 미커밋 변경은 미수정.
