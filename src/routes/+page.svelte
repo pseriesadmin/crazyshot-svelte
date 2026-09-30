@@ -280,16 +280,6 @@
       <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
       <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
     {/if}
-    <div class="d-hero-copy">
-      <div class="d-hero-line1">
-        <span class="d-hero-saengae">생애</span>
-        <span class="d-hero-first">First</span>
-      </div>
-      <div class="d-hero-rental">렌탈</div>
-      <div class="d-hero-badge">
-        <span class="d-hero-badge-text">미친할인</span>
-      </div>
-    </div>
   </div>
 
   <!-- ② 취향직격 PICK (PC) — Figma node 2072:5988 구조 그대로:
@@ -622,9 +612,6 @@
   <!-- ① 모바일 히어로 -->
   <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
   <div class="m-hero">
-    <div class="m-hero-watermark" aria-hidden="true">
-      Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!<br/>Get Your CRAZYSHOT!
-    </div>
     {#if mobileCarousel.length > 0}
       {@const b = mobileCarousel[mobileIdx]}
       {#if b}
@@ -642,18 +629,6 @@
     {:else}
       <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
     {/if}
-    <div class="m-hero-stripes" aria-hidden="true">
-      {#each Array(10) as _, i}
-        <div style="height:9px;background:{i%2===0 ? 'rgba(0,115,170,0.5)' : 'rgba(255,158,116,0.5)'}"></div>
-      {/each}
-    </div>
-    <img src="/home/mobile/b473ea708107badf385ed8827f8fb7a156223d67.png" alt="" class="m-hero-overlay" aria-hidden="true"/>
-    <div class="m-hero-copy">
-      <div class="m-hero-tag1">이 구역 장비명빨!</div>
-      <div class="m-hero-tag2">크레이지한<br/>썸머풀팩</div>
-      <div class="m-hero-tag3">한번에 왕창 예약해서 <b>30</b>% 절약해봐요</div>
-      <div class="m-hero-cta">80,000원·1일</div>
-    </div>
   </div>
 
   <!-- ② 취향직격 테마그룹 (Mobile) -->
@@ -1228,51 +1203,6 @@
     object-position: bottom;
     pointer-events: none;
   }
-  .d-hero-copy {
-    position: relative;
-    z-index: 10;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    margin-top: 48px;
-  }
-  .d-hero-line1 { display: flex; align-items: flex-end; gap: 12px; }
-  .d-hero-saengae {
-    font-family: var(--font-kr-heading);
-    font-size: 44px;
-    color: #f64572;
-    line-height: 1;
-  }
-  .d-hero-first {
-    font-family: var(--font-en-display);
-    font-size: 80px;
-    color: white;
-    line-height: 1;
-    font-style: italic;
-  }
-  .d-hero-rental {
-    font-family: var(--font-kr-heading);
-    font-size: 110px;
-    color: white;
-    letter-spacing: 4px;
-    line-height: 1;
-    text-shadow: 4px 4px 0 rgba(30,10,70,0.3);
-  }
-  .d-hero-badge {
-    background: rgba(255,33,136,0.7);
-    border: 2px solid rgba(255,255,255,0.3);
-    border-radius: 5px;
-    padding: 8px 32px;
-    margin-top: 4px;
-  }
-  .d-hero-badge-text {
-    font-family: var(--font-kr-heading);
-    font-size: 52px;
-    color: white;
-    letter-spacing: 4px;
-    text-shadow: 4px 4px 0 rgba(146,2,79,0.6);
-  }
 
   /* ── THEME GROUPS (취향직격 테마그룹) — PC ── */
   /* 다른 섹션과 동일하게 기본 중앙정렬(.section-head align-items:center) 유지 —
@@ -1819,19 +1749,6 @@
     height: 720px;
     background: #fdefc3;
   }
-  .m-hero-watermark {
-    position: absolute;
-    left: -24px;
-    top: 80px;
-    font-family: var(--font-kr-heading);
-    font-size: 60px;
-    color: #fff8e1;
-    opacity: 0.5;
-    line-height: 0.88;
-    white-space: nowrap;
-    pointer-events: none;
-    user-select: none;
-  }
   .m-hero-bg {
     position: absolute;
     top: 20px;
@@ -1841,69 +1758,6 @@
     object-fit: cover;
     object-position: top;
     pointer-events: none;
-  }
-  .m-hero-stripes {
-    position: absolute;
-    left: 0; right: 0;
-    bottom: 82px;
-    display: flex;
-    flex-direction: column;
-  }
-  .m-hero-overlay {
-    position: absolute;
-    left: 0;
-    bottom: 72px;
-    width: 100%;
-    height: 340px;
-    object-fit: cover;
-    object-position: top;
-    pointer-events: none;
-  }
-  .m-hero-copy {
-    position: absolute;
-    left: 28px;
-    bottom: 140px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .m-hero-tag1 {
-    background: #ff9581;
-    padding: 4px 16px;
-    align-self: flex-start;
-    font-family: var(--font-kr);
-    font-size: 22px;
-    color: white;
-    font-weight: 500;
-  }
-  .m-hero-tag2 {
-    background: rgba(250,232,177,0.5);
-    padding: 4px 8px;
-    font-family: var(--font-kr-heading);
-    font-size: 38px;
-    color: white;
-    line-height: 1.3;
-  }
-  .m-hero-tag3 {
-    background: #02c5f1;
-    padding: 4px 16px;
-    align-self: flex-start;
-    font-family: var(--font-kr);
-    font-size: 17px;
-    color: white;
-    font-weight: 500;
-  }
-  .m-hero-tag3 b { font-size: 19px; font-weight: 700; }
-  .m-hero-cta {
-    background: #d30071;
-    padding: 8px 20px;
-    border-radius: 15px;
-    align-self: flex-start;
-    margin-top: 4px;
-    font-family: var(--font-kr);
-    font-size: 22px;
-    color: white;
-    font-weight: 900;
   }
 
   /* ── SNAP SLIDER ── */
