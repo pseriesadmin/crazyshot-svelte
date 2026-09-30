@@ -79,7 +79,7 @@ export const BENEFIT_DEFS: Record<BenefitType, BenefitTypeDef> = {
   LOYALTY_POINTS: {
     type: 'LOYALTY_POINTS',
     label: '적립포인트',
-    description: '결제 금액의 일정 비율을 포인트로 추가 적립합니다.',
+    description: '구독료 결제 시 이 적립률로 포인트를 추가 적립합니다. 렌탈 완료 시에도 공통 적립 규칙(렌탈 완료)과 별개로 이 적립률만큼 추가 적립됩니다(더블 적립).',
     fields: [
       { key: 'points_rate', label: '적립률', type: 'number', unit: '%', defaultValue: 2 },
       { key: 'min_purchase_amount', label: '최소 적립 기준금액', type: 'number', unit: '원', defaultValue: 10000 },
