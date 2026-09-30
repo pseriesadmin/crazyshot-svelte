@@ -183,16 +183,23 @@
     setTimeout(() => { poppingTab = null }, 700)
   }
 
-  // 취향직격 테마 원형탭(PC) — 최대 3개만 노출, 나머지는 슬라이드로 이동
-  let themeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
-  function scrollThemeTabs(dir: 'left' | 'right') {
-    themeTabsEl?.scrollBy({ left: dir === 'right' ? 210 : -210, behavior: 'smooth' })
-  }
+  // 취향직격 테마 원형탭(PC) — 좌우 화살표 제거(2026-09-30), 가로 스크롤(드래그·트랙패드)만 유지
+  let themeTabsEl: HTMLDivElement | undefined = $state()
 
-  // 취향직격 테마 원형탭(Mobile) — PC와 동일 구조(activeThemeId 공유, 3개 초과 시 화살표)
-  let mThemeTabsEl: { scrollBy: (opts: { left: number; behavior: 'smooth' | 'instant' | 'auto' }) => void } | undefined = $state()
-  function scrollMThemeTabs(dir: 'left' | 'right') {
-    mThemeTabsEl?.scrollBy({ left: dir === 'right' ? 165 : -165, behavior: 'smooth' })
+  // 취향직격 테마 원형탭(Mobile) — PC와 동일 구조(activeThemeId 공유)
+  let mThemeTabsEl: HTMLDivElement | undefined = $state()
+
+  // 선택한 원형 탭을 스크롤 트랙 중앙으로 부드럽게 이동 — PC·모바일 동일 동작
+  // scrollIntoView({inline:'center'})는 브라우저별 편차가 있어(특히 Safari), 컨테이너·타겟의
+  // 현재 위치를 직접 계산해 scrollBy로 이동 — 가장자리 항목은 스크롤 한계까지만 이동(자연스러운 clamping).
+  function selectTheme(id: string, target: HTMLElement) {
+    activeThemeId = id
+    const container = target.closest<HTMLElement>('.theme-circle-tabs, .m-theme-circle-tabs')
+    if (!container) return
+    const containerRect = container.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const delta = (targetRect.left + targetRect.width / 2) - (containerRect.left + containerRect.width / 2)
+    container.scrollBy({ left: delta, behavior: 'smooth' })
   }
 
   let pkgSliderEl: { scrollLeft: number } | undefined
@@ -305,17 +312,10 @@
 
       {#if data.themeGroups && data.themeGroups.length > 0}
         <div class="theme-circle-tabs-wrap">
-          {#if data.themeGroups.length > 3}
-            <button class="theme-tabs-arrow left" onclick={() => scrollThemeTabs('left')} aria-label="이전 테마">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M15 18l-6-6 6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          {/if}
           <div class="theme-circle-tabs" class:theme-circle-tabs--capped={data.themeGroups.length > 3} bind:this={themeTabsEl}>
             {#each data.themeGroups as tg, i}
               {@const isActive = (activeThemeId ?? data.themeGroups[0].id) === tg.id}
-              <button class="theme-circle-tab" onclick={() => (activeThemeId = tg.id)} type="button" aria-pressed={isActive}>
+              <button class="theme-circle-tab" onclick={(e) => selectTheme(tg.id, e.currentTarget as HTMLElement)} type="button" aria-pressed={isActive}>
                 <div class="theme-hl-card theme-hl-card--circle" class:is-active={isActive}>
                   {#if tg.image_url}
                     <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
@@ -336,13 +336,6 @@
               </button>
             {/each}
           </div>
-          {#if data.themeGroups.length > 3}
-            <button class="theme-tabs-arrow right" onclick={() => scrollThemeTabs('right')} aria-label="다음 테마">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M9 18l6-6-6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          {/if}
         </div>
       {:else}
         <!-- 테마그룹 0개 — 레이아웃 자리 유지용 샘플 원형탭(모든 방문자에게 노출, 신규 등록 시 가려짐) -->
@@ -677,17 +670,10 @@
     {#if data.themeGroups && data.themeGroups.length > 0}
       <!-- PC와 동일 구조: 원형 탭 선택 시 하나의 상품슬라이드만 전환(그룹마다 반복 아님) -->
       <div class="m-theme-circle-tabs-wrap">
-        {#if data.themeGroups.length > 3}
-          <button class="m-theme-tabs-arrow left" onclick={() => scrollMThemeTabs('left')} aria-label="이전 테마">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M15 18l-6-6 6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        {/if}
         <div class="m-theme-circle-tabs" class:m-theme-circle-tabs--capped={data.themeGroups.length > 3} bind:this={mThemeTabsEl}>
           {#each data.themeGroups as tg}
             {@const isActive = (activeThemeId ?? data.themeGroups[0].id) === tg.id}
-            <button class="theme-circle-tab" onclick={() => (activeThemeId = tg.id)} type="button" aria-pressed={isActive}>
+            <button class="theme-circle-tab" onclick={(e) => selectTheme(tg.id, e.currentTarget as HTMLElement)} type="button" aria-pressed={isActive}>
               <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle" class:is-active={isActive}>
                 {#if tg.image_url}
                   <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
@@ -707,13 +693,6 @@
             </button>
           {/each}
         </div>
-        {#if data.themeGroups.length > 3}
-          <button class="m-theme-tabs-arrow right" onclick={() => scrollMThemeTabs('right')} aria-label="다음 테마">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M9 18l6-6-6-6" stroke={navy} stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        {/if}
       </div>
 
       {#if activeThemeProducts.length > 0}
@@ -1351,41 +1330,40 @@
     text-align: center;
     line-height: 1.6;
   }
-  /* 원형탭 슬라이드 — 3개 초과 시 슬라이드 화살표로 이동(.theme-circle-tabs--capped) */
+  /* 원형탭 슬라이드 — 3개 초과 시 가로 스크롤(드래그·트랙패드)로 이동(.theme-circle-tabs--capped) */
   /* 탭 그룹(.theme-circle-tabs)을 래퍼 폭 안에서 중앙 정렬 — 모바일(.m-theme-circle-tabs-wrap)과
      동일한 좌측 쏠림 문제가 PC에도 동일하게 있어 동일 처리(2026-08-26) */
   .theme-circle-tabs-wrap { position: relative; display: flex; justify-content: center; }
-  .theme-tabs-arrow {
-    position: absolute;
-    top: 90px; /* 180px 원형 이미지의 세로 중앙 */
-    transform: translateY(-50%);
-    z-index: 10;
-    width: 40px; height: 40px;
-    min-width: 44px; min-height: 44px;
-    border-radius: 9999px;
-    background: white;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    transition: transform 0.15s;
-  }
-  .theme-tabs-arrow:hover { transform: translateY(-50%) scale(1.1); }
-  .theme-tabs-arrow.left  { left: -22px; }
-  .theme-tabs-arrow.right { right: -22px; }
   .theme-circle-tabs {
     display: flex;
     gap: 30px;
     align-items: center;
     overflow-x: auto;
-    padding-bottom: 4px;
+    /* overflow-x:auto가 지정되면 overflow-y도 자동으로 auto가 되어(CSS 스펙),
+       선택 시 스프링 바운스가 정점에서 1.32배까지 커지는 만큼(180px×0.32÷2=28.8px) 위아래
+       여백이 없으면 상단이 스크롤 컨테이너에 잘려 보인다 — 그만큼 패딩 확보
+       (2026-09-30, 2026-10-01 바운스 정점 1.32배 기준으로 재조정) */
+    /* 좌우 여유 패딩(2026-09-30) — 맨 앞·맨 뒤 항목을 선택해 중앙으로 이동시키려 해도
+       스크롤 가능 범위가 부족해 0(또는 최대치)에서 클램핑돼 중앙에 못 미치던 문제 보정.
+       선택 시 중앙 정렬이 가능하도록 양옆에 미리 스크롤 여유 공간을 확보한다.
+       box-sizing:border-box 필수 — 아니면 .theme-circle-tabs--capped의 max-width(600px)에
+       이 패딩(400px)이 더해져 캡 자체가 무력화된다. */
+    padding: 29px 200px;
+    box-sizing: border-box;
   }
   .theme-circle-tabs::-webkit-scrollbar { display: none; }
   /* 테마 3개 초과 시 한 화면에 3개만 노출(180px 원형×3 + gap 30px×2) */
   .theme-circle-tabs--capped {
     max-width: 600px;
+    /* 캡(3개만 노출) 모드에서는 좌우 200px 센터링 여유 패딩을 그대로 두면 max-width(600px)
+       안에서 실제 보이는 영역이 200px로 줄어 "3개만 노출" 의도가 깨진다 — 이 모드에서는
+       기존 마스크 페이드 폭(30px)만큼만 여유를 둬 3개 노출 폭을 그대로 유지한다.
+       2026-09-30 Stephen 확정(1번 안): 그 결과 가장자리(맨 앞·맨 뒤) 항목 선택 시 완전한
+       중앙 이동은 스크롤 한계에서 자연 클램핑돼 제한될 수 있음 — "3개만 노출" 디자인
+       유지를 우선한 의도된 절충이며, 추후 세션에서 재차 "중앙 이동이 안 된다"며 패딩을
+       늘리는 시도를 반복하지 말 것(2번 안·완전 중앙 이동 우선은 이미 검토 후 폐기됨). */
+    padding-left: 30px;
+    padding-right: 30px;
     scroll-snap-type: x proximity;
     /* 좌우 끝을 투명하게 페이드 — 스크롤 중 카드가 컨테이너 경계에서 뚝 잘려나가는
        느낌 대신 배경으로 부드럽게 스며드는 것처럼 보이게 함 */
@@ -1415,12 +1393,39 @@
     height: 180px;
     border-radius: 40px;
     flex-shrink: 0;
+    /* 원 전체를 통째로 확대 — 이미지만 확대하면 object-fit:cover 특성상 중심에서 먼
+       가장자리(얼굴·손 등)가 원 밖으로 밀려나 잘려나감. 원(컨테이너) 자체를 키우면
+       이미지도 함께 그대로 커져서 잘림 없이 확대된다. 2026-09-30.
+       텐션감 있는 스프링 이징(빠르게 튀어나왔다 살짝 안착) — PC·모바일 공용(동일 클래스). */
+    transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .theme-hl-card-img {
     position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-    transition: transform 0.4s ease;
   }
-  .theme-hl-card:hover .theme-hl-card-img { transform: scale(1.25); }
+  /* 선택된 원형이 있으면 나머지 원형은 10% 축소 — 선택된 것이 상대적으로 더 크게
+     주목되도록 함(PC .theme-circle-tabs / 모바일 .m-theme-circle-tabs 공용 규칙) */
+  .theme-circle-tabs:has(.theme-hl-card.is-active) .theme-hl-card:not(.is-active),
+  .m-theme-circle-tabs:has(.theme-hl-card.is-active) .theme-hl-card:not(.is-active) {
+    transform: scale(0.9);
+  }
+  .theme-hl-card:hover,
+  .theme-hl-card.is-active {
+    transform: scale(1.2);
+    z-index: 1;
+  }
+  /* 선택 시 탱탱볼처럼 한 번 튕겨 올랐다 안착하는 스프링 바운스 — 목표(1.2배)를 살짝
+     넘겼다 되돌아오며 정착(2026-10-01). forwards 없이도 애니메이션 종료 시 위 규칙의
+     scale(1.2)로 자연 복귀돼 끊김이 없다. */
+  @keyframes theme-circle-bounce {
+    0%   { transform: scale(1); }
+    45%  { transform: scale(1.32); }
+    65%  { transform: scale(1.12); }
+    85%  { transform: scale(1.23); }
+    100% { transform: scale(1.2); }
+  }
+  .theme-hl-card.is-active {
+    animation: theme-circle-bounce 0.45s cubic-bezier(0.34, 0.8, 0.64, 1);
+  }
   .theme-group-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
   /* 테마 대표이미지 원형 아바타 변형(관리모달 등록 형태와 통일) — 텍스트는 카드 밖 아래에 별도 표시 */
   .theme-hl-card--circle { border-radius: 50%; }
@@ -1431,11 +1436,25 @@
     gap: 5px;
     text-align: center;
     line-height: 1.6;
+    transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .theme-circle-name { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: #201857; letter-spacing: -0.5px; }
   .theme-circle-sub  { font-family: var(--font-kr); font-size: 14px; font-weight: 500; color: #201857; letter-spacing: -0.5px; }
   /* Figma가 원본 Polygon6 경로에 적용한 rotate-180과 동일 — 경로 자체는 원본 그대로 유지 */
-  .theme-tab-polygon { flex-shrink: 0; transform: rotate(180deg); }
+  .theme-tab-polygon {
+    flex-shrink: 0;
+    transform: rotate(180deg);
+    transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  /* 선택된 원형이 1.2배로 커지는 만큼(반지름 증가분) 아래 텍스트·폴리곤도 함께 내려가
+     확대와 동시에 자연스럽게 간격이 벌어지도록 함 — PC 180px 기준 18px, 모바일 140px 기준 14px */
+  .theme-circle-tab:has(.theme-hl-card.is-active) .theme-circle-info { transform: translateY(18px); }
+  /* ⚠️ translateY를 rotate보다 앞(바깥쪽)에 둬야 함 — rotate(180deg) translateY(...) 순서로
+     쓰면 이동이 회전 이전 좌표계에서 계산된 뒤 180도째 뒤집혀 방향이 반전된다(아래로 이동
+     시키려다 위로 튀어오르는 결함, 2026-09-30 실사용 중 발견). */
+  .theme-circle-tab:has(.theme-hl-card.is-active) .theme-tab-polygon { transform: translateY(18px) rotate(180deg); }
+  .theme-circle-tab:has(.theme-hl-card--m.is-active) .theme-circle-info { transform: translateY(14px); }
+  .theme-circle-tab:has(.theme-hl-card--m.is-active) .theme-tab-polygon { transform: translateY(14px) rotate(180deg); }
   /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 prod-card를 재사용(.prod-slider/.prod-card) —
      그룹별로 독립적인 가로 스크롤 슬라이드 */
   .theme-prod-slider { padding-left: 0; }
@@ -1479,40 +1498,35 @@
      원형이 깨짐(실사용 중 발견: 모바일 테마 아바타가 완전한 원이 아닌 둥근 사각형으로 렌더링) */
   .theme-hl-card--m.theme-hl-card--circle { border-radius: 50%; }
 
-  /* 원형탭 슬라이드(Mobile) — PC(.theme-circle-tabs)와 동일 구조·동일 3개 초과 기준,
-     원형 크기(140px)만 모바일 규격으로 축소 */
+  /* 원형탭 슬라이드(Mobile) — PC(.theme-circle-tabs)와 동일 구조, 원형 크기(140px)만
+     모바일 규격으로 축소. 좌우 화살표 제거(2026-09-30) — 가로 스크롤(터치)만으로 이동 */
   /* 좌측으로 쏠려 보이던 문제 해소 — 탭 그룹(.m-theme-circle-tabs)을 래퍼 폭 안에서 중앙
-     정렬. 화살표 버튼은 absolute라 flex 정렬 영향을 받지 않음(2026-08-26 실사용 중 발견) */
+     정렬(2026-08-26 실사용 중 발견) */
   .m-theme-circle-tabs-wrap { position: relative; width: 100%; display: flex; justify-content: center; }
-  .m-theme-tabs-arrow {
-    position: absolute;
-    top: 70px; /* 140px 원형 이미지의 세로 중앙 */
-    transform: translateY(-50%);
-    z-index: 10;
-    width: 32px; height: 32px;
-    min-width: 44px; min-height: 44px;
-    border-radius: 9999px;
-    background: white;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-  }
-  .m-theme-tabs-arrow.left  { left: -14px; }
-  .m-theme-tabs-arrow.right { right: -14px; }
   .m-theme-circle-tabs {
     display: flex;
     gap: 20px;
     align-items: center;
     overflow-x: auto;
-    padding-bottom: 4px;
+    /* 선택 시 스프링 바운스 정점(1.32배) 기준(140px×0.32÷2=22.4px) — hover/active 확대 시
+       상단 잘림 방지(2026-09-30, 2026-10-01 바운스 정점 기준으로 재조정) */
+    /* 좌우 여유 패딩(2026-10-01) — 맨 앞·맨 뒤 항목 선택 시 화면 정중앙까지 이동 가능하도록
+       확보(모바일 실사용 폭 ~365px 기준 필요치 ~113px + 여유). max-width로 패딩만큼 폭을
+       늘려 "따라잡으려는" 방식은 패딩을 늘릴수록 필요 패딩도 함께 커지는 자기모순이라
+       성립하지 않음(2026-10-01 실측 확인) — 그래서 .m-theme-circle-tabs--capped는 별도
+       max-width 없이 이 자연폭 그대로를 사용한다. */
+    padding: 23px 120px;
+    box-sizing: border-box;
   }
   .m-theme-circle-tabs::-webkit-scrollbar { display: none; }
   /* 테마 3개 초과 시 한 화면에 3개만 노출(140px 원형×3 + gap 20px×2) */
+  /* 2026-10-01 Stephen 확정 — 모바일은 PC와 달리 "3개만 노출" 디자인보다 "선택 원형이
+     항상 화면 정중앙으로 이동"을 우선한다(2번 안, 모바일 전용). PC(.theme-circle-tabs--capped)는
+     1번 안(부분 클램핑 허용) 그대로 유지 — 이 결정은 모바일에만 적용된다.
+     ⚠️ max-width로 폭을 인위적으로 제한하지 않는다 — base .m-theme-circle-tabs의 자연폭 +
+     120px 패딩을 그대로 사용(패딩만큼 max-width도 함께 늘리는 방식은 늘릴수록 필요 패딩도
+     커지는 자기모순이라 성립하지 않음이 실측으로 확인됨, 2026-10-01). */
   .m-theme-circle-tabs--capped {
-    max-width: 460px;
     scroll-snap-type: x proximity;
     /* 좌우 끝을 투명하게 페이드 — PC(.theme-circle-tabs--capped)와 동일 원리, 모바일 규격만 축소 */
     mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
