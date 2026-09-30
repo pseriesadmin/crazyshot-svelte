@@ -7,6 +7,7 @@
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
+  import { calcEarnPoints } from '$lib/utils/cartEarnPoints';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
@@ -1882,8 +1883,12 @@
     itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase')
   )
 
-  // 적립 예정 포인트 (5%)
-  const otEarnPoints = $derived(Math.round(otTotal * 0.05))
+  // 적립 예정 포인트 — CMS 적립 규칙(point_earn_rules, rental_complete)의 적립률 × 서버 지급 기준 금액.
+  // 서버 award_rental_complete_points는 order_items.line_total(대여료+옵션료, 멤버십 할인·배송비·휴무일
+  // 추가금·쿠폰·포인트 사용 차감 전) 합계에 rate를 곱하고, 판매전용(구매) 라인은 반납 전이가 없어
+  // 적립 대상이 아니다 → 화면도 같은 금액(otRentalOnlySubtotal)을 기준으로 한다.
+  // 규칙이 없거나 비활성이면(earnRate=null) 0p — 임의 비율로 추정하지 않는다.
+  const otEarnPoints = $derived(calcEarnPoints(otRentalOnlySubtotal, data.earnRate))
 
   // 쿠폰 만료까지 남은 일수 (CouponRow "N일 뒤 소멸" 표기용)
   // relative_days 모드: first_viewed_at + valid_days 기준 계산 (first_viewed_at=null이면 0 반환)

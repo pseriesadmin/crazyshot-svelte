@@ -1,4 +1,7 @@
 import { redirect } from '@sveltejs/kit'
+import { createClient } from '@supabase/supabase-js'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
@@ -600,6 +603,27 @@ export const load: PageServerLoad = async ({ locals }) => {
     return result.ok
   })
 
+  // 적립 예정 포인트 표시용 적립률 — CMS "적립 규칙"(point_earn_rules, rental_complete)이 정본.
+  // RLS가 CMS 계정만 SELECT를 허용하므로 서버에서 service_role로만 읽는다(키는 서버 밖으로 나가지 않음).
+  // 규칙이 없거나 비활성·조회 실패면 null → 화면은 0p로 표시(임의 비율로 추정하지 않는다).
+  let earnRate: number | null = null
+  try {
+    const earnAdmin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    const { data: earnRule, error: earnRuleError } = await earnAdmin
+      .from('point_earn_rules')
+      .select('rate, is_active')
+      .eq('event_type', 'rental_complete')
+      .maybeSingle()
+    if (earnRuleError) {
+      console.error('[cart] point_earn_rules 조회 실패', earnRuleError)
+    } else if (earnRule && earnRule.is_active === true) {
+      const rate = Number(earnRule.rate)
+      if (Number.isFinite(rate) && rate > 0) earnRate = rate
+    }
+  } catch (e) {
+    console.error('[cart] point_earn_rules 조회 예외', e)
+  }
+
   return {
     deliveryOptions,
     pickupPoints,
@@ -617,6 +641,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     availableStock,
     productPriceRules,
     depositTotal,
+    earnRate,
     calcTotal,
     calcDiscount,
     calcFinal,
