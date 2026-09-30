@@ -2,6 +2,8 @@
   import { enhance } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { MyPost } from './+page.server'
@@ -39,6 +41,9 @@
     { value: 'other',   label: '기타' },
   ]
 
+  const CATEGORY_OPTIONS: SuggestPickerOption[] = CATEGORIES.map((c) => ({ id: c.value, label: c.label }))
+
+  let categoryId  = $state<string | null>('general')
   let showForm    = $state(false)
   let expandedId  = $state<string | null>(null)
   let isSubmitting = $state(false)
@@ -94,11 +99,26 @@
 
           <div class="field">
             <label class="field-label" for="inq-category">카테고리</label>
-            <select id="inq-category" name="category" class="field-select">
-              {#each CATEGORIES as cat}
-                <option value={cat.value}>{cat.label}</option>
-              {/each}
-            </select>
+            <!-- <select> 대체 표준 — 서버에는 선택된 카테고리 id만 hidden으로 전송 -->
+            <input type="hidden" name="category" value={categoryId ?? 'general'} />
+            <SuggestPicker
+              id="inq-category"
+              variant="generic"
+              bind:selectedId={categoryId}
+              options={CATEGORY_OPTIONS}
+              placeholder="카테고리 선택"
+            >
+              {#snippet field(c)}
+                <input type="text" class="field-input" role="combobox"
+                  id={c.id} value={c.value} placeholder={c.placeholder}
+                  oninput={c.oninput} onkeydown={c.onkeydown}
+                  onfocus={c.onfocus} onblur={c.onblur}
+                  aria-autocomplete={c.ariaAutocomplete}
+                  aria-expanded={c.ariaExpanded}
+                  aria-controls={c.ariaControls}
+                  autocomplete="off" />
+              {/snippet}
+            </SuggestPicker>
           </div>
 
           <div class="field">
@@ -293,7 +313,6 @@
   .req { color: var(--cs-orange); }
 
   .field-input,
-  .field-select,
   .field-textarea {
     width: 100%;
     padding: 10px 14px;
@@ -306,7 +325,6 @@
     box-sizing: border-box;
   }
   .field-input:focus,
-  .field-select:focus,
   .field-textarea:focus {
     outline: 2px solid var(--cs-purple);
     outline-offset: -2px;
