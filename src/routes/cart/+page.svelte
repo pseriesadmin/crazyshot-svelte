@@ -2767,7 +2767,7 @@
           </button>
           <button class="delete-btn" onclick={() => removeItem(item)} aria-label="삭제">
             <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
-              <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+              <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="var(--cs-text-light)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
             </svg>
           </button>
         </div>
@@ -2900,7 +2900,7 @@
       </button>
       <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
         <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
-          <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="#AAAAAA" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+          <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="var(--cs-text-light)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
         </svg>
       </button>
     </div>
@@ -3601,7 +3601,7 @@
   :global(body) {
     margin: 0;
     font-family: var(--font-kr);
-    background: #ECEBF4;
+    background: var(--cs-lilac);
   }
 
   .cart-root {
@@ -3612,7 +3612,7 @@
        .cart-footer의 env(safe-area-inset-bottom)는 별개의 "고정 하단바 전용" 패턴이라
        이 규칙과 무관, 그대로 유지. */
     min-height: 100dvh;
-    background: #ECEBF4;
+    background: var(--cs-lilac);
     display: flex;
     flex-direction: column;
     font-family: var(--font-kr);
@@ -3731,7 +3731,7 @@
   .sec-title {
     font-family: var(--font-en-display);
     font-size: 20px;
-    color: #100B32;
+    color: var(--cs-text);
     line-height: 1.6;
   }
   /* ══ 모바일 전용(<641px) 카트 목록 — 상품별 개별 카드 (기존 레이아웃) ══ */
@@ -3976,7 +3976,7 @@
     text-align: center;
   }
   .empty-icon { width: 56px; height: auto; flex-shrink: 0; }
-  .empty-text { color: #AAAAAA; font-size: 16px; font-weight: 500; }
+  .empty-text { color: var(--cs-text-light); font-size: 16px; font-weight: 500; }
 
   /* Card top row (모바일 개별 카드 전용) */
   .card-top-row {
@@ -4043,7 +4043,7 @@
     /* 2026-08-18: 한 단계 큰 토큰으로 교체(--text-m-title-18B 18px Bold →
        --text-m-htitle-24B 24px Black) — font 축약형이 weight/line-height도 함께 지정 */
     font: var(--text-m-htitle-24B);
-    color: #100B32;
+    color: var(--cs-text);
     letter-spacing: -0.3px;
     margin: 0 0 5px;
     word-break: break-word;
@@ -4097,7 +4097,7 @@
   .option-subcard-name {
     font-size: 18px;
     font-weight: 700;
-    color: #100B32;
+    color: var(--cs-text);
     line-height: 1.6;
     letter-spacing: -0.3px;
     margin: 0;
@@ -4308,12 +4308,12 @@
   }
   .qty-arrow:hover { background: #F0F0F0; }
   .qty-num {
-    background: #ECEBF4;
+    background: var(--cs-lilac);
     border-radius: 10px;
     padding: 10px 20px;
     font-size: 14px;
     font-weight: 700;
-    color: #100B32;
+    color: var(--cs-text);
     letter-spacing: -0.5px;
     line-height: 2;
     min-width: 44px;
@@ -4461,7 +4461,7 @@
   .form-section-label {
     font-size: 16px;
     font-weight: 500;
-    color: #444444;
+    color: var(--cs-text-dark);
     letter-spacing: -0.5px;
     line-height: 1.6;
   }
@@ -4491,7 +4491,7 @@
   .form-note {
     font-size: 14px;
     font-weight: 700;
-    color: #AAAAAA;
+    color: var(--cs-text-light);
     letter-spacing: -0.5px;
     line-height: 2;
     margin: 0;
@@ -4503,7 +4503,7 @@
   .form-note-sm {
     font-size: 12px;
     font-weight: 500;
-    color: #AAAAAA;
+    color: var(--cs-text-light);
     letter-spacing: -0.5px;
     line-height: 1.6;
     margin: 0;
@@ -4914,7 +4914,7 @@
 
   /* Form inputs */
   .f-input {
-    background: #F6F6F6;
+    background: var(--cs-surface-gray);
     border: none;
     border-radius: 15px;
     padding: 10px 20px;
@@ -4927,13 +4927,13 @@
     box-sizing: border-box;
     min-height: 44px;
   }
-  .f-input::placeholder { color: #B6B6B6; }
-  .f-input:focus { outline: 2px solid #3B2F8A; outline-offset: -2px; }
+  .f-input::placeholder { color: var(--cs-text-placeholder); }
+  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   .f-input:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ══ Coupon Row ══ (CouponRow 스니펫 — 2026-08-24 장바구니 체크아웃에 다시 노출) */
   .coupon-row {
-    background: #F6F6F6;
+    background: var(--cs-surface-gray);
     border-radius: 20px;
     display: flex;
     align-items: center;
@@ -5013,7 +5013,7 @@
   .price-period-label {
     font-size: 16px;
     font-weight: 700;
-    color: #AAAAAA;
+    color: var(--cs-text-light);
     letter-spacing: -0.5px;
     line-height: 1.6;
   }
@@ -5029,7 +5029,7 @@
      기존에도 breakpoint별 font-size 분기가 없어 그대로 양쪽에 적용됨). 총 약정요금
      다크박스(.total-num/.total-points-num)는 별도로 700 유지 — 아래 해당 규칙 참고. */
   .period-num { font-size: 18px; font-weight: 500; font-family: var(--font-en-d-din); color: #444; letter-spacing: -0.3px; }
-  .period-unit { font-size: 16px; font-weight: 700; color: #AAAAAA; letter-spacing: -0.5px; }
+  .period-unit { font-size: 16px; font-weight: 700; color: var(--cs-text-light); letter-spacing: -0.5px; }
   .price-row {
     display: flex;
     align-items: center;
@@ -5038,7 +5038,7 @@
   .price-row-label {
     font-size: 14px;
     font-weight: 700;
-    color: #AAAAAA;
+    color: var(--cs-text-light);
     letter-spacing: -0.5px;
     line-height: 2;
   }
@@ -5046,13 +5046,13 @@
   .price-row-right { display: flex; align-items: center; gap: 15px; }
   .price-row-val { font-size: 16px; font-weight: 500; font-family: var(--font-en-d-din); color: #444; line-height: 1.6; }
   .price-row-val-large { }
-  .price-row-unit { font-size: 14px; font-weight: 700; color: #AAAAAA; line-height: 2; }
-  .price-divider { background: #AAAAAA; height: 1px; width: 100%; margin: 5px 0; }
+  .price-row-unit { font-size: 14px; font-weight: 700; color: var(--cs-text-light); line-height: 2; }
+  .price-divider { background: var(--cs-text-light); height: 1px; width: 100%; margin: 5px 0; }
   .points-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    color: #553FE0;
+    color: var(--cs-purple-light);
   }
   .points-label { font-size: 14px; font-weight: 700; line-height: 2; }
   .points-value { display: flex; align-items: center; gap: 15px; padding: 0 20px; }
@@ -5074,7 +5074,7 @@
     background: var(--cs-white, #fff);
   }
   .total-gray-section {
-    background: #F6F6F6;
+    background: var(--cs-surface-gray);
     padding: 40px;
     display: flex;
     flex-direction: column;
@@ -5096,7 +5096,7 @@
   }
 
   .total-dark-box {
-    background: #100B32;
+    background: var(--cs-dark);
     /* app.css --radius-xl(30px, "총금액 박스·CTA 버튼")와 일치 — PC 30px인데 모바일만
        20px로 갈라져 있던 파편화도 함께 정리(모바일 오버라이드 제거, 2026-08-17) */
     border-radius: var(--radius-xl, 30px);
@@ -5136,7 +5136,7 @@
   .total-num { font-size: 18px; color: white; letter-spacing: -0.3px; font-family: var(--font-en-d-din); }
   .total-unit { font-size: 14px; color: white; line-height: 2; }
   .total-points-row { }
-  .total-points-label { font-size: 14px; font-weight: 700; color: #C1BBEC; line-height: 2; }
+  .total-points-label { font-size: 14px; font-weight: 700; color: var(--cs-purple-pale); line-height: 2; }
   .total-points-val {
     display: flex;
     align-items: center;
@@ -5144,7 +5144,7 @@
     padding: 0 20px;
     font-size: 16px;
     font-weight: 700;
-    color: #C1BBEC;
+    color: var(--cs-purple-pale);
     line-height: 1.6;
   }
   .total-points-num { font-family: var(--font-en-d-din); }
@@ -5446,7 +5446,7 @@
     color: white;
   }
   .footer-cta-active {
-    background: #3B2F8A;
+    background: var(--cs-purple);
     box-shadow: 0 4px 15px rgba(59,47,138,0.3);
   }
   .footer-cta-active:hover { background: #4A3BA8; }
