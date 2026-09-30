@@ -41,6 +41,107 @@ Stephen 확정 정책:
 QA 결과(2026-09-30): 블로킹 0 / MEDIUM 4 / LOW 5. 조치: [해소] 마이그레이션 #584 파일에 ROLLBACK 섹션 추가, 라이브 테스트 SV-7(배송 잠금)·SV-8/9(옵션 조합) 추가(총 9건 GREEN). [Stephen 결정 대기] ① cart/+page.server.ts의 `is_free` 옵션 변경(optionIsFreeMap, 다른 세션 작성 — Stephen이 2차 검수 대상에 포함 지시) → 2차 QA: 🔴 BLOCKING 1건(B-1: 서버 compute_reservation_line_amount에 is_free 처리가 없어, 12h 있는 상품+무료옵션(12h 활성 규칙 보유)+반나절 블록(예 25h)이면 화면 0원 vs 서버 옵션 12h 정가 청구 — (B)가 '일관된 과청구'를 '안 보이는 불일치'로 바꿈, Stage 현재 데이터는 해당 규칙이 soft-delete라 미발현) + MEDIUM(무료 판정이 메인상품 범위 없음 / product_option_links deleted_at 필터 없음 / 예약 후 무료 토글 변경 시 기존 예약 불일치 / 회귀 테스트 없음) → 선택지: (가) (B)+서버 #585(is_free 옵션은 12h 제외) 한 세트 승인 (나) (B) 보류하고 (A)만 커밋(이 파일에서 (B) 분리 필요). → ✅ Stephen이 (가) 선택 — 위 [7]로 해소(서버 #585 + 클라이언트 본상품 범위 판정). Production에 product_option_links.is_free(#569) 적용 여부 미확인. [원 기록] 서버 함수에 is_free 처리가 없어 12h 있는 상품+무료옵션에서 화면(0)과 서버(12h 정가) 합계가 어긋날 수 있음 → 출처 세션 확인 필요, 이 파일 커밋 시 두 변경이 함께 들어감 / ② 서버 create_reservation_order 24h 없음 미차단(직접 API 호출 시 0원 라인) / ③ Production 적용 전 선행: Production 함수 정의·ACL 스냅샷 저장·Stage 대조(md5 c5dfeac7…), 12h 없는 활성 대여 부모 0개·삭제/비활성 요금만 있는 상품·진행중 예약 재확인, 적용 순서는 DB 먼저 → 코드 배포.
 git: Stephen 대기.
 
+## DONE — 🟢 ROUTINE: 테마그룹 관리 모달 검색UX 개편 + 상품검색 썸네일 폴백 보강 + 드래그버그 수정 + 홈 원형탭 인터랙션 개편 (2026-09-30~10-01, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·미디엄 0·로우 1건: +page.svelte의 themeTabsEl/mThemeTabsEl 미사용 바인딩, 차단 아님), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 실제로 수정한 파일만 기록 —
+`src/lib/components/hype-pack/HypePackThemeGroupModal.svelte`,
+`src/lib/components/home/admin/HomeThemeGroupModal.svelte`,
+`src/lib/components/cms/CmsDragList.svelte`,
+`src/routes/api/cms/products/search-suggestions/+server.ts`,
+`src/routes/+page.svelte`(홈). 다른 세션 소관 파일 무수정.
+
+수행 작업:
+  [1] 테마그룹 관리 모달(하입팩+홈 공용 패턴) — "상품 편집" 아코디언을 펼쳐야만 보이던 상품
+      검색 입력폼바를 서브카피 입력란 아래로 이동해 상시 노출(펼치지 않아도 바로 검색 가능),
+      펼침 버튼은 검색창 옆으로 이동해 "검색창+펼침 버튼" 한 줄 정렬. 상품 목록 자체는 기존
+      대로 펼침 버튼을 눌러야 보이는 아코디언 유지. 검색창 focus 시 해당 그룹을 자동으로
+      `activeGroupId`로 전환(activateGroup)해 여러 그룹의 검색창이 동시에 보여도 엉뚱한
+      그룹에 추가되지 않도록 안전장치 적용. SuggestPicker id를 그룹별로 유니크화
+      (`{prefix}-${g._tempId}`, 기존 정적 id로 여러 인스턴스 동시 마운트 시 DOM id 중복 방지).
+      홈 모달은 MAX_PRODUCTS(10개) 상한 안내도 비활성 그룹 기준(`g.productItems.length`)으로
+      정확히 표시되도록 보정.
+  [2] 홈 테마그룹 모달 검색창 UX 보정 — `.f-input` 표준(포커스 시 native outline)이 검색창으로
+      인식되기엔 애매하다는 피드백에 따라, 이 검색창 한정으로 평소에도 테두리를 두고 포커스
+      시 테두리색만 바뀌도록(`tg-search-f-input`) 보정 + 세로폭을 하입팩 모달 검색창과
+      동일(34px)하게 통일. `.f-input` 공용 표준 자체(다른 25+ 화면)는 무변경.
+  [3] 홈 테마그룹 모달 상품 행(`tg-prod-row`) 가로폭이 텍스트 길이만큼만 좁게 나오던 버그 —
+      `width:100%`로 목록 폭 전체를 채우도록 수정.
+  [4] `CmsDragList.svelte`(그룹 카드·상품 행 드래그 정렬 공용 컴포넌트) — 카드 전체에
+      `draggable="true"`가 걸려 있어, 카드 안 입력창에서 텍스트를 드래그 선택하면 그 제스처가
+      카드째로 dragstart로 잡혀 화면이 함께 딸려 움직이던 버그 수정. 드래그 시작이 `.drag-handle`
+      에서 일어난 경우에만 정렬을 시작하도록(`onDragStart`에 이벤트 target 검사 추가) — 이
+      컴포넌트를 쓰는 모든 화면(하입팩·홈 테마그룹 모달 등)에 공통 적용됨.
+  [5] `search-suggestions/+server.ts` 3차(MiniSearch 자연어) 폴백 검색 결과의 썸네일
+      `image_url: null` 고정 반환 결함 수정 — 이 폴백으로 새로 추가된 항목 id만 모아 단일
+      후속 조회(`products.image_urls, slug`)로 보강. 1차(ilike)·2차(동의어 확장) 경로는
+      원래부터 정상이라 영향 없음, 3차 폴백이 실제 발동될 때만 추가 쿼리 1회 실행.
+  [6] 홈(`/`) 원형 테마 탭(`theme-hl-card`) UI·인터랙션 개편:
+      - 좌우 화살표 버튼(`theme-tabs-arrow`/`m-theme-tabs-arrow`) 제거 — 클릭해도 동작은
+        정상이었으나 다른 세션의 이전 작업으로 이미 제거됐어야 할 요소가 남아있던 것으로
+        확인되어 PC·모바일 마크업+CSS+관련 스크롤 함수(`scrollThemeTabs`/`scrollMThemeTabs`)
+        전부 제거, `bind:this` 컨테이너 참조만 유지.
+      - 선택된 원이 1.2배로 확대(호버도 동일) + 텍스트·폴리곤 화살표가 확대분(PC 18px·
+        모바일 14px)만큼 함께 아래로 이동. `translateY`를 `rotate(180deg)`보다 CSS transform
+        리스트상 앞(바깥쪽)에 둬야 함 — 반대 순서로 쓰면 이동이 회전 이전 좌표계에서 계산된
+        뒤 180도째 뒤집혀 방향이 반전되는 결함을 발견해 수정.
+      - 선택된 원이 있으면 나머지 원은 0.9배로 축소(`:has(.theme-hl-card.is-active)`)해
+        선택 항목이 상대적으로 부각되도록 함.
+      - 선택 시 화면 정중앙으로 스크롤 이동(`selectTheme()`) — 최초 `scrollIntoView` 방식은
+        브라우저 편차 우려로, 컨테이너·타겟 좌표를 직접 계산해 `scrollBy`하는 방식으로 교체.
+      - PC/모바일 각각 좌우 스크롤 여유 패딩 확보(가장자리 항목도 중앙까지 이동 가능하도록) —
+        단 "3개 초과 시 3개만 노출" 캡 모드에서는 패딩만큼 `max-width`도 함께 늘리는 방식이
+        수학적으로 자기모순(패딩을 늘릴수록 필요 패딩도 함께 커짐)임을 실측으로 확인해 폐기.
+        최종: PC 캡 모드는 "3개만 노출" 디자인을 우선해 가장자리 항목의 부분 클램핑을 허용
+        (Stephen 확정, 1번 안) / 모바일 캡 모드는 반대로 정중앙 이동을 우선해 `max-width`
+        제한 자체를 제거하고 자연폭+패딩(120px)만 사용(Stephen 확정, 2번 안, 모바일 전용).
+      - 선택 시 탱탱볼처럼 목표치(1.2배)를 살짝 넘겼다(1.32배) 되돌아오며 안착하는 스프링
+        바운스 애니메이션(`@keyframes theme-circle-bounce`) 추가. 바운스 정점(1.32배) 기준
+        상하 잘림 방지 위해 스크롤 컨테이너 상하 패딩도 재계산(PC 18→29px, 모바일 14→23px).
+      - `.is-active` 클래스가 부여만 되고 실제 스타일 규칙이 전혀 없던 빈 훅이었음을 확인·해소.
+
+수정 파일: src/lib/components/hype-pack/HypePackThemeGroupModal.svelte,
+src/lib/components/home/admin/HomeThemeGroupModal.svelte,
+src/lib/components/cms/CmsDragList.svelte,
+src/routes/api/cms/products/search-suggestions/+server.ts,
+src/routes/+page.svelte
+git: Stephen 대기.
+
+## DONE — 🟢 ROUTINE: /hype-pack 모바일 UI 일괄 수정 6건 (2026-09-30, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·미디엄 0·로우 2건 모두 정보성, 조치 불요), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 실제로 수정한 파일만 기록 — `src/routes/hype-pack/+page.svelte`,
+`src/routes/hype-pack/+page.server.ts`, `src/routes/hype-pack/theme/[id]/+page.svelte`,
+`static/favicon.png`(신규). 다른 세션 소관 파일 무수정.
+
+수행 작업:
+  [1] "강렬하게 보기추천!" 서브뷰(`m-shotlog-posts`) 콘텐츠 연동 — 하드코딩 더미 3건 제거,
+      크레이지로그 `user_posts` 중 `log_type='상품리뷰'` + `status='published'` + `is_public=true`
+      게시글을 최신 30개 조회 후 셔플해 최대 10개 랜덤 노출(crazylog/+page.server.ts와 동일
+      패턴). 썸네일 카드 스타일도 크레이지로그 `m-article-card`(배경이미지+하단 그라데이션+
+      흰 텍스트)와 동일하게 통일. +page.server.ts에 `ShotlogPost`/추출 헬퍼 3종 신설, 서버
+      로드 결과에 `shotlogPosts` 추가.
+  [2] 위 서브뷰 상단 패딩 70px → 50px 조정(요청).
+  [3] `/favicon.png` 404 콘솔 오류 원인 분석 — 브라우저 기본 자동요청(`app.html`의 개별
+      `<link rel="icon">` 지정과 별개)이었음, `static/favicon.png` 신규 추가(기존
+      `app-icons/icon-32.png` 복사)로 해소.
+  [4] "Pack 테마목록" 좌측 상단 물음표 도움말 버튼(`m-help-btn`) — onclick 핸들러 없이 항상
+      아무 동작도 하지 않던 장식용 죽은 요소로 확인 후 마크업+CSS 완전 제거.
+  [5] 배너~"Pack 테마목록" 섹션 간 여백 50px→75px(50% 증가), "Pack 테마목록" 타이틀~카드 목록
+      간 여백 25px→37.5px(50% 증가), 카드(Idol Pack 등) 목록 항목 간 gap 15px→30px(100% 증가).
+  [6] `/hype-pack/theme/[id]` 결과 화면 — 모바일에서 좁은 해상도(예 360px대)일 때 `ProductDPCard`
+      고정폭(174px)+`gap:24px` flex-wrap 조합이 1열로 줄바꿈되던 버그 발견·수정. `/products`
+      `.m-prod-grid`·`SearchProductGrid.svelte`와 동일한 "래퍼 div + calc(50% - 5px)" 패턴을
+      `.theme-prod-item`으로 적용해 화면 폭과 무관하게 모바일 2열 고정.
+  [7] `Pack 테마그룹 관리` 모달 등록상품 썸네일 표시 원인 분석(코드 수정 없음, 분석만) —
+      `search-suggestions/+server.ts`의 3번째(MiniSearch 자연어) 폴백 검색 결과가 `image_url:
+      null`을 고정 반환해, 그 경로로 매칭된 상품은 모달에서 `/favicon.png` 대체 이미지로
+      표시됨(HypePackThemeGroupModal.svelte:430 `p.image_urls?.[0] ?? '/favicon.png'`). 수정은
+      아직 미착수 — 후속 확인 필요 시 별도 작업.
+
+수정 파일: src/routes/hype-pack/+page.svelte, src/routes/hype-pack/+page.server.ts,
+src/routes/hype-pack/theme/[id]/+page.svelte, static/favicon.png(신규)
+알려진 범위 외(분석만·미수정): search-suggestions API의 MiniSearch 폴백 image_url 누락 보강([7]).
+git: Stephen 대기.
+
 ## DONE — 🟢 ROUTINE: 상품상세 12H 요금 24h×0.7 잔재 계산 제거 (2026-09-30, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 정정본 재검수 완료(블로킹 0건), git commit은 Stephen 대기)
 
 ⚠️ 세션 스코프: 이 세션이 실제로 수정한 것은 `src/routes/products/[id]/+page.svelte`·`src/lib/components/products/CalendarTimePicker.svelte` 2개 파일(+ 이 기록). 검색 화면 12H 수정(0ab3718)은 이전 세션 산출물(이미 main·Vercel 운영 배포 완료)이라 재수정 없음.
