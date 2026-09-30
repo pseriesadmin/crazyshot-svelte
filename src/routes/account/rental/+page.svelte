@@ -403,7 +403,7 @@
 
 <style>
   .page-wrap {
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
     background: var(--cs-lilac);
     display: flex;
     flex-direction: column;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
 
   interface WishItem {
@@ -57,9 +58,7 @@
         <div class="section-right">
           <p class="section-count">{localCount}</p>
           <div class="chevron-wrap">
-            <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
-              <path d="M1 1L7 7L1 13" stroke="#444444" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/>
-            </svg>
+            <ChevronIcon size={8} color="var(--cs-text-dark)" />
           </div>
         </div>
       </div>

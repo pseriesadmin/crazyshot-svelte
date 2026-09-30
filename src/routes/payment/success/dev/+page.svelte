@@ -248,7 +248,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
     background: var(--cs-lilac);
     /* 모바일: 0 — 이전엔 여기 28px + .gnb-wrap 40px가 이중으로 쌓여 있어(둘 다 예전엔
        숨겨진 전역 GNB를 위한 여백), .gnb-wrap만 16px로 고쳐도 이 28px이 남아 표준

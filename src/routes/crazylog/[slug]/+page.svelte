@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
 	import { onMount } from 'svelte'
 	import { goto } from '$app/navigation'
 	import { supabase } from '$lib/services/supabase'
@@ -289,22 +290,7 @@
 				<span class="m-select-label" class:m-placeholder={!logType}>
 					{logType || '로그 타입 선택'}
 				</span>
-				<svg
-					class="m-select-arrow"
-					class:m-arrow-open={typeOpen}
-					width="8"
-					height="14"
-					viewBox="0 0 8 14"
-					fill="none"
-				>
-					<path
-						d="M1 1L7 7L1 13"
-						stroke="#444444"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					/>
-				</svg>
+				<ChevronIcon size={8} direction={typeOpen ? 'up' : 'down'} color="var(--cs-text-dark)" />
 			</button>
 			{#if typeOpen}
 				<ul class="m-dropdown" role="listbox">
@@ -582,22 +568,7 @@
 						<span class="d-select-label" class:d-placeholder={!logType}>
 							{logType || '로그 타입 선택'}
 						</span>
-						<svg
-							class="d-select-arrow"
-							class:d-arrow-open={typeOpen}
-							width="8"
-							height="14"
-							viewBox="0 0 8 14"
-							fill="none"
-						>
-							<path
-								d="M1 1L7 7L1 13"
-								stroke="#444444"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							/>
-						</svg>
+						<ChevronIcon size={8} direction={typeOpen ? 'up' : 'down'} color="var(--cs-text-dark)" />
 					</button>
 					{#if typeOpen}
 						<ul class="d-dropdown" role="listbox">
@@ -849,7 +820,7 @@
 	.m-page {
 		display: flex;
 		flex-direction: column;
-		min-height: 100dvh;
+		min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
 		background: var(--cs-lilac);
 	}
 
@@ -1057,15 +1028,7 @@
 		color: var(--cs-text-placeholder);
 	}
 
-	.m-select-arrow {
-		flex-shrink: 0;
-		transition: transform 0.2s;
-		transform: rotate(90deg);
-	}
 
-	.m-select-arrow.m-arrow-open {
-		transform: rotate(-90deg);
-	}
 
 	.m-dropdown {
 		position: absolute;
@@ -1353,7 +1316,7 @@
 		.d-page {
 			display: block;
 			background: var(--cs-lilac);
-			min-height: 100vh;
+			min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
 		}
 	}
 
@@ -1455,15 +1418,7 @@
 		color: var(--cs-text-placeholder);
 	}
 
-	.d-select-arrow {
-		flex-shrink: 0;
-		transition: transform 0.2s;
-		transform: rotate(90deg);
-	}
 
-	.d-select-arrow.d-arrow-open {
-		transform: rotate(-90deg);
-	}
 
 	.d-dropdown {
 		position: absolute;

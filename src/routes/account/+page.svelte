@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { page } from '$app/stores'
   import { invalidate, goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
@@ -211,14 +212,8 @@
                   class="font-['Noto_Sans_KR',sans-serif] text-[16px] tracking-[-0.5px]"
                   style="color:{activePcSection === item.panel ? 'var(--cs-purple)' : '#444'};font-weight:{activePcSection === item.panel ? '700' : '500'};"
                 >{item.label}</span>
-                <div class="h-[12px] relative shrink-0 w-[6px]">
-                  <div class="absolute inset-[-8.33%_-16.67%]">
-                    <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                      <path d="M1 1L7 7L1 13"
-                        stroke="{activePcSection === item.panel ? '#553FE0' : '#aaaaaa'}"
-                        stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                    </svg>
-                  </div>
+                <div class="h-[12px] relative shrink-0 w-[6px] flex items-center justify-center">
+                  <ChevronIcon size={8} color={activePcSection === item.panel ? 'var(--cs-purple-light)' : 'var(--cs-text-light)'} />
                 </div>
               </button>
             {/each}
@@ -240,14 +235,8 @@
                   class="font-['Noto_Sans_KR',sans-serif] text-[16px] tracking-[-0.5px]"
                   style="color: {activePcSection === item.panel ? 'var(--cs-purple)' : '#444'}; font-weight: {activePcSection === item.panel ? '700' : '500'};"
                 >{item.label}</span>
-                <div class="h-[12px] relative shrink-0 w-[6px]">
-                  <div class="absolute inset-[-8.33%_-16.67%]">
-                    <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                      <path d="M1 1L7 7L1 13"
-                        stroke="{activePcSection === item.panel ? '#553FE0' : '#aaaaaa'}"
-                        stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                    </svg>
-                  </div>
+                <div class="h-[12px] relative shrink-0 w-[6px] flex items-center justify-center">
+                  <ChevronIcon size={8} color={activePcSection === item.panel ? 'var(--cs-purple-light)' : 'var(--cs-text-light)'} />
                 </div>
               </button>
             {/each}
@@ -292,18 +281,8 @@
                 <p class="text-[#444] tracking-[-0.3px]" style="font: var(--text-pc-title-18);">관심가져봄</p>
                 <div class="flex gap-[20px] items-center">
                   <span class="font-['Noto_Sans_KR',sans-serif] font-medium text-[#444] text-[16px] tracking-[-0.5px]">{data.wishlists.length}</span>
-                  <div class="h-[6px] relative shrink-0 w-[12px]">
-                    <div class="absolute flex inset-0 items-center justify-center" style="container-type:size">
-                      <div class="flex-none h-[100cqw] rotate-90 w-[100cqh]">
-                        <div class="relative size-full">
-                          <div class="absolute inset-[-8.33%_-16.67%]">
-                            <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                              <path d="M1 1L7 7L1 13" stroke="#aaaaaa" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                            </svg>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                  <div class="h-[6px] relative shrink-0 w-[12px] flex items-center justify-center">
+                    <ChevronIcon size={8} direction="down" color="var(--cs-text-light)" />
                   </div>
                 </div>
               </div>
@@ -372,7 +351,7 @@
 <style>
   /* ── 페이지 전체 래퍼 ── */
   .page-wrap {
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
     background: #ecebf4;
     display: flex;
     justify-content: center;
