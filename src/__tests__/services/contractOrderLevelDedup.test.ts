@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { POST as initContract } from '../../routes/api/cms/reservations/[id]/init-contract/+server';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * 계약서 생성 — '예약' 단위(= '주문' 단위) 정합 (2026-08-31, Stephen 지적)
@@ -35,6 +36,7 @@ beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
   testProductId = (data as { id: string }).id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 function randomFutureDateRange(): { start: string; end: string } {

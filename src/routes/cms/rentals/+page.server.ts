@@ -46,8 +46,41 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) console.error('[cms/rentals] get_rental_list error:', error.message)
 
   const rentals: RentalListRow[] = rows ?? []
-  await attachRentalDaysLabel(admin, rentals)
+  // 총 건수·페이지 수는 취소중 행을 앞에 붙이기 "전"의 원 목록 기준으로 확정한다 — 취소중 행은
+  // get_rental_list(p_reservation_id)로 1건씩 가져와 그 행의 total_count가 항상 1이라, 붙인 뒤 계산하면
+  // "총 N건"과 페이지 수가 틀어진다(QA B-1).
   const totalCount = rentals[0]?.total_count ?? 0
+
+  // 고객이 취소했고 관리자 취소확인 전인 예약("취소중") — 대여 라이프사이클 스코프(cancelled 제외)와 별개로
+  // 목록 최상단에 "예약취소" 배지로 노출해 관리자가 놓치지 않게 한다(첫 페이지, 검색어 없음, 전체/계약완료 칩에서만).
+  // 헤더의 [예약취소] 버튼 = 관리자 취소확인(confirm-cancel API) → 고객 마이페이지에서 "취소" 화면으로 이동.
+  if (page === 1 && !search && (status === '' || status === 'confirmed')) {
+    const { data: pendingRows, error: pendingErr } = await admin
+      .from('rental_reservations')
+      .select('id')
+      .eq('status', 'cancelled')
+      .not('customer_cancelled_at', 'is', null)
+      .is('cancel_confirmed_at', null)
+      .order('customer_cancelled_at', { ascending: false })
+      .limit(20)
+    if (pendingErr) console.error('[cms/rentals] 취소중 예약 조회 실패:', pendingErr.message)
+    const pendingIds = ((pendingRows ?? []) as Array<{ id: number }>).map(r => r.id)
+    if (pendingIds.length > 0) {
+      const fetched = await Promise.all(pendingIds.map(async (id) => {
+        const { data, error: pendingListErr } = await admin.rpc('get_rental_list', {
+          p_status: null, p_search: null, p_date_from: null, p_date_to: null,
+          p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled'], p_reservation_id: id,
+        })
+        if (pendingListErr) console.error('[cms/rentals] 취소중 예약 상세 조회 실패:', id, pendingListErr.message)
+        return ((data ?? []) as RentalListRow[])[0] ?? null
+      }))
+      const pending = fetched
+        .filter((r): r is RentalListRow => r !== null)
+        .map(r => ({ ...r, cancel_pending: true }))
+      rentals.unshift(...pending)
+    }
+  }
+  await attachRentalDaysLabel(admin, rentals)
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
   // rental.change_cancel per-account 권한 판정

@@ -16,6 +16,8 @@
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
 
   interface RentalListRow {
+    /** 고객 취소 후 관리자 취소확인 대기 — /cms/rentals 로더가 부착(헤더 [예약취소]=취소확인) */
+    cancel_pending?:   boolean
     reservation_id:    number
     reservation_code:  string | null
     status:            string
@@ -211,6 +213,37 @@
   let cancelPending  = $state(false)
   let isCancelling   = $state(false)
 
+  // 고객이 취소한 예약("취소중") 관리자 취소확인 — 헤더 [예약취소] 버튼(row.cancel_pending일 때만 노출).
+  // 다른 헤더 버튼과 동일하게 1차 클릭=무장(토스트), 2차 클릭=실행. 예약 상태·결제는 바꾸지 않는다.
+  let confirmCancelPending = $state(false)
+  let isConfirmingCancel   = $state(false)
+
+  async function handleConfirmCustomerCancel(): Promise<void> {
+    if (!confirmCancelPending) {
+      confirmCancelPending = true
+      csToast.warning('고객이 취소한 예약입니다. 한번 더 누르면 취소를 확인 처리하고, 고객 마이페이지에서 "취소" 화면으로 이동합니다.')
+      return
+    }
+    isConfirmingCancel = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/confirm-cancel`, { method: 'POST' })
+      const body = await res.json().catch(() => ({})) as { ok?: boolean; error?: string }
+      if (!res.ok || !body.ok) {
+        csToast.error(body.error ?? '취소확인 처리 중 오류가 발생했습니다.')
+        return
+      }
+      csToast.success('취소를 확인했습니다. 고객 화면에 "취소"로 반영됩니다.')
+      // 목록을 새로고침하면 이 예약은 "취소중" 대상에서 빠지고 패널이 닫힌다(/cms/rentals 로더 참고)
+      onrefresh?.()
+      onstatuschange?.()
+    } catch {
+      csToast.error('네트워크 오류로 처리하지 못했습니다.')
+    } finally {
+      isConfirmingCancel   = false
+      confirmCancelPending = false
+    }
+  }
+
   let fetchedForId    = $state<number | null>(null)
   let paymentDetail   = $state<PaymentDetail | null>(null)
   let paymentLoading  = $state(false)
@@ -242,6 +275,43 @@
       .catch(() => {
         if (fetchedForId === id) { paymentError = '결제 정보를 불러오지 못했습니다.'; paymentLoading = false }
       })
+  })
+
+  // PG 취소 실행 상태(Toss 결제 조회 실시간 연동) — 결제정보 탭 "PG 결제 정보" 하단에 표시
+  interface PgStatusResp {
+    ok:               boolean
+    reason?:          string
+    label?:           string
+    cancelledAmount?: number
+    lastCancelledAt?: string | null
+  }
+  let pgStatus         = $state<PgStatusResp | null>(null)
+  let pgStatusLoading  = $state(false)
+  let pgFetchedKey     = $state<string | null>(null)
+
+  const PG_STATUS_REASON: Record<string, string> = {
+    no_payment:      '결제 정보 없음',
+    not_found_in_pg: '조회 불가 (모의결제이거나 PG에 없는 결제)',
+    not_configured:  '조회 불가 (PG 설정 없음)',
+    pg_unreachable:  '조회 불가 (PG 응답 없음)',
+    pg_error:        '조회 불가 (PG 오류)',
+    db_error:        '조회 불가',
+  }
+
+  $effect(() => {
+    const key = paymentDetail?.payment_key ?? null
+    if (activeTab !== 'payment') return
+    if (!key) { pgStatus = null; pgFetchedKey = null; return }
+    if (pgFetchedKey === key) return
+    pgFetchedKey    = key
+    pgStatus        = null
+    pgStatusLoading = true
+    const id = row.reservation_id
+    fetch(`/api/cms/reservations/${id}/payment/pg-status`)
+      .then(r => r.json())
+      .then((d: PgStatusResp) => { if (pgFetchedKey === key) pgStatus = d })
+      .catch(() => { if (pgFetchedKey === key) pgStatus = { ok: false, reason: 'pg_unreachable' } })
+      .finally(() => { if (pgFetchedKey === key) pgStatusLoading = false })
   })
 
   interface ReservationOption {
@@ -1275,6 +1345,18 @@
           >{isCancelling ? '처리 중...' : '예약취소'}</button>
         </form>
       {/if}
+      {#if row.cancel_pending}
+        <!-- 고객 취소 후 관리자 확인 대기 — 이 [예약취소] 실행 = 관리자 취소확인 (예약·결제는 이미 취소·환불 처리됨) -->
+        <button
+          type="button"
+          class="btn-header-action btn-header-action--danger"
+          disabled={isConfirmingCancel || !canChangeOrCancelReservation}
+          title={!canChangeOrCancelReservation
+            ? '예약변경 및 취소 권한이 없습니다'
+            : '고객이 취소한 예약입니다. 눌러서 취소를 확인하면 고객 마이페이지에서 "취소" 화면으로 이동합니다'}
+          onclick={handleConfirmCustomerCancel}
+        >{isConfirmingCancel ? '처리 중...' : '예약취소'}</button>
+      {/if}
       <div class="reservation-qr-wrap">
         <canvas bind:this={reservationQrCanvasEl} width="300" height="300" aria-label="예약 QR 코드"></canvas>
         <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
@@ -2209,6 +2291,25 @@
               <span class="info-value">{formatDateTime(paymentDetail.pg_cancelled_at)}</span>
             </div>
           {/if}
+          <!-- PG(Toss) 실시간 조회 — DB 기록과 별개로 PG 쪽에서 취소가 실제 실행됐는지 확인 -->
+          <div class="info-row">
+            <span class="info-label">PG 취소 실행 상태</span>
+            <span class="info-value">
+              {#if pgStatusLoading}
+                조회 중…
+              {:else if pgStatus?.ok}
+                {pgStatus.label}
+                {#if (pgStatus.cancelledAmount ?? 0) > 0}
+                  <span class="info-note">취소금액 {formatAmount(pgStatus.cancelledAmount ?? 0)}</span>
+                {/if}
+                {#if pgStatus.lastCancelledAt}
+                  <span class="info-note">{formatDateTime(pgStatus.lastCancelledAt)}</span>
+                {/if}
+              {:else}
+                {PG_STATUS_REASON[pgStatus?.reason ?? ''] ?? '조회 불가'}
+              {/if}
+            </span>
+          </div>
         </div>
       {/if}
     {/if}

@@ -16,7 +16,8 @@ import { sendReservationLifecyclePush, sendPushToAdmins } from '$lib/server/push
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
 
 type CancelResult =
-  | { ok: true }
+  /** cancelledIds: 이번 취소로 실제 cancelled 전이된 예약 id(주문 전체 취소 시 형제 포함) */
+  | { ok: true; cancelledIds: number[] }
   | { ok: false; code: 'NOT_FOUND' | 'TOSS_FAILED' | 'RPC_FAILED'; message: string }
 
 type RpcCancelResult = {
@@ -250,5 +251,5 @@ export async function cancelReservationWithRefund({
     }
   }
 
-  return { ok: true }
+  return { ok: true, cancelledIds }
 }

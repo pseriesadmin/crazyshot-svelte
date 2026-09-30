@@ -1,0 +1,8 @@
+-- Production(vnbpmvxruyciuuaermyh) create_reservation_order 적용 전 스냅샷 (Migration 587 롤백용)
+-- 적용 전: full md5(pg_get_functiondef)=4458d702a3a71c6e6d2fa46b7704b469 / 주석·공백 제거 md5=35aafc358ec6c00a3e331ca07de12b87
+--          ACL {postgres,service_role} / 가드 없음 / 요금 미등록 진행중 예약 0 · 요금 미등록 활성 재고 0 / orders 41행
+-- 원본 정의: supabase/migrations/20260921000000_510_sync_order_coupon_discount_fix.sql 계열(주석만 Stage와 상이, 논리 동일)
+-- 롤백: 현재 정의에서 '-- PRICE-UNSET-GUARD' 블록(IF EXISTS ... END IF;)만 제거해 재생성하면 된다(ACL 불변).
+--   DO $x$ DECLARE v text; BEGIN
+--     v := regexp_replace(pg_get_functiondef('public.create_reservation_order(uuid,bigint[],uuid,integer,integer,uuid[])'::regprocedure), E'  -- PRICE-UNSET-GUARD.*?END IF;\n\n', '', 's');
+--     EXECUTE v; END $x$;

@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { GET as resolveReservation } from '../../routes/api/cms/reservations/resolve/+server';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * 예약코드(reservation_code) 주문단위 통일 (2026-08-31, Migration 400)
@@ -34,6 +35,7 @@ beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
   testProductId = (data as { id: string }).id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 // 날짜 충돌 방지(rental_reservations_product_dates_excl) — 기존 테스트들과 동일한

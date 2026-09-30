@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * sync_order_after_composition_change RPC — TDD (Migration #497)
@@ -65,6 +66,7 @@ async function ensureParentProductWithChild(): Promise<string> {
     .limit(1)
     .single()
   if (error || !data) throw new Error(`활성 자식 상품 조회 실패: ${error?.message}`)
+  await ensure24hPriceRule(admin, data.parent_product_id as string)
   return data.parent_product_id as string
 }
 
@@ -81,6 +83,7 @@ async function ensureTestProducts(count: number): Promise<string[]> {
   if (error || !data || data.length < count) {
     throw new Error(`테스트용 product ${count}개 조회 실패: ${error?.message}`)
   }
+  for (const p of data) await ensure24hPriceRule(admin, p.id as string)
   return data.map((p) => p.id as string)
 }
 

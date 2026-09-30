@@ -33,6 +33,7 @@
     returned:         '반납완료',
     completed:        '완료',
     damage_claimed:   '파손신고',
+    cancelled:        '취소',
   }
 
   const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
@@ -43,6 +44,7 @@
     returned:         { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
     completed:        { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
     damage_claimed:   { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
+    cancelled:        { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
   }
 
   const PICKUP_LABELS: Record<string, string> = {
@@ -220,6 +222,10 @@
                   <span class="status-badge" style="background:{st.bg};color:{st.color}">
                     {STATUS_LABEL[row.status] ?? row.status}
                   </span>
+                  {#if row.cancel_pending}
+                    <!-- 고객 취소 후 관리자 취소확인 대기 — 패널 헤더 [예약취소]로 확인 -->
+                    <span class="status-badge" style="background:var(--cs-error);color:var(--cs-white)">예약취소</span>
+                  {/if}
                   {#if row.dhero_status}
                     <span class="dhero-mini-badge">{row.dhero_status}</span>
                   {/if}

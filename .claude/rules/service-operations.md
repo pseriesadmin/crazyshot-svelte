@@ -525,6 +525,11 @@ withdrawal_status 3단계:
 session이나 그 어떤 채팅 RPC도 "관리자 전용"을 보장해줄 수 없다(그 헬퍼가 찾는 세션은
 언제나 특정 고객 1명의 것이기 때문).
 ```
+> **예외(2026-09-30, 정합성 명시)**: 고객이 스스로 보낸 요청 카드(`cancel_request` — 마감 후 [취소 요청], `POST /api/checkout/cancel-request`)는
+> 고객 세션에 **고객 발신(`sender_type='user'`)**으로 남기며, 고객 본인 화면과 관리자 상담 화면 양쪽에 노출되는 것이 의도된 설계다
+> (고객에게는 CTA 없이 안내만, 관리자에게만 예약 열기 CTA). "관리자만 봐야 하는 알림"이 아니므로 위 금지 사례와 다르다.
+> 관리자 전용 정보는 여전히 이 경로에 넣지 않는다.
+
 → 상세: `.claude/harness/TASK.md` "관리자 채팅 세션 빠른문의 리마인더 카드 신규 구현"
 (2026-09-02) · Migration 425(`submit_cs_post`에서 고객세션 오노출 INSERT 제거) ·
 `security-auth.md` 역할별 CMS 접근 매트릭스(`/api/cms/chat/pending-inquiries` 등재)

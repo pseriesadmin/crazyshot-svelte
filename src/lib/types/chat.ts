@@ -41,6 +41,8 @@ export type ActionCardType =
   | 'identity_review_request'
   // 본인증명/외국인증명 관리자 승인 완료 알림 (고객 수신) — cms/approve-doc(Migration 526)
   | 'identity_approved'
+  // 예약 취소 요청 (고객 발신, 마감 후~대여 시작 전 — 고객·관리자 양쪽 채팅에 동시 노출, 관리자가 수동 처리)
+  | 'cancel_request'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 

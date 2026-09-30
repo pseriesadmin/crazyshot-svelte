@@ -51,6 +51,7 @@
     returned:         '반납완료',
     completed:        '완료',
     damage_claimed:   '파손신고',
+    cancelled:        '취소중',  // 고객 취소 후 관리자 확인 전(취소확인되면 /account/cancel로 이동)
   }
 
   const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
@@ -62,6 +63,7 @@
     returned:         { bg: 'rgba(102,102,102,0.10)', color: '#666' },
     completed:        { bg: 'rgba(102,102,102,0.10)', color: '#666' },
     damage_claimed:   { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
+    cancelled:        { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
   }
 
   function formatDate(dt: string | null): string {
@@ -73,7 +75,7 @@
   // modalType A: 취소 가능 → 확인 모달
   // modalType B: 취소 불가 → 채팅 문의 안내
   let cancelPendingId  = $state<string | null>(null)
-  let cancelModalType  = $state<'A' | 'B' | null>(null)
+  let cancelModalType  = $state<'A' | 'B' | 'R' | null>(null)
   let cancelLoading    = $state(false)
   let cancelErrorMsg   = $state<string | null>(null)
 
@@ -88,6 +90,50 @@
     cancelPendingId  = null
     cancelModalType  = null
     cancelErrorMsg   = null
+  }
+
+  // 마감 후 취소 요청(②구간) — 고객 채팅 세션에 '취소 요청' 카드를 남겨 관리자가 수동 처리한다
+  function openCancelRequestModal(rental: MyRental): void {
+    cancelPendingId  = rental.id
+    cancelErrorMsg   = null
+    cancelModalType  = 'R'
+  }
+
+  async function confirmCancelRequest(): Promise<void> {
+    if (!cancelPendingId) return
+    const targetId = cancelPendingId
+    cancelLoading  = true
+    cancelErrorMsg = null
+    try {
+      const res = await fetch('/api/checkout/cancel-request', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reservationId: Number(targetId) }),
+      })
+      const json = await res.json() as { ok: boolean; error?: string; code?: string }
+      if (!res.ok || !json.ok) {
+        if (json.code === 'use_cancel') {
+          // 그 사이 즉시 취소 구간으로 바뀐 경우(예: 관리자 조치) — 목록을 새로고침해 버튼을 바로잡는다
+          cancelPendingId = null
+          cancelModalType = null
+          await invalidateAll()
+          return
+        }
+        cancelModalType = 'B'
+        cancelErrorMsg  = json.error ?? '취소 요청이 불가합니다.'
+        return
+      }
+      cancelPendingId = null
+      cancelModalType = null
+      await invalidateAll()
+      // 방금 남긴 취소 요청 카드를 바로 확인할 수 있도록 이 예약의 채팅을 연다
+      openReservationChat(targetId)
+    } catch {
+      cancelModalType = 'B'
+      cancelErrorMsg  = '일시적인 오류가 발생했습니다. 채팅으로 문의해주세요.'
+    } finally {
+      cancelLoading = false
+    }
   }
 
   async function confirmCancel(): Promise<void> {
@@ -156,7 +202,7 @@
       <div class="list-wrap">
         {#each data.rentals as rental (rental.id)}
           {@const st = STATUS_STYLE[rental.status] ?? STATUS_STYLE['hold']}
-          <div class="rental-card">
+          <div class="rental-card" class:rental-card--cancelling={rental.cancelling}>
             <div class="card-head">
               <span class="code">{rental.reservation_code}</span>
               <div class="card-head-right">
@@ -193,7 +239,17 @@
               <RentalJourneyStepper status={rental.status} />
             </div>
 
-            {#if rental.status === 'hold' || (rental.status === 'confirmed' && !rental.tracking_number)}
+            {#if rental.cancelling}
+
+              <!-- 고객이 취소했고 관리자 취소확인 전 — 카드 전체 비활성(흐림), 버튼은 "취소중" 표시 -->
+
+              <div class="card-actions">
+
+                <button type="button" class="card-actions-btn danger" disabled>취소중</button>
+
+              </div>
+
+            {:else if rental.status === 'hold' || (rental.status === 'confirmed' && !rental.tracking_number)}
               <div class="card-actions">
                 {#if rental.status === 'hold'}
                   <button
@@ -204,19 +260,43 @@
                     예약신청 확인
                   </button>
                 {/if}
-                <button
-                  type="button"
-                  class="card-actions-btn danger"
-                  disabled={!rental.canCancel}
-                  title={rental.canCancel ? undefined : '방문 수령 6시간 전부터는 취소가 제한됩니다. 채팅으로 문의해주세요.'}
-                  onclick={() => openCancelModal(rental)}
-                >
-                  예약신청 취소
-                </button>
+                {#if rental.canCancel}
+                  <button
+                    type="button"
+                    class="card-actions-btn danger"
+                    onclick={() => openCancelModal(rental)}
+                  >
+                    예약신청 취소
+                  </button>
+                {:else if rental.status === 'confirmed' && rental.cancelKind === 'after_deadline'}
+                  <!-- 마감 후 ~ 대여 시작 전: [취소 요청] → 관리자 승인 후 취소·취소 수수료 적용 -->
+                  {#if rental.cancelRequested}
+                    <button type="button" class="card-actions-btn primary" disabled>취소 요청 접수됨</button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="card-actions-btn danger"
+                      onclick={() => openCancelRequestModal(rental)}
+                    >
+                      취소 요청
+                    </button>
+                  {/if}
+                {:else}
+                  <!-- 대여 시작 후 등: 취소 버튼 없이 문의하기만 노출 -->
+                  <button
+                    type="button"
+                    class="card-actions-btn primary"
+                    title="대여가 시작된 예약은 바로 취소할 수 없습니다. 채팅으로 문의해주세요."
+                    onclick={() => openReservationChat(rental.id)}
+                  >
+                    문의하기
+                  </button>
+                {/if}
               </div>
             {/if}
 
-            {#if rental.has_signed_contract}
+            {#if rental.cancelling}
+{:else if rental.has_signed_contract}
               <button
                 type="button"
                 class="contract-btn"
@@ -280,6 +360,26 @@
           </div>
         </div>
       </div>
+    {:else if cancelModalType === 'R'}
+      <!-- Modal R: 마감 후 취소 요청 확인 -->
+      <div class="cancel-modal" role="alertdialog" aria-modal="true" aria-label="예약 취소 요청 확인">
+        <div class="cancel-modal-top">
+          <div class="cancel-modal-icon" aria-hidden="true">⚠️</div>
+          <p class="cancel-modal-title">취소를 요청하시겠어요?</p>
+          <p class="cancel-modal-sub">수령 신청 마감이 지나 바로 취소할 수 없어요.<br>관리자 승인 후 취소되며 취소 수수료가 적용됩니다.</p>
+        </div>
+        <div class="cancel-modal-bottom">
+          {#if cancelErrorMsg}
+            <p class="cancel-modal-error">{cancelErrorMsg}</p>
+          {/if}
+          <div class="cancel-modal-actions">
+            <button type="button" class="cancel-modal-btn outline" onclick={dismissCancel} disabled={cancelLoading}>아니요</button>
+            <button type="button" class="cancel-modal-btn red" onclick={confirmCancelRequest} disabled={cancelLoading}>
+              {cancelLoading ? '처리 중...' : '네, 요청할게요'}
+            </button>
+          </div>
+        </div>
+      </div>
     {:else}
       <!-- Modal B: 취소 불가 — 채팅 문의 안내 -->
       <div class="cancel-modal" role="alertdialog" aria-modal="true" aria-label="예약신청취소 불가 안내">
@@ -289,7 +389,7 @@
         <div class="cancel-modal-top cancel-modal-top--info">
           <p class="cancel-modal-title">예약신청 취소가 어렵습니다</p>
           <p class="cancel-modal-sub">
-            {cancelErrorMsg ?? '방문 수령 예정 건은 수령 6시간 전부터 취소가 제한됩니다.'}
+            {cancelErrorMsg ?? '수령 신청 마감이 지났거나 대여가 시작된 예약은 바로 취소할 수 없습니다.'}
             <br>채팅으로 문의해주세요.
           </p>
         </div>
@@ -545,6 +645,11 @@
   }
   .card-actions-btn.danger:hover  { background: rgba(255,53,53,0.06); }
   .card-actions-btn.danger:active { background: rgba(255,53,53,0.12); }
+  .rental-card--cancelling {
+    opacity: 0.6;            /* 취소중 카드 — 40% 흐리게(비활성) */
+    pointer-events: none;
+  }
+  .rental-card--cancelling .card-actions-btn:disabled { opacity: 1; }  /* 카드 자체가 흐려지므로 버튼은 이중 감쇠 방지 */
   .card-actions-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;

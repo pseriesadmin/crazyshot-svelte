@@ -79,6 +79,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   )
 
   if (error) {
+    // 24h 요금 미등록 대여 상품(Migration 587 PRICE-UNSET-GUARD) — 서버 오류가 아니라 요청 거부(400)
+    const errMessage = (error as { message?: string } | null)?.message ?? ''
+    if (errMessage.includes('PRICE_UNSET')) {
+      return json(
+        { error: '요금이 등록되지 않은 상품이 있어 예약을 신청할 수 없습니다.', code: 'PRICE_UNSET' },
+        { status: 400 },
+      )
+    }
     console.error('[reservations/create-order] create_reservation_order 실패:', error)
     return json({ error: '주문 연결 생성 실패' }, { status: 500 })
   }

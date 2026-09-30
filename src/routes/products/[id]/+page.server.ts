@@ -115,7 +115,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const methodIds = ((row as unknown as Record<string, unknown>).allowed_method_ids as string[] | null) ?? [];
 
 	type RentalOption = { id: string; name: string };
-	type RentalMethodOption = { id: string; name: string; method_key: string | null };
+	type RentalMethodOption = { id: string; name: string; method_key: string | null; is_delivery_type?: boolean | null; deadline_time?: string | null };
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const anyClient = locals.supabase as any;
 	const [periodsRes, methodsRes, shippingSettingsRes] = await Promise.all([
@@ -123,7 +123,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			? anyClient.from('rental_period_options').select('id, name').in('id', periodIds).eq('is_active', true)
 			: Promise.resolve({ data: [] }),
 		methodIds.length > 0
-			? anyClient.from('rental_method_options').select('id, name, method_key').in('id', methodIds).eq('is_active', true)
+			? anyClient.from('rental_method_options').select('id, name, method_key, is_delivery_type, deadline_time').in('id', methodIds).eq('is_active', true)
 			: Promise.resolve({ data: [] }),
 		anyClient
 			.from('rental_shipping_settings')

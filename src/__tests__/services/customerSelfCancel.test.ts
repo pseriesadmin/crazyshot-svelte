@@ -13,101 +13,81 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // A. canCancelReservation — 순수 함수 (모킹 불필요)
 // ────────────────────────────────────────────────────────────────────────────
 
-describe('A. canCancelReservation — 취소가능 판정', () => {
-  // 아직 구현 파일 없음 → import 실패하거나 함수 undefined → RED 확인
-  it('CC-1 hold 상태는 항상 canCancel=true (배송 방식)', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    expect(canCancelReservation({
-      status: 'hold',
-      trackingNumber: null,
-      isDeliveryType: true,
-      startDate: '2099-12-31',
-      pickupTime: '10:00',
-      nowMs: Date.now(),
-    })).toBe(true)
+describe('A. canCancelReservation — 취소가능 판정 (2026-09-30 정책: 신청 마감 전 즉시취소 / 마감 후·대여 시작 후 문의)', () => {
+  // KST 시각 → epoch ms (실행 환경 타임존과 무관)
+  const kst = (y: number, m: number, d: number, h: number, min = 0): number => Date.UTC(y, m - 1, d, h - 9, min)
+  const VISIT = { leadDays: 1, cutoffHour: 19 }
+  const DELIVERY = { leadDays: 2, cutoffHour: 19 }
+
+  it('CC-1 hold(신청대기)는 언제든 free — 수령일이 지났어도', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    expect(getCancelKind({ status: 'hold', trackingNumber: null, startDate: '2020-01-01', rule: DELIVERY })).toBe('free')
   })
 
-  it('CC-2 confirmed + 운송장 미등록 + 배송 방식 → canCancel=true', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    expect(canCancelReservation({
-      status: 'confirmed',
-      trackingNumber: null,
-      isDeliveryType: true,
-      startDate: '2099-12-31',
-      pickupTime: null,
-      nowMs: Date.now(),
-    })).toBe(true)
+  it('CC-2 confirmed + 운송장 미등록 + 먼 미래 수령일 → free', async () => {
+    const { getCancelKind, canCancelReservation } = await import('$lib/utils/canCancelReservation')
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: null, startDate: '2099-12-31', rule: DELIVERY })).toBe('free')
+    expect(canCancelReservation({ status: 'confirmed', trackingNumber: null, startDate: '2099-12-31', rule: DELIVERY })).toBe(true)
   })
 
-  it('CC-3 confirmed + 운송장 등록됨 → canCancel=false', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    expect(canCancelReservation({
-      status: 'confirmed',
-      trackingNumber: 'TRACK123',
-      isDeliveryType: true,
-      startDate: '2099-12-31',
-      pickupTime: null,
-      nowMs: Date.now(),
-    })).toBe(false)
+  it('CC-3 confirmed + 운송장 등록됨 → unavailable', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: 'TRACK123', startDate: '2099-12-31', rule: DELIVERY })).toBe('unavailable')
   })
 
-  it('CC-4 confirmed + 비배송 + 방문 8시간 이전 → canCancel=true', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    const startDate = '2099-06-15'
-    const pickupTime = '14:00'
-    // 8시간 이전이면 취소 가능
-    const nowMs = new Date('2099-06-15T06:00:00').getTime() // 8h before 14:00
-    expect(canCancelReservation({
-      status: 'confirmed',
-      trackingNumber: null,
-      isDeliveryType: false,
-      startDate,
-      pickupTime,
-      nowMs,
-    })).toBe(true)
+  it('CC-4 방문(1일 전 19시): 수령 10/2 — 10/1 18:59 free, 19:00 after_deadline', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    const base = { status: 'confirmed', trackingNumber: null, startDate: '2026-10-02', rule: VISIT }
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 1, 18, 59) })).toBe('free')
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 1, 19, 0) })).toBe('after_deadline')
   })
 
-  it('CC-5 confirmed + 비배송 + 방문 5시간 이내 → canCancel=false', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    const startDate = '2099-06-15'
-    const pickupTime = '14:00'
-    // 5시간 이내(6시간 이내)이면 취소 불가
-    const nowMs = new Date('2099-06-15T09:00:00').getTime() // 5h before 14:00
-    expect(canCancelReservation({
-      status: 'confirmed',
-      trackingNumber: null,
-      isDeliveryType: false,
-      startDate,
-      pickupTime,
-      nowMs,
-    })).toBe(false)
+  it('CC-5 택배(2일 전 19시): 수령 10/5 — 10/3 18:59 free, 19:00 after_deadline', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    const base = { status: 'confirmed', trackingNumber: null, startDate: '2026-10-05', rule: DELIVERY }
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 3, 18, 59) })).toBe('free')
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 3, 19, 0) })).toBe('after_deadline')
+    // 방문 규칙이었다면 10/4 19시까지였으므로 10/3 19시에도 free — 방식별 규칙이 다르게 적용됨
+    expect(getCancelKind({ ...base, rule: VISIT, nowMs: kst(2026, 10, 3, 19, 0) })).toBe('free')
   })
 
-  it('CC-6 배송 방식은 6시간 이내라도 → canCancel=true (시간 제약 없음)', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    const startDate = '2099-06-15'
-    const pickupTime = '14:00'
-    const nowMs = new Date('2099-06-15T13:00:00').getTime() // 1h before
-    expect(canCancelReservation({
-      status: 'confirmed',
-      trackingNumber: null,
-      isDeliveryType: true,  // 배송
-      startDate,
-      pickupTime,
-      nowMs,
-    })).toBe(true)
+  it('CC-6 대여 시작일(KST) 00:00부터 after_start — 전날 23:59는 after_deadline', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    const base = { status: 'confirmed', trackingNumber: null, startDate: '2026-10-02', rule: VISIT }
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 1, 23, 59) })).toBe('after_deadline')
+    expect(getCancelKind({ ...base, nowMs: kst(2026, 10, 2, 0, 0) })).toBe('after_start')
   })
 
-  it('CC-7 shipped/in_use 등 취소 불가 상태 → canCancel=false', async () => {
-    const { canCancelReservation } = await import('$lib/utils/canCancelReservation')
-    expect(canCancelReservation({
-      status: 'shipped',
-      trackingNumber: null,
-      isDeliveryType: true,
-      startDate: '2099-12-31',
-      pickupTime: null,
-      nowMs: Date.now(),
-    })).toBe(false)
+  it('CC-7 shipped/in_use 등 취소 불가 상태 → unavailable', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    expect(getCancelKind({ status: 'shipped', trackingNumber: null, startDate: '2099-12-31', rule: DELIVERY })).toBe('unavailable')
+    expect(getCancelKind({ status: 'in_use', trackingNumber: null, startDate: '2099-12-31' })).toBe('unavailable')
+  })
+
+  it('CC-8 [신고 9 재현] 대여일이 지난 계약완료 건은 더 이상 취소 가능으로 남지 않는다 (배송·방문 모두)', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    const now = kst(2026, 9, 30, 12)
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: null, startDate: '2026-09-20', rule: DELIVERY, nowMs: now })).toBe('after_start')
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: null, startDate: '2026-09-20', rule: VISIT, nowMs: now })).toBe('after_start')
+  })
+
+  it('CC-9 수령일 정보가 없으면 free (기존 정책 유지)', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: null, startDate: null })).toBe('free')
+  })
+
+  it('CC-10 서버(UTC) 환경에서도 KST 기준 — UTC 전날이라도 KST 수령일 당일이면 after_start', async () => {
+    const { getCancelKind } = await import('$lib/utils/canCancelReservation')
+    // KST 10/2 08:00 = UTC 10/1 23:00
+    expect(getCancelKind({ status: 'confirmed', trackingNumber: null, startDate: '2026-10-02', rule: VISIT, nowMs: Date.UTC(2026, 9, 1, 23, 0) })).toBe('after_start')
+  })
+
+  it('CC-11 worstCancelKind — 같은 주문 형제 중 가장 엄격한 판정', async () => {
+    const { worstCancelKind } = await import('$lib/utils/canCancelReservation')
+    expect(worstCancelKind([])).toBe('free')
+    expect(worstCancelKind(['free', 'after_deadline'])).toBe('after_deadline')
+    expect(worstCancelKind(['free', 'after_deadline', 'after_start'])).toBe('after_start')
+    expect(worstCancelKind(['after_start', 'unavailable'])).toBe('unavailable')
   })
 })
 
@@ -387,6 +367,8 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
     expect(body.ok).toBe(true)
     // hold → Toss 환불 헬퍼 미호출
     expect(cancelReservationWithRefund).not.toHaveBeenCalled()
+    // 고객 취소 표식("취소중" 표시용) — 취소 성공 직후 호출됨
+    expect(mockAdminRpc).toHaveBeenCalledWith('mark_customer_cancelled', expect.objectContaining({ p_reservation_ids: expect.arrayContaining([42]) }))
     // update_reservation_status 호출됨
     expect(mockAdminRpc).toHaveBeenCalledWith('update_reservation_status', expect.objectContaining({
       p_new_status: 'cancelled',
@@ -396,7 +378,8 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
   it('SC-2 confirmed + 배송 + 운송장 미등록 → cancelReservationWithRefund 호출', async () => {
     const { POST } = await import('../../routes/api/checkout/cancel-reservation/+server')
     const { cancelReservationWithRefund } = await import('$lib/server/cancelReservationWithRefund')
-    vi.mocked(cancelReservationWithRefund).mockResolvedValue({ ok: true })
+    // 주문 전체 취소로 실제 전이된 예약 id(형제 포함)만 "취소중" 표식 대상 — 이전에 관리자가 취소한 형제는 제외
+    vi.mocked(cancelReservationWithRefund).mockResolvedValue({ ok: true, cancelledIds: [42, 43] })
 
     // 예약 조회: confirmed + 배송 + 운송장 없음
     mockMaybeSingle.mockResolvedValueOnce({
@@ -420,6 +403,7 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
       reservationId: 42,
       cancelReason: '고객 자가취소(예약신청취소)',
     }))
+    expect(mockAdminRpc).toHaveBeenCalledWith('mark_customer_cancelled', { p_reservation_ids: [42, 43] })
   })
 
   it('SC-4 비배송 + 방문 5시간 이내 → 403 취소불가', async () => {

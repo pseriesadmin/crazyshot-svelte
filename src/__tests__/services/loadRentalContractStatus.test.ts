@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { loadRentalContractStatus } from '../../lib/server/account/loadRentalContractStatus';
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * loadRentalContractStatus — 형제 예약(같은 주문의 다른 상품) 계약 상태 조회 (2026-08-31)
@@ -32,6 +33,7 @@ beforeAll(async () => {
   const { data, error } = await admin.from('products').select('id').limit(1).single();
   if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
   testProductId = (data as { id: string }).id;
+  await ensure24hPriceRule(admin, testProductId);
 });
 
 function randomFutureDateRange(): { start: string; end: string } {

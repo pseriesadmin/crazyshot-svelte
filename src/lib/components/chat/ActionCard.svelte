@@ -106,6 +106,7 @@
       case 'INQUIRY_NEW_CARD':       return { label: '빠른문의 답변등록', color: 'purple' }
       case 'identity_review_request': return { label: '본인증명정보 등록', color: 'purple' }
       case 'identity_approved':      return { label: '내 정보 확인하기', color: 'green' }
+      case 'cancel_request':         return { label: '취소요청 확인', color: 'red' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드
@@ -544,6 +545,9 @@
             {/each}
           </ul>
         {:else}
+          {#if payload.type === 'cancel_request'}
+            <p class="product-link-badge">예약 취소 요청</p>
+          {/if}
           {#if payload.reservation_no}
             <p class="reservation-no">예약번호: {payload.reservation_no}</p>
           {/if}
@@ -582,6 +586,9 @@
         <!-- CTA 버튼 — Figma node 2497:8767 -->
         {#if isShipmentPending}
           <p class="shipment-pending-note">아직 배송 정보가 등록되지 않았습니다. 등록되면 알려드릴게요.</p>
+        {:else if payload.type === 'cancel_request' && !isAdmin}
+          <!-- 고객 화면: 안내 전용(CTA 없음) — 관리자가 채팅 세션에서 확인 후 직접 처리 -->
+          <p class="shipment-pending-note">취소 요청이 접수되었습니다. 관리자가 확인 후 이 채팅으로 안내드립니다. (취소 수수료가 적용될 수 있습니다)</p>
         {:else}
           <button
             class="cta-btn cta-btn--{ctaColor}"

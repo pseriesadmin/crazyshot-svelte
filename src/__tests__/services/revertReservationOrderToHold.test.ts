@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
+import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 /**
  * revert_reservation_order_to_hold RPC — TDD (Migration #492)
@@ -61,6 +62,7 @@ async function ensureTestProducts(count: number): Promise<string[]> {
   if (error || !data || data.length < count) {
     throw new Error(`테스트용 product ${count}개 조회 실패: ${error?.message}`)
   }
+  for (const p of data) await ensure24hPriceRule(admin, p.id as string)
   return data.map((p) => p.id as string)
 }
 
