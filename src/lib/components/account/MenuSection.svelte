@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { goto } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
@@ -44,12 +45,8 @@
               <p class="leading-[1.6]">{item.label}</p>
             </div>
             <!-- chevron right -->
-            <div class="h-[12px] relative shrink-0 w-[6px]">
-              <div class="absolute inset-[-8.33%_-16.67%]">
-                <svg class="block size-full" fill="none" preserveAspectRatio="none" viewBox="0 0 8 14">
-                  <path d="M1 1L7 7L1 13" stroke="#aaaaaa" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" />
-                </svg>
-              </div>
+            <div class="h-[12px] relative shrink-0 w-[6px] flex items-center justify-center">
+              <ChevronIcon size={8} color="var(--cs-text-light)" />
             </div>
           </button>
         {/each}

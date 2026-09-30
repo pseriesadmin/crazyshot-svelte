@@ -721,7 +721,7 @@
   ══════════════════════════════════ */
   .d-view {
     background: var(--cs-lilac);
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
   }
 
   /* §13-2 sub-gnb_navi_b — cart/+page.svelte 정본 (sub-only: main GNB 미렌더) */

@@ -609,7 +609,7 @@
   .d-wrap {
     display: none;
     flex-direction: column;
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
     background: var(--cs-lilac);
   }
   @media (min-width: 768px) {
@@ -1007,7 +1007,7 @@
   .m-wrap {
     display: block;
     background: var(--cs-lilac);
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
   }
 
   /* 모바일 전용 상단 내비 바 (피그마 MTopGlobalArea 정합) */

@@ -326,7 +326,7 @@
   /* ── 루트 컨테이너 ─────────────────────────────────────────── */
   .list-root {
     background: var(--cs-lilac);
-    min-height: 100vh;
+    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
     width: 100%;
   }
   .list-wrap {
