@@ -230,6 +230,8 @@
   }
 
   function serializeBundleLinks(): string {
+    // 결합상품 토글이 OFF면 담아둔 목록이 있어도 저장 대상에서 제외(등록 시점 분류 고정 정책 — #575)
+    if (!isBundlePackage) return '[]'
     return JSON.stringify(
       selectedBundles.map((b, i) => ({
         bundle_product_id: b.bundle_product_id,
@@ -836,7 +838,11 @@
           type="button"
           class="opt-combo-btn bundle-toggle-btn"
           class:opt-combo-btn--on={isBundlePackage}
-          onclick={() => { isBundlePackage = !isBundlePackage }}
+          onclick={() => {
+            isBundlePackage = !isBundlePackage
+            // OFF 전환 시 담아둔 결합상품 목록을 비워 숨은 상태로 저장되는 것을 방지
+            if (!isBundlePackage) selectedBundles = []
+          }}
           aria-pressed={isBundlePackage}
         >결합상품</button>
       </div>

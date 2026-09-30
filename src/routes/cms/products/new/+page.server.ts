@@ -452,7 +452,8 @@ export const actions: Actions = {
     const bundleLinksRaw = (form.get('bundle_links') as string | null) ?? '[]'
     let bundleLinks: unknown[] = []
     try { bundleLinks = JSON.parse(bundleLinksRaw) } catch { /* ignore */ }
-    if (Array.isArray(bundleLinks) && bundleLinks.length > 0) {
+    // is_bundle_product=false 상품은 결합상품 링크를 저장하지 않는다(서버 이중 방어 — #575 정책)
+    if (isBundleProduct && Array.isArray(bundleLinks) && bundleLinks.length > 0) {
       const { error: bundleErr } = await admin.rpc('upsert_product_bundle_links', {
         p_product_id: product.id,
         p_bundle_links: bundleLinks,
