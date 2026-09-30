@@ -250,11 +250,36 @@ export const GET: RequestHandler = async ({ url, locals }) => {
                 category: (r.document['category'] as string | null) || null,
                 product_code: null, // productSearchIndex storeFields에 product_code 없음 → null
                 match_label: '키워드·상세', // NLSearch 폴백 전용 레이블
-                // MiniSearch 인덱스에는 image_urls·slug 미포함 → null
+                // MiniSearch 인덱스에는 image_urls·slug 미포함 → 아래에서 별도 조회해 채움
                 image_url: null,
                 slug: null,
               })
             }
+          }
+
+          // MiniSearch 인덱스 자체에는 image_urls·slug가 없어(storeFields 미포함) 위에서
+          // null로 채워졌다 — 이 폴백으로 새로 추가된 항목 id만 모아 단일 조회로 보강한다
+          // (2026-09-30, HypePackThemeGroupModal 등 검색 결과 썸네일이 항상 대체 이미지로
+          // 뜨던 결함 수정). ilike·동의어 경로는 이미 image_urls를 가져오므로 대상에서 제외.
+          const minisearchIds = finalItems
+            .filter((it) => it.match_label === '키워드·상세')
+            .map((it) => it.id)
+          if (minisearchIds.length > 0) {
+            const { data: thumbRows } = await admin
+              .from('products')
+              .select('id, image_urls, slug')
+              .in('id', minisearchIds)
+            type ThumbRow = { id: string; image_urls: string[] | null; slug: string | null }
+            const thumbMap = new Map<string, ThumbRow>(
+              ((thumbRows ?? []) as ThumbRow[]).map((r) => [r.id, r])
+            )
+            finalItems = finalItems.map((item) => {
+              if (item.match_label !== '키워드·상세') return item
+              const thumb = thumbMap.get(item.id)
+              return thumb
+                ? { ...item, image_url: thumb.image_urls?.[0] ?? null, slug: thumb.slug ?? null }
+                : item
+            })
           }
         } catch (e) {
           // 자연어 폴백 실패 시 현재까지 병합된 결과만 반환 (서비스 중단 방지)

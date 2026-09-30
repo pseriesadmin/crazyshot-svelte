@@ -358,21 +358,8 @@
               oninput={(e) => setField(g._tempId, 'title', (e.target as HTMLInputElement).value)}
             />
 
-            <!-- 아코디언 토글 / 삭제 -->
+            <!-- 삭제 / 노출 토글 (아코디언 토글은 검색입력폼바와 함께 아래로 이동) -->
             <div class="tg-group-actions">
-              <button
-                class="tg-expand-btn"
-                class:active={activeGroupId === g._tempId}
-                onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
-                aria-label="상품 편집"
-                type="button"
-              >
-                <ChevronIcon
-                  direction={activeGroupId === g._tempId ? 'up' : 'down'}
-                  size={8}
-                  color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
-                />
-              </button>
               <button
                 class="tg-del-btn"
                 onclick={() => removeGroup(g._tempId)}
@@ -403,7 +390,65 @@
             oninput={(e) => setField(g._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
           />
 
-          <!-- 상품 편집 아코디언 -->
+          <!-- 검색 입력폼바 + 아코디언 버튼 — 상시 노출(펼치지 않아도 바로 검색 가능) -->
+          <div class="tg-picker-row">
+            {#if (activeGroupId === g._tempId ? activeProductsList.length : g.productItems.length) < MAX_PRODUCTS}
+              <div class="tg-picker-wrap">
+                <SuggestPicker
+                  id={`theme-product-search-${g._tempId}`}
+                  bind:selectedId={pickerSelId}
+                  options={activeGroupId === g._tempId ? pickerOptions : []}
+                  noFilter
+                  clearOnSelect
+                  itemLayout="row"
+                  placeholder="상품 검색…"
+                  listLabel="검색 결과"
+                  variant="generic"
+                  oninput={onPickerInput}
+                  onselect={onProductSelect}
+                >
+                  {#snippet field(c)}
+                    <input
+                      type="text"
+                      class="f-input tg-search-f-input"
+                      id={c.id}
+                      placeholder={c.placeholder}
+                      value={c.value}
+                      oninput={c.oninput}
+                      onkeydown={c.onkeydown}
+                      onfocus={() => { if (activeGroupId !== g._tempId) activateGroup(g._tempId); c.onfocus() }}
+                      onblur={c.onblur}
+                      aria-autocomplete={c.ariaAutocomplete}
+                      aria-expanded={c.ariaExpanded}
+                      aria-controls={c.ariaControls}
+                      autocomplete="off"
+                    />
+                  {/snippet}
+                  {#snippet renderItem(item, _i, _sel)}
+                    <span class="suggest-name">{item.label}</span>
+                    <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
+                  {/snippet}
+                </SuggestPicker>
+              </div>
+            {:else}
+              <div class="tg-picker-wrap tg-picker-full">최대 {MAX_PRODUCTS}개까지 등록 가능합니다.</div>
+            {/if}
+            <button
+              class="tg-expand-btn"
+              class:active={activeGroupId === g._tempId}
+              onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
+              aria-label="상품 편집"
+              type="button"
+            >
+              <ChevronIcon
+                direction={activeGroupId === g._tempId ? 'up' : 'down'}
+                size={8}
+                color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
+              />
+            </button>
+          </div>
+
+          <!-- 상품 목록 아코디언 — 기존과 동일하게 펼침보기 유지 -->
           {#if activeGroupId === g._tempId}
             {#key activeGroupId}
               <div class="tg-products-area">
@@ -431,47 +476,6 @@
                       </div>
                     {/snippet}
                   </CmsDragList>
-                {/if}
-
-                <!-- 상품 추가 검색 -->
-                {#if activeProductsList.length < MAX_PRODUCTS}
-                  <div class="tg-picker-wrap">
-                    <SuggestPicker
-                      id="theme-product-search"
-                      bind:selectedId={pickerSelId}
-                      options={pickerOptions}
-                      noFilter
-                      clearOnSelect
-                      itemLayout="row"
-                      placeholder="상품 검색…"
-                      listLabel="검색 결과"
-                      variant="generic"
-                      oninput={onPickerInput}
-                      onselect={onProductSelect}
-                    >
-                      {#snippet field(c)}
-                        <input
-                          type="text"
-                          class="f-input"
-                          id={c.id}
-                          placeholder={c.placeholder}
-                          value={c.value}
-                          oninput={c.oninput}
-                          onkeydown={c.onkeydown}
-                          onfocus={c.onfocus}
-                          onblur={c.onblur}
-                          aria-autocomplete={c.ariaAutocomplete}
-                          aria-expanded={c.ariaExpanded}
-                          aria-controls={c.ariaControls}
-                          autocomplete="off"
-                        />
-                      {/snippet}
-                      {#snippet renderItem(item, _i, _sel)}
-                        <span class="suggest-name">{item.label}</span>
-                        <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
-                      {/snippet}
-                    </SuggestPicker>
-                  </div>
                 {/if}
               </div>
             {/key}
@@ -644,6 +648,7 @@
   .tg-expand-btn {
     width: 30px;
     height: 30px;
+    flex-shrink: 0;
     border: 1.5px solid #dcdcdc;
     border-radius: var(--radius-sm, 8px);
     background: #fff;
@@ -729,6 +734,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    width: 100%;
+    flex: 1;
+    min-width: 0;
     background: #fff;
     border-radius: var(--radius-sm, 8px);
     padding: 6px 8px;
@@ -768,8 +776,26 @@
   .tg-prod-del:hover { color: #cf0000; background: #fff0f0; }
 
   /* 검색 피커 */
+  /* 검색 입력폼바 + 아코디언 버튼 — 상시 노출 그룹 정렬 */
+  .tg-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .tg-picker-wrap {
     position: relative;
+    flex: 1;
+    min-width: 0;
+  }
+  .tg-picker-full {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 14px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--radius-sm, 8px);
+    font-size: 12px;
+    color: var(--cs-text-mid, #666);
   }
   /* SuggestPicker 표준 입력 — cms-uiux.md §7-7/§12 정본(.f-input) 그대로 사용 */
   .f-input {
@@ -784,6 +810,21 @@
   }
   .f-input::placeholder { color: var(--cs-text-light); }
   .f-input:focus { outline: 2px solid var(--cs-purple, #3b2f8a); outline-offset: -2px; }
+
+  /* 검색 입력폼바 전용 보정(2026-09-30) — .f-input 표준의 outline 포커스 스타일이 "검색창"으로
+     인식되기엔 브라우저 기본 포커스 링처럼 보이는 여지가 있어, 평소에도 테두리를 둬 입력란임을
+     분명히 하고 포커스 시에는 tg-search-input(하입팩 모달)과 동일하게 테두리 색만 바뀌도록 보정.
+     .f-input 자체(다른 25+개 화면의 공용 표준)는 무변경 — 이 검색 입력에만 별도 클래스로 덧씌움. */
+  .tg-search-f-input {
+    height: 34px;
+    padding: 0 10px;
+    font-size: 12px;
+    border: 1.5px solid #dcdcdc;
+  }
+  .tg-search-f-input:focus {
+    outline: none;
+    border-color: var(--cs-purple, #3b2f8a);
+  }
 
   /* SuggestPicker dropdown 오버라이드 */
   .tg-picker-wrap :global(.suggest-name) {

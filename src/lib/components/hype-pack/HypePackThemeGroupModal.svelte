@@ -368,21 +368,8 @@
               oninput={(e) => setField(g._tempId, 'title', (e.target as HTMLInputElement).value)}
             />
 
-            <!-- 아코디언 토글 / 삭제 -->
+            <!-- 삭제 / 노출 토글 (아코디언 토글은 검색입력폼바와 함께 아래로 이동) -->
             <div class="tg-group-actions">
-              <button
-                class="tg-expand-btn"
-                class:active={activeGroupId === g._tempId}
-                onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
-                aria-label="상품 편집"
-                type="button"
-              >
-                <ChevronIcon
-                  direction={activeGroupId === g._tempId ? 'up' : 'down'}
-                  size={8}
-                  color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
-                />
-              </button>
               <button
                 class="tg-del-btn"
                 onclick={() => removeGroup(g._tempId)}
@@ -413,7 +400,61 @@
             oninput={(e) => setField(g._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
           />
 
-          <!-- 상품 편집 아코디언 -->
+          <!-- 검색 입력폼바 + 아코디언 버튼 — 상시 노출(펼치지 않아도 바로 검색 가능) -->
+          <div class="tg-picker-row">
+            <div class="tg-picker-wrap">
+              <SuggestPicker
+                id={`hype-theme-product-search-${g._tempId}`}
+                bind:selectedId={pickerSelId}
+                options={activeGroupId === g._tempId ? pickerOptions : []}
+                noFilter
+                clearOnSelect
+                itemLayout="row"
+                placeholder="패키지 상품 검색…"
+                listLabel="검색 결과"
+                variant="generic"
+                oninput={onPickerInput}
+                onselect={onProductSelect}
+              >
+                {#snippet field(c)}
+                  <input
+                    type="text"
+                    class="tg-search-input"
+                    id={c.id}
+                    placeholder={c.placeholder}
+                    value={c.value}
+                    oninput={c.oninput}
+                    onkeydown={c.onkeydown}
+                    onfocus={() => { if (activeGroupId !== g._tempId) activateGroup(g._tempId); c.onfocus() }}
+                    onblur={c.onblur}
+                    aria-autocomplete={c.ariaAutocomplete}
+                    aria-expanded={c.ariaExpanded}
+                    aria-controls={c.ariaControls}
+                    autocomplete="off"
+                  />
+                {/snippet}
+                {#snippet renderItem(item, _i, _sel)}
+                  <span class="suggest-name">{item.label}</span>
+                  <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
+                {/snippet}
+              </SuggestPicker>
+            </div>
+            <button
+              class="tg-expand-btn"
+              class:active={activeGroupId === g._tempId}
+              onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
+              aria-label="상품 편집"
+              type="button"
+            >
+              <ChevronIcon
+                direction={activeGroupId === g._tempId ? 'up' : 'down'}
+                size={8}
+                color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
+              />
+            </button>
+          </div>
+
+          <!-- 상품 목록 아코디언 — 기존과 동일하게 펼침보기 유지 -->
           {#if activeGroupId === g._tempId}
             {#key activeGroupId}
               <div class="tg-products-area">
@@ -447,45 +488,6 @@
                     {/snippet}
                   </CmsDragList>
                 {/if}
-
-                <!-- 상품 추가 검색 (패키지 카테고리 잠금) — 개수 제한 없음 -->
-                <div class="tg-picker-wrap">
-                    <SuggestPicker
-                      id="hype-theme-product-search"
-                      bind:selectedId={pickerSelId}
-                      options={pickerOptions}
-                      noFilter
-                      clearOnSelect
-                      itemLayout="row"
-                      placeholder="패키지 상품 검색…"
-                      listLabel="검색 결과"
-                      variant="generic"
-                      oninput={onPickerInput}
-                      onselect={onProductSelect}
-                    >
-                      {#snippet field(c)}
-                        <input
-                          type="text"
-                          class="tg-search-input"
-                          id={c.id}
-                          placeholder={c.placeholder}
-                          value={c.value}
-                          oninput={c.oninput}
-                          onkeydown={c.onkeydown}
-                          onfocus={c.onfocus}
-                          onblur={c.onblur}
-                          aria-autocomplete={c.ariaAutocomplete}
-                          aria-expanded={c.ariaExpanded}
-                          aria-controls={c.ariaControls}
-                          autocomplete="off"
-                        />
-                      {/snippet}
-                      {#snippet renderItem(item, _i, _sel)}
-                        <span class="suggest-name">{item.label}</span>
-                        <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
-                      {/snippet}
-                    </SuggestPicker>
-                </div>
               </div>
             {/key}
           {/if}
@@ -657,6 +659,7 @@
   .tg-expand-btn {
     width: 30px;
     height: 30px;
+    flex-shrink: 0;
     border: 1.5px solid #dcdcdc;
     border-radius: var(--radius-sm, 8px);
     background: #fff;
@@ -788,9 +791,18 @@
   }
   .tg-prod-del:hover { color: #cf0000; background: #fff0f0; }
 
+  /* 검색 입력폼바 + 아코디언 버튼 — 상시 노출 그룹 정렬 */
+  .tg-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   /* 검색 피커 */
   .tg-picker-wrap {
     position: relative;
+    flex: 1;
+    min-width: 0;
   }
   .tg-search-input {
     width: 100%;
