@@ -32,7 +32,7 @@
     name: string
     category: string
     price24h: number
-    price12h: number
+    price12h: number | null
     img: string
     slug?: string
     href?: string
@@ -53,7 +53,8 @@
       category: String(r['category'] ?? ''),
       slug:     slug ?? undefined,
       price24h: p24,
-      price12h: Math.round(p24 * 0.7),
+      // 12h는 검색 API가 내려주는 CMS 실값(price_rules) — 규칙이 없으면 null(12H 표시 생략). 예전 24h×0.7 계산 제거
+      price12h: r['price_12h'] != null ? Number(r['price_12h']) : null,
       img:      ((r['image_urls'] as string[] | null)?.[0])
         ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
       href:     slug ? `/products/${slug}` : undefined,
