@@ -6,6 +6,7 @@
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
+  import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
@@ -247,7 +248,7 @@
       })
       const row = data?.[0]
       if (!row?.success || row.reservation_id == null) {
-        csToast.error(row?.error_message ?? error?.message ?? '재고가 부족합니다.')
+        csToast.error(stripServerGuardPrefix(row?.error_message) ?? error?.message ?? '재고가 부족합니다.')
         return false
       }
       applyQtyOverride(line.canonicalReservationId, line.qty + 1, [...line.reservationIds, String(row.reservation_id)], consumeDelta)
@@ -266,7 +267,7 @@
     })
     const row = data?.[0]
     if (!row?.success || row.reservation_id == null) {
-      csToast.error(row?.error_message ?? error?.message ?? '재고가 부족합니다.')
+      csToast.error(stripServerGuardPrefix(row?.error_message) ?? error?.message ?? '재고가 부족합니다.')
       return false
     }
     if (row.error_message?.startsWith('DURATION_SAVE_FAILED:')) {
@@ -666,22 +667,32 @@
   // 잘못 해석돼(아래 bulkHandleDate의 `bulkDate && !bulkReturnDate` 분기 참고) 무효
   // 날짜와 새 날짜가 동시에 선택된 것처럼 보이는 결함으로 이어졌다 — 경고와 동시에
   // 선택 자체를 취소(bulkDate 초기화)해 두 문제를 함께 해소한다.
-  // 기존 draft 그룹 제출 시점 재검증(TWO_DAY_LEADTIME_KEYS_CO, 위쪽 체크아웃 로직)과
-  // 동일한 2일 기준을 재사용하되, 그쪽은 'delivery'/'epost'(레거시 키) 기준이라 현재
+  // 기존 draft 그룹 제출 시점 재검증(위쪽 체크아웃 로직)도 같은 공용 함수를 쓴다(2026-09-30).
+  // 과거엔 'delivery'/'epost'(레거시 키) 기준이라 현재
   // 실사용 방식인 'crazydelivery'를 못 잡는다 — 여기서는 데이터 기반 판정
   // (isDeliveryTypeMethod)을 써서 CMS에서 "배송 반납 허용 지정"이 켜진 방식이면 무엇이든
   // 자동으로 대응한다.
+  // 2026-09-30 — 방식별 신청 마감(리드타임) 판정을 공용 유틸(pickupLeadTime.ts)로 일원화.
+  // 방문·퀵·무인보관함 "1일 전 오후 7시까지", 배송형(is_delivery_type) "2일 전 오후 7시까지"
+  // (KST 고정, CMS 안내문구가 정형이면 그 값 우선). 달력 사전 차단·클릭·제출 재검증이 모두
+  // 같은 함수를 쓴다 — 과거엔 세 곳이 각자 다른 기준(문구 parseInt / 로컬시각 / 레거시 키)이었다.
+  function leadRuleForMethod(m: DeliveryMethod | null) {
+    const opt = sdDeliveryOpts.find(o => o.method_key === m)
+    const text = ((data.deliveryOptions as DeliveryOptionRow[] | undefined) ?? []).find(o => o.method_key === m)?.deadline_time ?? null
+    return resolveLeadRule({ isDeliveryType: !!opt?.is_delivery_type, deadlineText: text })
+  }
   function isDeliveryLeadtimeInvalid(pickupDate: string): boolean {
-    if (!isDeliveryTypeMethod(bulkOpts.rentalMethod)) return false
-    const twoDaysLater = new Date()
-    twoDaysLater.setHours(0, 0, 0, 0)
-    twoDaysLater.setDate(twoDaysLater.getDate() + 2)
-    const startDateOnly = new Date(`${pickupDate}T00:00:00`)
-    return startDateOnly < twoDaysLater
+    if (!bulkOpts.rentalMethod) return false
+    return isPickupDateBlocked(pickupDate, leadRuleForMethod(bulkOpts.rentalMethod), Date.now())
   }
   function bulkHandleDate(d: string) {
     if (bulkDate && !bulkReturnDate) {
       if (d >= bulkDate) {
+        // 최대 대여일 초과 반납일은 확정하지 않는다(범위선택 경로에는 달력 상한이 없어 검증 필요)
+        if (maxReturnDate && d > maxReturnDate) {
+          csToast.warning(`최대 대여기간(${sdShippingSettings?.max_rental_days}일)을 초과했습니다. 반납일을 다시 선택해주세요.`)
+          return
+        }
         bulkReturnDate = d
         applyBulkToItems()
         // 2026-09-21(Stephen 지시) — 수령일 달력 하나에서 수령~반납 2클릭 범위선택이
@@ -690,7 +701,7 @@
         // 일어난다(measureCalLayer 액션의 문서 클릭 리스너 참고).
       } else {
         if (isDeliveryLeadtimeInvalid(d)) {
-          csToast.error('선택한 수령날짜에 배송이 불가능합니다.')
+          csToast.error(leadTimeMessage(leadRuleForMethod(bulkOpts.rentalMethod)))
           bulkDate = ''
           bulkReturnDate = ''
           applyBulkToItems()
@@ -701,7 +712,7 @@
       }
     } else {
       if (isDeliveryLeadtimeInvalid(d)) {
-        csToast.error('선택한 수령날짜에 배송이 불가능합니다.')
+        csToast.error(leadTimeMessage(leadRuleForMethod(bulkOpts.rentalMethod)))
         bulkDate = ''
         bulkReturnDate = ''
         applyBulkToItems()
@@ -720,6 +731,10 @@
     // [13] 반납일이 수령일보다 앞서면 차단 (수령일이 아직 미설정이면 통과)
     if (bulkDate && d < bulkDate) {
       csToast.warning('반납일은 수령일 이후로 설정해주세요')
+      return
+    }
+    if (maxReturnDate && d > maxReturnDate) {
+      csToast.warning(`최대 대여기간(${sdShippingSettings?.max_rental_days}일)을 초과했습니다.`)
       return
     }
     bulkReturnDate = d
@@ -925,25 +940,16 @@
     })
   )
 
-  // [12] 방문 수령 최소 선택 가능일 — "1일 전 오후 7시까지" 규칙 (KST 기준)
-  // 규칙: D일 방문수령을 원하면 D-1일 deadline_time(기본 19:00) 이전에 신청해야 한다.
-  // 즉 오늘 방문수령은 항상 불가 → 최소 내일(19시 이전) 또는 모레(19시 이후)
-  const minVisitPickupDate = $derived.by(() => {
-    const visitTab = deliveryTabs.find(t => t.v === 'visit')
-    const deadlineStr = visitTab?.deadline ?? '19:00'
-    const deadlineHour = parseInt(deadlineStr.split(':')[0], 10)
-    // KST = UTC+9: new Date(Date.now() + 9h)로 오프셋 후 getUTCHours()로 KST 시각 얻기
-    const kstNow = new Date(Date.now() + 9 * 3_600_000)
-    const todayKst = kstNow.toISOString().slice(0, 10)
-    const kstH = kstNow.getUTCHours()
-    return kstH < deadlineHour ? addDays(todayKst, 1) : addDays(todayKst, 2)
-  })
+  // [12] 수령 최소 선택 가능일 — 방식별 "N일 전 오후 H시까지" 규칙 (KST, pickupLeadTime.ts)
+  // 방문·퀵·무인보관함 D-1 19시 / 배송형 D-2 19시. 시각은 호출 시점 기준(달력 표시는 매 렌더 재계산).
+  const minPickupForSelectedMethod = $derived(
+    bulkOpts.rentalMethod ? minPickupDate(leadRuleForMethod(bulkOpts.rentalMethod), Date.now()) : ''
+  )
 
-  // 조건 3: 방문 수령 마감시각 검사 — "1일 전 오후 7시까지" (KST)
-  // 방문(visit) 이외 방식은 항상 통과. 날짜 미선택이면 통과(제출 단계는 datesSet이 막음).
-  // 방문인데 선택한 수령일이 최소일보다 이르면 차단(이미 캘린더 minDate로도 막혀있음 — 이중 방어).
+  // 조건 3: 수령 마감시각 검사 — 방식 미선택·날짜 미선택이면 통과(제출 단계는 datesSet이 막음).
+  // 선택한 수령일이 최소일보다 이르면 차단(달력 사전 차단과 이중 방어).
   const deadlineOk = $derived(
-    bulkOpts.rentalMethod !== 'visit' || !bulkDate || bulkDate >= minVisitPickupDate
+    !bulkOpts.rentalMethod || !bulkDate || bulkDate >= minPickupForSelectedMethod
   )
 
   // 조건 4: 신원 확인 완료 — 2026-08-18 정책 변경: 장바구니는 가입 완료 계정만 접근
@@ -1257,10 +1263,10 @@
 
   // [11] 최대 반납일 = 수령일 + max_rental_days (DB 설정값, 기본 15일)
   // bulkDate가 없거나 max_rental_days 미설정이면 제한 없음(undefined)
+  // 2026-09-30: 배송형은 요금이 "날짜차+1일"(포함 일수)이라 수령일 포함 max일 → 수령일+(max-1),
+  // 일반 방식은 "차이×24h"라 수령일+max (10/2 수령·최대 15일: 배송형 10/16, 그 외 10/17까지).
   const maxReturnDate = $derived(
-    bulkDate && sdShippingSettings?.max_rental_days
-      ? addDays(bulkDate, sdShippingSettings.max_rental_days)
-      : undefined
+    calcMaxReturnDate(bulkDate, sdShippingSettings?.max_rental_days, isDeliveryTypeMethod(bulkOpts.rentalMethod))
   )
 
   // 2026-09-05(Stephen 지시 — 배송요금 미부과 CRITICAL 결함 수정): "이 방식이 배송인가"
@@ -1870,6 +1876,12 @@
     }, 0)
   )
 
+  // 체크된 대여(비구매) 라인 존재 여부 — 보증금 "면제" 표기는 대여 라인이 있을 때만 의미가 있다
+  // (판매전용 구매 라인은 원래 보증금 개념이 없어 "면제"로 보이면 오해를 준다)
+  const hasCheckedRentalLine = $derived(
+    itemsState.some(it => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase')
+  )
+
   // 적립 예정 포인트 (5%)
   const otEarnPoints = $derived(Math.round(otTotal * 0.05))
 
@@ -2307,11 +2319,17 @@
           <div class="deposit-notice-row">
             <span class="deposit-label">보증금 (별도)</span>
             <div class="deposit-amount">
-              <span class="deposit-num">{fmtKrw(otDeposit)}</span>
-              <span class="deposit-unit">원</span>
+              {#if pricingReady && hasCheckedRentalLine && otDeposit === 0}
+                <span class="deposit-num">면제</span>
+              {:else}
+                <span class="deposit-num">{fmtKrw(otDeposit)}</span>
+                <span class="deposit-unit">원</span>
+              {/if}
             </div>
           </div>
-          <p class="deposit-note">보증금은 대여 합계금액과 별도로 청구되며 반납 완료 후 전액 환불됩니다.</p>
+          {#if !(pricingReady && hasCheckedRentalLine && otDeposit === 0)}
+            <p class="deposit-note">보증금은 대여 합계금액과 별도로 청구되며 반납 완료 후 전액 환불됩니다.</p>
+          {/if}
         </div>
 
         <!-- Total dark box -->
@@ -2471,7 +2489,6 @@
             // 1예약행=1대 단위로 이뤄져야 하므로).
             const checkedDraftItems = checkedItemsState.filter(it => groupsById.get(it.id)?.status === 'draft')
             if (checkedDraftItems.length > 0) {
-              const TWO_DAY_LEADTIME_KEYS_CO = new Set(['delivery', 'epost'])
               const nowTimeCo = new Date()
               for (const it of checkedDraftItems) {
                 // 2026-09-04: readyToSubmit(methodSelectionValid)이 이미 rentalMethod/
@@ -2497,27 +2514,10 @@
                 // 리드타임 재검증 — 구매 라인은 오늘 날짜 고정이므로 리드타임 검증을 건너뜀
                 if (!isPurchaseCo) {
                   if (!pickupMethodCo) { csToast.error('수령 방식을 다시 선택해주세요.'); return }
-                  const needsTwoDayLeadtime = TWO_DAY_LEADTIME_KEYS_CO.has(pickupMethodCo)
-                  if (needsTwoDayLeadtime) {
-                    const twoDaysLater = new Date(nowTimeCo.getFullYear(), nowTimeCo.getMonth(), nowTimeCo.getDate() + 2)
-                    const startDateOnly = new Date(`${it.rentalDate}T00:00:00`)
-                    if (startDateOnly < twoDaysLater) {
-                      csToast.error('택배 대여는 대여일 2일 전 예약 가능합니다.')
-                      return
-                    }
-                  } else {
-                    const todayIsoCo = `${nowTimeCo.getFullYear()}-${String(nowTimeCo.getMonth() + 1).padStart(2, '0')}-${String(nowTimeCo.getDate()).padStart(2, '0')}`
-                    if (it.rentalDate === todayIsoCo) {
-                      const [hStr, mStr] = (it.rentalTime || '00:00').split(':')
-                      const startH = parseInt(hStr ?? '0', 10)
-                      const startM = parseInt(mStr ?? '0', 10)
-                      const startDt = new Date(`${it.rentalDate}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`)
-                      const threeHoursLater = new Date(nowTimeCo.getTime() + 3 * 60 * 60 * 1000)
-                      if (startDt < threeHoursLater) {
-                        csToast.error('당일 대여는 대여시간 기준 3시간 전 방문만 가능합니다.')
-                        return
-                      }
-                    }
+                  // 신청 마감(리드타임) 재검증 — 달력·클릭 검증과 같은 공용 함수(KST 기준)
+                  if (isPickupDateBlocked(it.rentalDate, leadRuleForMethod(pickupMethodCo), nowTimeCo.getTime())) {
+                    csToast.error(leadTimeMessage(leadRuleForMethod(pickupMethodCo)))
+                    return
                   }
                 }
                 // 대여 기간 유형 계산(그룹 공유값, products/[id]/+page.svelte L320-322와 동일 판정 기준)
@@ -2561,7 +2561,7 @@
                   })
                   const promoteRow = promoteRows?.[0]
                   if (!promoteRow?.success) {
-                    csToast.error(promoteRow?.error_message ?? promoteError?.message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
+                    csToast.error(stripServerGuardPrefix(promoteRow?.error_message) ?? promoteError?.message ?? '해당 기간에 예약 가능한 재고가 없습니다.')
                     return
                   }
                   // 수령·반납 방식 저장 (기존 saveShipmentMethod 재사용) + 수령 주소 스냅샷(Migration 434)
@@ -2622,6 +2622,14 @@
             if (!createOrderRes) {
               csToast.error('예약 처리 중 오류가 발생했습니다.')
               return
+            }
+            // 서버가 24h 요금 미등록 상품을 거부한 경우(PRICE_UNSET) — 신청완료로 넘어가지 않는다
+            if (createOrderRes.status === 400) {
+              const rejected = await createOrderRes.clone().json().catch(() => null) as { code?: string; error?: string } | null
+              if (rejected?.code === 'PRICE_UNSET') {
+                csToast.error(rejected.error ?? '요금이 등록되지 않은 상품이 있어 예약을 신청할 수 없습니다.')
+                return
+              }
             }
             const nowDt = new Date()
             const padN = (n: number) => String(n).padStart(2, '0')
@@ -3027,7 +3035,7 @@
       </button>
       {#if bulkOpenAcc === 'rental'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate, minDate: bulkOpts.rentalMethod === 'visit' ? minVisitPickupDate : undefined })}
+          {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: bulkDate, onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: bulkTime, onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, copyToReturn: bulkOpts.copyToReturn, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, onCopyChange: bulkHandleCopy, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {:else if bulkDate && bulkTime}
         <!-- 2026-09-03(Stephen 확정) — "대여 방법" 아코디언이 닫혀도 이미 선택된 수령일·시간을
@@ -3473,9 +3481,16 @@
                   // 필요 수량만큼 가용 재고가 없으면 선택 불가로 반영. 휴무일 자체는
                   // 더 이상 차단 사유가 아님(자동 연장으로 대체, 아래 .cal-holiday-guide-note
                   // 상시 안내 참고).
+                  // 2026-09-30 — 수령 달력은 방식별 신청 마감(리드타임)이 지난 날짜도 사전 차단
+                  // (연한 빨간 원으로 표시, 클릭 시 안내). 반납 달력에는 적용하지 않음.
+                  if (props.type === 'rental' && props.method && isPickupDateBlocked(iso, leadRuleForMethod(props.method), Date.now())) return true
                   return props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
                 }}
                 onDisabledClick={(iso) => {
+                  if (props.type === 'rental' && props.method && isPickupDateBlocked(iso, leadRuleForMethod(props.method), Date.now())) {
+                    csToast.error(leadTimeMessage(leadRuleForMethod(props.method)))
+                    return
+                  }
                   const stockUnavailable = props.type === 'rental' ? unavailablePickupDates.has(iso) : unavailableReturnDates.has(iso)
                   if (stockUnavailable) {
                     csToast.error('해당 일자는 장바구니 상품의 재고가 모두 점유되어 예약할 수 없습니다.')
