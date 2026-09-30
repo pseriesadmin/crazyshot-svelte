@@ -4,7 +4,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
-import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
+import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
 import type { PageServerLoad } from './$types'
@@ -154,7 +154,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .from('user_coupons')
       .select(`id, coupon_id, used_count, first_viewed_at,
         coupons(
-          id, code, type, discount_type, discount_value, display_name, allow_stacking,
+          id, code, type, discount_type, discount_value, display_name, allow_stacking, allow_coupon_stacking,
           is_active, deleted_at, valid_from, valid_until, validity_type, valid_days,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
@@ -203,11 +203,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     // 실제 구독 테이블명은 subscriptions가 아니라 user_subscriptions이고, 이 테이블에도
     // deleted_at 컬럼이 없음(status CHECK 제약이 'active'/'cancelled'/'expired'만 허용) —
     // use_coupon RPC(Migration 348)와 동일하게 교정
+    // plan_id도 함께 조회 — 적립 예정 포인트 표시에 구독상품별 "더블 적립" 보너스율을
+    // 반영하려면 어느 구독상품에 가입했는지 알아야 한다(award_rental_complete_points와 동일 판별 조건).
     supabase
       .from('user_subscriptions')
-      .select('id')
+      .select('id, plan_id')
       .eq('user_id', session.user.id)
       .eq('status', 'active')
+      .order('started_at', { ascending: false })
       .limit(1),
   ])
 
@@ -219,6 +222,13 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 7개 자격조건(order-dependent/user-dependent) 2차 필터는 calcTotal 확정 후 적용
   const now = new Date().toISOString()
   const memberGrade = (profileResult.data as ProfileRow | null)?.membership_grade ?? null
+  // 필수 회원 분류(general/student/subscriber, Migration #528) 판정용 — 과거엔 membership_grade와 직접
+  // 비교해 분류가 설정된 쿠폰이 항상 제외되던 결함이 있었다(2026-10-01 교정)
+  const gradeUser = {
+    isStudent: (studentResult.data as { is_student?: boolean | null } | null)?.is_student === true,
+    membershipGrade: memberGrade,
+    hasActiveSubscription: (subscriptionResult.data?.length ?? 0) > 0,
+  }
 
   const basicFilteredCoupons = ((couponResult.data ?? []) as RawUserCouponRow[]).filter(uc => {
     const c = uc.coupons
@@ -238,7 +248,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       if (c.valid_until && c.valid_until < now) return false
     }
     // 등급 조건: user_grade_required가 설정된 쿠폰은 회원 등급 일치 필수
-    if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
+    if (c.user_grade_required && !matchesUserGradeRequired(c.user_grade_required, gradeUser)) return false
     // 전체 발급 한도 소진
     if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
     // 개별 사용 한도 소진
@@ -576,7 +586,10 @@ export const load: PageServerLoad = async ({ locals }) => {
   const filteredCoupons = basicFilteredCoupons.filter(uc => {
     const c = uc.coupons
     if (!c) return false
-    const result = isCouponEligible(
+    // B-1: 주문 의존 조건(최소 금액·대여일수·방문 전용)은 서버 로드 시점엔 판정할 수 없다(draft 예약은 날짜가 없고
+    // 수령 방식은 체크아웃 전까지 DB에 없음) — 여기서는 사용자 의존 조건만 걸러 내려주고, 주문 의존 조건은
+    // 화면이 현재 선택 상태로 판정한다. 최종 방어는 create-order 사전검증과 결제 소진(use_coupons)이 맡는다.
+    const result = isCouponUserEligible(
       {
         min_purchase_amount:  c.min_purchase_amount,
         min_rental_amount:    c.min_rental_amount,
@@ -604,11 +617,18 @@ export const load: PageServerLoad = async ({ locals }) => {
   })
 
   // 적립 예정 포인트 표시용 적립률 — CMS "적립 규칙"(point_earn_rules, rental_complete)이 정본.
+  // 구독회원은 award_rental_complete_points(Migration #603)의 "더블 적립"과 동일하게 공통
+  // 적립률 + 구독상품별 "적립포인트"(tier_benefits.LOYALTY_POINTS, 구독료 결제 적립과 동일
+  // 값 재사용) 보너스율을 합산해서 보여준다 — 그래야 실제 지급액과 장바구니 표시가 일치한다.
   // RLS가 CMS 계정만 SELECT를 허용하므로 서버에서 service_role로만 읽는다(키는 서버 밖으로 나가지 않음).
-  // 규칙이 없거나 비활성·조회 실패면 null → 화면은 0p로 표시(임의 비율로 추정하지 않는다).
+  // 규칙이 없거나 비활성·조회 실패면 그 부분은 0으로 취급(임의 비율로 추정하지 않는다).
+  // ⚠️ 표시는 단순 비율 합산 추정치다 — 실제 지급 시 적용되는 min_purchase_amount·
+  // max_points_per_order 상한은 여기서는 반영하지 않는다(최종 정확한 금액은 서버 RPC가 산정).
   let earnRate: number | null = null
   try {
     const earnAdmin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+    let combinedRate = 0
+
     const { data: earnRule, error: earnRuleError } = await earnAdmin
       .from('point_earn_rules')
       .select('rate, is_active')
@@ -618,8 +638,28 @@ export const load: PageServerLoad = async ({ locals }) => {
       console.error('[cart] point_earn_rules 조회 실패', earnRuleError)
     } else if (earnRule && earnRule.is_active === true) {
       const rate = Number(earnRule.rate)
-      if (Number.isFinite(rate) && rate > 0) earnRate = rate
+      if (Number.isFinite(rate) && rate > 0) combinedRate += rate
     }
+
+    // 구독회원 "더블 적립" 보너스 — award_rental_complete_points와 동일 판별 조건(활성 구독의 plan_id)
+    const activePlanId = (subscriptionResult.data?.[0] as { plan_id?: number } | null | undefined)?.plan_id
+    if (activePlanId) {
+      const { data: loyaltyBenefit, error: loyaltyError } = await earnAdmin
+        .from('tier_benefits')
+        .select('benefit_params')
+        .eq('plan_id', activePlanId)
+        .eq('benefit_type', 'LOYALTY_POINTS')
+        .eq('is_enabled', true)
+        .maybeSingle()
+      if (loyaltyError) {
+        console.error('[cart] tier_benefits(LOYALTY_POINTS) 조회 실패', loyaltyError)
+      } else if (loyaltyBenefit?.benefit_params) {
+        const bonusRatePercent = Number((loyaltyBenefit.benefit_params as Record<string, unknown>).points_rate)
+        if (Number.isFinite(bonusRatePercent) && bonusRatePercent > 0) combinedRate += bonusRatePercent / 100
+      }
+    }
+
+    if (combinedRate > 0) earnRate = combinedRate
   } catch (e) {
     console.error('[cart] point_earn_rules 조회 예외', e)
   }

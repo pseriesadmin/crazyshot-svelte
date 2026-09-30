@@ -121,10 +121,13 @@ export async function loadUserCoupons(
       const c = row.coupons as RawCoupon
       // [4A] Supabase NUMERIC(10,2)는 JS string으로 직렬화됨 → Number() 변환 필수
       const discountValue = Number(c.discount_value)
+      // 무료배송은 값이 '배송비 차감 상한'(비우면 전액 면제 상한값 9,999,999)이라 % 문구로 그리면 안 된다(B-7)
       const label = c.display_name
         ?? (c.discount_type === 'fixed'
           ? `${discountValue.toLocaleString('ko-KR')}원 할인`
-          : `${discountValue}% 할인`)
+          : c.discount_type === 'free_shipping'
+            ? '무료배송'
+            : `${discountValue}% 할인`)
 
       const status: UserCouponCard['status'] = row.used_at ? 'used' : 'usable'
 

@@ -1,8 +1,43 @@
 import { redirect } from '@sveltejs/kit'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { normalizeFreeShippingValue } from '$lib/utils/couponFreeShipping'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
+import { countStatuses, splitDistributionTargets, type PreviewStatus, type DistributeStatus } from '$lib/utils/couponDistribution'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// target_meta(JSON {user_ids:[...]}) 또는 줄바꿈 텍스트에서 입력 목록을 꺼낸다(공백·중복 제거)
+function parseTargetInputs(raw: FormDataEntryValue | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(String(raw)) as { user_ids?: unknown }
+    if (Array.isArray(parsed?.user_ids)) return splitDistributionTargets(parsed.user_ids.map(String).join('\n'))
+  } catch { /* JSON이 아니면 텍스트로 처리 */ }
+  return splitDistributionTargets(String(raw))
+}
+
+// 이메일 → user_profiles.id 변환(RPC는 UUID만 받음). 못 찾은 이메일은 userId=null(회원 없음)로 돌려준다.
+async function resolveDistributionTargets(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any,
+  inputs: string[],
+): Promise<{ items: Array<{ input: string; userId: string | null }> } | { error: string }> {
+  const emails = inputs.filter(v => !UUID_RE.test(v))
+  const idByEmail = new Map<string, string>()
+  if (emails.length > 0) {
+    const { data: profiles, error } = await db.from('user_profiles').select('id, email').in('email', emails)
+    if (error) return { error: error.message }
+    for (const p of (profiles ?? []) as Array<{ id: string; email: string }>) idByEmail.set(String(p.email).toLowerCase(), p.id)
+  }
+  return {
+    items: inputs.map(input => ({
+      input,
+      userId: UUID_RE.test(input) ? input : (idByEmail.get(input.toLowerCase()) ?? null),
+    })),
+  }
+}
 
 export type CouponStats = {
   total_issued: number
@@ -172,7 +207,8 @@ export const actions: Actions = {
 
     const id                 = String(form.get('id') ?? '')
     const discount_type      = String(form.get('discount_type') ?? 'fixed')
-    const discount_value     = Number(form.get('discount_value') ?? 0)
+    // 무료배송은 할인값을 비우면 '배송비 전액 면제' 상한값으로 정규화(B-7)
+    const discount_value     = normalizeFreeShippingValue(discount_type, Number(form.get('discount_value') ?? 0))
     const max_discount_amount = Number(form.get('max_discount_amount') ?? 0) || null
     // 2026-09-21 수정: "전체 발급 한도"는 생성화면(/cms/promotion/coupon/new)부터 줄곧
     // total_usage_limit 컬럼 기준이었는데, 이 액션만 잘못된 컬럼(usage_limit)을 갱신하고
@@ -200,6 +236,9 @@ export const actions: Actions = {
     const is_subscription_only = form.get('is_subscription_only') === 'true'
     const allow_with_points    = form.get('allow_with_points') !== 'false'
     const allow_stacking       = form.get('allow_stacking') === 'true'
+    // 쿠폰끼리 중복 허용(Migration 605) — 폼에 값이 없으면 변경하지 않는다(null)
+    const allowCouponStackingRaw = form.get('allow_coupon_stacking')
+    const allow_coupon_stacking: boolean | null = allowCouponStackingRaw === null ? null : allowCouponStackingRaw === 'true'
     const valid_days           = Number(form.get('valid_days') ?? 0) || null
 
     if (!id) return { ok: false, error: '쿠폰 ID가 없습니다.' }
@@ -257,6 +296,13 @@ export const actions: Actions = {
     if (error) return { ok: false, error: error.message }
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) return { ok: false, error: result?.error ?? '수정 실패' }
+
+    if (allow_coupon_stacking !== null) {
+      const { data: stackData, error: stackError } = await db.rpc('cms_set_allow_coupon_stacking', { p_id: id, p_allow: allow_coupon_stacking })
+      if (stackError) return { ok: false, error: stackError.message }
+      const stackResult = stackData as { ok: boolean; error?: string } | null
+      if (!stackResult?.ok) return { ok: false, error: stackResult?.error ?? '쿠폰 중복 설정 저장 실패' }
+    }
     return { ok: true }
   },
 
@@ -318,6 +364,40 @@ export const actions: Actions = {
     return { ok: true }
   },
 
+  // B-8: 지급 전 사전 조회 — 입력한 이메일/UUID별로 지급 가능·이미 보유·이미 사용·회원 없음을 알려준다(쓰기 없음).
+  previewDistribute: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
+    const form = await request.formData()
+    const coupon_id = String(form.get('coupon_id') ?? '')
+    if (!coupon_id) return { ok: false, error: '쿠폰을 선택하세요.' }
+    const inputs = parseTargetInputs(form.get('target_meta'))
+    if (inputs.length === 0) return { ok: false, error: '지급 대상(이메일 또는 UUID)을 입력해 주세요.' }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = locals.supabase as unknown as any
+    const resolved = await resolveDistributionTargets(db, inputs)
+    if ('error' in resolved) return { ok: false, error: resolved.error }
+
+    const uuids = [...new Set(resolved.items.map(i => i.userId).filter((v): v is string => !!v))]
+    const statusByUser = new Map<string, PreviewStatus>()
+    if (uuids.length > 0) {
+      const { data, error } = await db.rpc('preview_distribute_coupon', { p_coupon_id: coupon_id, p_user_ids: uuids })
+      if (error) return { ok: false, error: error.message }
+      const res = data as { ok: boolean; error?: string; results?: Array<{ user_id: string; status: PreviewStatus }> } | null
+      if (!res?.ok) return { ok: false, error: res?.error ?? '사전 조회 실패' }
+      for (const r of res.results ?? []) statusByUser.set(r.user_id, r.status)
+    }
+    const items = resolved.items.map(i => ({
+      input: i.input,
+      userId: i.userId,
+      status: (i.userId ? (statusByUser.get(i.userId) ?? 'not_found') : 'not_found') as PreviewStatus,
+    }))
+    return { ok: true, preview: { items, counts: countStatuses(items.map(i => i.status)) } }
+  },
+
   distributeCoupon: async ({ request, locals }) => {
     const { session: sess4 } = await locals.safeGetSession()
     if (!sess4) return { ok: false, error: '인증 필요' }
@@ -334,31 +414,18 @@ export const actions: Actions = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
 
-    // specific_user 대상: 이메일 항목을 user_profiles.email 기준으로 UUID 변환
-    // (distribute_coupon RPC는 UUID만 받으므로 RPC 자체는 수정하지 않고 호출 전 전처리)
+    // specific_user 대상: 이메일 항목을 user_profiles.email 기준으로 UUID 변환하고, 회원 없음은
+    // 오류로 중단하지 않고 "회원 없음" 결과로 돌려준다(B-8 — 나머지 대상에게는 계속 지급)
+    let items: Array<{ input: string; userId: string | null }> | null = null
     if (target_type === 'specific_user' && Array.isArray(target_meta?.user_ids)) {
-      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-      const raw = target_meta.user_ids as string[]
-      const uuids  = raw.filter(v => UUID_RE.test(v))
-      const emails = raw.filter(v => !UUID_RE.test(v))
-
-      if (emails.length > 0) {
-        const { data: profiles, error: lookupError } = await db
-          .from('user_profiles')
-          .select('id, email')
-          .in('email', emails)
-
-        if (lookupError) return { ok: false, error: lookupError.message }
-
-        const foundEmails = new Set((profiles ?? []).map((p: { email: string }) => p.email))
-        const notFound = emails.filter(e => !foundEmails.has(e))
-        if (notFound.length > 0) {
-          return { ok: false, error: `일치하는 회원을 찾을 수 없습니다: ${notFound.join(', ')}` }
-        }
-        uuids.push(...(profiles ?? []).map((p: { id: string }) => p.id))
+      const resolved = await resolveDistributionTargets(db, target_meta.user_ids as string[])
+      if ('error' in resolved) return { ok: false, error: resolved.error }
+      items = resolved.items
+      target_meta.user_ids = [...new Set(items.map(i => i.userId).filter((v): v is string => !!v))]
+      if ((target_meta.user_ids as string[]).length === 0) {
+        const out = items.map(i => ({ input: i.input, userId: null, status: 'not_found' as DistributeStatus }))
+        return { ok: true, issued_count: 0, items: out, counts: countStatuses(out.map(o => o.status)) }
       }
-
-      target_meta.user_ids = uuids
     }
 
     const { data, error } = await db.rpc('distribute_coupon', {
@@ -368,11 +435,25 @@ export const actions: Actions = {
     })
 
     if (error) return { ok: false, error: error.message }
-    const result = data as { ok: boolean; issued_count?: number; error?: string } | null
+    const result = data as {
+      ok: boolean; issued_count?: number; error?: string
+      results?: Array<{ user_id: string; status: DistributeStatus }>
+    } | null
     // 2026-09-23(재설계) — DISTRIBUTION_PAUSED 체크는 distribute_coupon에서 제거됨
     // (Migration #527) — "특정 사용자 수동 지급"은 자동배포 토글 상태와 무관하게 항상
     // 가능해야 하므로. 나머지 에러 코드(COUPON_NOT_FOUND 등)는 원문 그대로 반환.
     if (!result?.ok) return { ok: false, error: result?.error ?? '지급 실패' }
+
+    // 입력별 결과로 되돌려 매핑(Migration #604 results[] — specific_user 전용)
+    if (items && result.results) {
+      const byUser = new Map(result.results.map(r => [r.user_id, r.status]))
+      const out = items.map(i => ({
+        input: i.input,
+        userId: i.userId,
+        status: (i.userId ? (byUser.get(i.userId) ?? 'not_found') : 'not_found') as DistributeStatus,
+      }))
+      return { ok: true, issued_count: result.issued_count, items: out, counts: countStatuses(out.map(o => o.status)) }
+    }
     return { ok: true, issued_count: result.issued_count }
   },
 

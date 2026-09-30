@@ -4,6 +4,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { normalizeFreeShippingValue } from '$lib/utils/couponFreeShipping'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
 
@@ -138,7 +139,8 @@ export const actions: Actions = {
     const code         = String(form.get('code') ?? '').trim().toUpperCase()
     const type         = String(form.get('type') ?? 'fixed')
     const discount_type  = String(form.get('discount_type') ?? 'fixed')
-    const discount_value = Number(form.get('discount_value') ?? 0)
+    // 무료배송은 할인값을 비우면 '배송비 전액 면제' 상한값으로 정규화(B-7) — 나머지 유형은 기존 그대로
+    const discount_value = normalizeFreeShippingValue(discount_type, Number(form.get('discount_value') ?? 0))
     const usage_limit    = Number(form.get('usage_limit') ?? 0) || null
     const min_purchase_amount = Number(form.get('min_purchase_amount') ?? 0)
     const valid_from   = String(form.get('valid_from') ?? '') || null
@@ -156,6 +158,8 @@ export const actions: Actions = {
     const validity_type        = String(form.get('validity_type') ?? 'fixed_period')
     const allow_with_points    = form.get('allow_with_points') !== 'false'
     const allow_stacking       = form.get('allow_stacking') === 'true'
+    // 쿠폰끼리 중복 허용(Migration 605) — 폼에 값이 없으면(구 화면) 정책 기본값 true
+    const allow_coupon_stacking = form.get('allow_coupon_stacking') !== 'false'
     const is_first_rental_only = form.get('is_first_rental_only') === 'true'
     const is_student_only      = form.get('is_student_only') === 'true'
     const is_walk_in_only      = form.get('is_walk_in_only') === 'true'
@@ -255,8 +259,15 @@ export const actions: Actions = {
     const { data, error } = await db.rpc('cms_create_coupon', payload)
 
     if (error) return fail(400, { error: error.message })
-    const result = data as { ok: boolean; error?: string } | null
+    const result = data as { ok: boolean; id?: string; error?: string } | null
     if (!result?.ok) return fail(400, { error: result?.error ?? '생성 실패' })
+
+    // "쿠폰끼리 중복 허용"은 cms_create_coupon 시그니처와 분리된 전용 RPC로 저장(오버로드 방지, Migration 605).
+    // 기본값(true)과 다를 때만 호출하고, 실패해도 이미 생성된 쿠폰을 되돌리지 않는다(상세 패널에서 재설정 가능).
+    if (result.id && !allow_coupon_stacking) {
+      const { error: stackError } = await db.rpc('cms_set_allow_coupon_stacking', { p_id: result.id, p_allow: false })
+      if (stackError) console.error('[coupon/new] cms_set_allow_coupon_stacking 실패:', stackError.message)
+    }
 
     throw redirect(303, '/cms/promotion/coupon?tab=manage')
   },

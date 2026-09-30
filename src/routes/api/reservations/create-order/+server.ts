@@ -25,7 +25,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // 장바구니에서 고른 쿠폰/포인트 — 계약서명 페이지(/contract/[token])가 다시 읽어 미리
   // 선택된 상태로 보여주기 위한 사전선택 캐시(Migration 340). 실제 소진은 여전히 결제
   // 확정 시점(pay-mock)에서만 일어난다.
-  const selectedCouponId = typeof body.couponId === 'string' && body.couponId ? body.couponId : null
+  // 2026-10-01(쿠폰 다중 선택, Migration 533/605): 단일값(couponId) 대신 배열(couponIds)을 받아
+  // create_reservation_order의 p_selected_coupon_ids로 전달한다. 구 클라이언트 호환을 위해 단일값도 배열로 흡수.
+  const rawCouponIds: unknown[] = Array.isArray(body.couponIds)
+    ? body.couponIds
+    : (typeof body.couponId === 'string' && body.couponId ? [body.couponId] : [])
+  const selectedCouponIds = [...new Set(rawCouponIds.filter((v): v is string => typeof v === 'string' && v.length > 0))]
   const selectedPoints = Number.isFinite(body.points) && body.points > 0 ? Math.floor(body.points) : 0
   // 2026-08-31(Migration 395): 장바구니가 이미 계산해 고객에게 보여준 배송비(등급별 우대할인
   // 반영된 최종값)를 그대로 받아 orders.final_amount에 합산 — 실결제 금액과 장바구니 총액
@@ -65,18 +70,20 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       p_selected_coupon_id: string | null
       p_selected_points: number
       p_delivery_fee: number
+      p_selected_coupon_ids: string[] | null
     }
   ) => Promise<{ data: { order_id: number; order_key: string; final_amount: number }[] | null; error: unknown }>
-  const { data, error } = await (admin.rpc as unknown as CreateReservationOrderRpcFn)(
-    'create_reservation_order',
-    {
+  const callCreateOrder = (couponIds: string[]) =>
+    (admin.rpc as unknown as CreateReservationOrderRpcFn)('create_reservation_order', {
       p_user_id: session.user.id,
       p_reservation_ids: reservationIds,
-      p_selected_coupon_id: selectedCouponId,
+      // 구 단일값 파라미터는 항상 null — 다중쿠폰 배열(p_selected_coupon_ids)만 사용
+      p_selected_coupon_id: null,
       p_selected_points: selectedPoints,
       p_delivery_fee: finalDeliveryFee,
-    }
-  )
+      p_selected_coupon_ids: couponIds.length > 0 ? couponIds : null,
+    })
+  let { data, error } = await callCreateOrder(selectedCouponIds)
 
   if (error) {
     // 24h 요금 미등록 대여 상품(Migration 587 PRICE-UNSET-GUARD) — 서버 오류가 아니라 요청 거부(400)
@@ -87,11 +94,51 @@ export const POST: RequestHandler = async ({ locals, request }) => {
         { status: 400 },
       )
     }
+    // "쿠폰끼리 중복 허용"이 꺼진 쿠폰이 2장 이상 선택에 섞임(Migration 605) — 요청 거부(400)
+    if (errMessage.includes('COUPON_STACKING_NOT_ALLOWED')) {
+      return json(
+        { error: '함께 사용할 수 없는 쿠폰이 포함되어 있습니다.', code: 'COUPON_STACKING_NOT_ALLOWED' },
+        { status: 400 },
+      )
+    }
     console.error('[reservations/create-order] create_reservation_order 실패:', error)
     return json({ error: '주문 연결 생성 실패' }, { status: 500 })
   }
 
-  const order = data?.[0] ?? null
+  let order = data?.[0] ?? null
+
+  // 쿠폰 사전검증(Migration 605 validate_order_coupons) — 주문이 만들어진 뒤 결제 소진 규칙(최소 금액·대여일수·
+  // 방문 전용·첫 렌탈·1인당 한도 등)을 같은 기준으로 미리 돌려, 화면 조작을 우회해 들어온 부적격 쿠폰이
+  // 할인에 반영되는 것을 막는다. 부적격 쿠폰만 빼고 주문을 다시 계산하고 제외 내역을 응답에 담는다.
+  // fail-soft — 사전검증 자체가 실패하면 기존 동작(결제 소진 시점 use_coupons 검증)에 맡긴다.
+  const droppedCoupons: Array<{ userCouponId: string; reason: string }> = []
+  if (order?.order_id && selectedCouponIds.length > 0) {
+    try {
+      const { data: validation, error: validationError } = await admin.rpc('validate_order_coupons', {
+        p_user_id: session.user.id,
+        p_order_id: order.order_id,
+        p_user_coupon_ids: selectedCouponIds,
+      })
+      if (validationError) {
+        console.error('[reservations/create-order] validate_order_coupons 실패:', validationError)
+      } else {
+        const results = ((validation as { results?: Array<{ user_coupon_id: string; ok: boolean; error?: string | null }> } | null)?.results ?? [])
+        const bad = results.filter((r) => r.ok === false)
+        if (bad.length > 0) {
+          for (const b of bad) droppedCoupons.push({ userCouponId: b.user_coupon_id, reason: b.error ?? 'UNKNOWN' })
+          const keep = selectedCouponIds.filter((id) => !bad.some((b) => b.user_coupon_id === id))
+          const retry = await callCreateOrder(keep)
+          if (retry.error) {
+            console.error('[reservations/create-order] 부적격 쿠폰 제외 후 재계산 실패:', retry.error)
+            return json({ error: '주문 연결 생성 실패' }, { status: 500 })
+          }
+          order = retry.data?.[0] ?? order
+        }
+      }
+    } catch (err) {
+      console.error('[reservations/create-order] 쿠폰 사전검증 예외:', err)
+    }
+  }
 
   // 3-2: 신규 예약 관리자 푸시 복구 (fail-soft — 실패해도 예약 신청 결과에 영향 없음)
   try {
@@ -110,5 +157,5 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     // 관리자 푸시 실패는 무시
   }
 
-  return json({ orderId: order?.order_id ?? null, orderKey: order?.order_key ?? null })
+  return json({ orderId: order?.order_id ?? null, orderKey: order?.order_key ?? null, droppedCoupons })
 }

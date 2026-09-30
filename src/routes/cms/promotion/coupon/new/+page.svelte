@@ -30,6 +30,8 @@
   let f_valid_days     = $state<number | null>(null)
   let f_allow_points   = $state(true)
   let f_allow_stacking = $state(false)
+  // 쿠폰끼리 중복 허용(allow_coupon_stacking) — 정책상 기본 허용, 끄면 다른 쿠폰과 함께 선택·사용 불가
+  let f_allow_coupon_stacking = $state(true)
   let f_first_rental   = $state(false)
   let f_student        = $state(false)
   let f_walk_in        = $state(false)
@@ -135,11 +137,10 @@
 
   function comboDatePart(combo: ComboRow): string | null {
     if (combo.date_option === 'none') return null
-    if (combo.date_option === 'ymd') {
-      const now = new Date()
-      return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-    }
-    return datePart('YYMM')
+    // B-7: 저장·발급은 date_option을 'yyyymm'으로만 기록하고(codeSeriesPayload 참고, 'ymd'도 근사 처리)
+    // 실채번(generate_user_coupon_redeemed_code)과 발행관리 목록(codeDisplay)도 YYYYMM 6자리를 쓴다.
+    // 예전 미리보기는 YYMM(4자리)·ymd(8자리)를 그려 실제 코드와 자릿수가 달랐다.
+    return datePart('YYYYMM')
   }
 
   function buildComboPreview(combo: ComboRow): string {
@@ -295,7 +296,8 @@
         // 제약을 전 discount_type 공통으로 받는다 — "배송비 할인"도 예외 없이 실제 할인금액
         // (배송비에서 차감할 원 단위 금액)을 입력받아야 한다(Stephen 확정). 0으로 제출하면
         // DB 제약에 막혀 원문 Postgres 에러가 그대로 토스트에 노출되던 문제를 여기서 선제 차단.
-        if (!f_discount_value || f_discount_value <= 0) {
+        // 무료배송은 할인값을 비워도 된다(B-7) — 서버가 "배송비 전액 면제" 상한값으로 채운다
+        if (f_discount_type !== 'free_shipping' && (!f_discount_value || f_discount_value <= 0)) {
           csToast.error('할인값을 입력해주세요.')
           cancel()
           return
@@ -407,6 +409,9 @@
                자유편집 가능한 입력창처럼 보이던 UX 혼란 방지. manual 모드는 그대로 자유편집 -->
           <input id="fc-code" name="code" class="f-input" class:f-input-code-badge={codeMode === 'sequenced'}
             bind:value={f_code} readonly={codeMode === 'sequenced'} required />
+          {#if codeMode === 'sequenced'}
+            <p class="code-preview-hint">미리보기 형식입니다 — 숫자 자리는 0으로 표시되며 실제 번호는 발행·사용 시 자동으로 채번됩니다.</p>
+          {/if}
           <input type="hidden" name="code_mode" value={codeMode} />
           <input type="hidden" name="code_series" value={codeSeriesPayload ? JSON.stringify(codeSeriesPayload) : ''} />
         </div>
@@ -462,7 +467,7 @@
         <div class="form-field">
           <label for="fc-dval">
             {f_discount_type === 'percentage' ? '할인값 (%)' :
-             f_discount_type === 'free_shipping' ? '할인값 (배송비에서 차감할 금액, 원)' :
+             f_discount_type === 'free_shipping' ? '할인값 (배송비에서 차감할 금액, 원 — 선택)' :
              '할인값 (원)'}
           </label>
           {#if f_discount_type === 'percentage'}
@@ -471,7 +476,8 @@
               oninput={(e) => { onPercentInput((e.currentTarget as HTMLInputElement).value) }} />
           {:else}
             <input id="fc-dval" type="text" inputmode="numeric" class="f-input"
-              value={f_discount_value.toLocaleString('ko-KR')}
+              value={f_discount_value === 0 && f_discount_type === 'free_shipping' ? '' : f_discount_value.toLocaleString('ko-KR')}
+              placeholder={f_discount_type === 'free_shipping' ? '비워두면 배송비 전액 면제' : ''}
               oninput={(e) => { f_discount_value = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
           {/if}
           <input type="hidden" name="discount_value" value={f_discount_value} />
@@ -569,10 +575,13 @@
         <button type="button" class="s-chip" class:s-chip--on={f_allow_points}
           onclick={() => f_allow_points = !f_allow_points}>포인트 결합 사용 허용</button>
         <button type="button" class="s-chip" class:s-chip--on={f_allow_stacking}
-          onclick={() => f_allow_stacking = !f_allow_stacking}>쿠폰 중복 사용 허용</button>
+          onclick={() => f_allow_stacking = !f_allow_stacking}>멤버십 할인과 중복 허용</button>
+        <button type="button" class="s-chip" class:s-chip--on={f_allow_coupon_stacking}
+          onclick={() => f_allow_coupon_stacking = !f_allow_coupon_stacking}>쿠폰끼리 중복 허용</button>
       </div>
       <input type="hidden" name="allow_with_points" value={String(f_allow_points)} />
       <input type="hidden" name="allow_stacking" value={String(f_allow_stacking)} />
+      <input type="hidden" name="allow_coupon_stacking" value={String(f_allow_coupon_stacking)} />
 
       <div class="fs-title">유효기간</div>
       <div class="radio-group">
@@ -823,4 +832,5 @@
   letter-spacing: .04em; cursor: default;
 }
 .f-input-code-badge:focus { outline: none; }
+.code-preview-hint { margin: 6px 0 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
 </style>

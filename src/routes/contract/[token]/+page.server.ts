@@ -3,7 +3,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
-import { isCouponEligible } from '$lib/server/coupons/couponEligibility'
+import { isCouponEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
@@ -147,6 +147,10 @@ export const load: PageServerLoad = async ({ params }) => {
     selected_points: number | null
   }
   let orderData: OrderData | null = null
+  // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): order_coupons(Migration #531) 조회에
+  // 재사용하기 위해 orderId를 바깥 스코프로 끌어올림 — 기존엔 아래 if 블록 내부에서만
+  // 쓰이고 버려지던 지역변수였다.
+  let orderId: string | null = null
 
   if (reservation?.user_id) {
     const { data: addrData } = await admin
@@ -173,7 +177,7 @@ export const load: PageServerLoad = async ({ params }) => {
       .maybeSingle()
 
     if (orderItemData && (orderItemData as { order_id?: string | null }).order_id) {
-      const orderId = (orderItemData as { order_id: string }).order_id
+      orderId = (orderItemData as { order_id: string }).order_id
       const { data: o } = await admin
         .from('orders')
         .select('total_amount, discount_amount, coupon_discount_amount, tax_amount, delivery_fee, final_amount, selected_coupon_id, selected_points')
@@ -285,7 +289,7 @@ export const load: PageServerLoad = async ({ params }) => {
       } else {
         if (c.valid_until && c.valid_until < now) return false
       }
-      if (c.user_grade_required && c.user_grade_required !== memberGrade) return false
+      // 필수 회원 분류(general/student/subscriber) 판정은 학생·구독 여부를 조회한 뒤 아래 2차 필터에서 수행
       if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
       if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
       return true
@@ -329,6 +333,9 @@ export const load: PageServerLoad = async ({ params }) => {
 
     userCoupons = basicFiltered.filter((uc) => {
       const c = uc.coupons
+      if (c && c.user_grade_required && !matchesUserGradeRequired(c.user_grade_required, {
+        isStudent: contractIsStudent, membershipGrade: memberGrade, hasActiveSubscription: contractHasSubscription,
+      })) return false
       if (!c) return false
       return isCouponEligible(
         {
@@ -362,9 +369,21 @@ export const load: PageServerLoad = async ({ params }) => {
   // 등 더 이상 유효하지 않을 수 있어, 위에서 이미 검증·필터링된 userCoupons 목록에 실제로
   // 남아있는 경우에만 그대로 사용하고, 그렇지 않으면 미선택으로 되돌린다(무효 쿠폰 미리선택
   // 방지). 포인트도 그사이 잔액이 줄었을 수 있어 현재 userPoints로 재클램프.
-  const preselectedCouponId = (orderData?.selected_coupon_id && userCoupons.some((uc) => uc.id === orderData?.selected_coupon_id))
-    ? orderData.selected_coupon_id
-    : null
+  // 다중쿠폰 주문은 create_reservation_order(Migration #533)가 orders.selected_coupon_id를 항상
+  // NULL로 남기고 실제 선택값은 order_coupons(Migration #531)에만 저장한다 — order_coupons를 우선
+  // 조회하고, 비어있을 때만(레거시 단일값 주문 보호) selected_coupon_id로 폴백한다.
+  let orderCouponIds: string[] = []
+  if (orderId) {
+    const { data: ocRows } = await admin
+      .from('order_coupons')
+      .select('user_coupon_id')
+      .eq('order_id', orderId)
+    orderCouponIds = ((ocRows ?? []) as { user_coupon_id: string }[]).map((r) => r.user_coupon_id)
+  }
+  const rawPreselectedCouponIds = orderCouponIds.length > 0
+    ? orderCouponIds
+    : (orderData?.selected_coupon_id ? [orderData.selected_coupon_id] : [])
+  const preselectedCouponIds = rawPreselectedCouponIds.filter((id) => userCoupons.some((uc) => uc.id === id))
   const preselectedPoints = Math.max(0, Math.min(orderData?.selected_points ?? 0, userPoints))
 
   // '서비스 기본 정보'(Migration #566) — canvas 모드 substitutionMap의 임대인 4개 변수 소스.
@@ -382,7 +401,7 @@ export const load: PageServerLoad = async ({ params }) => {
     serviceInfo,
     userCoupons,
     userPoints,
-    preselectedCouponId,
+    preselectedCouponIds,
     preselectedPoints,
     // EC-1 방어(위 참고) — 이미 서명된 상태(결제만 남음)로 재진입했음을 +page.svelte에 알려
     // 서명 UI 대신 결제 단계를 바로 렌더링하게 한다.

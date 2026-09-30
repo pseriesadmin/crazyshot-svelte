@@ -7,7 +7,10 @@
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
-  import { calcEarnPoints } from '$lib/utils/cartEarnPoints';
+  import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
+  import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
+  import { calcStackedCouponDiscount, canAddCoupon, type StackableCoupon } from '$lib/utils/couponStacking';
+  import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
@@ -104,6 +107,17 @@
   // 결제조건 판정을 이 독립 함수로 분리해 반납강제고정 여부와 무관하게 항상 정확히 동작하게 함.
   function isDeliveryTypeMethod(m: DeliveryMethod | null): boolean {
     return sdDeliveryOpts.some(o => o.method_key === m && o.is_delivery_type);
+  }
+
+  // 퀵서비스는 실시간 맞춤 요금(대여/반납 별도 결제)이라 장바구니 배송료 계산·배송료 우대설정 할인
+  // 대상에서 항상 제외한다(method_key 기준 — CMS의 is_delivery_type 토글과 무관하게 고정).
+  // ⚠️ 1day 강제청구·휴무일 연장 등 기존 isDeliveryTypeMethod 사용처는 그대로 두고, 배송료 계산
+  //    입력(checkedShippingItems)에만 이 판정을 적용한다.
+  function isQuickMethod(m: DeliveryMethod | null): boolean {
+    return m === 'quick';
+  }
+  function isShippingFeeMethod(m: DeliveryMethod | null): boolean {
+    return isDeliveryTypeMethod(m) && !isQuickMethod(m);
   }
 
   // 휴무일 캘린더 제한(공휴일·일요일 날짜 선택 차단) 대상 판정 — is_bulk_delivery("요청 A"
@@ -798,7 +812,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; valid_until: string; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean } | null }
+  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -1289,8 +1303,8 @@
         const effectivePickupMethod = isPurchase ? ('crazydelivery' as const) : it.opts.rentalMethod
         const effectiveReturnMethod = isPurchase ? ('crazydelivery' as const) : it.opts.returnMethod
         return {
-          pickupIsDelivery: isDeliveryTypeMethod(effectivePickupMethod),
-          returnIsDelivery: isDeliveryTypeMethod(effectiveReturnMethod),
+          pickupIsDelivery: isShippingFeeMethod(effectivePickupMethod),
+          returnIsDelivery: isShippingFeeMethod(effectiveReturnMethod),
           shipping_round_trip: (product as ProductRow & { shipping_round_trip?: boolean | null } | undefined)?.shipping_round_trip ?? true,
           shipping_delivery: (product as ProductRow & { shipping_delivery?: boolean | null } | undefined)?.shipping_delivery ?? true,
           shipping_return: (product as ProductRow & { shipping_return?: boolean | null } | undefined)?.shipping_return ?? true,
@@ -1299,6 +1313,16 @@
       })
   )
   const otShippingFee = $derived(calcShippingFee(sdShippingSettings, checkedShippingItems))
+  // 퀵서비스 수령/반납 표기용 — 배송료 계산에서 제외된 퀵은 금액 대신 "실시간 맞춤 요금" 문구로 안내한다.
+  const otPickupQuick = $derived(
+    itemsState.some((it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase' && isQuickMethod(it.opts.rentalMethod))
+  )
+  const otReturnQuick = $derived(
+    itemsState.some((it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase' && isQuickMethod(it.opts.returnMethod))
+  )
+  const otPickupCourier = $derived(checkedShippingItems.some((i) => i.pickupIsDelivery))
+  const otReturnCourier = $derived(checkedShippingItems.some((i) => i.returnIsDelivery))
+  const QUICK_FEE_TEXT = '실시간 맞춤 요금 (대여/반납 별도 결제)'
 
   // 배송료 우대설정(/cms/set/rental) — 대여금액(otRentalOnlySubtotal) + 조건 만족 시 배송비
   // 할인율 적용(Stephen 확정, 2026-08-29/2026-09-01).
@@ -1743,10 +1767,70 @@
   // 카트 구성 변경으로 우대설정이 뒤늦게 적용되며 이미 선택된 free_delivery 쿠폰이 차단
   // 대상이 되면 자동 해제(다음 렌더에 잘못 반영된 값으로 계산되는 것을 방지).
   $effect(() => {
-    if ([...otSelectedCouponIds].some((id) => otBlockedCouponIds.has(id))) {
-      otSelectedCouponIds = new Set()
+    // 다중 선택: 차단 대상 쿠폰만 해제하고 나머지 선택은 유지한다
+    const bad = [...otSelectedCouponIds].filter((id) => otBlockedCouponIds.has(id) || otNoDeliveryCouponIds.has(id) || otConditionFailIds.has(id))
+    if (bad.length > 0) {
+      if (bad.some((id) => otConditionFailIds.has(id))) csToast.warning('사용 조건을 만족하지 못한 쿠폰은 선택이 해제됐어요')
+      otSelectedCouponIds = new Set([...otSelectedCouponIds].filter((id) => !bad.includes(id)))
     }
   })
+  // B-6: 배송 항목(택배 수령·반납, 구매 상품 배송)이 하나도 없는 카트(방문·무인보관함·퀵만)에서는
+  // 무료배송 쿠폰이 차감할 배송비가 없으므로 선택 불가 — "크레이지배송(택배) 선택 시 사용 가능" 안내.
+  // (우대설정 적용 중 안내와 구분: 배송 항목이 있고 우대가 적용되면 기존 otBlockedCouponIds 문구)
+  const otHasDeliveryItem = $derived(checkedShippingItems.some((i) => i.pickupIsDelivery || i.returnIsDelivery))
+  const otNoDeliveryCouponIds = $derived<Set<string>>(
+    new Set(
+      sdCoupons
+        .filter((uc) => uc.coupons?.discount_type === 'free_shipping' && !otHasDeliveryItem)
+        .map((uc) => uc.id)
+    )
+  )
+
+  // B-1: 주문 의존 사용 조건(최소 대여금액·최소 대여기간·방문 전용)은 서버가 로드 시점에 판정할 수 없어
+  // (날짜 미선택 draft 예약·수령 방식은 체크아웃 전까지 DB에 없음) 화면이 현재 선택 상태로 판정한다.
+  // 서버 로더는 사용자 의존 조건만 걸러 쿠폰을 내려주고, 미충족 쿠폰은 숨기지 않고 사유와 함께 비활성 표시한다.
+  // 대여일수는 DB rental_days(박 수, 당일=0)와 같은 기준으로 센다 — 결제 소진 규칙과 어긋나지 않게.
+  // pricingReady는 이 위치보다 아래에서 선언되므로(TDZ) 함수 경유로 읽는다
+  function readPricingReady(): boolean { return pricingReady }
+  const otConditionCtx = $derived<CouponOrderContext>((() => {
+    const rentalItems = itemsState.filter(
+      (it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase',
+    )
+    const dated = rentalItems.filter((it) => it.rentalDate && it.returnDate)
+    return {
+      orderAmount: readPricingReady() ? otSubtotal : null,
+      minRentalDays: dated.length > 0
+        ? Math.min(...dated.map((it) => (it.rentalDate === it.returnDate ? 0 : calcRentalDays(it.rentalDate, it.returnDate))))
+        : null,
+      allWalkIn: rentalItems.length > 0 ? rentalItems.every((it) => it.opts.rentalMethod === 'visit') : null,
+    }
+  })())
+  const otConditionResults = $derived<Map<string, { ok: true } | { ok: false; reason: CouponOrderReason }>>(
+    new Map(
+      sdCoupons
+        .filter((uc) => uc.coupons !== null)
+        .map((uc) => {
+          const c = uc.coupons!
+          return [uc.id, checkCouponOrderConditions({
+            min_purchase_amount: Number(c.min_purchase_amount ?? 0),
+            min_rental_amount: Number(c.min_rental_amount ?? 0),
+            min_rental_days: Number(c.min_rental_days ?? 0),
+            is_walk_in_only: !!c.is_walk_in_only,
+          }, otConditionCtx)] as const
+        }),
+    ),
+  )
+  // 자동 해제 대상은 "주문 정보가 채워진 뒤에도 조건 미충족"인 경우만(정보 입력 전 ORDER_CONTEXT_REQUIRED는 해제하지 않음)
+  const otConditionFailIds = $derived<Set<string>>(
+    new Set(
+      [...otConditionResults.entries()]
+        .filter(([, r]) => !r.ok && r.reason !== 'ORDER_CONTEXT_REQUIRED')
+        .map(([id]) => id),
+    ),
+  )
+
+  // 쿠폰끼리 중복 허용 — 중복 불가 쿠폰이 섞이려 하면 안내창으로 확인받는다
+  let stackNotice = $state<{ couponId: string; conflictLabel: string } | null>(null)
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
   // "회원정보 반영"(배송지) 체크박스 활성화 조건 — 저장된 배송지 주소가 있을 때만 사용 가능
   const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
@@ -1791,25 +1875,25 @@
   // 2026-09-21 추가: percentage 할인은 "최대 할인 한도"(max_discount_amount)를 초과할 수
   // 없다 — 서버(sync_order_after_composition_change, Migration 511)와 동일하게 캡핑.
   // 0 또는 미설정은 무제한을 의미(products.md류 "0=무제한" 표기 관례와 동일).
-  const otCouponDiscount = $derived(
+  // ⚠️ 2026-10-01 다중 쿠폰 선택 — 쿠폰별 독립 합산이 아니라 서버(create_reservation_order/
+  // sync_order_after_composition_change, Migration 533·534)와 같은 순차 산식을 쓴다:
+  //   정액 합산 → 정률 쿠폰은 coupon_id 오름차순으로 잔액에 순차 적용(최대 한도 단계별) → 무료배송은 배송비 한도.
+  // 계산은 단위 테스트 대상 순수 함수(couponStacking.ts)로 분리했다.
+  const otSelectedStackables = $derived<StackableCoupon[]>(
     sdCoupons
       .filter((uc) => otSelectedCouponIds.has(uc.id) && uc.coupons !== null)
-      .reduce((sum, uc) => {
-        const c = uc.coupons!
+      .map((uc) => ({
+        id: uc.id,
+        coupon_id: uc.coupon_id,
+        discount_type: uc.coupons!.discount_type,
         // [4B] Supabase NUMERIC(10,2)은 JS string으로 직렬화됨 — 산술 전 Number() 변환 필수
-        const discountVal = Number(c.discount_value)
-        const amount =
-          c.discount_type === 'fixed' ? discountVal :
-          c.discount_type === 'percentage' ? (() => {
-            const raw = Math.round(otSubtotal * discountVal / 100)
-            const maxAmt = Number(c.max_discount_amount ?? 0)
-            return maxAmt > 0 ? Math.min(raw, maxAmt) : raw
-          })() :
-          c.discount_type === 'free_shipping' ? Math.min(discountVal, otDeliveryFee) :
-          0
-        return sum + amount
-      }, 0)
+        discount_value: Number(uc.coupons!.discount_value),
+        max_discount_amount: uc.coupons!.max_discount_amount == null ? null : Number(uc.coupons!.max_discount_amount),
+        allow_coupon_stacking: uc.coupons!.allow_coupon_stacking !== false,
+      })),
   )
+  const otStackedDiscount = $derived(calcStackedCouponDiscount(otSelectedStackables, otSubtotal, otDeliveryFee))
+  const otCouponDiscount = $derived(otStackedDiscount.total)
 
   // 회원등급 할인 — 서버(Migration 510)와 동일 정책: 선택된 쿠폰 중 "중복 사용 허용"이
   // 꺼진 쿠폰이 하나라도 있으면 회원등급 할인은 배제(고객이 직접 선택한 쿠폰 할인 우선).
@@ -1844,7 +1928,9 @@
   // 2026-08-25: 상품 가격이 부가세 포함가라 별도로 10%를 더해서는 안 됨(이중과세) —
   // 포함가에서 역산해 "얼마가 부가세였는지"만 안내용으로 표시(합계 계산에는 더하지 않음)
   // [14] otNetAfterCoupon 기준으로 수정 (쿠폰 적용 후 실제 과세액 반영)
-  const otVat = $derived(Math.round(otNetAfterCoupon - otNetAfterCoupon / 1.1))
+  // B-4: 포인트 사용분도 과세 기준에서 차감(쿠폰과 동일) — 예: 246,000 − 쿠폰 5,000 − 포인트 1,000 = 240,000 → 부가세 21,818.
+  // 포인트가 배송비·휴무일 요금을 상쇄할 수 있어 상품분 기준액(0 이상)으로 제한한다.
+  const otVat = $derived(calcVatForCart(otNetAfterCoupon, otPointsUsed))
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
@@ -1884,28 +1970,35 @@
   )
 
   // 적립 예정 포인트 — CMS 적립 규칙(point_earn_rules, rental_complete)의 적립률 × 서버 지급 기준 금액.
-  // 서버 award_rental_complete_points는 order_items.line_total(대여료+옵션료, 멤버십 할인·배송비·휴무일
-  // 추가금·쿠폰·포인트 사용 차감 전) 합계에 rate를 곱하고, 판매전용(구매) 라인은 반납 전이가 없어
-  // 적립 대상이 아니다 → 화면도 같은 금액(otRentalOnlySubtotal)을 기준으로 한다.
+  // data.earnRate는 서버(+page.server.ts)에서 이미 "공통 적립률 + 구독회원 더블 적립 보너스율"을
+  // 합산해 내려준 값이다(Migration #603과 동일 조건) — 구독회원은 자동으로 더 높은 값이 온다.
   // 규칙이 없거나 비활성이면(earnRate=null) 0p — 임의 비율로 추정하지 않는다.
-  const otEarnPoints = $derived(calcEarnPoints(otRentalOnlySubtotal, data.earnRate))
+  // 2026-10-01 A-1(Stephen 확정): 적립 기준 = 대여료(상품+옵션) + 휴무일 연장요금 − (멤버십 할인 + 상품분 쿠폰 할인 + 사용 포인트).
+  // 배송비·무료배송 쿠폰이 깎은 배송비분·구매(판매전용)·보증금은 제외, 등급 배율 없음. 서버 award_rental_complete_points
+  // (Migration 606)와 같은 식이며 계산은 $lib/utils/cartEarnPoints.calcEarnBase(단위·라이브 패리티 테스트 대상)다.
+  // 서버는 예약별로 반올림해 지급하므로 여러 예약 주문은 표시값과 1~2p 차이가 날 수 있다.
+  const otEarnBase = $derived(calcEarnBase({
+    rentalAmount: otRentalOnlySubtotal,
+    holidayFee: otHolidayExtraFee,
+    allAmount: otSubtotal,
+    allHolidayFee: otHolidayExtraFee,
+    membershipDiscount: otMembershipDiscount,
+    couponDiscount: otCouponDiscount,
+    freeShippingDiscount: otStackedDiscount.freeShipping,
+    pointsUsed: otPointsUsed,
+  }))
+  const otEarnPoints = $derived(calcEarnPoints(otEarnBase, data.earnRate))
 
   // 쿠폰 만료까지 남은 일수 (CouponRow "N일 뒤 소멸" 표기용)
-  // relative_days 모드: first_viewed_at + valid_days 기준 계산 (first_viewed_at=null이면 0 반환)
+  // relative_days 모드: first_viewed_at + valid_days 기준 계산 (first_viewed_at=null이면 전체 valid_days 반환, 기한 없음은 null)
   function daysUntilExpiry(
-    validUntil: string,
+    validUntil: string | null,
     validityType?: string,
     firstViewedAt?: string | null,
     validDays?: number | null,
-  ): number {
-    if (validityType === 'relative_days') {
-      if (!firstViewedAt || !validDays) return 0
-      const expiry = new Date(firstViewedAt).getTime() + validDays * 86400_000
-      return Math.max(0, Math.ceil((expiry - Date.now()) / 86400_000))
-    }
-    if (!validUntil) return 0
-    const diff = new Date(validUntil).getTime() - Date.now()
-    return Math.max(0, Math.ceil(diff / 86400000))
+  ): number | null {
+    // null = "기한 없음" — 계산은 $lib/utils/cartCouponPoints.couponDaysLeft(단위 테스트 대상)
+    return couponDaysLeft(validUntil, validityType, firstViewedAt, validDays)
   }
 
   // 대여 기간(분) — calculate_cart_total RPC와 정합되는 계산은 $lib/utils/cartRentalFee 참고
@@ -2230,17 +2323,47 @@
                   c.discount_type === 'percentage' ? `${c.discount_value}% 할인` :
                   '무료배송'
                 )}
-                {@const isBlocked = otBlockedCouponIds.has(uc.id)}
+                {@const isNoDelivery = otNoDeliveryCouponIds.has(uc.id)}
+                {@const isBlocked = !isNoDelivery && otBlockedCouponIds.has(uc.id)}
+                {@const cond = otConditionResults.get(uc.id)}
+                {@const condFail = cond && !cond.ok ? cond.reason : null}
                 {@render CouponRow({
                   label: couponLabel,
                   days: daysUntilExpiry(c.valid_until, c.validity_type, uc.first_viewed_at, c.valid_days),
-                  note: isBlocked ? '배송 우대설정 적용 중 — 중복 적용 불가' : undefined,
+                  note: isNoDelivery
+                    ? '크레이지배송(택배) 선택 시 사용 가능'
+                    : isBlocked ? '배송 우대설정 적용 중 — 중복 적용 불가'
+                    : condFail ? couponConditionMessage(condFail, {
+                        min_purchase_amount: Number(c.min_purchase_amount ?? 0),
+                        min_rental_amount: Number(c.min_rental_amount ?? 0),
+                        min_rental_days: Number(c.min_rental_days ?? 0),
+                        is_walk_in_only: !!c.is_walk_in_only,
+                      })
+                    : undefined,
                   checked: otSelectedCouponIds.has(uc.id),
-                  disabled: !pricingReady || isBlocked,
+                  disabled: !pricingReady || isBlocked || isNoDelivery || !!condFail,
                   onToggle: () => {
-                    if (!pricingReady || isBlocked) return
-                    // 중복 쿠폰 적용 불가 — 단일 선택만 허용(계약서명 페이지와 동일 정책)
-                    otSelectedCouponIds = otSelectedCouponIds.has(uc.id) ? new Set() : new Set([uc.id])
+                    if (!pricingReady || isBlocked || isNoDelivery || condFail) return
+                    let next: Set<string>
+                    if (otSelectedCouponIds.has(uc.id)) {
+                      next = new Set([...otSelectedCouponIds].filter((id) => id !== uc.id))
+                    } else {
+                      // 다중 선택 — "쿠폰끼리 중복 허용"이 꺼진 쿠폰이 섞이면 안내창으로 확인받는다
+                      const current = sdCoupons.filter((x) => otSelectedCouponIds.has(x.id) && x.coupons !== null)
+                      const candidate = { allow_coupon_stacking: c.allow_coupon_stacking !== false }
+                      if (!canAddCoupon(current.map((x) => ({ allow_coupon_stacking: x.coupons!.allow_coupon_stacking !== false })), candidate)) {
+                        const culprit = candidate.allow_coupon_stacking
+                          ? current.find((x) => x.coupons!.allow_coupon_stacking === false)
+                          : uc
+                        stackNotice = { couponId: uc.id, conflictLabel: culprit?.coupons?.display_name ?? '이 쿠폰' }
+                        return
+                      }
+                      next = new Set([...otSelectedCouponIds, uc.id])
+                    }
+                    otSelectedCouponIds = next
+                    // B-3: 포인트 결합 불가 쿠폰을 고르면 입력된 포인트를 즉시 0으로 되돌린다
+                    // (otMaxPoints가 0이 되어도 입력칸 DOM 값이 남는 문제 방지)
+                    if (c.allow_with_points === false && next.has(uc.id)) otPointsUsed = 0
                   },
                 })}
               {/each}
@@ -2258,19 +2381,25 @@
                 min="0"
                 max={otMaxPoints}
                 value={otPointsUsed}
-                disabled={!pricingReady}
+                disabled={!pricingReady || !otSelectedCouponsAllowPoints}
                 oninput={(e) => {
-                  const v = Math.min(otMaxPoints, Math.max(0, parseInt((e.target as HTMLInputElement).value) || 0))
+                  const el = e.target as HTMLInputElement
+                  const v = Math.min(otMaxPoints, Math.max(0, parseInt(el.value) || 0))
                   otPointsUsed = v
+                  // 값이 같아 상태가 안 바뀌어도 입력칸에 보이는 숫자는 항상 실제 적용값과 일치시킨다
+                  el.value = String(v)
                 }}
               />
               <button
                 type="button"
                 class="points-all-btn"
-                disabled={!pricingReady || otMaxPoints === 0}
+                disabled={!pricingReady || !otSelectedCouponsAllowPoints || otMaxPoints === 0}
                 onclick={() => { otPointsUsed = otMaxPoints }}
               >모두 사용</button>
             </div>
+            {#if !otSelectedCouponsAllowPoints}
+              <p class="points-block-note">이 쿠폰은 포인트와 함께 사용할 수 없습니다</p>
+            {/if}
           </div>
 
           <!-- 대여설정 미완성 상태에서 금액 영역 진입 감지용 센티널 -->
@@ -2299,7 +2428,28 @@
               {#if pricingReady && otCouponDiscount > 0}
                 {@render PriceRow({ label: '쿠폰 할인', value: `-${fmtKrw(otCouponDiscount)}` })}
               {/if}
-              {@render PriceRow({ label: '배송요금', value: pricingReady && otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : (pricingReady ? '무료' : fmtKrw(0)) })}
+              {#if otPickupQuick || otReturnQuick}
+                <!-- 퀵서비스: 배송료 할인 대상 아님 — 실시간 맞춤 요금(대여/반납 별도 결제)으로 표기.
+                     수령·반납이 택배/퀵으로 갈릴 때는 두 줄로 나눠 표기한다 -->
+                {#if (otPickupQuick && otReturnCourier) || (otReturnQuick && otPickupCourier)}
+                  {@render PriceRow({
+                    label: '수령 배송료',
+                    value: otPickupQuick ? QUICK_FEE_TEXT : (pricingReady && otDeliveryFee > 0 ? `${fmtKrw(otDeliveryFee)}원` : (pricingReady ? '무료' : '0원')),
+                    raw: true,
+                    text: true,
+                  })}
+                  {@render PriceRow({
+                    label: '반납 배송료',
+                    value: otReturnQuick ? QUICK_FEE_TEXT : (pricingReady && otDeliveryFee > 0 ? `${fmtKrw(otDeliveryFee)}원` : (pricingReady ? '무료' : '0원')),
+                    raw: true,
+                    text: true,
+                  })}
+                {:else}
+                  {@render PriceRow({ label: '배송료', value: QUICK_FEE_TEXT, raw: true, text: true })}
+                {/if}
+              {:else}
+                {@render PriceRow({ label: '배송요금', value: pricingReady && otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : (pricingReady ? '무료' : fmtKrw(0)) })}
+              {/if}
               {#if pricingReady && otHolidayExtraFee > 0}
                 {@render PriceRow({ label: '휴무일 연장요금', value: fmtKrw(otHolidayExtraFee) })}
               {/if}
@@ -2605,13 +2755,14 @@
             // 2026-08-24: 장바구니에서 고른 쿠폰/포인트도 함께 저장(Migration 340,
             // orders.selected_coupon_id/selected_points) — 계약서명 페이지(/contract/[token])
             // 진입 시 이 값을 다시 읽어 자동으로 미리 선택된 상태로 보여준다.
-            const selectedCouponId = otSelectedCouponIds.size > 0 ? [...otSelectedCouponIds][0] : null
+            // 2026-10-01(쿠폰 다중 선택): 단일값 대신 선택한 쿠폰 전체를 배열로 전송
+            const selectedCouponIds = [...otSelectedCouponIds]
             const createOrderRes = await fetch('/api/reservations/create-order', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 reservationIds: checkedIds,
-                couponId:       selectedCouponId,
+                couponIds:      selectedCouponIds,
                 points:         otPointsUsed,
                 // 2026-08-31: 여기서 고객에게 보여준 배송비를 그대로 주문에 합산 —
                 // 실결제 금액이 이 화면의 총액과 정확히 일치하도록 함
@@ -2633,6 +2784,21 @@
               const rejected = await createOrderRes.clone().json().catch(() => null) as { code?: string; error?: string } | null
               if (rejected?.code === 'PRICE_UNSET') {
                 csToast.error(rejected.error ?? '요금이 등록되지 않은 상품이 있어 예약을 신청할 수 없습니다.')
+                return
+              }
+              if (rejected?.code === 'COUPON_STACKING_NOT_ALLOWED') {
+                csToast.error(rejected.error ?? '함께 사용할 수 없는 쿠폰이 포함되어 있습니다.')
+                return
+              }
+            }
+            // 서버가 사전검증에서 조건 미충족 쿠폰을 제외하고 주문을 다시 계산한 경우 — 화면에 보여준 금액과
+            // 주문 금액이 달라지므로 신청완료로 넘어가지 않고 선택을 갱신해 다시 확인하게 한다.
+            if (createOrderRes.ok) {
+              const created = await createOrderRes.clone().json().catch(() => null) as { droppedCoupons?: Array<{ userCouponId: string }> } | null
+              const dropped = created?.droppedCoupons ?? []
+              if (dropped.length > 0) {
+                otSelectedCouponIds = new Set([...otSelectedCouponIds].filter((id) => !dropped.some((d) => d.userCouponId === id)))
+                csToast.warning(`사용 조건에 맞지 않는 쿠폰 ${dropped.length}장이 제외됐어요. 금액을 확인하고 다시 신청해 주세요.`)
                 return
               }
             }
@@ -2730,6 +2896,25 @@
             </div>
           {/if}
         </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- 쿠폰끼리 중복 불가 안내 — 재발행 확인과 같은 .confirm-toast 패턴(footer transform 조상 밖 형제 배치) -->
+  {#if stackNotice}
+    <button type="button" class="toast-backdrop" onclick={() => (stackNotice = null)} aria-label="닫기"></button>
+    <div class="confirm-toast" role="alertdialog" aria-modal="true" aria-label="쿠폰 중복 사용 불가 안내">
+      <p class="confirm-toast-msg">'{stackNotice.conflictLabel}' 쿠폰은 다른 쿠폰과 함께 사용할 수 없어요.<br>기존에 선택한 쿠폰을 해제하고 이 쿠폰만 적용할까요?</p>
+      <div class="confirm-toast-actions">
+        <button type="button" class="toast-btn toast-btn-cancel" onclick={() => (stackNotice = null)}>취소</button>
+        <button type="button" class="toast-btn toast-btn-confirm" onclick={() => {
+          if (stackNotice) {
+            const target = sdCoupons.find((x) => x.id === stackNotice!.couponId)
+            otSelectedCouponIds = new Set([stackNotice.couponId])
+            if (target?.coupons?.allow_with_points === false) otPointsUsed = 0
+          }
+          stackNotice = null
+        }}>이 쿠폰만 적용</button>
       </div>
     </div>
   {/if}
@@ -3569,7 +3754,7 @@
   </div>
 {/snippet}
 
-{#snippet CouponRow(props: { label: string; days: number; checked: boolean; onToggle: () => void; disabled?: boolean; note?: string })}
+{#snippet CouponRow(props: { label: string; days: number | null; checked: boolean; onToggle: () => void; disabled?: boolean; note?: string })}
   <div class="coupon-row" class:coupon-row-disabled={props.disabled}>
     <label class="coupon-row-left">
       <button class="checkbox-btn checkbox-btn-terms" class:checked={props.checked} onclick={props.onToggle} disabled={props.disabled} aria-label={props.label}>
@@ -3584,18 +3769,22 @@
     </label>
     {#if !props.note}
       <div class="coupon-expiry">
-        <span class="coupon-days">{props.days}</span>
-        <span>일</span>
+        {#if props.days === null}
+          <span>기한 없음</span>
+        {:else}
+          <span class="coupon-days">{props.days}</span>
+          <span>일</span>
+        {/if}
       </div>
     {/if}
   </div>
 {/snippet}
 
-{#snippet PriceRow(props: { label: string; value: string; large?: boolean; raw?: boolean })}
+{#snippet PriceRow(props: { label: string; value: string; large?: boolean; raw?: boolean; text?: boolean })}
   <div class="price-row">
     <span class="price-row-label" class:price-row-large={props.large}>{props.label}</span>
     <div class="price-row-right">
-      <span class="price-row-val" class:price-row-val-large={props.large}>{props.value}</span>
+      <span class="price-row-val" class:price-row-val-large={props.large} class:price-row-val-text={props.text}>{props.value}</span>
       {#if !props.raw}<span class="price-row-unit">원</span>{/if}
     </div>
   </div>
@@ -4988,6 +5177,8 @@
   /* ══ 포인트 사용 입력(장바구니) ══ */
   .points-select-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .points-input-row { display: flex; align-items: center; gap: 10px; }
+  /* B-3: 포인트 결합 불가 쿠폰 선택 시 안내 — 쿠폰 사유 안내(.coupon-note)와 동일한 레드 계열 12px */
+  .points-block-note { margin: 0; font-size: 12px; font-weight: 500; color: var(--cs-red-badge); }
   .points-input { flex: 1; font-family: var(--font-en-d-din); }
   .points-all-btn {
     flex-shrink: 0;
@@ -5051,6 +5242,8 @@
   .price-row-right { display: flex; align-items: center; gap: 15px; }
   .price-row-val { font-size: 16px; font-weight: 500; font-family: var(--font-en-d-din); color: #444; line-height: 1.6; }
   .price-row-val-large { }
+  /* 문구형 값(퀵서비스 "실시간 맞춤 요금 …") — 숫자용 DIN 대신 본문 한글 폰트, 우측 정렬·줄바꿈 허용 */
+  .price-row-val-text { font-family: var(--font-kr); font-weight: 700; text-align: right; word-break: keep-all; }
   .price-row-unit { font-size: 14px; font-weight: 700; color: var(--cs-text-light); line-height: 2; }
   .price-divider { background: var(--cs-text-light); height: 1px; width: 100%; margin: 5px 0; }
   .points-row {

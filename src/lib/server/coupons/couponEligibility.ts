@@ -51,6 +51,31 @@ export interface CouponEligibilityContext {
   cartCategories:        string[] | null
 }
 
+// ── 필수 회원 분류(user_grade_required) 판정 ────────────────────────────────
+/**
+ * coupons.user_grade_required는 Migration #528부터 회원 분류 값('general'/'student'/'subscriber')이다.
+ * 과거 코드는 이 값을 user_profiles.membership_grade(NONE/EASY/POP/CRAZY)와 직접 비교해, 분류가 설정된
+ * 쿠폰이 장바구니·계약서 화면에서 항상 제외되는 결함이 있었다(2026-10-01 교정).
+ * 분류 기준은 distribute_coupon RPC('grade' 대상)와 동일하다:
+ *   student    = is_student
+ *   subscriber = 활성 구독 또는 membership_grade가 NONE이 아님
+ *   general    = 위 둘 다 아님
+ * 알 수 없는 옛 값(예: 'POP')은 하위호환으로 membership_grade와 같을 때만 통과시킨다.
+ */
+export function matchesUserGradeRequired(
+  required: string | null | undefined,
+  user: { isStudent: boolean; membershipGrade: string | null; hasActiveSubscription: boolean },
+): boolean {
+  if (!required) return true
+  const subscriber = user.hasActiveSubscription || (!!user.membershipGrade && user.membershipGrade !== 'NONE')
+  switch (required) {
+    case 'student':    return user.isStudent
+    case 'subscriber': return subscriber
+    case 'general':    return !user.isStudent && !subscriber
+    default:           return required === user.membershipGrade
+  }
+}
+
 // ── 순수 함수: 쿠폰 1개 자격 검증 ────────────────────────────────────────────
 /**
  * 7개 자격조건 검증 — DB 없이 동작하는 순수 함수(테스트 가능).
@@ -101,6 +126,18 @@ export function isCouponEligible(
     }
   }
 
+  return isCouponUserEligible(coupon, ctx)
+}
+
+/**
+ * 사용자·카트 내용 의존 조건만 판정(첫 렌탈·학생·구독·1인당 한도·카테고리) — 주문 금액·대여일수·수령방식은
+ * 제외한다. 장바구니는 주문이 없어 서버가 주문 의존 조건을 판정할 수 없으므로(B-1) 이 함수로만 목록을
+ * 거르고, 주문 의존 조건은 화면이 현재 선택 상태로 직접 판정한다($lib/utils/couponOrderConditions).
+ */
+export function isCouponUserEligible(
+  coupon: CouponEligibilityFields,
+  ctx:    CouponEligibilityContext,
+): { ok: boolean; reason?: string } {
   // ── 사용자의존 조건 체크 ───────────────────────────────────────────────────
   if (coupon.is_first_rental_only && !ctx.isFirstRental) {
     return { ok: false, reason: 'FIRST_RENTAL_ONLY' }
