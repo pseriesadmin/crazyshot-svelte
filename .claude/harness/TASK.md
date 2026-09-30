@@ -7,6 +7,189 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🔴 CRITICAL: 내정보·퀵 배송료·쿠폰 다중 선택/조건부 노출/CMS 지급 확인·적립 기준 재정의(A-1) 묶음 (신고 12건, Migration #604·#605·#606 + #531~534 저장소 복원, 2026-10-01, 이 세션'만', ✅ GATE B 승인 — Stephen 단계별 진행 지시, Stage·Production DB 적용 완료 · GATE E 조건부 통과 — sp3-qa-agent 독립검수(블로킹 0건, MEDIUM 2건 중 M-2는 본 세션이 해시 대조로 해소, M-1 use_coupons 권한은 Migration #607로 해소 — Stage·Production 적용 완료), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 파일만 기록. 같은 파일에 다른 세션(포인트 세션: Migration #596~603·subscriptionBenefits.ts·cms/promotion/point/*·cart/+page.server.ts의 구독 적립률 합산 hunk)의 수정이 섞여 있어 커밋은 한 번에 묶는다.
+
+플랜: /Users/stevenmac/.claude/plans/crystalline-giggling-hejlsberg.md (5단계 중 1·2·3·4단계 구현, 5단계 미착수)
+
+수행 작업:
+  [1단계] 프론트 단독 — 내정보 로그·후기·댓글 더미 제거→본인 실데이터(loadMyActivity.ts 신설, LogTab/ReviewTab,
+      account·account/profile +page.server/+page.svelte) / 퀵 배송료(수령·반납 2줄, "실시간 맞춤 요금 (대여/반납 별도 결제)", 우대할인 대상 제외)
+      / B-3 포인트 결합 불가 쿠폰 시 입력 0·비활성·안내 / B-4 부가세(쿠폰+포인트 차감 후, cartCouponPoints.calcVatForCart)
+      / B-5 "기한 없음"(couponDaysLeft) / B-6 방문 수령 무료배송 쿠폰 문구. 문서: rental-fee-policy.md, rental-cms-settings.md
+  [2단계] CMS — B-7 무료배송 할인값 선택 입력(FREE_SHIPPING_FULL_WAIVER 9,999,999, couponFreeShipping.ts)·코드 미리보기 YYYYMM 통일
+      / B-8(a) 수동 지급 사전조회 모달·대상별 결과(couponDistribution.ts, CouponDetailPanel.svelte) — Migration #604
+  [4단계] 쿠폰 B-1·B-2 — Migration #605(coupons.allow_coupon_stacking, cms_set_allow_coupon_stacking, use_coupons 혼합 거부,
+      create_reservation_order 가드+다중쿠폰 order_id 모호성 결함 수정, validate_order_coupons) + #531~534 파일 저장소 복원
+      / consumeCoupons.ts, create-order(couponIds[]·droppedCoupons), confirm-mock·pay-mock·pay-result·contract 서명/결제 연동
+      / couponStacking.ts·couponOrderConditions.ts·couponEligibility.ts(isCouponUserEligible·matchesUserGradeRequired)
+      / 장바구니 다중선택·조건 사유 표시·안내창, CMS 쿠폰 생성·수정 칩 2개("멤버십 할인과 중복 허용"/"쿠폰끼리 중복 허용")
+  [3단계 A-1] 적립 기준 재정의 — Migration #606(award_rental_complete_points: 대여료+옵션+휴무일요금 − 멤버십·상품분 쿠폰·사용 포인트 몫,
+      무료배송분·구매·배송비·보증금 제외, 예약 id 누적 반올림 배분, 구독 더블 적립은 같은 기준금액) + cartEarnPoints.ts(calcEarnBase 등)
+      + 장바구니 otEarnPoints 교체. "등급 없음"·"추가일 요금 포함" Stephen 확정.
+
+검증 증거:
+  - vitest 23개 파일 158건 통과(라이브 Stage: couponStackingRules 4·couponMultiStacking 5·rentalCompleteNetBase 8 포함), 기존 적립 테스트 24건 무회귀
+  - svelte-check 신규 오류 0(기존 vite.config.ts 1건), npm run build 성공
+  - Stage DB 롤백 프로브: preview_distribute_coupon/distribute_coupon 결과(will_issue·already_held·not_found·issued)
+  - Claude Browser(Stage 로컬): 퀵 배송료 문구·쿠폰 2장 합산(-5,000)·중복 불가 안내창·포인트 결합 불가·부가세(31,636)·조건부 쿠폰 사유/방문 전용 활성화·
+    적립 예정 18,000→17,850→17,350p·내정보 후기 실데이터. 테스트용 쿠폰 설정은 모두 원복.
+  - DB 동일성: Stage=Production 함수 해시(use_coupons 19fa2943, create_reservation_order 93a6c21b, validate_order_coupons 8c13d73c,
+    award_rental_complete_points e1770e5f)·권한 일치 확인
+
+배포 상태: #603·#604·#605·#606 Stage·Production 적용 완료(Production은 DB 먼저·앱 코드 미배포 상태) / 앱 코드 git commit·push 대기
+
+알려진 한계·미착수:
+  - 5단계 B-8(b) 1인당 횟수 2 이상 "추가 지급"(UNIQUE(user_id,coupon_id) 구조 변경 필요) — 별도 승인 대기
+  - 장바구니 적립 예정은 주문 단위 계산이라 다예약 주문은 서버 예약별 반올림 지급과 1~2p 차이 가능
+  - 구독 보너스의 min_purchase_amount·max_points_per_order는 장바구니 표시에 미반영(서버 RPC만)
+  - CMS 쿠폰 생성·수정 화면 칩/할인값/미리보기와 수동 지급 모달은 브라우저 실조작 미검증(자동·DB 테스트로만 확인)
+  - use_coupons authenticated 실행권한(Migration 532부터 기존) — 호출자=p_user_id 검증 없음, 별도 점검 필요
+  - reservationApprovalNotify.test.ts 7건 실패(예약 생성 시 상품·날짜 겹침 제약) — 이번 작업 무관 추정, 수정 전 상태와 비교 미실시
+  - Production/Stage 마이그레이션 목록 차이(558·562·556b는 Stage에만) — 이번 작업 이전부터, 별도 확인 필요
+
+GATE E: sp3-qa-agent 독립검수 결과(조건부 통과, 블로킹 0건)
+  - 자동 게이트: utils 108건·라이브 서비스 51건 통과, svelte-check 신규 오류 0, build 성공, console.log/any/TODO/Svelte4 문법 추가 없음
+  - M-1(MEDIUM): use_coupons(Migration 532)가 authenticated 실행 가능하고 p_user_id=auth.uid() 검증이 없다. 호출은 서버 admin(consumeCoupons.ts)뿐이라
+    브라우저 호출 없음(본 세션 grep 확인). 단일 use_coupon은 Migration 311로 이미 service_role 전용 잠금 — use_coupons만 누락. 조치안: Migration 607로
+    REVOKE EXECUTE FROM authenticated(service_role 전용) → ✅ Migration #607로 Stage·Production 적용 완료(has_function_privilege authenticated/anon=false·service_role=true, authenticated 역할 실호출 거부 확인, 함수 본문 해시 19fa2943 불변, 쿠폰 라이브 테스트 43건 통과)
+  - ✅ 같은 유형 잔여 2건 Migration #608로 해소(Stage·Production): 단일 use_coupon(authenticated 실행 가능)·sync_order_after_composition_change(anon·authenticated 실행 가능)를 service_role 전용으로 잠금.
+    호출 경로 전수확인(앱 직접 호출 0, DB 내부 호출자 3종 cms_add/remove_reservation_product_unit·use_coupons는 모두 SECURITY DEFINER, 트리거·크론·뷰 0, 테스트는 service_role) 후 적용.
+    검증: has_function_privilege anon/authenticated=false·service_role=true, anon·authenticated 역할 실호출 전부 거부, 함수 본문 해시 불변(sync 12e18c76·use_coupon ab54805c), 회귀 테스트 7파일 56건 통과
+  - M-2(MEDIUM): QA는 DB 도구가 없어 Stage↔Production 대조 미실시 → 본 세션이 직접 대조 완료(use_coupons 19fa2943·create_reservation_order 93a6c21b·
+    validate_order_coupons 8c13d73c·cms_set_allow_coupon_stacking 285c0a0f·award_rental_complete_points e1770e5f 해시·권한 Stage=Production, 603/604/605/606 및
+    531~534 버전 양쪽 등록 확인). DRIFT_CHECK_PROCEDURE.md 정식 절차 1~4는 미실행
+  - ✅ DRIFT_CHECK_PROCEDURE.md 절차 1~4 정식 실행(2026-10-01, 본 세션):
+    · 절차1 함수 정의: 이번 세션 객체 11종(use_coupons·create_reservation_order·sync_order_after_composition_change·validate_order_coupons·cms_set_allow_coupon_stacking·
+      preview_distribute_coupon·distribute_coupon·award_rental_complete_points·private._validate_and_consume_coupon·generate_user_coupon_redeemed_code·compute_reservation_line_amount)
+      정규화 해시 Stage=Production 전부 일치 + cms_create_coupon·cms_update_coupon 단일 오버로드·본문 일치(PGRST203 위험 없음)
+    · 절차2 권한: 11종 실행 권한 Stage=Production 일치(use_coupons 607 후 service_role 전용, validate_order_coupons·award_rental_complete_points·create_reservation_order service_role 전용,
+      cms_set_allow_coupon_stacking·preview_distribute_coupon·distribute_coupon은 authenticated 허용이나 본문 is_cms_user() 검사). anon 실행 가능은 sync_order_after_composition_change 1건(기존)
+    · 절차3 제약·구조: order_coupons 컬럼·제약(order_coupons_order_id_user_coupon_id_key 포함)·인덱스·RLS, coupons 컬럼 5종·CHECK 제약 7종 일치
+    · 절차4 이력: 603(Stage 5행=초안·되돌림·최종·길이수정 / Production 1행=최종 double_stack)·605(Stage 605+605b / Production 통합 1행)·번호 차이(Stage 588~591 = Production 596~599 동일 내용)는 이름만 다르고 내용 동일.
+      604·606·607·531~534는 양쪽 등록
+    · ⚠️ 이번 작업 밖 기존 드리프트(보고만, 미수정): ①Stage에만 있는 마이그레이션 556b·558·562·569c — 562 미적용으로 apply_subscription_free_shipping 본문 불일치(Stage e8322505 / Production ac105c11)
+        → ✅ 562 Production 적용 완료(2026-10-01, Stephen 승인): 코드(6bac472)는 2026-09-28 main 배포됐으나 DB 미적용 상태였음(코드 배포≠DB 적용 재현). Production Easy pack01(월 제한 횟수 비움=무제한 의도, 가입자 1명)이
+          월 1회로 잘못 제한되던 것 해소. 적용 후 Production 함수 해시 e8322505=Stage, 권한 service_role 전용 일치. 사용 기록 0건이라 기존 피해 없음.
+          ※ Production Crazy pack(플랜 11)의 월 제한 횟수는 0(무제한 의도라면 입력란을 비워야 함 — 0은 '0회 허용'이라 항상 거부, 가입자 0명, 미수정)
+      ②FK 삭제 동작 차이: order_items_order_id_fkey(Prod CASCADE/Stage 없음)·order_items_reservation_id_fkey(Prod SET NULL/Stage 없음)·user_coupons_coupon_id_fkey(Prod CASCADE/Stage RESTRICT)
+      ③RLS 차이: Production coupons_user_select는 auth.uid() IS NOT NULL 조건이 없어 비로그인(anon)도 활성 쿠폰 조회 가능(Stage는 로그인 필요) → ✅ Migration #609로 해소(Stage·Production):
+        Production 정책에 auth.uid() IS NOT NULL 추가(Stage는 이미 동일 정의라 실질 변경 없음, 양쪽 정책 이름을 모두 처리하는 멱등 DO 블록). 앱의 coupons 직접 조회는 전부 service_role 또는 로그인 사용자 세션이라 영향 없음(익명 로그인도 auth.uid 존재).
+        검증: Production anon 조회 12건→0건, authenticated 12건 유지, coupons_admin_all 불변, Stage 쿠폰 회귀 테스트 5파일 41건 통과. (나머지 정책 이름 차이·CHECK 절 차이는 기능 영향 없어 미수정)
+      ④Production 인덱스 idx_user_coupons_coupon_id·idx_user_coupons_user_id 없음(Stage만)
+    · 절차5(코드↔DB 배포 교차검증)는 요청 범위 밖 — 앱 코드 미배포(미커밋)라 해당 없음
+  - L-1 coupon/+page.server.ts `db: any` eslint-disable(기존 패턴), L-2 check-rpc-error-handling 기존 위반 5건(create-order:52는 2026-09-25 커밋분),
+    L-3 validate_order_coupons 롤백 프로브 전용 부작용 검증 테스트 없음(couponStackingRules 간접 검증) — 차단 아님
+  - QA 미검증 범위: 화면 코드 UI 표준 준수, 내정보 조회 본인 행 한정, A-1 TS↔SQL 식 라인별·문서 정합성, reservationApprovalNotify 7건 실패 원인, create_reservation_order 앵커 패치 결과
+    (→ 본 세션은 A-1 패리티를 rentalCompleteNetBase 라이브 테스트, 앵커 패치를 couponStackingRules 라이브 테스트, 화면을 Claude Browser로 각각 확인)
+
+---
+
+## DONE — 🔴 CRITICAL: CMS 포인트 "등급별 배수" 오해 표시 해소 — 구독회원 렌탈완료 "더블 적립" 실구현 (Migration #603, 2026-10-01, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수 2차(1차 설계는 Stephen이 전면 정정 지시로 폐기·재구현, 2차 검수 블로킹 1건은 이 TASK.md 기록 자체의 구설계 잔존이었고 이번 갱신으로 해소, MEDIUM 2건은 경미·문서화된 한계로 미차단), Stage·Production 둘 다 RPC까지 전체 적용 완료(3차 갱신, 아래 참고) — 이후 다른 세션 Migration #606이 같은 함수를 더 확장했고 이 세션의 더블 적립 로직은 그 안에 그대로 보존됨(3차 재검증 완료), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 실제로 수정한 파일만 기록. 다른 세션 소관 미커밋 변경(`supabase/migrations/20261001010000_604_coupon_manual_distribute_preview_results.sql` 등)은 무수정.
+
+⛔ **이 블록은 같은 날 두 번째로 다시 쓴 최종본이다** — 최초 설계(같은 날 오전, "구독회원은
+공통 규칙 대신 신규 혜택종류 `RENTAL_COMPLETE_POINTS` 적립률을 적용받는 대체 방식")는
+Stephen이 명시적으로 뒤집어 전면 재구현했다. 아래는 그 최종(더블 적립) 설계만 기술한다 —
+`RENTAL_COMPLETE_POINTS`라는 이름은 코드베이스 어디에도 남아있지 않다(완전히 원상복구됨).
+
+배경: CMS 포인트 설정 화면의 "렌탈 완료" 규칙에 "등급별 배수"(B×1/P×2/C×3) 컬럼이 표시되고
+있었는데, `point_earn_rules.grade_multipliers`는 Migration #407 주석에도 명시됐듯 어떤 적립
+RPC도 실제로 읽지 않는 죽은 값이었다. BASIC/PRO/CRAZY 이름 자체도 "고객 등급"이 아니라
+정기구독 상품 티어(EASY/POP/CRAZY)를 잘못 재사용한 흔적임을 확인.
+
+Stephen 최종 확정 정책(같은 날 2차 지시):
+  ① 일반(비구독) 회원 — 공통 규칙(point_earn_rules.rental_complete) 그대로 적용(무변경).
+  ② 정기구독 회원(user_subscriptions.status='active') — 공통 규칙 "모두" 그대로 적용받고,
+     **추가로** "구독료 결제 적립"(tier_benefits.benefit_type='LOYALTY_POINTS', 구독료
+     결제 시 이미 쓰이던 기존 혜택 — 새 혜택종류를 만들지 않고 이 값을 그대로 재사용)과
+     동일한 비율만큼 렌탈완료 시에도 추가로 지급받는다 — "더블 적립"(대체 아님, 가산).
+  ③ "정기구독 상품별 적립포인트 항목 값 = 구독료 결제 적립"(Stephen) — 렌탈완료 보너스는
+     구독료 결제 적립과 완전히 같은 값(points_rate·min_purchase_amount·max_points_per_order·
+     points_expiry_days)을 그대로 읽는다. CMS에 새 입력 필드를 추가하지 않는다.
+  ④ 공통 규칙 is_active와 구독보너스(tier_benefits.is_enabled)는 완전히 독립적으로 작동
+     — 공통 규칙을 꺼도 구독보너스는 그대로 지급되고, 반대도 마찬가지.
+  ⑤ "긴급 수정" 지시로 장바구니 "적립 예정 포인트" 표시도 같은 날 함께 반영(공통 적립률 +
+     구독보너스율 합산 표시).
+
+수행 작업:
+  [1] `src/lib/utils/subscriptionBenefits.ts` — 최초 설계에서 추가했던 신규 혜택종류
+      `RENTAL_COMPLETE_POINTS`를 완전히 제거(원상복구, BenefitType/BENEFIT_TYPES/BENEFIT_DEFS/
+      formatBenefitForDisplay 전부). 기존 `LOYALTY_POINTS`의 description만 "구독료 결제 +
+      렌탈완료 더블 적립" 겸용 문구로 갱신 — CMS 구독상품 편집화면·구독상품 비교 페이지는
+      기존 혜택 카드 그대로 재사용되므로 UI 변경 없음.
+  [2] Migration #603(최종본으로 재작성) — `award_rental_complete_points` RPC: 공통분(①,
+      전원 동일)과 구독보너스분(②, `tier_benefits.LOYALTY_POINTS` 재사용)을 **각각 독립
+      계산·독립 지급**하도록 재작성. 공통분은 `ref_type='rental_complete'`(기존과 100% 동일
+      멱등키, 무회귀), 보너스분은 별도 `ref_type='rental_complete_sub_bonus'`로 독립 기록.
+      멱등성 재확인은 두 ref_type 중 하나라도 있으면 전체 스킵(OR 조건) — 공통규칙이 꺼져
+      공통분 행이 안 생기는 경우에도 보너스만 중복 지급되는 것을 막음. `tier_benefits_
+      benefit_type_check` CHECK 제약은 최초 설계 때 추가했던 값을 다시 빼 원래 5종 그대로
+      복원(Stage DB 직접 조회로 재확인 완료).
+      ⚠️ 실제 발견한 버그: `point_transactions.ref_type`이 `varchar(30)`인데 처음 쓴 이름
+      `rental_complete_subscriber_bonus`(32자)가 초과해 DB 에러 발생 — `rental_complete_
+      sub_bonus`(25자)로 줄여 해결(Stage 배포본 직접 조회로 최종 반영 확인).
+  [3] `src/routes/cms/promotion/point/+page.svelte`/`+page.server.ts` — "등급별 배수" 컬럼
+      완전 제거(헤더/뷰모드/편집모드/숨김input/colspan 6→5). 이 부분은 최초 설계 변경과
+      무관하게 그대로 유효(1차 검수 통과 유지).
+  [4] `rental_complete` 규칙 설명 문구 — 최종적으로 "렌탈비 × 적립률. 구독회원은 구독료
+      결제 적립(CMS 구독상품 '혜택관리'의 '적립포인트')과 동일한 비율로 추가 적립됩니다
+      (더블 적립)."로 확정(구체적 퍼센트 수치는 하드코딩하지 않음 — 같은 행의 "적립률(%)"
+      숫자 컬럼과 중복·박제 방지). 처음엔 Production RPC 배포 전이라 문구만 축약판("렌탈
+      완료 — 렌탈비 × 적립률", 구독회원 언급 없음)으로 우선 반영했었으나, 같은 날 후속으로
+      Stephen이 "Production DB 마이그레이션도 진행해줘" 지시 → RPC 전체(더블 적립 로직)를
+      Production에도 배포하고 이 완전판 문구로 갱신 완료(md5 해시로 Stage=Production 일치
+      재확인). ※ 이후 다른 세션 Migration #606이 이 설명을 다시 한번 갱신함(적립 기준금액
+      재정의 반영) — 최신 문구는 그쪽 블록 참고.
+  [5] `src/routes/cart/+page.server.ts`(긴급 수정) — `user_subscriptions` 조회에 `plan_id`
+      추가, "적립 예정 포인트" 계산용 적립률을 공통 규칙 + 구독보너스(`tier_benefits.
+      LOYALTY_POINTS`) 합산으로 변경(award_rental_complete_points와 동일 판별 조건 재사용).
+      `src/routes/cart/+page.svelte`는 주석만 갱신(로직 무변경, `data.earnRate`를 그대로 소비).
+  [6] TDD `src/__tests__/services/rentalCompleteSubscriberRate.test.ts` 전면 재작성, 더블
+      적립(가산) 정책 5건(①일반회원 공통분만 ②구독+보너스=공통+보너스 합산 ③보너스
+      비활성=공통분만(대체 아님) ④공통규칙 꺼도 보너스 독립 지급 ⑤멱등성) 전부 GREEN —
+      `common_amount`/`bonus_amount` 개별 assert로 "대체 아님"을 명시적으로 검증. 기존 회귀
+      테스트(awardRentalCompletePoints·rentalCompletePointsManualTrigger·
+      rentalCompletePointsQrTrigger·dheroAutoAdvance·rentalActionLog·cartEarnPoints) 27건
+      재확인 GREEN(총 32/32).
+
+수정 파일: src/lib/utils/subscriptionBenefits.ts,
+supabase/migrations/20261001000000_603_award_rental_complete_points_subscriber_rate.sql,
+src/routes/cms/promotion/point/+page.svelte, src/routes/cms/promotion/point/+page.server.ts,
+src/routes/cart/+page.server.ts, src/routes/cart/+page.svelte(주석만),
+src/__tests__/services/rentalCompleteSubscriberRate.test.ts(신규)
+
+배포 상태(3차 갱신, 같은 날 후속): Stephen "Production DB 마이그레이션도 진행해줘" 지시로
+RPC 전체(더블 적립 로직)를 Production에도 배포 완료 — 적용 전 Production 현재 함수가
+Migration #407 원본과 완전히 동일(드리프트 없음)함을 먼저 확인한 뒤 적용, 적용 후 md5
+해시로 Stage=Production 완전 일치 재확인. 적용 시점 Production은 7개 플랜 전부
+`is_enabled=false`라 실제 지급액 변화 0건(안전). **이후 다른 세션이 같은 함수를 Migration
+#606(적립 기준금액을 "할인·포인트 차감 후 실결제 대여료"로 재정의)로 다시 CREATE OR
+REPLACE했다** — 메인 세션이 파일 diff로 직접 대조한 결과, #606은 이 세션의 더블 적립 분리
+구조(공통분/구독보너스분 독립 계산·독립 ref_type·OR 멱등성 체크)를 그대로 보존한 채 기준
+금액 계산 부분만 교체했음을 확인(회귀 없음, `rentalCompleteSubscriberRate.test.ts` 5건
+재실행 GREEN). CMS 화면(`+page.svelte`/`+page.server.ts`)·장바구니 표시 코드는 git commit
+전이라 여전히 Production 앱 코드에는 미반영 — DB 로직(RPC)만 이미 최신 상태로 실제 작동 중.
+
+같은 날 추가 확인 작업: 다른 세션이 작성한 "쿠폰·포인트 개발 내역 요약본"을 Stephen 요청으로
+직접 검증(파일 수정 없음, 순수 리뷰) — 요약본의 핵심 수치(Stage 3%/Production 0.3% 적립률,
+Production 실제 활성 구독상품 3개 전부 미설정 등)를 DB 직접 조회로 전부 일치 확인, #606이
+이 세션 로직을 깨뜨리지 않았음을 재확인, 관련 테스트(이 세션 5건 + 그 세션 59건 표본
+재실행) 전부 GREEN 확인. 문제 발견 없음.
+
+QA 결과(2026-10-01, sp3-qa-agent 2차): 블로킹 1건(이 TASK.md 블록이 폐기된 1차 설계를 그대로
+서술하며 "GATE E 통과"까지 기록돼 있던 문제 — 이번 갱신으로 해소) / MEDIUM 2건: M-1(1차
+설계 때 추가했던 tier_benefits CHECK 제약 값이 실제로 원복됐는지 Stage DB 직접 재확인 필요
+— 메인 세션이 직접 조회해 원래 5종으로 정확히 복원돼 있음과 배포된 RPC가 최종본과 일치함을
+확인 완료·해소) / M-2(장바구니 표시가 min_purchase_amount·max_points_per_order 상한을
+반영하지 않는 근사치 — 코드 주석에 이미 명시된 의도된 단순화, 실제 지급액이 표시보다 작을
+수 있음을 인지 필요·미차단). LOW 2건(활성구독 판별 로직이 RPC·cart 서버 두 곳에 중복 구현
+— 유지보수 메모 수준 / 이 세션과 무관한 untracked 파일(#604)이 옆에 있으니 커밋 시 섞이지
+않게 주의 — 조치 불필요).
+git: Stephen 대기.
+
 ## DONE — 🔴 CRITICAL: CMS 포인트 적립 규칙 보완 — 리뷰·정시반납·생일 실제 지급 구현 + 추천인/피추천인 준비중 고정 (Migration #596~#600, 2026-09-30, 이 세션'만', ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0건, MEDIUM 2건 이번 세션 내 즉시 해소, LOW 4건 중 3건 해소·1건은 기존 코드베이스 전반의 허용된 리스크 패턴이라 미조치), git commit은 Stephen 대기)
 
 ⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 다른 세션 소관 미커밋 변경은 미수정.
@@ -90,6 +273,29 @@ LOW-1(마이그레이션 번호 충돌, #596~#600 재번호) / LOW-2(테스트 �
 스타일 통일, `id`→`user_id`) / LOW-3(birthday-points 크론에 `console.error` 로깅 추가,
 point-expiry·return-remind와 동일 수준). [미조치, 근거 있음] LOW-4(리뷰 적립 TOCTOU —
 기존 허용 리스크 패턴과 동일 클래스).
+git: Stephen 대기.
+
+## NOW — 🔴 CRITICAL: 결합상품 정책 구멍 보완(토글 OFF 링크 저장·서버 플래그 강제·양방향 중첩 차단) + 추천패키지 전체 결합상품 분류 (Migration #572 정정·#601·#602, 2026-09-30, 이 세션'만', ✅ 사용자(Stephen) 직접 지시 — Stage·Production DB 적용 완료 · GATE E sp3-qa-agent 검수 대기, git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 소관 미커밋 변경(cart/*, cartRentalFee, CalendarTimePicker, hype-pack, 홈 등)은 미수정.
+
+배경(현황 재확인 결과): `/cms/products` 결합상품 기능이 기존 기능을 깨뜨린 회귀는 없음(블로킹 0). 다만 정책 구멍 4건 — ① 신규등록 토글 OFF여도 담아둔 결합 링크 저장(#575 "등록 시점 분류 고정" 위반) ② 서버가 is_bundle_product 미강제 ③ #572 이후 "패키지 안의 패키지"가 등록 순서에 따라 통과(A→B 후 B→C) ④ Production assign_bundle_assets 존재 여부 미확인.
+
+수행 작업:
+  [1] 신규등록 화면(new/+page.svelte): serializeBundleLinks가 토글 OFF면 '[]' 반환 + 토글 OFF 전환 시 selectedBundles 비움.
+  [2] 신규등록 서버(new/+page.server.ts): is_bundle_product=true일 때만 upsert_product_bundle_links 호출.
+  [3] 상세 패널 저장(cms/products/+page.server.ts updateSection 'bundles'): 비어있지 않은 링크 저장 시 대상 is_bundle_product=false면 fail(400). 빈 목록(정리)은 허용. 새 오류코드 BUNDLE_IS_PART_OF_PACKAGE 메시지 매핑 추가. (복제 경로는 의도적으로 무변경 — 기존 productClone 테스트 보호)
+  [4] Migration #601(upsert_product_bundle_links 검증 7): 이미 다른(미삭제) 패키지의 부품인 상품은 자기 결합목록을 만들 수 없음(BUNDLE_IS_PART_OF_PACKAGE). 빈 목록 정리는 허용. 롤백=#572 본문 재실행. DB에서 is_bundle_product를 강제하는 검사는 의도적으로 넣지 않음(기존 라이브 테스트 fixture가 플래그 없이 패키지를 만들기 때문 — 서버 코드 검사까지만).
+  [5] ⚠️ 기록 정정: TASK/문서에 "#572 Stage·Production 적용 완료"로 적혀 있었으나 Production 실측(schema_migrations·함수 정의)에서 #572가 미적용(옛 #544 본문, BUNDLE_IS_NESTED·BUNDLE_OPTION_OVERLAP 잔존)임을 확인. 이번에 #572 → #601 순서로 Production 적용(이력 정합: #601만 적용하면 추후 #572 적용 시 덮어쓰기 회귀). Production·Stage 함수 md5 동일(8771ad52…), ACL service_role 전용 유지, 활성 링크 63건 무변경. 그 결과 Production에도 #572 정책(옵션과 겹쳐도 결합상품 허용·부품이면서 패키지 허용→#601이 다시 양방향 차단)이 반영됨.
+  [6] Migration #602: 추천패키지(code_mapping_groups b92a9ac1… default_category='hypepack') 부모 상품 전체를 is_bundle_product=true로 분류(Stephen 지시 "전체"). Production 12개 변경(분류 32/미분류 0, 링크 63건 무변경), Stage 동일 조건 적용. 플래그만 변경(링크·재고·요금·예약 영향 없음). 되돌리기 id 12개는 대화 기록. 대상에 단품처럼 보이는 "420B Combi-boom Stand with Sandbag" 포함(전체 지정에 따름).
+  [7] "총 32건" 카운트 재검증(코드+Production DB): category='hypepack' ∧ parent_product_id IS NULL ∧ deleted_at IS NULL(비활성 포함) = 32 일치, 삭제 부모 11·재고 자식 91은 제외 — 로직 정상.
+  [8] TDD: src/__tests__/services/bundleReverseNesting.test.ts(Stage 라이브 RN-1~5) 신규. 기존 bundleInventoryHold·bundleOverlapRecheck·productClone 포함 4개 파일 48건 통과. svelte-check 이번 변경 관련 오류 0(기존 vite.config.ts 1건은 무관).
+  [9] 문서: .claude/rules/products.md §2-14 ⑤항(양방향 중첩·서버 플래그 집행) 추가.
+
+수정 파일: supabase/migrations/20260930100000_601_bundle_links_block_reverse_nesting.sql, supabase/migrations/20260930110000_602_backfill_hypepack_is_bundle_product.sql, src/routes/cms/products/+page.server.ts, src/routes/cms/products/new/+page.server.ts, src/routes/cms/products/new/+page.svelte, src/__tests__/services/bundleReverseNesting.test.ts, .claude/rules/products.md
+알려진 범위 외(미수정·Stephen 확인 대기): new/+page.svelte:210-213 "옵션에 있으면 결합 불가" 옛 검사 잔존(#572 이전 정책, 상세 패널과 불일치) / 복제 시 원본 링크 조회 실패 → 링크 0개 결합상품 생성 가능(경고 있음) / #544·#545·#572·#575 롤백 섹션 부재 / Production 서버 코드([1]~[3])는 미커밋·미배포 — DB 먼저 적용 완료, 코드 배포는 커밋 후 / Stage에 중첩 테스트 데이터 3행 잔존(목록 비우면 정리됨).
+QA 결과(2026-09-30, sp3-qa-agent GATE E): **조건부 통과 — 블로킹 0**. 4개 파일 vitest 48건·eslint/svelte-check 신규 오류 0 확인. MEDIUM 1(products.md §2-14 #572 폐기 단락·GATE C 문구가 #601 재차단과 모순) → ✅ 정정 완료(같은 날). LOW: ⑤항 위치 → ✅ 이동 / GATE C 제약 목록 → ✅ 5가지로 갱신 / DB 미강제(의도)·Stage 중첩 2쌍 잔존(문서화됨) / #602 롤백 id는 대화 기록뿐(아래 보관). QA 환경에 DB 도구가 없어 Production 대조는 본 세션 직접 SQL로 수행(함수 md5 8771ad52… Stage 일치, 분류 32/미분류 0, 링크 63건).
+#602 롤백 id(Production 12개, 링크 없는 상품만): 8045f402-8eef-48c9-af9b-5a3bbf157904, f089a5aa-8219-4fed-ab0f-aafadc637836, 24754b60-03de-472f-bf6d-207227fcbe5e, 132ecc32-94b1-435e-911c-aa3135aea95c, 4579459b-e3a4-457b-83aa-e9952a0f25a6, 19ad877c-8e9c-4df7-87ae-46ae9a62e53a, 896364d6-5786-43c9-8063-2c7e2822880f, a6dc1fce-3ad8-45d0-a98a-95653972a07f, c7d78377-975f-450a-a597-d7f22b5d1245, 95578a22-2b4b-4ef9-97e6-597d21e0ac28, 3db96f04-ec6c-4ace-ba6b-763f3110291a, 9b6e18e8-efe0-4201-9387-6083a0940508
 git: Stephen 대기.
 
 ## NOW — 🔴 CRITICAL: 요금 미등록 상품 처리 — 장바구니 폴백(150000·24h×0.6) 제거 + 12h 없음 24시간 단위 올림 + 24h 없음 "요금 미정"·예약 신청 차단 (Migration #584, 2026-09-30, 이 세션'만', ✅ GATE B 승인 — Stephen 진행 지시, Migration #584·#585 Stage·Production 모두 적용 완료(Production 2026-09-30 15:01 KST 적용·검증) · ✅ GATE E 3차 통과 — sp3-qa-agent 독립검수(블로킹 0건, #585 무료옵션 포함), git commit은 Stephen 대기)

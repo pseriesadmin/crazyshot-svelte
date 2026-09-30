@@ -185,7 +185,6 @@ export const actions: Actions = {
     const amount_raw = form.get('amount')
     const rate_raw   = form.get('rate')
     const is_active  = form.get('is_active')
-    const mults_raw  = form.get('grade_multipliers')
 
     if (!event_type) return { ok: false, error: '이벤트 유형이 필요합니다.' }
 
@@ -196,7 +195,7 @@ export const actions: Actions = {
       p_amount:            amount_raw !== null ? Number(amount_raw) : null,
       p_rate:              rate_raw   !== null ? Number(rate_raw)   : null,
       p_is_active:         is_active  !== null ? is_active === 'true' : null,
-      p_grade_multipliers: mults_raw  ? JSON.parse(String(mults_raw)) : null,
+      p_grade_multipliers: null,
     })
 
     if (error) return { ok: false, error: error.message }

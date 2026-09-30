@@ -362,7 +362,7 @@
         <thead>
           <tr>
             <th>이벤트</th><th>고정 적립 (P)</th>
-            <th>적립률 (%)</th><th>등급별 배수</th>
+            <th>적립률 (%)</th>
             <th>활성</th><th>관리</th>
           </tr>
         </thead>
@@ -385,11 +385,6 @@
                   <input type="number" min="0" step="0.01" class="f-input inline"
                     bind:value={ruleEdits[r.event_type].rate} />
                 </td>
-                <td class="td-date">
-                  {#if r.grade_multipliers}
-                    BASIC×{r.grade_multipliers.BASIC} / PRO×{r.grade_multipliers.PRO} / CRAZY×{r.grade_multipliers.CRAZY}
-                  {:else}—{/if}
-                </td>
                 <td>
                   <button type="button" class="tog" class:tog-on={ruleEdits[r.event_type].is_active}
                     role="switch" aria-checked={ruleEdits[r.event_type].is_active}
@@ -410,10 +405,6 @@
                     <input type="hidden" name="amount"    value={ruleEdits[r.event_type].amount} />
                     <input type="hidden" name="rate"      value={ruleEdits[r.event_type].rate} />
                     <input type="hidden" name="is_active" value={String(ruleEdits[r.event_type].is_active)} />
-                    {#if r.grade_multipliers}
-                      <input type="hidden" name="grade_multipliers"
-                        value={JSON.stringify(r.grade_multipliers)} />
-                    {/if}
                     <div class="row-gap">
                       <button type="submit" class="btn-primary sm"
                         disabled={ruleLoading}>저장</button>
@@ -425,11 +416,6 @@
               {:else}
                 <td>{r.amount > 0 ? r.amount.toLocaleString() + 'P' : '—'}</td>
                 <td>{r.rate > 0 ? (r.rate * 100).toFixed(1) + '%' : '—'}</td>
-                <td class="td-date">
-                  {#if r.grade_multipliers}
-                    B×{r.grade_multipliers.BASIC} / P×{r.grade_multipliers.PRO} / C×{r.grade_multipliers.CRAZY}
-                  {:else}—{/if}
-                </td>
                 <td>
                   <span class="badge {r.is_active ? 'badge-active' : 'badge-inactive'}">
                     {r.is_active ? '활성' : '비활성'}
@@ -441,7 +427,7 @@
               {/if}
             </tr>
           {:else}
-            <tr><td colspan="6" class="no-data">적립 규칙이 없습니다. (migration #50 적용 필요)</td></tr>
+            <tr><td colspan="5" class="no-data">적립 규칙이 없습니다. (migration #50 적용 필요)</td></tr>
           {/each}
         </tbody>
       </table>
