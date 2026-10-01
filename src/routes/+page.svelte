@@ -23,25 +23,14 @@
   // ── 캐러셀 상태 ───────────────────────────────────────────────────
   let pcIdx    = $state(0)
   let mobileIdx = $state(0)
-  let pcCarousel    = $state<typeof heroPC>([])
-  let mobileCarousel = $state<typeof heroMobile>([])
+  // 캐러셀 배열 — 랜덤 모드 셔플은 서버(+page.server.ts)에서 끝낸 상태로 내려온다.
+  // $state+$effect로 클라이언트에서 채우면 SSR 첫 HTML엔 빈 배열이라 기본 배경이 잠깐 보였다가 교체되는 깜빡임이 생김
+  const pcCarousel     = $derived(heroPC)
+  const mobileCarousel = $derived(heroMobile)
 
-  // 캐러셀 배열 초기화 (랜덤/고정 모드 반영)
-  $effect(() => {
-    const list = data.bannerMap?.['hero_pc'] ?? []
-    pcCarousel = data.heroBannerSettings?.pc_mode === 'random'
-      ? [...list].sort(() => Math.random() - 0.5)
-      : [...list]
-    pcIdx = 0
-  })
-
-  $effect(() => {
-    const list = data.bannerMap?.['hero_mobile'] ?? []
-    mobileCarousel = data.heroBannerSettings?.mobile_mode === 'random'
-      ? [...list].sort(() => Math.random() - 0.5)
-      : [...list]
-    mobileIdx = 0
-  })
+  // 배너 목록이 바뀌면(재조회 등) 첫 장부터 다시 시작
+  $effect(() => { void pcCarousel; pcIdx = 0 })
+  $effect(() => { void mobileCarousel; mobileIdx = 0 })
 
   // 자동 슬라이드 (4초 인터벌)
   $effect(() => {
