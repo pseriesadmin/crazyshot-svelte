@@ -632,6 +632,10 @@ matchesUserGradeRequired()를 쓴다(장바구니·계약서 2곳 교정).
 605에서 DELETE를 별칭으로 한정하고 ON CONFLICT를 제약 이름으로 지정해 수정. RETURNS TABLE 출력 컬럼명과 같은 이름의 테이블 컬럼을
 다루는 함수는 항상 별칭/제약 이름을 써야 한다.
 ```
+쿠폰 "적용 대상"(2026-10-01, CMS 설정 Migration 615 + 장바구니·서버 연동 Migration 616): coupons.applies_to_rental / applies_to_sale(기본 둘 다 true).
+  한쪽 전용 쿠폰은 그 종류의 상품이 선택된 상품(주문)에 하나라도 있어야 사용 가능 — 대여 전용 쿠폰 + 판매 단독, 판매 전용 쿠폰 + 대여 단독은 비활성/거절,
+  혼합 주문은 둘 다 활성. 화면(couponOrderConditions.ts 'RENTAL_ONLY_COUPON'/'SALE_ONLY_COUPON')과 서버(_validate_and_consume_coupon 'COUPON_NOT_APPLICABLE', use_coupon·use_coupons·validate_order_coupons 공통 경로)가 같은 규칙.
+  ⛔ 미결(Stephen 결정 대기, 구현 안 함): 혼합 주문에서 한쪽 전용 쿠폰의 할인 금액 범위(대여 금액에만 적용할지) · 무료배송 쿠폰 대상 · 최소 금액 기준 금액 · 대여 전용 쿠폰이 판매 몫 적립 기준에 잡히는 조정.
 → 상세: `supabase/migrations/20261001020000_605_coupon_stacking_rules_and_order_validation.sql` ·
 `src/lib/utils/couponStacking.ts` · `couponOrderConditions.ts` · `src/lib/server/coupons/consumeCoupons.ts` ·
 `src/__tests__/services/couponStackingRules.test.ts`(Stage 라이브 4건) · `couponMultiStacking.test.ts`(5건)

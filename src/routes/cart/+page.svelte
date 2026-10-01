@@ -824,7 +824,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean } | null }
+  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -1811,6 +1811,10 @@
   function readPricingReady(): boolean { return pricingReady }
   // cartMode도 아래(2043행 부근)에서 선언되므로 같은 이유(TDZ)로 함수 경유로 읽는다 — 판매전용 단독 카트 판정용
   function readIsPurchaseOnly(): boolean { return cartMode === 'purchase' }
+  function isSaleLine(itemId: string): boolean {
+    const g = groupsById.get(itemId)
+    return g?.durationType === 'purchase' || (g?.product as { sale_only?: boolean | null } | undefined)?.sale_only === true
+  }
   const otConditionCtx = $derived<CouponOrderContext>((() => {
     const rentalItems = itemsState.filter(
       (it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase',
@@ -1822,6 +1826,10 @@
         ? Math.min(...dated.map((it) => (it.rentalDate === it.returnDate ? 0 : calcRentalDays(it.rentalDate, it.returnDate))))
         : null,
       allWalkIn: rentalItems.length > 0 ? rentalItems.every((it) => it.opts.rentalMethod === 'visit') : null,
+      // 쿠폰 "적용 대상"(대여/판매) 판정용 — 체크된 미삭제 상품의 구성
+      // 서버(Migration 616)와 같은 판매 판별 — 예약 duration_type='purchase' 또는 상품이 판매전용(레거시 draft 대비)
+      hasRentalLine: itemsState.some((it) => !it.deleted && it.checked && !isSaleLine(it.id)),
+      hasSaleLine: itemsState.some((it) => !it.deleted && it.checked && isSaleLine(it.id)),
     }
   })())
   const otConditionResults = $derived<Map<string, { ok: true } | { ok: false; reason: CouponOrderReason }>>(
@@ -1835,6 +1843,8 @@
             min_rental_amount: Number(c.min_rental_amount ?? 0),
             min_rental_days: Number(c.min_rental_days ?? 0),
             is_walk_in_only: !!c.is_walk_in_only,
+            applies_to_rental: c.applies_to_rental !== false,
+            applies_to_sale: c.applies_to_sale !== false,
           }, otConditionCtx)] as const
         }),
     ),
@@ -2434,6 +2444,7 @@
                   note: isNoDelivery
                     ? '크레이지배송(택배) 선택 시 사용 가능'
                     : isBlocked ? '배송 우대설정 적용 중 — 중복 적용 불가'
+                    : (condFail === 'WALK_IN_ONLY' || condFail === 'MIN_DAYS_NOT_MET') && !otConditionCtx.hasRentalLine ? '대여 상품에만 사용 가능'
                     : condFail ? couponConditionMessage(condFail, {
                         min_purchase_amount: Number(c.min_purchase_amount ?? 0),
                         min_rental_amount: Number(c.min_rental_amount ?? 0),
