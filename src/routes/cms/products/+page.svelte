@@ -110,13 +110,15 @@
     searchInput = data.q
   })
 
-  type SortMode = 'newest' | 'oldest' | 'asc' | 'desc'
+  // 'relevance'는 검색어 입력 시 서버가 근접도순으로 정렬할 때만 내려오는 값(정렬 버튼 순환에는 포함하지 않음)
+  type SortMode = 'newest' | 'oldest' | 'asc' | 'desc' | 'relevance'
   const SORT_CYCLE: SortMode[] = ['asc', 'desc', 'newest', 'oldest']
   const SORT_LABELS: Record<SortMode, string> = {
     asc: '오름순',
     desc: '내림순',
     newest: '최신 등록순',
     oldest: '과거 등록순',
+    relevance: '관련도순',
   }
 
   function nextSort() {
@@ -163,17 +165,27 @@
     const params = new URLSearchParams()
     if (value !== 'all') params.set('category', value)
     if (searchInput) params.set('q', searchInput)
-    if (data.sort !== 'newest') params.set('sort', data.sort)
+    if (data.sort !== 'newest' && data.sort !== 'relevance') params.set('sort', data.sort)
     // page 리셋 (카테고리 변경 시 1페이지로)
     goto(`/cms/products?${params.toString()}`)
   }
 
-  function runSearch(): void {
+  // item이 있으면(제안목록에서 상품 직접 선택): 전 카테고리 대상으로 그 상품명을 검색하고,
+  // 선택 상품을 결과 최상단(pin)에 올리면서 상세 패널을 함께 연다(selected).
+  // item이 없으면(Enter): 현재 카테고리 유지 + 서버가 근접도순으로 정렬(sort 미지정).
+  function runSearch(item?: { id: string; name: string }): void {
     const params = new URLSearchParams()
+    if (item) {
+      params.set('q', item.name.trim())
+      params.set('pin', item.id)
+      params.set('selected', item.id)
+      goto(`/cms/products?${params.toString()}`)
+      return
+    }
     if (data.category !== 'all') params.set('category', data.category)
     const q = searchInput.trim()
     if (q) params.set('q', q)
-    if (data.sort !== 'newest') params.set('sort', data.sort)
+    if (data.sort !== 'newest' && data.sort !== 'relevance') params.set('sort', data.sort)
     // page 리셋 (검색 시 1페이지로)
     goto(`/cms/products?${params.toString()}`)
   }
@@ -408,7 +420,7 @@
           listLabel="상품 검색 제안"
           placeholder="상품명·브랜드·키워드 검색"
           categoryLabels={CATEGORY_LABEL}
-          onselect={() => runSearch()}
+          onselect={(item) => runSearch({ id: item.id, name: item.name })}
         >
           {#snippet field(c)}
             <input

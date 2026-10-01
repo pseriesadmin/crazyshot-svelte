@@ -7,6 +7,37 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## DONE — 🟢 ROUTINE: 홈 히어로(PC·모바일) 새로고침 시 기본 배경 이미지가 잠깐 노출되던 깜빡임 수정 (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시("모바일·PC 둘 다 수정"), DB·마이그레이션 변경 없음 · ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·MEDIUM 0·LOW 2 정보성), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
+
+원인: `src/routes/+page.svelte`의 `pcCarousel`/`mobileCarousel`이 `$state([])`로 시작해 `$effect`에서만 채워졌다. `$effect`는 SSR에서 실행되지 않으므로 서버 첫 HTML엔 항상 빈 배열 → `{:else}` 정적 기본 이미지(`/home/mobile/ac4438…png` 등)가 렌더되고, 하이드레이션 후 DB 배너로 교체되며 깜빡임. 서버 쿼리(`bannerMap`)는 정상이었음(표시 시점만 늦음).
+수행 작업:
+  [1] +page.svelte: `pcCarousel`·`mobileCarousel`을 `$derived(heroPC/heroMobile)`로 변경 — SSR 첫 HTML부터 DB 배너 렌더. 배너 목록 변경 시 `pcIdx/mobileIdx=0` 리셋만 작은 `$effect`로 유지. 4초 자동 슬라이드·링크·sub_copy 로직 무변경.
+  [2] +page.server.ts: 랜덤 모드(`pc_mode`/`mobile_mode`==='random')는 서버에서 Fisher-Yates로 섞어 `bannerMap`에 내려줌(클라이언트 셔플은 SSR과 순서가 달라 동일 깜빡임 유발). 고정 모드는 기존 순서 그대로.
+검증: svelte-check 이번 변경 관련 신규 오류 0(기존 `vite.config.ts` 1건만). 실화면 깜빡임 소멸 확인은 미실시(Stephen 또는 허용 시 Browser).
+수정 파일(이 세션'만'): src/routes/+page.svelte, src/routes/+page.server.ts
+알려진 한계: 랜덤 모드는 이제 요청마다 서버에서 섞임(캐시되는 페이지로 바뀌면 같은 순서가 고정될 수 있음) / 활성 배너 0개일 때만 기본 이미지 노출(의도).
+QA 결과(2026-10-01, sp3-qa-agent GATE E): **통과 — BLOCKING 0·MEDIUM 0·LOW 2**. SSR 첫 HTML에서 DB 배너 렌더·4초 슬라이드 루프 없음·인덱스 범위 가드(`{#if b}`)·`$state(prop)` 위반 없음·`bannerMap` 소비처 영향 없음 확인, svelte-check 신규 오류 0. LOW-1(랜덤 모드 invalidateAll 시 재셔플·인덱스 0 리셋)은 기존 동작과 동일, LOW-2(CDN/ISR 캐시 시 같은 순서 가능)는 load가 사용자 세션 클라이언트를 써 가능성 낮아 조치 불요.
+git: Stephen 대기.
+
+## DONE — 🟡 BOUNDARY: `/cms/products` 검색바 보완 — Enter 근접도순 정렬 + 제안목록 선택 상품 최상단·패널 동시 오픈 (2026-10-01, 이 세션'만', DB·마이그레이션 무변경 · ✅ GATE E 통과 — sp3-qa-agent 독립 재검수(블로킹 0·MEDIUM 0·LOW 0), 조건: Stephen 실화면 확인, git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
+
+배경: 검색어(q)가 있어도 목록이 등록일(newest) 순으로만 나열돼 검색어와 가까운 상품이 아래로 밀렸고, 제안목록(SuggestPicker) 선택은 q만 재검색할 뿐 선택 상품을 위로 올리거나 패널을 열지 않았다.
+수행 작업:
+  [1] 근접도 정렬: `q` 있음 ∧ URL에 `sort` 미명시일 때만 "관련도 모드" — 목록과 동일 필터(삭제·부모·카테고리·ilike 4필드+NLSearch 폴백 id)로 후보 최대 500건을 정렬 없이 조회 → 순수 함수 `rankProductsByRelevance`(등급=자동완성과 동일한 relevanceTier → 같은 등급은 일치 위치 → 이름 길이 → 가나다)로 정렬 → 해당 페이지 id만 재조회해 순서 재배열. 후보 조회 실패 시 기존 등록일순 쿼리로 폴백. 응답 `sort`는 관련도 모드면 'relevance'(정렬 버튼 라벨 "관련도순"). 정렬 버튼으로 sort를 명시하면 기존 정렬 그대로(관련도 해제), 검색어 없음·카테고리 탭·페이지 이동은 기존 경로.
+  [2] 제안목록 선택: `runSearch(item)` → `q=상품명&pin=id&selected=id`(카테고리 필터 해제)로 이동. 서버가 `pin`(UUID 형식만 허용)을 관련도 모드 1페이지 맨 앞에 고정, 후보에 없으면 단건 조회해 앞에 추가(총건수 +1). `selected`는 기존 처리로 우측 패널 동시 오픈.
+  [3] `relevanceTier`를 `$lib/utils/similarNameSuggest.ts`로 이동(export)하고 search-suggestions API는 import로 교체(동작 무변경) — 자동완성과 목록 정렬 기준 일치.
+  [4] TDD: `src/__tests__/utils/productSearchRanking.test.ts` 8건(등급·위치·길이 정렬, 영문·숫자·특수문자·대소문자, pin, 빈 검색어, 원본 불변, UUID 검증) GREEN. 기존 `cmsProductSearchSuggestions`·`productClone`·`cloneProductPartnerCodeComboMerge`·`saleOnlyToggleGuard`·`productKeyValueOrderSave` 통과. svelte-check·eslint 이번 변경 관련 신규 오류 0.
+  ⚠️ `productUpdateSection.test.ts:130` 1건 실패는 이번 변경과 무관한 기존 사항 — 2026-09-28 "24시간 가격 필수" 폐기(products.md §2-9) 이후 갱신되지 않은 옛 정책 테스트.
+수정 파일: src/routes/cms/products/+page.server.ts, src/routes/cms/products/+page.svelte, src/lib/utils/similarNameSuggest.ts, src/routes/api/cms/products/search-suggestions/+server.ts, src/lib/utils/productSearchRanking.ts(신규), src/__tests__/utils/productSearchRanking.test.ts(신규)
+알려진 범위 외: 초성 전용 검색은 목록 필터 미지원(기존) / 실화면(Enter 정렬·제안 선택 시 최상단+패널) 확인은 Stephen 또는 허용 시 Browser.
+QA 결과(2026-10-01, sp3-qa-agent GATE E): **조건부 통과 — 블로킹 0·MEDIUM 0**. 요건 ①②·회귀(검색어 없음·카테고리·명시 정렬·페이지·카드 클릭·폴백) 확인, vitest 52/53(실패 1건은 기존 `productUpdateSection.test.ts:130` — 9/28 폐기 정책 이전 테스트)·svelte-check/eslint 신규 오류 0. LOW 1·2(500건 상한/pin 추가 시 totalCount 불일치) → ✅ 정정(totalCount를 정렬된 후보 수로 일치). LOW 3(`selected` UUID 미검증)은 기존·무위험. 조건: 실화면 확인(Stephen).
+재검수(2026-10-01, 최종 상태): **통과 — BLOCKING 0·MEDIUM 0·LOW 0**. LOW 1·2 정정 반영·TASK.md 구조 무결성(서문 온전, 신규 블록 +16줄 단독) 확인. 기록 정정: 최초 삽입이 서문 5줄 중간에 들어갔던 것을 서문 원복 + 첫 NOW 앞으로 이동해 바로잡음.
+git: Stephen 대기.
+
 ## NOW — 🟢 ROUTINE: 검수 후속 — 키워드 링크 렌더 방어·콤보 hover BG만·키워드 칩 hover 지침(§26)·ALL 관리 버튼 모바일 숨김 (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시(앞선 sp3 MEDIUM 2건 처리 지시 포함), DB 변경 없음 — GATE E sp3-qa-agent 검수 진행, git commit은 Stephen 대기)
 - MEDIUM-1 해소: src/routes/hype-pack/+page.svelte `safeKeywordHref()` — 저장된 keyword_links가 `/products/`로 시작하고 `//` 아닐 때만 `<a href>`로 렌더(그 외는 링크 없는 칩).
 - MEDIUM-2 해소: HypePackBannerModal `.combo-btn:hover`에서 보더 색 변경 제거(호버는 BG만). ⚠️ front-uiux.md §16 스펙에는 hover 보더 변경이 남아 있어 지침과 코드가 어긋남 — 지침 수정 여부 Stephen 확인 대기.

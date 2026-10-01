@@ -82,6 +82,18 @@ export const load: PageServerLoad = async ({ locals }) => {
     ((heroBannerSettingsRow as { value: unknown } | null)?.value as HeroBannerSettings | null) ??
     { pc_mode: 'fixed', mobile_mode: 'fixed' }
 
+  // 랜덤 모드는 서버에서 섞어 내려준다 — 클라이언트에서 섞으면 SSR 첫 HTML과 달라 기본 배경이 깜빡임
+  const shuffled = <T,>(list: T[]): T[] => {
+    const a = [...list]
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[a[i], a[j]] = [a[j], a[i]]
+    }
+    return a
+  }
+  if (bannerMap['hero_pc'] && heroBannerSettings.pc_mode === 'random') bannerMap['hero_pc'] = shuffled(bannerMap['hero_pc'])
+  if (bannerMap['hero_mobile'] && heroBannerSettings.mobile_mode === 'random') bannerMap['hero_mobile'] = shuffled(bannerMap['hero_mobile'])
+
   // BUG-FIX(2026-08-10): 홈 화면 카테고리 탭이 하드코딩 배열(CATEGORY_TABS)로 고정돼
   // 있었음 — /products와 동일하게 백오피스(code_mapping_groups) 값으로 통일. RLS가
   // is_cms_user()라 service_role 사용(RLS 정책 자체는 무변경, 비민감 카테고리 라벨
