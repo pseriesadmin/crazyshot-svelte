@@ -81,14 +81,6 @@
   <div class="m-scroll-menu">
     <div class="m-scroll-menu-top">
       <h2 class="m-section-title">추천 HypePack</h2>
-      <button class="m-help-btn" aria-label="도움말">
-        <!-- help icon: #FF3535 circle -->
-        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-          <path fill-rule="evenodd" clip-rule="evenodd"
-            d="M15 0C6.716 0 0 6.716 0 15s6.716 15 15 15 15-6.716 15-15S23.284 0 15 0zm0 22a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0-16c2.76 0 5 2.24 5 5 0 2.17-1.39 4.04-3.34 4.73L16.5 17h-3v-1.5c0-.83.67-1.5 1.5-1.5 1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2h-3c0-2.76 2.24-5 5-5z"
-            fill="#FF3535"/>
-        </svg>
-      </button>
     </div>
     <div class="m-chips-wrap">
       {#each displayKeywords as kw}
@@ -363,11 +355,6 @@
     letter-spacing: -0.3px;
     line-height: 1.6;
   }
-  .m-help-btn {
-    display: flex; align-items: center; justify-content: center;
-    min-width: 44px; min-height: 44px;
-    background: none; border: none; cursor: pointer; padding: 0; flex-shrink: 0;
-  }
   .m-chips-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
   .m-chip {
     display: inline-flex; align-items: center;
@@ -453,14 +440,14 @@
   /* ── Pack 테마목록 (모바일 전용) ── */
   .m-pack-themes {
     background: var(--cs-lilac);
-    padding: 50px 25px 60px;
+    padding: 75px 25px 60px; /* 배너-테마목록 사이 여백 50% 증가(50px→75px) */
   }
   .m-pack-themes .theme-pick-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin: 0 0 25px;
+    margin: 0 0 37.5px; /* 타이틀-목록 사이 여백 50% 증가(25px→37.5px) */
   }
   .m-pack-themes .theme-pick-head .m-pack-themes-title { margin: 0; }
   .m-pack-themes-title {
@@ -475,7 +462,7 @@
   .m-pack-themes-list {
     display: flex;
     flex-direction: column;
-    gap: 15px;
+    gap: 30px; /* 패키지 그룹 카드 간 여백 100% 증가(15px→30px) */
   }
   .m-pack-theme-card {
     display: block;
