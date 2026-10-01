@@ -7,6 +7,29 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🟡 BOUNDARY: 재고(자식)는 옵션 링크를 복사하지 않고 부모값을 따르는 구조로 전환 + 운영 재고 링크 데이터 복구 (2026-10-01, 이 세션'만', ✅ GATE B 승인 — Stephen "1번 데이터 복구와 3번 구조 변경 모두 진행", ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0건), git commit은 Stephen 대기)
+
+배경: 직전 블록(장바구니 판정 수정)의 후속. "빠른 재고 등록"(add_inventory)이 부모 옵션 링크를 재고에 복사 → 부모를 고쳐도 사본이 어긋남(SONY UWP-D21 사고). 정책 정본: products.md §4-0·§4-1(재고는 등록정보 읽기전용, 부모만 수정).
+[3번 구조 변경] src/routes/cms/products/+page.server.ts cloneProduct add_inventory — get_product_option_links→upsert_product_option_links 복사 블록 제거(주석으로 사유 기록). new_product(새 부모로 복제) 복사는 새 부모가 정본을 갖는 정상 동작이라 유지. TDD: productClone.test.ts에 add_inventory 링크 복사 금지 2건 추가(RED→GREEN), 관련 3개 파일 25/25 통과, svelte-check 신규 오류 0.
+  재발 경로 점검: DB 함수 중 product_option_links를 쓰는 것은 compute_reservation_line_amount·get/upsert_product_option_links·set_reservation_options·updated_at 트리거뿐, products 트리거에도 링크 생성 없음. 앱 코드 쓰기 지점(옵션 탭 저장=부모 전용·신규 등록·새 상품 복제) 모두 부모 대상.
+[1번 데이터 복구] Production(vnbpmvxruyciuuaermyh) product_option_links에서 재고 af37c3e5 의 링크 3건(id e14d59fa…·8f0aea20…·fce8be14…)만 DELETE(정확히 3행 반환). 백업·복구 INSERT: .claude/harness/learnings/product_option_links_child_af37c3e5_backup_2026-10-01.sql. 사후: af37c3e5 링크 0 / 부모(cbc516ff) 링크 3건 그대로 / 활성 재고 링크 잔여 3건(Sony NP-F770 1·NP-F780 2)은 부모와 값 동일(어긋남 없음, 이번 범위 밖이라 유지) / 삭제 처리된 옛 링크 4건은 비활성.
+유의: 운영 CMS는 이 코드가 배포되기 전까지 구 코드로 재고 추가 시 링크를 다시 복사한다 — 코드 배포 전 재고 추가는 장바구니에는 영향 없음(직전 수정 이후) 하지만 사본이 다시 생길 수 있음.
+QA(2026-10-01): 블로킹 0 / MEDIUM 1(QA는 DB 접근 수단이 없어 운영 데이터 사후 상태 미검증 → 실행 세션이 직접 조회로 확인: af37c3e5 링크 0·부모 링크 3건 그대로·활성 재고 링크 3건 부모와 동일) / LOW 3(테스트 주석 위치 — 수정 완료, DB 레벨 가드 없음(권고), 구 코드 배포 전 재고 추가 시 사본 재생성 가능). 링크 복사 도입 이력: 15908b4(2026-07-11, 옵션탭 버그 수정) — 당시 소비처는 현재 전부 부모 기준.
+수정 파일: src/routes/cms/products/+page.server.ts, src/__tests__/services/productClone.test.ts, .claude/harness/learnings/product_option_links_child_af37c3e5_backup_2026-10-01.sql(신규), .claude/harness/TASK.md
+git: Stephen 대기.
+
+## NOW — 🟡 BOUNDARY: 장바구니 옵션 링크 플래그를 본상품(부모) 링크로만 판정 — 재고 복사 링크 누수로 배송 방식이 사라지던 문제 (2026-10-01, 이 세션'만', ✅ GATE B 승인 — Stephen "2번 코드 수정 진행", ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0건) · DB 변경 없음, git commit은 Stephen 대기)
+
+원인(SONY UWP-D21, 운영 DB 조회): 2026-10-01 07:03:16 UTC "빠른 재고 등록"(cms/products/+page.server.ts add_inventory)이 재고(자식) af37c3e5에 부모의 옵션 링크를 복사 → 07:08:19 부모 링크 수정(케이블 2종 배송불가·최소선택 해제)했으나 복사본은 그대로 → 장바구니(cart/+page.server.ts)가 옵션 id만으로 링크를 모아 "하나라도 true면 true"(OR) 판정 → 케이블 2종 담긴 카트에서 hasDeliveryDisabledOption=true → 배송(is_delivery_type) 방식이 수령·반납 탭에서 제거. 상품상세는 get_product_option_links(부모)만 읽어 정상.
+수정: src/lib/utils/cartOptionLinkFlags.ts 신설(buildOptionLinkFlagIndex·optionLinkFlagsFor — 키 `본상품(부모):옵션`, deleted_at 제외, 링크 없으면 전부 false) + cart/+page.server.ts가 5개 플래그(배송불가·필수·최소선택·수량연동·무료)를 이 인덱스로 판정(개별 Map 4개·freeOptionKeys 제거). 재고 예약은 parent_product_id로 부모 환산(기존 mainParentByReservation 재사용).
+TDD: src/__tests__/utils/cartOptionLinkFlags.test.ts 7건(OL-1 사고 재현 포함) RED→GREEN. svelte-check 신규 오류 0.
+범위 확인: delivery_rental_disabled 등 플래그를 읽는 곳은 장바구니 서버뿐(상품상세·CMS·DB 함수 get/upsert는 이미 부모 기준).
+Production 영향 대조(2026-10-01, 읽기 전용 SQL — QA는 Production 접근 수단이 없어 직접 수행): draft/hold 예약의 옵션 행 8건 중 구 로직(옵션 id 기준 OR) 대비 판정이 바뀌는 것은 SONY UWP-D21 임시 예약 229·232의 옵션 4건뿐(배송불가 true→false 3건 = 사고 케이스, 수량연동 true→false 4건 = 부모 링크 값 반영). 다른 상품은 변화 0건.
+QA 지적 정정: set_reservation_options가 재고 id 예약에서도 부모 링크를 찾도록 이미 Migration 586에서 수정·Production 적용 완료(20260930070435, 611도 적용) — "후속 마이그레이션 검토" 서술은 낡은 것이었음.
+미수정·결정 대기: ① 운영 DB 재고 링크 데이터 정리(해당 재고 af37c3e5 3건 또는 재고 링크 6건 전체) ② "빠른 재고 등록"(add_inventory)이 링크를 복사하지 않도록 변경(부모 값을 따르는 구조) — 코드 1곳 + 기존 재고 링크 정리. 링크 조회 실패(error 미확인) 시 플래그가 모두 false가 되는 기존 패턴(LOW)은 유지.
+수정 파일: src/lib/utils/cartOptionLinkFlags.ts(신규), src/routes/cart/+page.server.ts, src/__tests__/utils/cartOptionLinkFlags.test.ts(신규), .claude/harness/TASK.md
+git: Stephen 대기.
+
 ## NOW — 🔴 CRITICAL: 쿠폰 "적용 대상"(대여/판매) 장바구니·서버 연동 (Migration #616, 2026-10-01, 이 세션'만', ✅ Stephen 직접 지시 — Stage 적용·TDD 완료, Production 적용·sp3 검수·git commit은 Stephen 대기)
 - 선행: 다른 세션이 CMS 설정(Migration #615 applies_to_rental/applies_to_sale, Stage·Production 적용 완료, 기본 둘 다 true·기존 33건 전부 둘 다)을 개발 — 이 블록은 그 값을 장바구니·서버가 읽는 연동만(CMS 파일 무수정).
 - 규칙: 한쪽 전용 쿠폰은 해당 종류 상품이 선택 상품(주문)에 하나라도 있어야 활성/사용 가능. 혼합은 둘 다 활성. 둘 다 true는 기존 동작 무영향.
@@ -33,7 +56,7 @@
 - ✅ QA MEDIUM-1 해소(2026-10-01, Stephen 지시): 쿠폰 발행 직후 `cms_set_coupon_applies_to`가 에러 또는 ok:false를 반환하면 `coupon/new/+page.server.ts`가 `/cms/promotion/coupon?tab=manage&warn=applies`로 이동하고, 목록 화면(`coupon/+page.svelte`)이 1회 경고 토스트("쿠폰은 발행됐지만 적용 대상 저장에 실패해 모두 적용으로 남아 있습니다 — 상세 패널에서 다시 설정")를 띄운 뒤 URL 파라미터를 제거. 성공·기본값(둘 다)이면 변화 없음. 신규 테스트 `src/__tests__/server/couponCreateAppliesWarn.test.ts` 5/5(에러·ok:false·성공·기본값·둘 다 false 거절) + couponAppliesTo 6/6 재확인, svelte-check 신규 오류 0. ⚠️ 실패 분기는 실제 화면에서 재현하기 어려워 서버 액션 단위 테스트로만 검증(토스트 렌더는 미확인). ✅ sp3-qa-agent 2차 재검수(2026-10-01): 블로킹 0 · MEDIUM 0 · LOW 2 — MEDIUM-1 해소 확인, GATE E 통과. 실패 경로 2종(error·ok:false) 모두 warn=applies 연결·성공/기본값 URL 불변·redirect 고정 문자열(open-redirect 없음)·$effect 무한루프/중복 토스트 없음(플래그 선세팅)·SSR 안전·warn 위변조 영향 없음, 회귀 5파일 31/31 GREEN, svelte-check 기존 1건만. LOW(기록만): ① appliesWarnShown이 컴포넌트 생성 시 1회 초기화라 같은 목록 페이지에서 두 번째 발행 시 토스트가 안 뜰 수 있음(/new→목록 redirect는 보통 재마운트라 실영향 거의 없음) ② 토스트 렌더·$effect 단위 테스트 없음(알려진 한계).
 - QA 기록(MEDIUM-1 외 미조치): LOW: ① RPC에 NULL 인자는 false로 처리(서버는 항상 boolean 전달) ② 수정 액션에서 cms_update_coupon 성공 후 적용 대상 RPC 실패 시 부분 저장(기존 패턴) ③ get_segment_users p_limit 상한 없음(기존) ④ partner가 RPC 직접 호출로 연락처 조회 가능 — 확정 수준이나 필요 시 manager 이상 가드로 상향 고려 ⑤ 거절 시 ACCESS_DENIED 원문 노출(서버 게이트 뒤라 도달 낮음).
 - 인계 보강(사용자 개발 세션): 읽을 컬럼 coupons.applies_to_rental/applies_to_sale · 서버 강제 지점 create_reservation_order·validate_order_coupons·use_coupons(화면 필터만으로 부족) · 판정 신호는 products.sale_only/duration_type='purchase' 단일 기준(products.md §2-15) · 혼합 주문은 할인 대상 금액을 라인별 분리 + couponStacking.ts와 SQL 산식 동기화(service-operations §21).
-- 별도 확인 필요(이 세션 범위 밖 발견): `point_earn_rules.rental_complete` 적립률이 Production 0.003 / Stage 0.03으로 다름(의도 여부 Stephen 확인), #611·#612·#613은 Production 적용됐으나 저장소 파일이 untracked(커밋 필요, 다른 세션 몫)
+- 별도 확인 필요(이 세션 범위 밖 발견): `point_earn_rules.rental_complete` 적립률이 Production 0.003 / Stage 0.03으로 다름(✅ 해소 2026-10-01: Stephen 확인 — Production 0.3%는 관리자가 CMS에서 정한 정상 운영값, 환경별 설정값 차이는 정상), #611·#612·#613은 Production 적용됐으나 저장소 파일이 untracked(커밋 필요, 다른 세션 몫)
 
 ## NOW — 🔴 CRITICAL: 판매전용 단독 주문 직접 PG 결제 + 미결제 이탈 30분 자동 만료 (Migration #613, 2026-10-01, 이 세션'만', ✅ Stephen 직접 지시("제안대로 진행·이탈 만료 30분·기존 장바구니 전역 무영향") — Stage 적용·TDD·브라우저 검증 완료, Production 적용·sp3 검수·git commit은 Stephen 대기)
 - 흐름(2026-10-01 설계 변경 — 중간 결제 페이지 제거, Stephen 지시): 판매전용 "단독" 카트만 장바구니 하단에 Toss 결제위젯(결제 방법·약관)을 내장 → [결제하기] → hold·주문 생성 → /api/checkout/pay-start(서버 최종금액 확인·이탈 30분 마감 시작, 화면 합계와 다르면 결제창 열지 않음) → requestPayment → /checkout/pay/[orderId]/result(승인·확정·후처리) → 기존 완료 화면 /payment/success/dev?...&paid=1(결제 완료 문구·'대여(판매)요금'·'결제 금액'·'결제일시'). 쿠폰·포인트로 0원이면 /api/checkout/pay-free(결제창 없이 확정) 후 같은 완료 화면. 실패·취소는 /cart?payStatus=fail&code=..로 복귀해 안내. 대여 포함(혼합) 카트는 기존 "예약신청 → 전자계약 서명 → 결제" 그대로(분기 조건 cartMode==='purchase' 하나뿐).
