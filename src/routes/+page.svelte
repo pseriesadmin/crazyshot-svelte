@@ -451,10 +451,16 @@
     </div>
 
     {#if data.isCms}
-      <div class="cat-cms-btns">
-        <button class="cat-cms-btn" onclick={() => (showCategoryModal = true)}>⚙ 카테고리 설정</button>
+      <div class="cat-cms-btns cat-cms-btns-edge">
+        <button class="cat-cms-btn cat-cms-btn-std" onclick={() => (showCategoryModal = true)}>⚙ 카테고리 메뉴 설정</button>
+      </div>
+    {/if}
+
+    <div class="prod-area">
+    {#if data.isCms}
+      <div class="cat-cms-btns cat-cms-btns-slider">
         <button class="cat-cms-btn" onclick={() => { catProductsTabId = activeTab; catProductsTabName = CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? activeTab; showCatProductsModal = true }}>
-          ⚙ {CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? ''} 상품 큐레이션
+          ⚙ {CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? ''} 상품 슬라이드 설정
         </button>
       </div>
     {/if}
@@ -495,6 +501,7 @@
     {:else if data.isCms}
       <p class="cat-empty-notice">⚙ 상품 큐레이션에서 이 카테고리의 상품을 추가하세요.</p>
     {/if}
+    </div>
   </div>
 
   <!-- ⑤ 크레이지로그 -->
@@ -508,7 +515,7 @@
     <p class="section-sub" style="color:{navyDeep}">신상 리뷰도, 내 유튜브채널 홍보도 크레이지로그로!</p>
 
     {#if data.isCms}
-      <a href="/crazylog" class="cms-section-link" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
+      <a href="/crazylog" class="cms-section-link cms-section-link--edge" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
     {/if}
 
     {#if data.crazylogPosts.length >= 1}
@@ -572,7 +579,7 @@
     {@render faqHero('mh-hero--pc')}
     <div class="faq-col">
       {#if data.isCms}
-        <a href="/help" class="cms-section-link" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
+        <a href="/help" class="cms-section-link cms-section-link--edge" aria-label="헬프 설정 페이지로 이동">✦ 헬프 설정</a>
       {/if}
       <p class="faq-intro">FAQ ·자주 묻는 질문</p>
       <div class="faq-list">
@@ -1020,23 +1027,29 @@
   .hero-cms-btn {
     position: absolute;
     /* GNB(position:fixed, --layout-header-h)에 가려지지 않도록 헤더 높이 아래로 배치 */
-    top: calc(var(--layout-header-h) + 10px);
-    right: 10px;
+    top: calc(var(--layout-header-h) + 40px);
+    /* 표준 위치(front-uiux.md §9-1-B): 레이아웃 컨테이너(max-width·좌우 40px) 콘텐츠 우측 끝 */
+    right: max(40px, calc((100% - var(--layout-pc-max)) / 2 + 40px));
     z-index: 20;
-    padding: 6px 12px;
-    background: rgba(16, 11, 50, 0.75);
-    border: none;
-    border-radius: var(--radius-sm);
     color: var(--cs-white);
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.12s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .hero-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+  .hero-cms-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
   /* /products의 admin-edit-btn + admin-float-btn 위치·스타일 규칙과 통일 */
+  .prod-area { position: relative; }
   .cat-cms-btns {
     position: absolute;
     top: 10px;
@@ -1048,18 +1061,37 @@
     gap: 6px;
   }
   .cat-cms-btn {
-    padding: 6px 12px;
-    background: rgba(16, 11, 50, 0.75);
-    border: none;
-    border-radius: var(--radius-sm);
     color: var(--cs-white, #fff);
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.12s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .cat-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+  .cat-cms-btn:hover { background: rgba(16, 11, 50, 0.6); }
+  /* front 설정버튼 표준(front-uiux.md §9-1-B): 200×50 고정 · BG 40% · 한 단계 큰 폰트 */
+  .cat-cms-btn-std {
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    text-align: left;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+  }
+  /* 레이아웃 컨테이너(.d-section, 좌우 padding 40px) 콘텐츠 우측 끝에 정렬 */
+  .cat-cms-btns-edge { right: 40px; }
+  /* .prod-area(=콘텐츠 폭) 기준 우측 끝 */
+  .cat-cms-btns-slider { right: 0; top: -50px; } /* 버튼 하단이 슬라이더 시작선에 닿도록 위로 올림 */
+  .cat-cms-btn-std:hover { background: rgba(16, 11, 50, 0.6); }
   .cat-empty-notice {
     font-size: 12px;
     color: var(--cs-text-light);
@@ -1215,18 +1247,24 @@
     top: 10px;
     right: 10px;
     z-index: 20;
-    padding: 6px 12px;
-    background: rgba(16, 11, 50, 0.75);
-    border: none;
-    border-radius: var(--radius-sm);
     color: var(--cs-white, #fff);
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     transition: background 0.12s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .theme-cms-btn:hover { background: rgba(16, 11, 50, 0.92); }
+  .theme-cms-btn:hover { background: rgba(16, 11, 50, 0.6); }
+  /* 기준 박스 = .d-theme-section(padding 80px 40px) — 버튼 하단이 콘텐츠 상단(80px)에 닿도록 내리고 콘텐츠 우측 끝(40px)에 정렬 */
+  .d-theme-section .theme-cms-btn { top: 30px; right: 40px; }
 
   /* ── 취향직격 PICK 헤더행 (Figma node 2072:5988) — 제목/부제(좌) + 원형 테마탭(우) ── */
   .theme-pick-row {
@@ -1619,7 +1657,7 @@
   }
 
   /* ── BLOG GRID ── */
-  .d-blog-section { align-items: center; gap: 32px; }
+  .d-blog-section { align-items: center; gap: 32px; position: relative; }
   .blog-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1675,6 +1713,7 @@
 
   /* ── FAQ ── */
   .d-faq-section {
+    position: relative;
     flex-direction: row;
     gap: 64px;
     align-items: flex-start;
@@ -1945,15 +1984,19 @@
     top: 10px;
     right: 10px;
     z-index: 20;
-    padding: 6px 12px;
-    background: rgba(16, 11, 50, 0.75);
-    border: none;
-    border-radius: var(--radius-sm);
     color: var(--cs-white);
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .md-picks-cms-btn--empty { position: static; }
 
@@ -2158,21 +2201,27 @@
     position: absolute; inset: 0;
     background: linear-gradient(to bottom, transparent 0%, rgba(16,11,50,0.4) 50%, rgba(16,11,50,0.85) 100%);
   }
+  /* front 관리모달 버튼 표준(front-uiux.md §9-1-B) */
   .mh-hero-edit-btn {
-    position: absolute; top: 16px; right: 16px; z-index: 10;
+    position: absolute; top: 20px; right: 20px; z-index: 10;
     display: flex; align-items: center; gap: 6px;
-    padding: 8px 14px;
-    background: rgba(16, 11, 50, 0.65);
-    color: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: var(--radius-xl);
-    font-size: 13px; font-weight: 600;
+    color: var(--cs-white);
     cursor: pointer;
-    backdrop-filter: blur(6px);
-    transition: background 0.15s, color 0.15s;
-    min-height: 44px;
+    transition: background 0.15s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    justify-content: flex-start;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .mh-hero-edit-btn:hover { background: rgba(59, 47, 138, 0.85); color: #fff; border-color: rgba(255, 255, 255, 0.4); }
+  .mh-hero-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
   .mh-hero-content {
     position: relative; z-index: 1;
     display: flex; flex-direction: column; justify-content: flex-end;
@@ -2259,23 +2308,26 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 18px;
-    background: rgba(59, 47, 138, 0.10);
-    color: var(--cs-purple);
-    border: 1.5px solid var(--cs-purple);
-    border-radius: var(--radius-xl);
-    font-family: var(--font-kr);
-    font-size: 13px;
-    font-weight: 700;
+    color: var(--cs-white);
     text-decoration: none;
-    width: fit-content;
     margin: 0 auto;
-    transition: background 0.18s, color 0.18s;
+    transition: background 0.18s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    justify-content: flex-start;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .cms-section-link:hover {
-    background: var(--cs-purple);
-    color: #fff;
-  }
+  /* PC 섹션 설정 링크 — 표준 위치(front-uiux.md §9-1-B): 섹션(.d-section 패딩 80px 40px) 콘텐츠 우측 끝, 하단이 콘텐츠 시작선에 닿게 */
+  .cms-section-link--edge { position: absolute; top: 30px; right: 40px; margin: 0; z-index: 20; }
+  .cms-section-link:hover { background: rgba(16, 11, 50, 0.6); color: var(--cs-white); }
   /* 어두운 배경 섹션(모바일 크레이지로그) 위에서 쓸 때 */
   .cms-section-link--light {
     background: rgba(255, 255, 255, 0.18);

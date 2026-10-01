@@ -173,9 +173,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="hcp-backdrop" onclick={onclose} role="presentation"></div>
 
-<aside class="hcp-panel" role="dialog" aria-modal="true" aria-label="{categoryName} 상품 큐레이션">
+<aside class="hcp-panel" role="dialog" aria-modal="true" aria-label="상품 슬라이드 설정 {categoryName}">
   <div class="hcp-header">
-    <span class="hcp-title">{categoryName} 상품 큐레이션</span>
+    <span class="hcp-title">상품 슬라이드 설정 <span class="hcp-title-cat">{categoryName}</span></span>
     <button class="hcp-close" onclick={onclose} aria-label="닫기">✕</button>
   </div>
 
@@ -307,36 +307,33 @@
     box-shadow: -8px 0 40px rgba(16, 11, 50, 0.18);
   }
 
+  /* front 관리모달 헤더 표준(front-uiux.md §9-2-A ②) — 다크 네이비 바 + 흰 제목 + ✕ 닫기 */
   .hcp-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 24px 16px;
-    border-bottom: 1px solid var(--cs-lilac);
+    padding: 20px 24px;
+    background: var(--cs-dark);
+    border-radius: var(--radius-2xl) 0 0 0;
     flex-shrink: 0;
   }
 
   .hcp-title {
     font: var(--text-pc-title-16);
-    font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-white);
   }
+  .hcp-title-cat { color: var(--cs-white); }
 
   .hcp-close {
-    width: 28px;
-    height: 28px;
-    min-width: 28px;
+    background: none;
     border: none;
-    background: transparent;
-    font-size: 16px;
-    color: var(--cs-text-mid);
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 18px;
     cursor: pointer;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    padding: 4px 8px;
+    min-height: 32px;
   }
-  .hcp-close:hover { background: var(--cs-lilac); color: var(--cs-red-badge); }
+  .hcp-close:hover { color: var(--cs-white); }
 
   .hcp-body {
     flex: 1;
@@ -409,6 +406,8 @@
   .hcp-suggest-price { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin-left: 6px; }
 
   .hcp-selected-row {
+    flex: 1;
+    min-width: 0; /* 드래그 목록 안에서 콘텐츠 폭으로 늘어나지 않고 모달 폭에 맞춰 말줄임이 동작하도록 */
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -422,6 +421,7 @@
     font-weight: 700;
     color: var(--cs-text);
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -455,33 +455,34 @@
     margin: 0;
   }
 
+  /* front 관리모달 푸터 표준(front-uiux.md §9-2-A ④) */
   .hcp-footer {
-    padding: 16px 24px 20px;
+    padding: 16px 24px;
     border-top: 1px solid var(--cs-lilac);
     display: flex;
     gap: 10px;
+    justify-content: flex-end;
     flex-shrink: 0;
   }
   .hcp-btn-cancel {
-    flex: 1;
-    height: 40px;
-    border: 1.5px solid var(--cs-lilac);
+    height: 36px;
+    padding: 0 20px;
+    background: none;
+    border: 1px solid var(--cs-lilac);
     border-radius: var(--radius-md);
-    background: #fff;
+    font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
-    font: var(--text-pc-script-12);
-    font-weight: 700;
     cursor: pointer;
   }
-  .hcp-btn-cancel:hover:not(:disabled) { border-color: var(--cs-purple); color: var(--cs-purple); }
+  .hcp-btn-cancel:hover:not(:disabled) { border-color: var(--cs-text-mid); }
   .hcp-btn-save {
-    flex: 2;
-    height: 40px;
+    height: 36px;
+    padding: 0 24px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
     border: none;
     border-radius: var(--radius-md);
-    background: var(--cs-purple);
-    color: #fff;
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-body-14);
     font-weight: 700;
     cursor: pointer;
   }

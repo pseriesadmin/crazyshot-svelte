@@ -773,24 +773,24 @@
     top: 16px;
     right: 16px;
     z-index: 10;
-    padding: 6px 12px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: rgba(16, 11, 50, 0.75);
     color: var(--cs-white);
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    min-height: 32px;
     white-space: nowrap;
     transition: background 0.12s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .d-admin-edit-btn:hover {
-    background: rgba(16, 11, 50, 0.92);
-  }
+  .d-admin-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
   /* 폼 패널 (우) */
   .d-form-panel {

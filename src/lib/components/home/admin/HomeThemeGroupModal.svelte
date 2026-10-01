@@ -861,40 +861,40 @@
   }
 
   /* ── 푸터 ── */
+  /* front 관리모달 푸터 표준(front-uiux.md §9-2-A ④) */
   .tg-footer {
     display: flex;
-    gap: 8px;
-    padding: 16px;
-    border-top: 1px solid #ebe9f5;
+    gap: 10px;
+    justify-content: flex-end;
+    padding: 16px 24px;
+    border-top: 1px solid var(--cs-lilac);
     flex-shrink: 0;
   }
   .tg-cancel-btn {
-    flex: 1;
-    height: 44px;
-    border: 1.5px solid #dcdcdc;
-    border-radius: var(--radius-xl, 30px);
-    background: #fff;
-    color: var(--cs-text, #100b32);
-    font-size: 14px;
-    font-weight: 600;
+    height: 36px;
+    padding: 0 20px;
+    background: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
     cursor: pointer;
-    transition: background 0.15s;
   }
-  .tg-cancel-btn:hover:not(:disabled) { background: #f6f6f6; }
+  .tg-cancel-btn:hover:not(:disabled) { border-color: var(--cs-text-mid); }
   .tg-cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .tg-save-btn {
-    flex: 2;
-    height: 44px;
+    height: 36px;
+    padding: 0 24px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-xl, 30px);
-    background: var(--cs-purple, #3b2f8a);
-    color: #fff;
-    font-size: 14px;
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
     font-weight: 700;
     cursor: pointer;
     transition: background 0.15s;
   }
   .tg-save-btn:hover:not(:disabled) { background: #2d2469; }
-  .tg-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .tg-save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

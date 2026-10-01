@@ -114,7 +114,7 @@
       <div class="kw-chips">
         {#each keywords as kw}
           <span class="kw-chip">
-            {kw.title}
+            <a class="kw-chip-link" href={kw.href} target="_blank" rel="noopener noreferrer" title="{kw.href} 새 창으로 열기">{kw.title}</a>
             <button
               type="button"
               class="kw-chip-remove"
@@ -248,6 +248,10 @@
     padding: 6px 12px;
     font: var(--text-pc-body-14);
   }
+
+  /* 키워드 랜딩 링크 — 클릭 시 해당 크레이지로그 상세를 새 창으로 열어 연결 확인 */
+  .kw-chip-link { color: inherit; text-decoration: none; }
+  .kw-chip-link:hover { text-decoration: underline; }
 
   .kw-chip-remove {
     background: none;

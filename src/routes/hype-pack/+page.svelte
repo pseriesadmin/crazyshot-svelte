@@ -2,12 +2,20 @@
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HypePackBannerModal from '$lib/components/hype-pack/HypePackBannerModal.svelte'
   import HypePackThemeGroupModal from '$lib/components/hype-pack/HypePackThemeGroupModal.svelte'
+  import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
 
   let activeModal = $state<'banner' | 'themeGroups' | null>(null)
+
+  // 저장된 키워드 링크는 상품 상세 `/products/{slug}` 한 단계 경로만 허용 — 저장 JSON이 오염돼도
+  // javascript:·외부 URL·`..`·하위 경로·쿼리/해시·백슬래시 href 차단(§26)
+  const KEYWORD_HREF_PATTERN = /^\/products\/(?!\.{1,2}$)[^/?#\\]+$/
+  function safeKeywordHref(href: string | undefined): string | null {
+    return href && KEYWORD_HREF_PATTERN.test(href) ? href : null
+  }
 
   const KEYWORDS_FALLBACK = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
   // Use CMS-managed keywords when set, else fallback
@@ -84,7 +92,12 @@
     </div>
     <div class="m-chips-wrap">
       {#each displayKeywords as kw}
-        <span class="m-chip">{kw}</span>
+        {@const kwHref = safeKeywordHref(data.banner.keyword_links?.[kw])}
+        {#if kwHref}
+          <a class="m-chip" href={kwHref} title={kw} aria-label={kw}>{truncateKeywordLabel(kw, 20)}</a>
+        {:else}
+          <span class="m-chip" title={kw}>{truncateKeywordLabel(kw, 20)}</span>
+        {/if}
       {/each}
     </div>
   </div>
@@ -207,9 +220,6 @@
   <!-- 추천 Package 섹션 -->
   <section class="d-section">
     <div class="d-section-inner">
-      <div class="d-title-bar">
-        <h2 class="d-section-title">추천 Package</h2>
-      </div>
       <!-- 광고 배너 (AdPack) -->
       <div class="d-ad-banner">
         {#if bannerHref}
@@ -358,16 +368,22 @@
   .m-chips-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
   .m-chip {
     display: inline-flex; align-items: center;
-    background: var(--cs-purple-op10);
+    /* ALL(/products) 모바일 키워드 pill 규격(.kw-pill)과 동일 — 배경 #e1def3 · 반경 13 · 패딩 8/25 · 14px 500 #444 · 높이 44 */
+    background: #e1def3;
     border-radius: 13px;
-    padding: 8px 25px;
+    padding: 8px 12.5px; /* 가로 패딩 50% 축소(25px → 12.5px) */
+    min-height: 44px;
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 14px;
     font-weight: 500;
-    color: var(--cs-text-dark);
+    color: #444;
     white-space: nowrap;
     letter-spacing: -0.5px;
+    text-decoration: none;
   }
+  /* 링크가 있는 칩(<a>)에만 hover·active 피드백 — 호버는 BG 색상 변경만 */
+  a.m-chip { cursor: pointer; transition: background 0.15s; }
+  a.m-chip:hover, a.m-chip:active { background: #d4d0ec; }
 
   /* ── 광고 배너 (m-ad-banner) ── */
   .m-ad-banner {
@@ -610,7 +626,7 @@
   }
 
   .d-body {
-    padding-top: 170px;
+    padding-top: var(--layout-pc-gnb-offset);
     padding-bottom: 100px;
   }
 
@@ -651,14 +667,6 @@
     line-height: 2;
     text-align: center;
   }
-  /* "추천 Package" 타이틀만 — Category 타이틀(/products d-pkg-title)과 동일 폰트 크기·굵기로
-     축소 + 좌측 정렬(2026-09-29). "Pack 테마목록"(.theme-pick-head)은 기존 25px/center 유지 */
-  .d-title-bar:not(.theme-pick-head) .d-section-title {
-    font-size: 20px;
-    font-weight: 500;
-    text-align: left;
-  }
-
   .d-ad-banner {
     position: relative;
     width: 100%;
@@ -775,18 +783,21 @@
   .admin-edit-btn {
     position: absolute;
     z-index: 10;
-    background: rgba(16, 11, 50, 0.75);
     color: #fff;
-    border: 1px solid rgba(255,255,255,0.3);
-    border-radius: var(--radius-md, 15px);
-    font-size: 13px;
-    font-weight: 700;
     cursor: pointer;
-    line-height: 1;
-    backdrop-filter: blur(4px);
     transition: background 0.15s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .admin-edit-btn:hover { background: rgba(59, 47, 138, 0.9); }
+  .admin-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
   .admin-banner-btn {
     top: 16px;
     right: 16px;
@@ -796,20 +807,22 @@
   /* 관리자 테마그룹 관리 버튼 — admin-edit-btn과 동일 톤(비-absolute, 인라인 배치) */
   .theme-cms-btn {
     z-index: 10;
-    background: rgba(16, 11, 50, 0.75);
     color: #fff;
-    border: 1px solid rgba(255,255,255,0.3);
-    border-radius: var(--radius-md, 15px);
-    font-size: 13px;
-    font-weight: 700;
     cursor: pointer;
-    line-height: 1;
-    padding: 8px 14px;
-    backdrop-filter: blur(4px);
     transition: background 0.15s;
     white-space: nowrap;
     flex-shrink: 0;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .theme-cms-btn:hover { background: rgba(59, 47, 138, 0.9); }
+  .theme-cms-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
 </style>

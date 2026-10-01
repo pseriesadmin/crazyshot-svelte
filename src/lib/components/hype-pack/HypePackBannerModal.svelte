@@ -37,6 +37,8 @@
     mode: 'random' | 'fixed'
     items: BannerItem[]
     keywords: string[]
+    /** 키워드 → 랜딩 링크(상품 상세). 상품명 검색으로 추가한 키워드만 값이 있고, 직접 입력 키워드는 없음 */
+    keyword_links?: Record<string, string>
   }
 
   interface Props {
@@ -64,6 +66,9 @@
 
   // Keyword state — SuggestPicker 연동(상품명 검색 제안 + 자유 입력 둘 다 허용)
   let selectedKeywords    = $state<string[]>(initialSettings.keywords ?? [])
+  let keywordLinks        = $state<Record<string, string>>({ ...(initialSettings.keyword_links ?? {}) })
+  // 상품명 제안 → 상품 상세 슬러그(검색 제안으로 추가할 때 링크 생성용)
+  let kwSlugByName        = $state<Record<string, string>>({})
   let kwPickerSelectedId  = $state<string | null>(null)
   let kwSearchResults     = $state<string[]>([])
   let kwDebounceTimer     = $state<ReturnType<typeof setTimeout> | null>(null)
@@ -239,14 +244,17 @@
   }
 
   // IME-SAFE-INPUT — add() 내부에서 항상 빈값·중복·최대치 방어 (core-rules.md)
-  function addKeywordValue(val: string) {
+  function addKeywordValue(val: string, href?: string) {
     const kw = val.trim()
     if (!kw || selectedKeywords.includes(kw) || selectedKeywords.length >= MAX_KEYWORDS) return
     selectedKeywords = [...selectedKeywords, kw]
+    if (href) keywordLinks = { ...keywordLinks, [kw]: href }
   }
 
   function removeKeyword(kw: string) {
     selectedKeywords = selectedKeywords.filter((k) => k !== kw)
+    const { [kw]: _removed, ...rest } = keywordLinks
+    keywordLinks = rest
   }
 
   function onKwPickerInput(val: string) {
@@ -261,7 +269,10 @@
         `/api/cms/products/search-suggestions?q=${encodeURIComponent(q)}&category=${encodeURIComponent(searchCategory)}&limit=8`
       )
       if (res.ok) {
-        const items = await res.json() as Array<{ name: string }>
+        const items = await res.json() as Array<{ name: string; slug?: string | null }>
+        const slugMap: Record<string, string> = {}
+        for (const r of items) if (r.name && r.slug && !slugMap[r.name]) slugMap[r.name] = r.slug
+        kwSlugByName = { ...kwSlugByName, ...slugMap }
         kwSearchResults = Array.from(new Set(items.map((r) => r.name).filter(Boolean))).slice(0, 8)
       } else {
         kwSearchResults = []
@@ -272,7 +283,8 @@
   }
 
   function onKwSelect(opt: SuggestPickerOption) {
-    addKeywordValue(opt.label)
+    const slug = kwSlugByName[opt.label]
+    addKeywordValue(opt.label, slug ? `/products/${slug}` : undefined)
     setTimeout(() => { kwPickerSelectedId = null; kwSearchResults = [] }, 0)
   }
 
@@ -304,6 +316,9 @@
         mode,
         items: resolvedItems,
         keywords: selectedKeywords,
+        keyword_links: Object.fromEntries(
+          selectedKeywords.filter((k) => keywordLinks[k]).map((k) => [k, keywordLinks[k]])
+        ),
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: err } = await (supabase.rpc as any)('upsert_product_page_setting', {
@@ -333,22 +348,24 @@
   </div>
 
   <div class="modal-body">
+    <!-- 노출 방식 + 배너 상품(검색·선택 목록) — 스타일 없는 div 그룹 -->
+    <div class="group-wrap">
     <!-- 노출 방식 -->
     <div class="section">
       <p class="section-label">노출 방식</p>
-      <div class="radio-group">
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="fixed" checked={mode === 'fixed'} onchange={() => (mode = 'fixed')} />
-          <span>고정 순서</span>
-        </label>
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="random" checked={mode === 'random'} onchange={() => (mode = 'random')} />
-          <span>랜덤 노출</span>
-        </label>
+      <!-- front-uiux.md §16 콤보 버튼 선택 그룹(수평 단일 선택) -->
+      <div class="combo-wrap" role="radiogroup" aria-label="노출 방식">
+        <button type="button" class="combo-btn" class:combo-btn-active={mode === 'fixed'} role="radio" aria-checked={mode === 'fixed'} onclick={() => (mode = 'fixed')}>
+          <span class="combo-label">고정 순서</span>
+        </button>
+        <button type="button" class="combo-btn" class:combo-btn-active={mode === 'random'} role="radio" aria-checked={mode === 'random'} onclick={() => (mode = 'random')}>
+          <span class="combo-label">랜덤 노출</span>
+        </button>
       </div>
     </div>
 
-    <!-- 배너 상품 추가 -->
+    <!-- 배너 상품 추가 + 선택된 상품 목록 — 스타일 없는 div 그룹 -->
+    <div class="group-products">
     <div class="section">
       <p class="section-label">배너 상품 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
@@ -396,7 +413,6 @@
     <!-- 선택된 상품 목록 -->
     {#if selected.length > 0}
       <div class="section">
-        <p class="section-label">선택된 상품 (드래그로 순서 변경)</p>
         <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
           {#snippet renderItem(item)}
             <div class="selected-row">
@@ -456,11 +472,12 @@
     {:else}
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
     {/if}
+    </div>
+    </div>
 
     <!-- 모바일 키워드 칩 설정 -->
     <div class="section">
       <p class="section-label">모바일 키워드 칩 <span class="count-badge">{selectedKeywords.length}/{MAX_KEYWORDS}</span></p>
-      <p class="section-hint">모바일 화면 상단에 노출될 키워드입니다. 상품명 검색으로 제안받거나 직접 입력 후 Enter로 추가하세요.</p>
       {#if selectedKeywords.length < MAX_KEYWORDS}
         <div class="search-wrap">
           <SuggestPicker
@@ -500,7 +517,11 @@
         <div class="kw-chips">
           {#each selectedKeywords as kw}
             <span class="kw-chip">
-              {kw}
+              {#if keywordLinks[kw]}
+                <a class="kw-chip-link" href={keywordLinks[kw]} target="_blank" rel="noopener noreferrer" title="상품 상세 새 창으로 열기">{kw}</a>
+              {:else}
+                {kw}
+              {/if}
               <button class="kw-chip-remove" onclick={() => removeKeyword(kw)} aria-label="{kw} 제거">✕</button>
             </span>
           {/each}
@@ -534,7 +555,8 @@
     right: 0;
     top: 0;
     height: 100dvh;
-    width: 440px;
+    width: 420px;
+    max-width: 100vw;
     z-index: 201;
     background: var(--cs-white);
     border-radius: var(--radius-2xl) 0 0 var(--radius-2xl);
@@ -546,7 +568,8 @@
 
   .modal-header {
     background: var(--cs-dark);
-    padding: 18px 20px;
+    padding: 20px 24px; /* 관리모달 헤더 표준(front-uiux.md §9-2-A ②) */
+    border-radius: var(--radius-2xl) 0 0 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -555,8 +578,7 @@
 
   .modal-title {
     color: var(--cs-white);
-    font-size: 15px;
-    font-weight: 700;
+    font: var(--text-pc-title-16);
   }
 
   .modal-close {
@@ -566,13 +588,15 @@
     font-size: 18px;
     cursor: pointer;
     padding: 4px 8px;
+    min-height: 32px;
     line-height: 1;
   }
+  .modal-close:hover { color: var(--cs-white); }
 
   .modal-body {
     flex: 1;
     overflow-y: auto;
-    padding: 20px;
+    padding: 20px 24px; /* 관리모달 바디 공통값(front-uiux.md §9-2-A ③) */
     display: flex;
     flex-direction: column;
     gap: 20px;
@@ -593,13 +617,8 @@
     gap: 6px;
   }
 
-  .section-hint {
-    font-size: 12px;
-    color: var(--cs-text-mid, #666);
-    margin: 0;
-  }
-
   .count-badge {
+    margin-left: auto; /* 라벨 우측 끝 정렬 */
     background: var(--cs-lilac);
     color: var(--cs-text);
     border-radius: 99px;
@@ -608,18 +627,38 @@
     font-weight: 600;
   }
 
-  .radio-group {
+  /* 콤보 버튼 선택 그룹 — front-uiux.md §16 (PC 기본값) */
+  .combo-wrap {
     display: flex;
-    gap: 16px;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
   }
-
-  .radio-opt {
+  .combo-wrap::-webkit-scrollbar { display: none; }
+  .combo-btn {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
+    padding: 9px 16px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid #DCDCDC;
+    background: #fff;
     cursor: pointer;
+    transition: all 0.18s;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
+  .combo-btn:hover { background: #F5F4FA; } /* 호버는 BG 색상 변경만(보더 변경 금지) */
+  .combo-btn-active { border-color: var(--cs-purple); background: var(--cs-purple); }
+  .combo-btn-active:hover { background: var(--cs-purple); }
+  .combo-label { font-size: 13px; font-weight: 700; color: var(--cs-text); }
+  .combo-btn-active .combo-label { color: #fff; }
+
+  .group-wrap { display: flex; flex-direction: column; gap: 20px; }
+  /* 그룹(노출방식·배너상품) ↔ 모바일 키워드 칩 사이 여백 +100% (바디 기본 gap 20px → 40px) */
+  .group-wrap + .section { margin-top: 20px; }
+  .group-products { display: flex; flex-direction: column; gap: 16px; }
 
   .search-wrap { position: relative; }
 
@@ -659,11 +698,17 @@
   .suggest-name { font-size: 13px; font-weight: 600; }
   .suggest-price { font-size: 12px; color: var(--cs-text-mid, #666); }
 
+  /* 카드형 그룹핑 — 관리모달 카드 규격(연보라 배경·반경 15px·패딩 12px 20px).
+     드래그 손잡이 옆에서 폭을 넘지 않도록 flex:1 + min-width:0 */
   .selected-row {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+    background: var(--cs-lilac);
+    border-radius: var(--radius-md);
+    padding: 12px 20px;
   }
 
   .selected-thumb {
@@ -795,7 +840,10 @@
     margin: 0;
   }
 
+  .kw-chip-link { color: inherit; text-decoration: none; }
+  .kw-chip-link:hover { text-decoration: underline; }
   .kw-chips {
+    margin-top: 8px; /* 키워드 입력칸 ↔ 칩 사이 여백 +100% (섹션 gap 8px → 16px) */
     display: flex;
     flex-wrap: wrap;
     gap: 6px;

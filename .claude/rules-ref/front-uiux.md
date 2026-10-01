@@ -545,6 +545,29 @@ CTA 강조  (2px solid #FF3535)          : CTA 버튼 포커스·활성 아웃�
 }
 ```
 
+### 9-1-B. front 관리모달 버튼 UI (2026-10-01 확정, Stephen — 표준)
+
+> 사용자 화면(front)에서 `data.isCms`일 때만 노출하는 "관리 모달 호출" 버튼 전부의 표준. 9-1 기본 스타일(12px·BG 75%·8px 반경)을 이 값으로 **대체**한다. 위치(absolute 좌표)는 화면별로 유지하되 아래 위치 규칙을 따른다.
+> 적용 완료: 홈(`/` — `.hero-cms-btn`·`.theme-cms-btn`·`.cat-cms-btn`·`.md-picks-cms-btn`) · `/products`(`.admin-edit-btn`·`.admin-cat-btn`) · `/hype-pack`(`.admin-edit-btn`·`.theme-cms-btn`) · `/crazylog`(`.admin-edit-btn`) · `/auth/login`(`.d-admin-edit-btn`).
+
+| 항목 | 값 |
+|---|---|
+| 크기 | **가로 200px × 세로 50px 고정**(padding 0 20px) |
+| 글자 정렬 | **좌측 정렬**(`text-align:left`, flex 버튼은 `justify-content:flex-start`), 넘치면 말줄임 |
+| 배경 | `rgba(16, 11, 50, 0.4)`(`--cs-dark` 알파 40%) · hover는 BG만 `0.6` |
+| 반경 | `--radius-lg` 20px |
+| 폰트 | `var(--text-pc-body-14)`(구 12px에서 한 단계 상향) |
+| 보더·그림자 | 없음(hype-pack의 구 1px 보더·blur 제거) |
+| 위치 | 해당 해상도의 레이아웃 컨테이너(`.d-section`) **콘텐츠 우측 끝** 정렬(PC는 좌우 padding 40px 안쪽 = `right:40px`) |
+| 라벨 | "⚙ " + 대상 + " 설정/관리" — 200px(내부 160px) 안에 한 줄 권장, 길면 말줄임 처리됨 |
+| 예외 | 빈 상태 유도 CTA `.admin-md-empty-btn`(점선 보더·인라인)은 이 표준 대상이 아님 · 크레이지로그 모바일 칩행 소형 `.admin-kw-btn`(28px)은 칩행 공간 때문에 별도 유지 |
+
+```css
+.관리모달버튼 { width:200px; height:50px; padding:0 20px; border:none; border-radius:var(--radius-lg);
+  background:rgba(16,11,50,0.4); font:var(--text-pc-body-14); text-align:left; overflow:hidden; text-overflow:ellipsis; }
+.관리모달버튼:hover { background:rgba(16,11,50,0.6); }  /* BG만 변경 */
+```
+
 ### 9-2. 관리자 설정 모달 진입 패턴
 
 ```svelte
@@ -581,6 +604,62 @@ CTA 강조  (2px solid #FF3535)          : CTA 버튼 포커스·활성 아웃�
   {/if}
   <!-- ... 나머지 모달 -->
 {/if}
+```
+
+### 9-2-A. front 관리모달 패널 UI — 헤더·바디·푸터 표준 (2026-10-01 기록, 정본 구현 `HomeBannerModal.svelte`)
+
+> 사용자 화면(front)에서 `data.isCms`일 때 우측에서 슬라이드로 열리는 관리모달의 공통 골격. 실측 스타일 그대로 기록한 값이며(추론 값 아님), 신규 관리모달은 이 표를 그대로 복사한다.
+> 정본: `src/lib/components/home/admin/HomeBannerModal.svelte`(홈 히어로 배너 관리) — 같은 계열 `HomeCategoryProductsModal`·`ProductHeroModal` 등도 이 골격을 따른다. 제목 규칙(상품 슬라이드 설정 + 대상명 purple-80 등)은 모달별로 다르다.
+
+**① 패널 / 백드롭**
+
+| 요소 | 값 |
+|---|---|
+| 백드롭 `.modal-backdrop` | `position:fixed; inset:0; z-index:200; background:rgba(16,11,50,0.3)` |
+| 패널 `.modal-panel` | `position:fixed; right:0; top:0; height:100dvh; width:420px; max-width:100vw; z-index:201; background:var(--cs-white)` |
+| 패널 반경 | `var(--radius-2xl) 0 0 var(--radius-2xl)` (좌측 상·하만 50px) |
+| 패널 그림자 | `-4px 0 24px rgba(16,11,50,0.15)` (배경 위로 뜨는 패널 한정) |
+| 구조 | `display:flex; flex-direction:column` → 헤더 / 바디(스크롤) / 푸터(고정) |
+
+**② 헤더 `.modal-header`** — 다크 네이비 바 + 흰 제목 + 닫기
+
+| 항목 | 값 |
+|---|---|
+| 배경 | `var(--cs-dark)` (#100B32) |
+| 패딩·레이아웃 | `20px 24px`, flex, `justify-content:space-between`, `align-items:center`, `flex-shrink:0` (실측 높이 72px) |
+| 반경 | `var(--radius-2xl) 0 0 0` (패널 좌상단 곡선과 일치) |
+| 제목 `.modal-title` | `color:var(--cs-white); font:var(--text-pc-title-16)` |
+| 닫기 `.modal-close` | 텍스트 `✕`(SVG 금지), 배경·보더 없음, `color:rgba(255,255,255,0.7)`, `font-size:18px`, `padding:4px 8px`, `min-height:32px` · hover `color:var(--cs-white)` (색만 변경) |
+
+**③ 바디 `.modal-body`** — 스크롤 영역
+
+| 항목 | 값 |
+|---|---|
+| 레이아웃 | `flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:16px; padding:20px 24px` |
+| 구분선 `.divider` | `height:1px; background:var(--cs-lilac); margin:4px 0` |
+| 섹션 `.section` | flex column, `gap:8px` |
+| 섹션 라벨 `.section-label` | `font:var(--text-pc-body-14); font-weight:700; color:var(--cs-text)`, flex, `gap:8px`, `margin:0` · 보조 힌트 `.hint` = `font:var(--text-pc-script-12); font-weight:400; color:var(--cs-text-light)` |
+| 안내문 `.spec-note`/`.empty-msg` | `font:var(--text-pc-script-12); color:var(--cs-text-mid); line-height:1.6; margin:0` |
+| 라디오 그룹 | `.radio-group { display:flex; gap:16px }`, 옵션 `.radio-opt` = flex·`gap:6px`·`font:var(--text-pc-body-14)`·`color:var(--cs-text)`·`cursor:pointer` |
+| 입력 필드 `.cms-field` | `min-height:44px; padding:12px 16px; background:var(--cs-surface-gray); border:none; border-radius:var(--cms-radius-sm); font:var(--text-pc-body-14)` · focus `outline:2px solid var(--cs-purple); outline-offset:-2px` · placeholder `var(--cs-text-light)` |
+| 목록 행 `.banner-row` | `padding:10px; background:var(--cs-surface-gray); border-radius:var(--radius-sm); gap:8px` |
+| 추가 버튼 `.btn-add` | `height:36px; padding:0 16px; background:none; border:1.5px dashed var(--cs-purple); border-radius:var(--radius-md); color:var(--cs-purple); font:var(--text-pc-body-14); font-weight:700` · hover `background:rgba(59,47,138,0.06)` |
+| 삭제 `.btn-remove` | 배경·보더 없음, `color:var(--cs-text-mid)`, hover `color:var(--cs-red-badge)` (색만 변경) |
+| 오류 문구 `.save-error` | `font:var(--text-pc-script-12); color:var(--cs-red-badge)` |
+
+**④ 푸터 `.modal-footer`** — 취소 / 저장
+
+| 항목 | 값 |
+|---|---|
+| 컨테이너 | `padding:16px 24px; display:flex; gap:10px; justify-content:flex-end; border-top:1px solid var(--cs-lilac); flex-shrink:0` (실측 높이 69px) |
+| 취소 `.btn-cancel` | `height:36px; padding:0 20px; background:none; border:1px solid var(--cs-lilac); border-radius:var(--radius-md); font:var(--text-pc-body-14); color:var(--cs-text-mid)` · hover는 `border-color:var(--cs-text-mid)` · disabled `opacity:.5` — ⚠️ 이 취소 버튼의 보더는 ghost 성격의 기존 정본 값 그대로 기록한 것이며, 신규 작성 시 outline 추가 금지 원칙(CLAUDE.md)과 충돌하면 Stephen에게 먼저 확인 |
+| 저장 `.btn-save` | `height:36px; padding:0 24px; background:var(--cs-purple); color:var(--cs-white); border:none; border-radius:var(--radius-md); font:var(--text-pc-body-14); font-weight:700` · disabled `opacity:.5; cursor:default` |
+
+```
+⛔ 신규 관리모달에서 패널 폭(420px)·헤더 다크 바·푸터 구성을 임의 변경하지 않는다.
+⛔ 닫기 버튼은 ✕ 문자만 사용(SVG 아이콘 금지) — front-uiux.md §9 / uiux-index.md "close-red"와 동일 원칙.
+⛔ 모달 내부 목록 행이 모달 폭을 넘지 않도록 flex 자식에는 `min-width:0` + 말줄임을 함께 적용한다
+   (CmsDragList 내부 행은 `flex:1; min-width:0` 필수 — HomeCategoryProductsModal 사례).
 ```
 
 ### 9-2-B. 슬롯 기반 배너 설정 패턴 (다중 슬롯 — crazylog 방식)
@@ -2373,7 +2452,7 @@ export const actions = {
   white-space: nowrap;
 }
 .combo-btn:hover {
-  border-color: var(--cs-purple);
+  /* 호버는 BG 색상 변경만 — 보더 변경 금지(2026-10-01 확정, CLAUDE.md '호버는 BG만') */
   background: #F5F4FA;
 }
 
@@ -3407,3 +3486,67 @@ Stephen 실화면 확인 후 표준으로 확정. `uiux-index.md`에 트리거 �
 ```
 
 *2026-09-29 §25 신설 — front 영역 전체 삭제 버튼 표준(원형 red-5 BG·red-80 휴지통·삭제 안전 토스트 재확인). 크레이지로그 댓글·상품 후기 적용.*
+
+---
+
+## 26. 키워드 칩(pill) UI 표준 — 하입팩·ALL 모바일 키워드 ★★★ (2026-10-01 확정, Stephen)
+
+> **"키워드 UI" 작업 시 → 이 섹션 값을 즉시 적용.** 적용: `/hype-pack` 모바일 `.m-chip`, `/products`(ALL) 모바일 `.kw-pill`. 두 화면은 항상 같은 값을 유지한다.
+
+| 항목 | 값 |
+|---|---|
+| 배경 | `#e1def3` |
+| 반경 | `13px` |
+| 패딩 | `8px 12.5px` (가로 12.5px — 구 25px에서 50% 축소) · 높이 최소 `44px` |
+| 글자 | `14px` / 500 / `#444` / `letter-spacing: -0.5px`, `white-space: nowrap` |
+| 간격 | 칩 사이 `gap: 10px`, 줄바꿈(`flex-wrap`) |
+| 글자 수 | 최대 **20자** — `truncateKeywordLabel(kw, 20)`(초과 시 `…`). 원문은 `title`·`aria-label`과 이동 주소에 그대로 사용. 공용 기본값 `KEYWORD_LABEL_MAX_LEN`(10)은 변경하지 않는다 |
+| hover·active | **링크·클릭 가능한 칩에만** 배경이 `#d4d0ec`로 한 단계 진해짐(**BG 색상 변경만** — 보더·그림자 추가 금지) · `transition: background 0.15s` · `cursor: pointer` |
+| 링크 없는 칩 | hover 없음(직접 입력 키워드 등 `<span>`) — 링크 유무를 눌러 보기 전에 구분 |
+
+```css
+.chip { background:#e1def3; border-radius:13px; padding:8px 12.5px; min-height:44px;
+  font:500 14px 'Noto Sans KR',sans-serif; color:#444; letter-spacing:-0.5px; white-space:nowrap; }
+a.chip, button.chip { cursor:pointer; transition:background 0.15s; }
+a.chip:hover, a.chip:active, button.chip:hover, button.chip:active { background:#d4d0ec; }
+```
+
+**링크 정책:** 하입팩 키워드는 상품명 검색 제안으로 추가한 것만 `/products/{slug}`로 연결(`keyword_links`), 직접 입력은 링크 없음. 렌더 시 `/products/{slug}` 한 단계 경로만 허용(정규식 `^/products/(?!\.{1,2}$)[^/?#\\]+$` — `..`·하위 경로·쿼리·해시·백슬래시 거부, `safeKeywordHref`).
+
+**GATE C**
+```
+[ ] 키워드 칩 규격(배경·반경·패딩 12.5·최대 20자)이 하입팩·ALL 두 화면에서 동일한가?
+[ ] 링크·클릭 가능한 칩에만 hover(BG #d4d0ec)가 있고 보더·그림자 변화가 없는가?
+```
+
+---
+
+## 27. 표준 아코디언 화살표 아이콘 — 접힘/펼침 토글 ★★★ (2026-10-01 기록, Stephen)
+
+> **"아코디언 화살표 아이콘 표준" 언급 시 → 이 섹션 값을 즉시 적용.** 정본 구현: `src/routes/products/+page.svelte` 모바일 섹션 헤더(`.m-sec-header` > `.m-sec-right`)의 "전체" 접힘/펼침 화살표.
+
+| 항목 | 값 |
+|---|---|
+| 형태 | 아래쪽 꺾쇠(⌄) 라인형 SVG — `viewBox="0 0 13 13"`, `width/height="13"`, `fill="none"` |
+| path | `M2 4.5L6.5 9L11 4.5` |
+| 선 | `stroke="#3b2f8a"`(= `--cs-purple`), `stroke-width="2"`, `stroke-linecap="round"`, `stroke-linejoin="round"` |
+| 접힘(닫힘) | 아래쪽 꺾쇠(⌄) 그대로 |
+| 펼침(열림) | `style="transform:scaleY(-1)"`로 위쪽 꺾쇠(⌃) 반전 |
+| 접근성 | 아이콘은 `aria-hidden="true"` — 토글 버튼 쪽에 `aria-expanded`·`aria-label`을 둔다 |
+| 인터랙션 | 아이콘 자체 hover 없음(토글 버튼 hover는 BG 색상 변경만, §9-1-B 원칙) |
+
+```svelte
+<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"
+     style="transform:{open ? 'scaleY(-1)' : 'none'}">
+  <path d="M2 4.5L6.5 9L11 4.5" stroke="#3b2f8a" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" />
+</svg>
+```
+
+> ⚠️ 기존 규칙과의 관계: "리스트·아코디언 화살표 인라인 SVG 신규 작성 금지 → `ChevronIcon` 사용"(uiux-index.md·CLAUDE.md) 규정은 **화면 이동·리스트 우측 화살표**용 표준(`ChevronIcon`, 연회색 `#aaaaaa`)이다. 위 값은 **접힘/펼침 토글 전용 아코디언 아이콘**의 정본 값으로 별도 기록한다 — 두 규정의 적용 범위 정리(예: 아코디언도 `ChevronIcon`에 같은 값을 옵션으로 흡수할지)는 Stephen 결정 대기. 신규 아코디언 작성 시 이 값을 우선 확인하고, 현재 관리모달(ProductHeroModal)의 아코디언 2종은 `ChevronIcon` 기본값(8px·`#aaaaaa`)을 쓰고 있어 이 값과 다름에 유의.
+
+**GATE C**
+```
+[ ] 아코디언 토글 화살표가 13×13 · stroke #3b2f8a · 2px · round로 접힘 ⌄ / 펼침 ⌃(scaleY(-1))인가?
+[ ] 토글 버튼에 aria-expanded가 있고 아이콘은 aria-hidden인가?
+```

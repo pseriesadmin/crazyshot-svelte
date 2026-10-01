@@ -3,6 +3,7 @@
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
 
@@ -63,6 +64,12 @@
 
   const BANNER_KEY = 'product_page_category_banners'
   const isHero = settingKey === 'product_page_hero'
+  let selectedOpen = $state(true)
+  // 카테고리 배너 행 아코디언 — 기본 닫힘(행이 길어 목록 파악이 어려움), 펼친 행의 category_id 목록
+  let openBanners = $state<string[]>([])
+  function toggleBanner(id: string): void {
+    openBanners = openBanners.includes(id) ? openBanners.filter((x) => x !== id) : [...openBanners, id]
+  }
   const showBanners = $derived(isHero && categories.length > 0)
 
   // 모바일 목록 중간 배너 — 저장값이 없으면 기존 하드코딩 값(촬영본능 / PICK! / ellipse.png)을 기본으로 사용
@@ -364,13 +371,14 @@
 <aside class="modal-panel" role="dialog" aria-modal="true" aria-label="헤더 상품 설정">
   <div class="modal-header">
     <span class="modal-title">
-      {settingKey === 'product_page_md_picks' ? 'MD 추천 픽 설정' : '헤더 슬라이드 상품 설정'}
+      {settingKey === 'product_page_md_picks' ? 'MD 추천 픽 설정' : '공통 상품 슬라이드 설정'}
     </span>
     <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
   </div>
 
   <div class="modal-body">
-    <!-- 모드 선택 -->
+    <!-- 노출 방식 + 상품 추가 + 선택된 상품 — 카드 스타일 없이 div로만 그룹핑 -->
+    <div class="group-wrap">
     <div class="section">
       <p class="section-label">노출 방식</p>
       <div class="radio-group">
@@ -385,7 +393,8 @@
       </div>
     </div>
 
-    <!-- 상품 검색 -->
+    <!-- 상품 추가 + 선택된 상품 — 카드형 그룹 -->
+    <div class="group-products">
     <div class="section">
       <p class="section-label">상품 추가 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
@@ -433,19 +442,35 @@
     <!-- 선택된 상품 목록 (드래그 순서) -->
     {#if selected.length > 0}
       <div class="section">
-        <p class="section-label">선택된 상품 (드래그로 순서 변경)</p>
-        <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
-          {#snippet renderItem(item)}
-            <div class="selected-row">
-              <span class="selected-name">{item.name}</span>
-              <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
-            </div>
-          {/snippet}
-        </CmsDragList>
+        <!-- 아코디언 — 화살표는 공통 ChevronIcon(방향: 열림=up / 닫힘=down) -->
+        <button
+          type="button"
+          class="acc-head"
+          aria-expanded={selectedOpen}
+          aria-controls="selected-products-panel"
+          onclick={() => (selectedOpen = !selectedOpen)}
+        >
+          <span class="section-label">선택된 상품 <span class="acc-hint">드래그로 순서 변경</span></span>
+          <ChevronIcon direction={selectedOpen ? 'up' : 'down'} />
+        </button>
+        {#if selectedOpen}
+          <div id="selected-products-panel">
+            <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
+              {#snippet renderItem(item)}
+                <div class="selected-row">
+                  <span class="selected-name">{item.name}</span>
+                  <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
+                </div>
+              {/snippet}
+            </CmsDragList>
+          </div>
+        {/if}
       </div>
     {:else}
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
     {/if}
+    </div>
+    </div>
 
     <!-- 카테고리 선택 시 노출 배너 — 카테고리별 1개, 가로 100% × 세로 150px -->
     {#if showBanners}
@@ -455,13 +480,31 @@
         {#each bannerRows as row (row.category_id)}
           <div class="banner-row">
             <div class="banner-row-head">
-              <span class="banner-cat">{catName(row.category_id)}</span>
-              <label class="radio-opt">
-                <input type="checkbox" checked={row.enabled} disabled={!row.image_url && !row._preview && !row.mobile_image_url && !row._mPreview}
-                  onchange={(e) => patchBanner(row.category_id, { enabled: e.currentTarget.checked })} />
-                <span>노출</span>
-              </label>
+              <!-- front-uiux.md §17 체크아이콘 버튼 표준 — 좌측 배치, ON=--cs-purple / OFF=--cs-purple-op10 -->
+              <button
+                type="button"
+                class="checkbox-btn checkbox-btn-terms"
+                class:checked={row.enabled}
+                disabled={!row.image_url && !row._preview && !row.mobile_image_url && !row._mPreview}
+                aria-pressed={row.enabled}
+                aria-label="{catName(row.category_id)} 배너 노출"
+                onclick={() => patchBanner(row.category_id, { enabled: !row.enabled })}
+              >
+                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="acc-head acc-head--row"
+                aria-expanded={openBanners.includes(row.category_id)}
+                onclick={() => toggleBanner(row.category_id)}
+              >
+                <span class="banner-cat">{catName(row.category_id)}</span>
+                <ChevronIcon direction={openBanners.includes(row.category_id) ? 'up' : 'down'} />
+              </button>
             </div>
+            {#if openBanners.includes(row.category_id)}
             <p class="banner-sub">PC 이미지 (1240×150px)</p>
             <div class="banner-thumb" class:banner-thumb-empty={!(row._preview ?? row.image_url)}>
               {#if row._preview ?? row.image_url}
@@ -502,6 +545,7 @@
               value={row.link_url ?? ''} oninput={(e) => patchBanner(row.category_id, { link_url: e.currentTarget.value })} />
             <input type="text" class="f-input" placeholder="대체 텍스트 (접근성)" maxlength="100"
               value={row.alt} oninput={(e) => patchBanner(row.category_id, { alt: e.currentTarget.value })} />
+            {/if}
           </div>
         {/each}
       </div>
@@ -612,9 +656,26 @@
 
   .section { display: flex; flex-direction: column; gap: 8px; }
 
+  .acc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 44px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+  }
+  .acc-head--row { width: auto; flex: 1; gap: 8px; justify-content: space-between; } /* 카테고리명 좌 · 화살표 우측 끝 */
+  .acc-hint { font-size: 11px; color: var(--cs-text-light); }
+
+  /* front 관리모달 섹션 라벨 표준(front-uiux.md §9-2-A ③) */
   .section-label {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
     margin: 0;
     display: flex;
     align-items: center;
@@ -736,48 +797,66 @@
     padding: 8px 12px;
   }
 
+  /* front 관리모달 푸터 표준(front-uiux.md §9-2-A ④) */
   .modal-footer {
     flex-shrink: 0;
     padding: 16px 24px;
     display: flex;
     gap: 10px;
+    justify-content: flex-end;
     border-top: 1px solid var(--cs-lilac);
   }
 
   .btn-cancel {
-    flex: 1;
-    height: 50px;
+    height: 36px;
+    padding: 0 20px;
+    background: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+  }
+  .btn-cancel:hover:not(:disabled) { border-color: var(--cs-text-mid); }
+  .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-save {
+    height: 36px;
+    padding: 0 24px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-xl);
-    font: var(--text-pc-title-16);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
     cursor: pointer;
     transition: background 0.15s;
   }
-  .btn-cancel:hover:not(:disabled) { background: var(--cs-purple-hover); }
-  .btn-cancel:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
-
-  .btn-save {
-    flex: 1;
-    height: 50px;
-    background: var(--cs-red-badge);
-    color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-xl);
-    font: var(--text-pc-title-16);
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .btn-save:hover:not(:disabled) { background: var(--cs-red); }
-  .btn-save:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .btn-save:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .banner-help { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
+  .group-wrap { display: flex; flex-direction: column; gap: 16px; }
+  /* 그룹(노출방식·상품)과 카테고리 배너 사이 여백 +100% (기본 body gap 20px → 40px) */
+  .group-wrap + .banner-section { margin-top: 20px; }
+  /* 카테고리 배너 ↔ 모바일 목록 중간 배너 사이 여백 +100% (20px → 40px) */
+  .banner-section + .banner-section { margin-top: 20px; }
+  /* 카드형 — 카테고리 배너 행(.banner-row)과 동일한 연보라 카드 */
+  .group-products {
+    display: flex; flex-direction: column; gap: 16px;
+    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;
+  }
   .banner-row {
     display: flex; flex-direction: column; gap: 8px;
-    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px;
+    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;
   }
-  .banner-row-head { display: flex; align-items: center; justify-content: space-between; }
+  .banner-row-head { display: flex; align-items: center; gap: 12px; }
+  .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
+  .checkbox-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+  .checkbox-btn-terms { color: var(--cs-purple-op10); }
+  .checkbox-btn-terms.checked { color: var(--cs-purple); }
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) { .checkbox-btn-terms svg { width: 18px; height: 12px; } }
   .banner-cat { font: var(--text-pc-title-16); color: var(--cs-text); }
   .banner-thumb {
     width: 100%; aspect-ratio: 1240 / 150; border-radius: var(--radius-sm); overflow: hidden;

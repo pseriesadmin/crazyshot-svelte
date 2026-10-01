@@ -408,7 +408,7 @@
       flex-direction: column;
       gap: 50px;
       align-items: center;
-      padding: 150px 0 50px; /* GNB 100px + Figma py-[50px] */
+      padding: var(--layout-pc-gnb-offset) 0 50px; /* 공통 PC 상단 토큰(--layout-pc-gnb-offset 210px = GNB 아랫변 110px + 여백 100px) */
     }
   }
 
@@ -427,7 +427,7 @@
     display: flex;
     flex-direction: row;
     gap: 30px;
-    height: 730px;
+    /* 높이 고정(730px) 제거 — 왼쪽 열(타이틀 내용 높이 + 카드 400px)에 맞춰 상단 빈 공간 제거 */
     border-radius: 50px;
     overflow: hidden;
   }
@@ -440,6 +440,10 @@
     gap: 30px;
     justify-content: flex-end;   /* K-Trail log + Release를 bottom 기준 정렬 */
   }
+  /* 오른쪽 열은 왼쪽 열 높이에 맞춰 두 카드가 균등 분할 — 상단 빈 공간 없음 */
+  .d-col2-wrap .d-shotlog-wrap { flex: 1; min-height: 0; }
+  .d-col2-wrap .d-shotlog1,
+  .d-col2-wrap .d-shotlog2 { flex: 1; height: auto; min-height: 0; }
 
   /* col-1 래퍼: text tile(300px) + Flash Deals(400px) 수직 스택 */
   .d-col1-wrap {
@@ -451,25 +455,28 @@
 
   /* 배너 카드 관리자 트리거 래퍼 */
   .d-shotlog-wrap { position: relative; display: flex; flex-direction: column; }
-  .d-col1-wrap .d-shotlog-wrap { flex: 1; min-height: 0; }
+  .d-col1-wrap .d-shotlog-wrap { flex: 0 0 400px; min-height: 0; } /* 상품리뷰 카드 400px 유지 */
   .admin-edit-btn {
-    background: rgba(16,11,50,0.75);
     color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 6px 12px;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    min-height: 32px;
     white-space: nowrap;
     transition: background 0.12s;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-content: flex-start;
   }
-  .admin-edit-btn:hover { background: rgba(16,11,50,0.92); }
+  .admin-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
   .admin-banner-btn {
     position: absolute;
     top: 10px;
@@ -485,7 +492,6 @@
     flex-direction: column;
     justify-content: flex-end;
     overflow: hidden;
-    height: 300px;
     position: relative;
   }
   .admin-kw-btn-d {
@@ -649,7 +655,8 @@
   .d-shotlog1-writing {
     position: relative;
     z-index: 1;
-    flex: 1;
+    flex: 0 0 auto;
+    /* 텍스트 높이에 맞춤(세로폭 최소화) — 고정 높이 제거 */
     background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
     padding: 20px 40px;
     display: flex;
@@ -695,6 +702,7 @@
     height: 100%;
     object-fit: cover;
     pointer-events: none;
+    transition: transform 0.5s ease;
   }
   /* Figma: bg-[#3b2f8a] header */
   .d-shotlog2-header {
@@ -716,7 +724,8 @@
   .d-shotlog2-writing {
     position: relative;
     z-index: 1;
-    flex: 1;
+    flex: 0 0 auto;
+    /* 텍스트 높이에 맞춤(세로폭 최소화) — 고정 높이 제거 */
     background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
     padding: 20px 40px;
     display: flex;
@@ -816,12 +825,7 @@
   }
   .d-post:hover { box-shadow: 0 4px 20px rgba(16,11,50,0.12); }
 
-  /* D-7: grid card hover */
-  .d-shotlog, .d-shotlog1, .d-shotlog2 { transition: transform 0.5s ease, box-shadow 0.5s ease; }
-  .d-shotlog:hover, .d-shotlog1:hover, .d-shotlog2:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 20px 60px rgba(16,11,50,0.45);
-  }
+  /* D-7: grid card hover — 카드(레이아웃) 확대·이동 대신 내부 이미지만 확대(카드가 grid overflow:hidden에 가려지는 문제 해결) */
   .d-shotlog-bg-img { transition: transform 0.5s ease; }
   .d-shotlog:hover .d-shotlog-bg-img { transform: scale(1.10); }
   .d-shotlog2:hover .d-shotlog2-img { transform: scale(1.10); }

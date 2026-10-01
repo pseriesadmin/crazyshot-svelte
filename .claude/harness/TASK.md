@@ -7,6 +7,35 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🟢 ROUTINE: 검수 후속 — 키워드 링크 렌더 방어·콤보 hover BG만·키워드 칩 hover 지침(§26)·ALL 관리 버튼 모바일 숨김 (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시(앞선 sp3 MEDIUM 2건 처리 지시 포함), DB 변경 없음 — GATE E sp3-qa-agent 검수 진행, git commit은 Stephen 대기)
+- MEDIUM-1 해소: src/routes/hype-pack/+page.svelte `safeKeywordHref()` — 저장된 keyword_links가 `/products/`로 시작하고 `//` 아닐 때만 `<a href>`로 렌더(그 외는 링크 없는 칩).
+- MEDIUM-2 해소: HypePackBannerModal `.combo-btn:hover`에서 보더 색 변경 제거(호버는 BG만). ⚠️ front-uiux.md §16 스펙에는 hover 보더 변경이 남아 있어 지침과 코드가 어긋남 — 지침 수정 여부 Stephen 확인 대기.
+- 키워드 칩 hover: 하입팩 링크 칩(`a.m-chip`)만 배경 #d4d0ec(hover·active, 0.15s), ALL `.kw-pill` 전체 동일 적용. 지침 front-uiux.md §26 "키워드 칩(pill) UI 표준" 신설(규격·최대 20자·hover·링크 정책·GATE C).
+- 정책 변경(ALL 한정): src/routes/products/+page.svelte — `@media (max-width:640px)`에서 `.admin-edit-btn/.admin-cat-btn/.admin-float-btn` 숨김(관리모달 호출은 PC 반응형에서만). 다른 화면(홈·하입팩·크레이지로그·헬프·멤버스·로그인)에도 같은 정책을 적용할지·§9-1-B에 기록할지 Stephen 확인 대기.
+- 수정 파일(이 세션'만'): src/routes/hype-pack/+page.svelte · src/lib/components/hype-pack/HypePackBannerModal.svelte · src/routes/products/+page.svelte · .claude/rules-ref/front-uiux.md
+- git: Stephen 대기.
+
+## NOW — 🟢 ROUTINE: 하입팩 배너 설정 모달 UI 표준화 + 키워드 칩 랜딩 링크 + 모바일 키워드 칩 규격(하입팩·ALL) (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시(UI 단계별), DB·마이그레이션 변경 없음 — GATE E sp3-qa-agent 검수 진행, git commit은 Stephen 대기)
+- HypePackBannerModal(src/lib/components/hype-pack/HypePackBannerModal.svelte): 헤더 표준(패딩 20/24·좌상단 반경·title-16·닫기 hover)·패널 폭 420px·바디 패딩 20/24 · 노출 방식 → 콤보 버튼(§16, role=radiogroup) · 선택 상품 카드화(.selected-row 연보라·flex:1/min-width:0) + 라벨 제거 · 모바일 키워드 안내문(.section-hint) 제거 · count-badge 우측 정렬 · div 그룹(.group-wrap/.group-products)·여백 조정(키워드 영역 +100%, 칩 입력칸 +100%).
+- 키워드 랜딩 링크: 저장 구조 `hype_pack_banner` 설정 JSON에 `keyword_links`(키워드→/products/{slug}) 추가, 기존 `keywords: string[]`는 그대로(하위호환). 상품명 제안으로 추가한 키워드만 링크 저장, 직접 입력은 링크 없음. 서버 src/routes/hype-pack/+page.server.ts가 keyword_links를 banner/bannerRaw로 전달, 페이지가 링크 있으면 <a>·없으면 <span>.
+- 모바일 키워드 칩 규격: 하입팩 `.m-chip`을 ALL `.kw-pill` 규격(#e1def3·반경13·14px 500 #444·높이44)에 맞추고 가로 패딩 12.5px(50% 축소)·글자 최대 20자(truncateKeywordLabel(kw, 20), 전체 이름은 title/aria-label), ALL(/products) `.kw-pill`도 동일 패딩 12.5px·최대 20자. 공용 기본값(KEYWORD_LABEL_MAX_LEN=10)은 변경 없음.
+- 오적용 정정 기록: 최초 "키워드 랜딩 링크" 요청을 CrazylogKeywordModal(크레이지로그 키워드)에 잘못 적용 — 해당 칩 링크(새 창)는 그대로 남아 있음(되돌릴지 Stephen 확인 대기).
+- 수정 파일(이 세션'만'): src/lib/components/hype-pack/HypePackBannerModal.svelte · src/routes/hype-pack/+page.svelte · src/routes/hype-pack/+page.server.ts · src/routes/products/+page.svelte · src/lib/components/crazylog/admin/CrazylogKeywordModal.svelte
+- ✅ sp3-qa-agent 검수(2026-10-01): 블로킹 0 · GATE E 진행 가능 · MEDIUM 2(① 공개 페이지가 keyword_links 값을 렌더할 때 `/products/` 접두어 검증 없음 — 쓰기는 CMS 권한자만이라 실위험 낮음, 방어 심화 권고 ② .combo-btn:hover 보더 색 전환이 CLAUDE.md '호버는 BG만' 원칙과 문자상 충돌 소지 — Stephen 확인) · LOW 4(hype-pack·products 페이지에 앞선 UI 블록 변경이 섞여 커밋 시 구분 필요·동명 상품 slug 첫 값·하드코딩 색은 §16 정본값·크레이지로그 오적용 링크 되돌림 확인 대기). svelte-check 신규 오류 0, keywordDisplay 단위 테스트 3/3.
+- git: Stephen 대기.
+
+## NOW — 🟢 ROUTINE: front 관리모달·설정버튼 UI 표준화 + PC GNB 아래 여백 토큰 통일 + 크레이지로그·하입팩·헬프·멤버스 PC 레이아웃 보정 (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시(UI 단계별), DB·마이그레이션 변경 없음 — GATE E sp3-qa-agent 검수 진행, git commit은 Stephen 대기)
+- 지침 신설(.claude/rules-ref/front-uiux.md): §9-1-B front 관리모달 버튼 UI(200×50·BG 40%·반경 20px·폰트 body-14·좌측 정렬·우측 끝 위치) · §9-2-A 관리모달 패널 헤더·바디·푸터 표준(다크 헤더·섹션 라벨·푸터 36px 버튼). 취소 버튼 1px 보더는 기존 정본 값 그대로 기록(outline 금지 원칙 충돌 여부 Stephen 확인 대기).
+- 관리 설정버튼 표준 적용: src/routes/+page.svelte(hero/theme/cat/md-picks/mh-hero-edit/cms-section-link 위치·규격), products·hype-pack·crazylog `.admin-edit-btn`·`.admin-cat-btn`, auth/login `.d-admin-edit-btn`. 모바일 `.cms-section-link--light`·`.admin-md-empty-btn`·crazylog 모바일 `.admin-kw-btn`은 예외 유지.
+- 관리모달 표준 적용: HomeCategoryProductsModal(제목 "상품 슬라이드 설정 ○○"·다크 헤더·푸터·말줄임·카테고리명), HomeThemeGroupModal·ProductCategoryModal·ProductGridModal·ProductHeroModal 푸터, ProductCategoryModal 헤더 좌상단 반경·안내문 제거, ProductHeroModal(제목 "공통 상품 슬라이드 설정"·아코디언 2종·체크아이콘 §17·섹션 라벨 14px·그룹 카드·여백).
+- PC 상단 여백 토큰: src/app.css `--layout-pc-gnb-offset: 210px`(GNB 아랫변 110px + 여백 100px) — 크레이지로그·헬프·하입팩·상품목록·멤버스 5개 화면 참조(구 150/160/170/180/220px 폐기). 헬프 `.help-main` 콘텐츠 폭 1240px, 멤버스 `.hero-pc` 폭 100%/max 1240·페이지 패딩 헬프와 동일(상단 토큰·좌우 24·하단 32).
+- 크레이지로그 PC: 그리드 높이 고정 해제·타이틀 타일 내용 높이·상품리뷰 카드 400px 유지·오른쪽 카드 균등 분할, 카드 hover 레이아웃 확대 제거→내부 이미지 확대. 하입팩 PC: "추천 Package" 제목 바 제거(배너가 첫 요소).
+- 미결·주의: ① 멤버스 하단 패딩 150→32px·좌우 24px로 다른 섹션 폭 영향 미확인 ② 641~767px 구간 products PC 패딩(토큰)과 모바일 GNB 불일치 ③ 크레이지로그 오른쪽 카드 높이 약 300px(요청 280px과 상충 시 상단 빈공간 재발) ④ 화면 육안 검증은 Stephen 직접.
+- 수정 파일(이 세션'만'): .claude/rules-ref/front-uiux.md · src/app.css · src/routes/+page.svelte · src/routes/products/+page.svelte · src/routes/hype-pack/+page.svelte · src/routes/crazylog/+page.svelte · src/routes/help/+page.svelte · src/routes/members/+page.svelte · src/routes/auth/login/+page.svelte · src/lib/components/members/MembersHero.svelte · src/lib/components/home/admin/{HomeCategoryProductsModal,HomeThemeGroupModal}.svelte · src/lib/components/products/admin/{ProductCategoryModal,ProductGridModal,ProductHeroModal}.svelte
+- ✅ sp3-qa-agent 검수(2026-10-01): 블로킹 0 · MEDIUM 2(① 641~767px 구간 토큰·GNB 불일치 ② 푸터 취소 버튼 1px 보더 vs outline 금지 — Stephen 확인 대기) · LOW 5(모바일 200×50 의도 확인·체크아이콘 22×15 예외 표기·crazylog 주석 150px(정정 완료)·멤버스 하단/좌우 패딩·헬프 max-width 육안 확인). svelte-check 신규 오류 0(기존 vite.config.ts 1건뿐).
+- 추가(검수 후): CrazylogKeywordModal 키워드 칩 제목을 해당 랜딩 링크(kw.href) 새 창 링크로 변경.
+- git: Stephen 대기.
+
 ## NOW — 🟡 BOUNDARY: 재고(자식)는 옵션 링크를 복사하지 않고 부모값을 따르는 구조로 전환 + 운영 재고 링크 데이터 복구 (2026-10-01, 이 세션'만', ✅ GATE B 승인 — Stephen "1번 데이터 복구와 3번 구조 변경 모두 진행", ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0건), git commit은 Stephen 대기)
 
 배경: 직전 블록(장바구니 판정 수정)의 후속. "빠른 재고 등록"(add_inventory)이 부모 옵션 링크를 재고에 복사 → 부모를 고쳐도 사본이 어긋남(SONY UWP-D21 사고). 정책 정본: products.md §4-0·§4-1(재고는 등록정보 읽기전용, 부모만 수정).

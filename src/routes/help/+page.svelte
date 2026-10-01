@@ -630,8 +630,9 @@
 /* ── Responsive: 768px+ ─────────────────────────────────────────── */
 @media (min-width: 768px) {
   .help-main {
-    padding: 160px 24px 32px;
+    padding: var(--layout-pc-gnb-offset) 24px 32px;
     gap: 32px;
+    max-width: calc(var(--layout-pc-max) + 48px); /* 좌우 패딩 24px 제외한 콘텐츠(히어로 포함) 폭 = 1240px */
   }
 
   .hero-section {
@@ -695,7 +696,7 @@
 /* ── Responsive: 1024px+ ────────────────────────────────────────── */
 @media (min-width: 1024px) {
   .help-main {
-    padding: 160px 20px 40px;
+    padding: var(--layout-pc-gnb-offset) 20px 40px;
     gap: 40px;
   }
 
