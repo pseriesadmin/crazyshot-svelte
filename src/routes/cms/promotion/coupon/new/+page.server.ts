@@ -160,6 +160,12 @@ export const actions: Actions = {
     const allow_stacking       = form.get('allow_stacking') === 'true'
     // 쿠폰끼리 중복 허용(Migration 605) — 폼에 값이 없으면(구 화면) 정책 기본값 true
     const allow_coupon_stacking = form.get('allow_coupon_stacking') !== 'false'
+    // 적용 대상(Migration 615) — 폼에 값이 없으면(구 화면) 정책 기본값 둘 다 true. 둘 다 false는 서버에서도 거절.
+    const applies_to_rental = form.get('applies_to_rental') !== 'false'
+    const applies_to_sale   = form.get('applies_to_sale') !== 'false'
+    if (!applies_to_rental && !applies_to_sale) {
+      return fail(400, { error: '적용 대상은 대여상품·판매상품 중 최소 한 개 이상 선택해야 합니다.' })
+    }
     const is_first_rental_only = form.get('is_first_rental_only') === 'true'
     const is_student_only      = form.get('is_student_only') === 'true'
     const is_walk_in_only      = form.get('is_walk_in_only') === 'true'
@@ -269,6 +275,21 @@ export const actions: Actions = {
       if (stackError) console.error('[coupon/new] cms_set_allow_coupon_stacking 실패:', stackError.message)
     }
 
-    throw redirect(303, '/cms/promotion/coupon?tab=manage')
+    // "적용 대상"(대여/판매)도 전용 RPC로 저장(Migration 615). 기본값(둘 다)과 다를 때만 호출하고,
+    // 실패해도 이미 생성된 쿠폰을 되돌리지 않는다(상세 패널에서 재설정 가능) — 대신 목록 화면이
+    // warn=applies 경고 토스트로 알린다(기본값 "둘 다 적용"으로 남아 의도보다 넓게 쓰일 수 있기 때문).
+    let appliesFailed = false
+    if (result.id && !(applies_to_rental && applies_to_sale)) {
+      const { data: appliesData, error: appliesError } = await db.rpc('cms_set_coupon_applies_to', {
+        p_id: result.id, p_rental: applies_to_rental, p_sale: applies_to_sale,
+      })
+      const appliesResult = appliesData as { ok?: boolean } | null
+      if (appliesError || !appliesResult?.ok) {
+        appliesFailed = true
+        console.error('[coupon/new] cms_set_coupon_applies_to 실패:', appliesError?.message ?? JSON.stringify(appliesData))
+      }
+    }
+
+    throw redirect(303, appliesFailed ? '/cms/promotion/coupon?tab=manage&warn=applies' : '/cms/promotion/coupon?tab=manage')
   },
 }

@@ -71,6 +71,18 @@
     goto(u.toString(), { replaceState: true, noScroll: true })
   }
 
+  // 쿠폰 발행 직후 "적용 대상"(대여/판매) 저장이 실패한 경우(?warn=applies) — 쿠폰은 생성됐지만 기본값
+  // "대여·판매 모두 적용"으로 남아 있으므로 재설정을 안내한다. 1회만 노출하고 URL에서 파라미터를 제거한다.
+  let appliesWarnShown = false
+  $effect(() => {
+    if (page.url.searchParams.get('warn') !== 'applies' || appliesWarnShown) return
+    appliesWarnShown = true
+    csToast.warning('쿠폰은 발행됐지만 적용 대상(대여/판매) 저장에 실패해 "모두 적용"으로 남아 있습니다. 쿠폰 상세 패널에서 다시 설정해주세요.')
+    const u = new URL(page.url)
+    u.searchParams.delete('warn')
+    goto(u.toString(), { replaceState: true, noScroll: true })
+  })
+
   // 사용량 리포트 탭 — 행은 coupon_id만 갖고 있어 data.coupons(전체 목록, tab 무관하게
   // 항상 로드됨)에서 매칭되는 쿠폰을 찾아 발행관리 탭과 동일한 selectCoupon()으로 위임.
   // 과거 리포트 기간에 등장했지만 이후 삭제된 쿠폰처럼 못 찾는 경우는 조용히 무시(패널 안 열림).
@@ -298,7 +310,14 @@
               >
                 <td class="td-code">{codeDisplay(c)}</td>
                 <td>{cc.display_name ?? '—'}</td>
-                <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
+                <td>
+                  <span class="badge badge-info">{typeLabel(c.type)}</span>
+                  {#if cc.applies_to_rental === false}
+                    <span class="badge badge-info">판매 전용</span>
+                  {:else if cc.applies_to_sale === false}
+                    <span class="badge badge-info">대여 전용</span>
+                  {/if}
+                </td>
                 <td class="col-hide">{discountLabel(c)}</td>
                 <td class="td-date col-hide">
                   {#if cc.validity_type === 'unlimited'}

@@ -132,6 +132,19 @@
   let u_allow_stacking       = $state(cc.allow_stacking === true)
   // 쿠폰끼리 중복 허용 — 컬럼 기본값 true(정책상 기본 허용), 명시적으로 false일 때만 끔
   let u_allow_coupon_stacking = $state(cc.allow_coupon_stacking !== false)
+  // 적용 대상(Migration 615) — 컬럼 기본값 둘 다 true. 하나만 켜면 그 대상에만, 둘 다 켜면 모두 적용. 최소 1개 필수.
+  let u_applies_rental = $state(cc.applies_to_rental !== false)
+  let u_applies_sale = $state(cc.applies_to_sale !== false)
+  function toggleApplies(target: 'rental' | 'sale') {
+    const rental = target === 'rental' ? !u_applies_rental : u_applies_rental
+    const sale = target === 'sale' ? !u_applies_sale : u_applies_sale
+    if (!rental && !sale) {
+      csToast.warning('적용 대상은 대여상품·판매상품 중 최소 한 개 이상 선택해야 합니다.')
+      return
+    }
+    u_applies_rental = rental
+    u_applies_sale = sale
+  }
 
   function toggleCat(c: string) {
     u_categories = u_categories.includes(c)
@@ -167,6 +180,8 @@
     u_allow_points        = ccEff.allow_with_points !== false
     u_allow_stacking      = ccEff.allow_stacking === true
     u_allow_coupon_stacking = ccEff.allow_coupon_stacking !== false
+    u_applies_rental      = ccEff.applies_to_rental !== false
+    u_applies_sale        = ccEff.applies_to_sale !== false
   })
 
   // 2026-09-23 추가(Stephen 지시) — "정보 저장" 버튼을 변경사항 유무에 따라 활성/비활성
@@ -195,6 +210,8 @@
     allowPoints: cc.allow_with_points !== false,
     allowStacking: cc.allow_stacking === true,
     allowCouponStacking: cc.allow_coupon_stacking !== false,
+    appliesRental: cc.applies_to_rental !== false,
+    appliesSale: cc.applies_to_sale !== false,
   })
   const isDirtyInfo = $derived(
     u_discount_type !== origInfo.discountType ||
@@ -219,7 +236,9 @@
     u_subscription !== origInfo.subscription ||
     u_allow_points !== origInfo.allowPoints ||
     u_allow_stacking !== origInfo.allowStacking ||
-    u_allow_coupon_stacking !== origInfo.allowCouponStacking
+    u_allow_coupon_stacking !== origInfo.allowCouponStacking ||
+    u_applies_rental !== origInfo.appliesRental ||
+    u_applies_sale !== origInfo.appliesSale
   )
 
   // ─ 특정 사용자 수동 지급(2026-09-23 재설계) ─
@@ -626,6 +645,18 @@
           <input type="hidden" name="applicable_categories"
             value={u_categories.length ? JSON.stringify(u_categories) : ''} />
         {/if}
+
+        <div class="validity-group">
+         <div class="section-title">적용 대상</div>
+         <div class="s-chip-group">
+          <button type="button" class="s-chip" class:s-chip--on={u_applies_rental}
+            onclick={() => toggleApplies('rental')}>대여상품</button>
+          <button type="button" class="s-chip" class:s-chip--on={u_applies_sale}
+            onclick={() => toggleApplies('sale')}>판매상품</button>
+         </div>
+         <input type="hidden" name="applies_to_rental" value={String(u_applies_rental)} />
+         <input type="hidden" name="applies_to_sale" value={String(u_applies_sale)} />
+        </div>
 
         <div class="validity-group">
          <div class="section-title">전용 조건</div>
