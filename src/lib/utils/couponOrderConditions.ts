@@ -11,6 +11,10 @@ export interface CouponOrderConditionFields {
   min_rental_amount: number
   min_rental_days: number
   is_walk_in_only: boolean
+  /** CMS "적용 대상"(Migration 615) — 대여상품에 적용. 없으면(구 데이터·구 호출부) 적용으로 취급 */
+  applies_to_rental?: boolean
+  /** CMS "적용 대상"(Migration 615) — 판매상품에 적용. 없으면 적용으로 취급 */
+  applies_to_sale?: boolean
 }
 
 export interface CouponOrderContext {
@@ -20,6 +24,10 @@ export interface CouponOrderContext {
   minRentalDays: number | null
   /** 모든 대여 예약이 방문 수령 */
   allWalkIn: boolean | null
+  /** 선택된 상품 중 대여 상품이 있는가 — 쿠폰 "적용 대상" 판정용(없으면 판정 생략) */
+  hasRentalLine?: boolean
+  /** 선택된 상품 중 판매(구매) 상품이 있는가 */
+  hasSaleLine?: boolean
 }
 
 export type CouponOrderReason =
@@ -27,6 +35,8 @@ export type CouponOrderReason =
   | 'MIN_AMOUNT_NOT_MET'
   | 'MIN_DAYS_NOT_MET'
   | 'WALK_IN_ONLY'
+  | 'RENTAL_ONLY_COUPON'
+  | 'SALE_ONLY_COUPON'
 
 export function hasOrderCondition(c: CouponOrderConditionFields): boolean {
   return c.min_purchase_amount > 0 || c.min_rental_amount > 0 || c.min_rental_days > 0 || c.is_walk_in_only
@@ -36,6 +46,14 @@ export function checkCouponOrderConditions(
   c: CouponOrderConditionFields,
   ctx: CouponOrderContext,
 ): { ok: true } | { ok: false; reason: CouponOrderReason } {
+  // 적용 대상(대여/판매) — 이 쿠폰이 적용되는 상품 종류가 선택된 상품에 하나도 없으면 비활성. 금액·기간 조건보다 먼저 본다.
+  // 한쪽 전용 쿠폰이 혼합 주문에서 활성인 것은 "적용되는 쪽 상품이 있기 때문"이다(할인 범위 분리는 별도 정책).
+  const appliesRental = c.applies_to_rental !== false
+  const appliesSale = c.applies_to_sale !== false
+  if (ctx.hasRentalLine !== undefined && ctx.hasSaleLine !== undefined && !(appliesRental && appliesSale)) {
+    const covered = (appliesRental && ctx.hasRentalLine) || (appliesSale && ctx.hasSaleLine)
+    if (!covered) return { ok: false, reason: appliesRental ? 'RENTAL_ONLY_COUPON' : 'SALE_ONLY_COUPON' }
+  }
   if (!hasOrderCondition(c)) return { ok: true }
   if (ctx.orderAmount === null) return { ok: false, reason: 'ORDER_CONTEXT_REQUIRED' }
   if (c.min_purchase_amount > 0 && ctx.orderAmount < c.min_purchase_amount) return { ok: false, reason: 'MIN_AMOUNT_NOT_MET' }
@@ -53,6 +71,8 @@ export function couponConditionMessage(reason: CouponOrderReason, c: CouponOrder
   switch (reason) {
     case 'ORDER_CONTEXT_REQUIRED': return '대여 정보를 입력하면 확인돼요'
     case 'MIN_AMOUNT_NOT_MET': return `최소 대여금액 ${won(Math.max(c.min_purchase_amount, c.min_rental_amount))} 이상`
+    case 'RENTAL_ONLY_COUPON': return '대여 상품에만 사용 가능'
+    case 'SALE_ONLY_COUPON': return '판매 상품에만 사용 가능'
     case 'MIN_DAYS_NOT_MET': return `최소 대여기간 ${c.min_rental_days}일 이상`
     default: return '방문 수령 시 사용 가능'
   }

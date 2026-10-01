@@ -159,7 +159,8 @@ export const load: PageServerLoad = async ({ locals }) => {
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
           min_purchase_amount, min_rental_amount, min_rental_days,
-          per_user_limit, applicable_categories, max_discount_amount, allow_with_points
+          per_user_limit, applicable_categories, max_discount_amount, allow_with_points,
+          applies_to_rental, applies_to_sale
         )`)
       .eq('user_id', session.user.id)
       .is('used_at', null),
@@ -809,6 +810,8 @@ interface UserCouponRow {
     min_rental_days:     number
     max_discount_amount: number | null
     allow_with_points:   boolean
+    applies_to_rental?:  boolean   // CMS 쿠폰 "적용 대상"(Migration 615) — 장바구니가 대여/판매 구성으로 활성 판정
+    applies_to_sale?:    boolean
   } | null
 }
 
@@ -842,6 +845,8 @@ interface RawCouponFields {
   applicable_categories: string[] | null
   max_discount_amount:  number | null
   allow_with_points:    boolean
+  applies_to_rental?:   boolean
+  applies_to_sale?:     boolean
 }
 interface RawUserCouponRow {
   id:              string
