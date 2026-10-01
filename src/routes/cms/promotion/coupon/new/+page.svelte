@@ -32,6 +32,19 @@
   let f_allow_stacking = $state(false)
   // 쿠폰끼리 중복 허용(allow_coupon_stacking) — 정책상 기본 허용, 끄면 다른 쿠폰과 함께 선택·사용 불가
   let f_allow_coupon_stacking = $state(true)
+  // 적용 대상(applies_to_rental/sale) — 기본 둘 다. 하나만 켜면 그 대상에만, 둘 다 켜면 모두 적용. 최소 1개 필수.
+  let f_applies_rental = $state(true)
+  let f_applies_sale = $state(true)
+  function toggleApplies(target: 'rental' | 'sale') {
+    const rental = target === 'rental' ? !f_applies_rental : f_applies_rental
+    const sale = target === 'sale' ? !f_applies_sale : f_applies_sale
+    if (!rental && !sale) {
+      csToast.warning('적용 대상은 대여상품·판매상품 중 최소 한 개 이상 선택해야 합니다.')
+      return
+    }
+    f_applies_rental = rental
+    f_applies_sale = sale
+  }
   let f_first_rental   = $state(false)
   let f_student        = $state(false)
   let f_walk_in        = $state(false)
@@ -554,6 +567,16 @@
 
       <!-- 항목 5: 세로 나열 토글 스위치 → CMS 표준 .s-chip 콤보버튼(cms-uiux.md §7-12-B,
            cms/set/rental·cms/set/push와 동일 스타일) — hidden input 배선은 그대로 유지 -->
+      <div class="fs-title">적용 대상</div>
+      <div class="s-chip-group">
+        <button type="button" class="s-chip" class:s-chip--on={f_applies_rental}
+          onclick={() => toggleApplies('rental')}>대여상품</button>
+        <button type="button" class="s-chip" class:s-chip--on={f_applies_sale}
+          onclick={() => toggleApplies('sale')}>판매상품</button>
+      </div>
+      <input type="hidden" name="applies_to_rental" value={String(f_applies_rental)} />
+      <input type="hidden" name="applies_to_sale" value={String(f_applies_sale)} />
+
       <div class="fs-title">전용 조건</div>
       <div class="s-chip-group">
         <button type="button" class="s-chip" class:s-chip--on={f_first_rental}

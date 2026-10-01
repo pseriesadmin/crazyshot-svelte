@@ -239,9 +239,20 @@ export const actions: Actions = {
     // 쿠폰끼리 중복 허용(Migration 605) — 폼에 값이 없으면 변경하지 않는다(null)
     const allowCouponStackingRaw = form.get('allow_coupon_stacking')
     const allow_coupon_stacking: boolean | null = allowCouponStackingRaw === null ? null : allowCouponStackingRaw === 'true'
+    // 적용 대상(Migration 615) — 폼에 값이 없으면 변경하지 않는다(null). 둘 다 false는 거절.
+    const appliesRentalRaw = form.get('applies_to_rental')
+    const appliesSaleRaw   = form.get('applies_to_sale')
+    const applies: { rental: boolean; sale: boolean } | null =
+      appliesRentalRaw === null || appliesSaleRaw === null
+        ? null
+        : { rental: appliesRentalRaw === 'true', sale: appliesSaleRaw === 'true' }
     const valid_days           = Number(form.get('valid_days') ?? 0) || null
 
     if (!id) return { ok: false, error: '쿠폰 ID가 없습니다.' }
+
+    if (applies && !applies.rental && !applies.sale) {
+      return { ok: false, error: '적용 대상은 대여상품·판매상품 중 최소 한 개 이상 선택해야 합니다.' }
+    }
 
     if (validity_type === 'relative_days' && (!valid_days || valid_days <= 0)) {
       return { ok: false, error: '"첫 확인일로부터 N일" 모드는 유효일수(N)를 1 이상 입력해야 합니다.' }
@@ -302,6 +313,14 @@ export const actions: Actions = {
       if (stackError) return { ok: false, error: stackError.message }
       const stackResult = stackData as { ok: boolean; error?: string } | null
       if (!stackResult?.ok) return { ok: false, error: stackResult?.error ?? '쿠폰 중복 설정 저장 실패' }
+    }
+    if (applies) {
+      const { data: appliesData, error: appliesError } = await db.rpc('cms_set_coupon_applies_to', {
+        p_id: id, p_rental: applies.rental, p_sale: applies.sale,
+      })
+      if (appliesError) return { ok: false, error: appliesError.message }
+      const appliesResult = appliesData as { ok: boolean; error?: string } | null
+      if (!appliesResult?.ok) return { ok: false, error: appliesResult?.error === 'APPLIES_TO_REQUIRED' ? '적용 대상은 최소 한 개 이상 선택해야 합니다.' : (appliesResult?.error ?? '적용 대상 저장 실패') }
     }
     return { ok: true }
   },

@@ -465,6 +465,8 @@ export interface Coupon {
   valid_until: string;                 // timestamptz
   validity_type: string;               // 'fixed_period' | 'unlimited' | 'relative_days'
   valid_days: number | null;           // relative_days 모드: 첫 확인일로부터 유효일수
+  applies_to_rental: boolean;          // 적용 대상: 대여상품 — Migration #615 (기본 true, applies_to_sale과 최소 하나 true)
+  applies_to_sale: boolean;            // 적용 대상: 판매상품 — Migration #615
   description: string | null;
   created_at: string;
   updated_at: string;
