@@ -83,13 +83,14 @@
   @media (min-width: 1024px) {
     .hero-pc {
       display: block;
-      width: 1240px;
+      width: 100%;
+      max-width: 1240px; /* 헬프 PC 콘텐츠 폭과 동일(창이 좁으면 컨테이너 폭에 맞춰 줄어듦) */
     }
   }
 
   .hero-pc-inner {
     position: relative;
-    width: 1240px;
+    width: 100%;
     height: 700px;
     background: var(--cs-purple-op10);
     border-radius: var(--radius-2xl);

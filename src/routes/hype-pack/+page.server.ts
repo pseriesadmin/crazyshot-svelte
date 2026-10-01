@@ -60,6 +60,7 @@ interface RawBannerSettings {
   mode: 'random' | 'fixed'
   items: RawBannerItem[]
   keywords: string[]
+  keyword_links?: Record<string, string>
 }
 
 export interface EnrichedBannerItem {
@@ -268,11 +269,13 @@ export const load: PageServerLoad = async ({ locals }) => {
       mode:     raw.mode,
       items:    enrichedItems,
       keywords: raw.keywords,
+      keyword_links: raw.keyword_links ?? {},
     },
     // raw settings for modal initialSettings — pc/mobile_image_url 필드 정규화(null로 채움)
     bannerRaw: {
       mode: raw.mode,
       keywords: raw.keywords,
+      keyword_links: raw.keyword_links ?? {},
       items: raw.items.map((item) => ({
         product_id:       item.product_id,
         subtitle:         item.subtitle,

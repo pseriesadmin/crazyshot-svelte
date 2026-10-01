@@ -384,7 +384,7 @@
               title={kw}
               aria-label={kw}
               onclick={() => goto(`/products/search?q=${encodeURIComponent(kw)}`)}
-            >{truncateKeywordLabel(kw)}</button>
+            >{truncateKeywordLabel(kw, 20)}</button>
           {/each}
         </div>
       {/if}
@@ -392,11 +392,6 @@
       <!-- Mobile: section header (category label + chevron + more) -->
       <div class="m-sec-header">
         <span class="m-sec-label">{activeCategoryLabel}</span>
-        <div class="m-sec-right">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true" style="transform:scaleY(-1)">
-            <path d="M2 4.5L6.5 9L11 4.5" stroke="#3b2f8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
       </div>
 
     </div>
@@ -1127,7 +1122,7 @@
     background: #e1def3;
     border: none;
     border-radius: 13px;
-    padding: 8px 25px;
+    padding: 8px 12.5px; /* 가로 패딩 50% 축소(25px → 12.5px) */
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 500;
     font-size: 14px;
@@ -1136,7 +1131,10 @@
     white-space: nowrap;
     letter-spacing: -0.5px;
     min-height: 44px;
+    transition: background 0.15s;
   }
+  /* 키워드 칩 hover·active — BG 색상 변경만(front-uiux.md §26) */
+  .kw-pill:hover, .kw-pill:active { background: #d4d0ec; }
 
   /* Mobile section header (category label + icon) */
   .m-sec-header {
@@ -1153,7 +1151,6 @@
     letter-spacing: -0.3px;
     line-height: 1.6;
   }
-  .m-sec-right { display: flex; align-items: center; gap: 15px; }
 
   /* ── MOBILE SLIDER ── */
   /* 모바일 슬라이더: 부모(.body-wrap) 좌우 25px 패딩을 상쇄해 화면 좌우 끝까지 노출(full-bleed)하고,
@@ -1860,24 +1857,27 @@
   /* 관리자 공통 버튼 (front-uiux.md 토큰 기반) */
   /* ─────────────────────────────────────────────────────────────────── */
   .admin-edit-btn {
-    background: rgba(16,11,50,0.75);
     color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 6px 12px;
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 12px;
-    font-weight: 700;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    min-height: 32px;
     white-space: nowrap;
     transition: background 0.12s;
     z-index: 20;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-content: flex-start;
   }
-  .admin-edit-btn:hover { background: rgba(16,11,50,0.92); }
+  .admin-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
   /* 카테고리 전체 영역 클릭 오버레이 (isCms) */
   /* 관리자: 카테고리 설정 버튼 — 상시 노출 */
@@ -1886,15 +1886,24 @@
     top: 6px;
     right: 6px;
     z-index: 20;
-    background: rgba(16,11,50,0.72);
     color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-sm);
-    font: var(--text-pc-script-12);
-    padding: 4px 10px;
-    min-height: 32px;
     cursor: pointer;
     white-space: nowrap;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 관리모달 호출 버튼 정책(2026-10-01): PC 반응형(≥641px)에서만 노출·호출 — 모바일(≤640px)에서는 숨김 */
+  @media (max-width: 640px) {
+    .admin-edit-btn, .admin-cat-btn, .admin-float-btn { display: none; }
   }
 
   .admin-float-btn {
@@ -1911,6 +1920,10 @@
     padding: 16px 32px;
     border-radius: var(--radius-xl);
     min-height: 56px;
+    width: auto;
+    height: auto;
+    text-align: center;
+    overflow: visible;
   }
 
   /* ─────────────────────────────────────────────────────────────────── */
@@ -1924,7 +1937,7 @@
     .bottom-dock.dock-on.dock-above-tab { bottom: 0; }
     .bottom-dock:not(.dock-on)::before { display: block; }
     .body-wrap {
-      padding: 180px 0 60px;
+      padding: var(--layout-pc-gnb-offset) 0 60px;
     }
 
     /* Category icons: single row, 100px each */

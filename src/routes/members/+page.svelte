@@ -99,9 +99,10 @@
   }
 
   @media (min-width: 1024px) {
-    /* PC: fixed GNB(120px) + gap 100px = 220px top offset. 원본 250px(50py+100gnb+50gap+50bodyPt)에 근사 */
+    /* PC: 상단 여백은 공통 토큰(--layout-pc-gnb-offset) 사용 — 구 220px(GNB 120 + gap 100) 폐기(2026-10-01) */
     .members-page {
-      padding: 220px 0 150px;
+      /* 헬프 .help-main과 동일 규격: 상단 공통 토큰 · 좌우 24px · 하단 32px (콘텐츠 폭 1240px) */
+      padding: var(--layout-pc-gnb-offset) 24px 32px;
       gap: 50px;
     }
 

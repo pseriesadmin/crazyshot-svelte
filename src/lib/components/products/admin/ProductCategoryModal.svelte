@@ -267,7 +267,6 @@
         카테고리 추가목록
         <span class="hint">드래그로 순서 변경</span>
       </p>
-      <p class="hint icon-guide">OFF = 기본 상태 · ON = 마우스 올림·선택 상태(공용). 둥근 상자 배경까지 포함한 1:1 SVG 권장. ON을 올리지 않으면 기존 효과가 적용됩니다.</p>
       <div class="order-list">
         <CmsDragList bind:items={selected} class="order-drag">
           {#snippet renderItem(item)}
@@ -431,6 +430,7 @@
     justify-content: space-between;
     flex-shrink: 0;
     overflow: hidden;
+    border-radius: var(--radius-2xl) 0 0 0; /* 패널 좌상단 곡선과 일치(front-uiux.md §9-2-A ②) */
   }
 
   .modal-title {
@@ -588,41 +588,43 @@
   }
 
   /* 푸터 */
+  /* front 관리모달 푸터 표준(front-uiux.md §9-2-A ④) */
   .modal-footer {
     flex-shrink: 0;
     padding: 16px 24px;
     display: flex;
     gap: 10px;
+    justify-content: flex-end;
     border-top: 1px solid var(--cs-lilac);
   }
 
   .btn-cancel {
-    flex: 1;
-    height: 50px;
+    height: 36px;
+    padding: 0 20px;
+    background: none;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+  }
+  .btn-cancel:hover:not(:disabled) { border-color: var(--cs-text-mid); }
+  .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-save {
+    height: 36px;
+    padding: 0 24px;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-xl);
-    font: var(--text-pc-title-16);
+    border-radius: var(--radius-md);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
     cursor: pointer;
     transition: background 0.15s;
   }
-  .btn-cancel:hover:not(:disabled) { background: var(--cs-purple-hover); }
-  .btn-cancel:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
-
-  .btn-save {
-    flex: 1;
-    height: 50px;
-    background: var(--cs-red-badge);
-    color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-xl);
-    font: var(--text-pc-title-16);
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .btn-save:hover:not(:disabled) { background: var(--cs-red); }
-  .btn-save:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .btn-save:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ── 키워드 영역 (modal-scroll 내 연속 배치) ── */
   .kw-area {
