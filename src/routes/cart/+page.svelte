@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { untrack, tick } from 'svelte';
   import { goto, invalidateAll } from '$app/navigation';
   import { slide, fly } from 'svelte/transition';
   import type { PageData } from './$types';
@@ -14,6 +14,8 @@
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
+  import { browser } from '$app/environment';
+  import { env as publicEnv } from '$env/dynamic/public';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
@@ -1020,7 +1022,8 @@
   )
 
   // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
-  const confirmLabel = '예약신청완료'
+  // 판매전용 단독 카트는 곧바로 PG 결제로 이어지므로 '결제하기'(2026-10-01) — 대여 포함 카트는 기존 문구 유지
+  const confirmLabel = $derived(readIsPurchaseOnly() ? '결제하기' : '예약신청완료')
 
   // 페이지 최하단(결제 영역) 근접 시에만 CTA 푸터 노출 — 절대 위치 기반(IntersectionObserver)이라
   // 스크롤 방향 델타 비교 방식과 달리 관성·러버밴드 반동에 의한 반복 토글(떨림)이 구조적으로 발생하지 않음
@@ -2066,6 +2069,82 @@
     )
   )
 
+  // ── 판매전용 단독 카트 직접결제(2026-10-01, Stephen 확정) — 결제 방법 선택 UI를 장바구니 하단에 내장 ──
+  // 대여 포함 카트에는 전혀 렌더되지 않는다(showPayWidget=false) — 그 카트는 기존 "예약신청 → 전자계약 서명 → 결제" 흐름 그대로.
+  // Toss 결제위젯은 결제수단 UI를 먼저 그려야 requestPayment()를 부를 수 있어 여기서 미리 마운트하고, 금액이 바뀌면 setAmount로 따라간다.
+  interface TossPaymentWidgets {
+    setAmount(amount: { currency: string; value: number }): Promise<void>
+    renderPaymentMethods(params: { selector: string; variantKey?: string }): Promise<void>
+    renderAgreement(params: { selector: string; variantKey?: string }): Promise<void>
+    requestPayment(params: { orderId: string; orderName: string; successUrl: string; failUrl: string; customerName?: string; customerEmail?: string }): Promise<void>
+  }
+  type TossPaymentsSDK = (clientKey: string) => { widgets(opts: { customerKey: string }): TossPaymentWidgets }
+  let tossWidgets = $state<TossPaymentWidgets | null>(null)
+  let payWidgetError = $state('')
+  const showPayWidget = $derived(browser && cartMode === 'purchase' && pricingReady && otTotal > 0)
+
+  async function loadTossSDK(): Promise<void> {
+    if ((window as Window & { TossPayments?: unknown }).TossPayments) return
+    return new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://js.tosspayments.com/v2/standard'
+      script.onload = () => resolve()
+      script.onerror = () => reject(new Error('결제 모듈을 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.'))
+      document.head.appendChild(script)
+    })
+  }
+
+  $effect(() => {
+    if (!showPayWidget) {
+      // 컨테이너가 사라지면 기존 인스턴스는 무효 — 다시 필요해질 때 새로 만든다
+      untrack(() => { tossWidgets = null; payWidgetError = '' })
+      return
+    }
+    if (untrack(() => tossWidgets)) return
+    let cancelled = false
+    const initialAmount = untrack(() => otTotal)
+    ;(async () => {
+      try {
+        await tick()
+        await loadTossSDK()
+        const toss = (window as Window & { TossPayments?: TossPaymentsSDK }).TossPayments
+        if (!toss) throw new Error('결제 모듈을 불러올 수 없습니다.')
+        const widgets = toss(publicEnv.PUBLIC_TOSS_CLIENT_KEY ?? '').widgets({ customerKey: 'ANONYMOUS' })
+        await widgets.setAmount({ currency: 'KRW', value: initialAmount })
+        await widgets.renderPaymentMethods({ selector: '#toss-payment-method', variantKey: 'DEFAULT' })
+        await widgets.renderAgreement({ selector: '#toss-agreement', variantKey: 'AGREEMENT' })
+        if (!cancelled) tossWidgets = widgets
+      } catch (e) {
+        if (!cancelled) payWidgetError = e instanceof Error ? e.message : '결제 위젯을 불러오지 못했습니다.'
+      }
+    })()
+    return () => { cancelled = true }
+  })
+
+  // 쿠폰·포인트·방법 변경으로 결제금액이 바뀌면 이미 마운트된 위젯에도 즉시 반영
+  $effect(() => {
+    const total = otTotal
+    const w = tossWidgets
+    if (w && showPayWidget && total > 0) w.setAmount({ currency: 'KRW', value: total }).catch(() => {})
+  })
+
+  // Toss 결제창에서 실패·취소로 돌아온 경우(failUrl=/cart?payStatus=fail&code=..&message=..) 안내 후 주소 정리
+  $effect(() => {
+    if (!browser) return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('payStatus') !== 'fail') return
+    const code = params.get('code') ?? ''
+    const message = params.get('message')
+    const known: Record<string, string> = {
+      PAY_PROCESS_CANCELED: '결제를 취소하셨어요. 다시 결제하려면 [결제하기]를 눌러주세요.',
+      USER_CANCEL: '결제를 취소하셨어요. 다시 결제하려면 [결제하기]를 눌러주세요.',
+      AMOUNT_MISMATCH: '결제 금액이 주문 금액과 달라 승인되지 않았어요. 다시 시도해 주세요.',
+      NOT_ACTIVE: '결제 가능 시간이 지났거나 취소된 주문이에요. 다시 신청해 주세요.',
+    }
+    csToast.error(known[code] ?? message ?? (code ? `결제에 실패했어요. (${code})` : '결제에 실패했어요. 다시 시도해 주세요.'))
+    window.history.replaceState(window.history.state, '', window.location.pathname)
+  })
+
   // 혼합 → 구매 단독으로 바뀌는 순간(대여 상품 체크 해제 등) 이미 고른 수령 방법·입력값을 구매 라인에 한 번 동기화 —
   // 안 하면 화면에는 선택값이 보이는데 라인 값은 비어 제출 검증이 막힌다(sp3 2차 검수 M-1)
   $effect(() => {
@@ -2529,6 +2608,17 @@
             </div>
           </div>
         </div>
+
+        <!-- 결제 방법 — 판매전용 단독 카트에서만(직접결제). Toss 결제위젯이 이 컨테이너에 그려진다 -->
+        {#if showPayWidget}
+          <div class="pay-widget-box">
+            <div id="toss-payment-method"></div>
+            <div id="toss-agreement"></div>
+            {#if payWidgetError}
+              <p class="pay-widget-error" role="alert">{payWidgetError}</p>
+            {/if}
+          </div>
+        {/if}
       </section>
 
       <!-- CTA 푸터 노출 트리거 — 결제 영역(합계·보증금) 근접 시 IntersectionObserver 감지 -->
@@ -2577,13 +2667,22 @@
             // 그룹 내 모든 reservationIds를 펼쳐서 전송해야 한다.
             const checkedItemsState = itemsState.filter(it => !it.deleted && it.checked)
             let checkedIds = checkedItemsState.flatMap(it => it.reservationIds)
+            // 판매전용 "단독" 카트(2026-10-01, Stephen 확정): 주문 생성 직후 곧바로 PG 결제 페이지로 이동한다.
+            // 대여 상품이 하나라도 섞인 카트(mixed/rental)는 false — 기존 "예약신청 → 전자계약 서명 → 결제" 흐름 그대로.
+            const directPay = cartMode === 'purchase'
+            // 직접결제는 결제수단 UI(위젯)가 준비돼 있어야 한다 — 예약(hold)을 만들기 전에 먼저 확인(준비 전이면 주문을 만들지 않는다)
+            if (directPay && otTotal > 0 && !tossWidgets) {
+              csToast.error(payWidgetError || '결제 모듈을 준비 중이에요. 잠시 후 다시 눌러주세요.')
+              return
+            }
 
             // ── hold 그룹 — 로컬에서 방식·날짜가 변경됐으면 재발행(reissue)으로 처리
             // promote_draft_reservation이 status='draft'만 지원하므로, hold 상태에서의
             // 방식·날짜 변경은 구 hold 취소 + 신규 hold 생성으로 우회한다(Migration 448).
             const checkedHoldItems = checkedItemsState.filter(it => groupsById.get(it.id)?.status === 'hold')
             // 재발행 대상이 1개라도 있으면 사전 확인 — 새 예약코드로 바뀜을 안내
-            const hasChangedHolds = checkedHoldItems.some(it => {
+            // 직접결제(판매전용 단독)는 이미 hold인 구매 건도 재발행(구 예약 폐기)하지 않고 선택한 수령 방법만 저장한다 — 재발행은 날짜 기반 대여용 경로
+            const hasChangedHolds = !directPay && checkedHoldItems.some(it => {
               const sg = groupsById.get(it.id)
               const lp = it.opts.rentalMethod
               return sg && lp && (
@@ -2596,6 +2695,17 @@
               if (!confirmed) return
             }
             for (const it of checkedHoldItems) {
+              if (directPay) {
+                const pm: DeliveryMethod = it.opts.rentalMethod ?? 'crazydelivery'
+                for (const reservationId of it.reservationIds) {
+                  const saved = await saveShipmentMethod(reservationId, pm, pm, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.rentalForm.pickupPointId)
+                  if (!saved.success) {
+                    csToast.error(saved.errorMessage ?? '수령 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
+                    return
+                  }
+                }
+                continue
+              }
               const serverGroup = groupsById.get(it.id)
               const localPickup = it.opts.rentalMethod
               const localReturn = it.opts.returnMethod
@@ -2649,7 +2759,7 @@
                 // (위 promote_draft_reservation 분기, notify-hold 호출 참고)과 동일하게
                 // "예약 신청 확인"(reservation_hold) 채팅 알림을 발송해야 한다 — 기존엔 구
                 // 예약을 취소만 하고 신규 예약에 대한 알림이 전혀 발송되지 않던 결함.
-                fetch('/api/checkout/notify-hold', {
+                if (!directPay) fetch('/api/checkout/notify-hold', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ reservationId: reissueTyped.newReservationId }),
@@ -2769,7 +2879,8 @@
                     csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
                   }
                   // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
-                  fetch('/api/checkout/notify-hold', {
+                  // 직접결제(판매전용 단독)는 결제 전 "예약신청 완료" 카드를 보내지 않는다 — 결제 후 승인 알림만 발송
+                  if (!directPay) fetch('/api/checkout/notify-hold', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reservationId: Number(reservationId) }),
@@ -2829,6 +2940,78 @@
                 csToast.warning(`사용 조건에 맞지 않는 쿠폰 ${dropped.length}장이 제외됐어요. 금액을 확인하고 다시 신청해 주세요.`)
                 return
               }
+            }
+            // 판매전용 단독 → 곧바로 PG 결제(주문 생성이 실패했으면 진행하지 않고 안내)
+            if (directPay) {
+              const created = createOrderRes.ok
+                ? await createOrderRes.clone().json().catch(() => null) as { orderId?: number | null } | null
+                : null
+              if (!created?.orderId) {
+                csToast.error('주문 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return
+              }
+              // 서버가 저장한 최종 결제금액·주문명을 받아 화면 합계와 대조(이탈 30분 마감도 이때 시작)
+              const startRes = await fetch('/api/checkout/pay-start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ orderId: created.orderId }),
+              }).catch(() => null)
+              const start = startRes?.ok
+                ? await startRes.json().catch(() => null) as { ok?: boolean; finalAmount?: number; orderName?: string; customerName?: string | null; customerEmail?: string | null } | null
+                : null
+              if (!start?.ok || typeof start.finalAmount !== 'number') {
+                const failBody = startRes && !startRes.ok ? await startRes.clone().json().catch(() => null) as { error?: string; code?: string } | null : null
+                csToast.error(failBody?.code === 'PAY_WINDOW_CLOSING' ? (failBody.error ?? '결제 가능 시간이 거의 끝났어요.') : '결제 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.')
+                return
+              }
+              if (start.finalAmount === 0) {
+                // 쿠폰·포인트로 전액 무료 — 결제창 없이 바로 확정 후 기존 완료 화면으로
+                const freeRes = await fetch('/api/checkout/pay-free', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ orderId: created.orderId }),
+                }).catch(() => null)
+                const free = freeRes?.ok
+                  ? await freeRes.json().catch(() => null) as { ok?: boolean; successQuery?: string; couponError?: string | null } | null
+                  : null
+                if (!free?.ok || !free.successQuery) {
+                  csToast.error('주문 확정 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.')
+                  return
+                }
+                if (free.couponError) csToast.warning('쿠폰이 적용되지 않았어요. 고객센터로 문의해 주세요.')
+                await goto(`/payment/success/dev?${free.successQuery}`)
+                return
+              }
+              if (start.finalAmount !== otTotal) {
+                // 화면 합계와 서버 저장 금액이 다르면 결제창을 열지 않는다 — 위젯 금액을 서버값으로 맞추고 다시 확인하게 한다
+                await tossWidgets?.setAmount({ currency: 'KRW', value: start.finalAmount }).catch(() => {})
+                csToast.warning(`결제 금액이 ${fmtKrw(start.finalAmount)}원으로 확정됐어요. 금액을 확인하고 다시 눌러주세요.`)
+                return
+              }
+              if (!tossWidgets) {
+                csToast.error('결제 모듈을 준비 중이에요. 잠시 후 다시 눌러주세요.')
+                return
+              }
+              const origin = window.location.origin
+              try {
+                await tossWidgets.requestPayment({
+                  orderId: `CSHOT-${Date.now()}`,
+                  orderName: start.orderName ?? '크레이지샷 상품 구매',
+                  successUrl: `${origin}/checkout/pay/${created.orderId}/result`,
+                  failUrl: `${origin}/cart?payStatus=fail`,
+                  customerName: start.customerName ?? undefined,
+                  customerEmail: start.customerEmail ?? undefined,
+                })
+              } catch (payErr) {
+                // 약관 미동의·결제창 닫기 등 Toss가 결제창을 열기 전/직후 거부한 경우 — 네트워크 오류로 오인되지 않게 사유를 그대로 안내
+                const code = (payErr as { code?: string } | null)?.code
+                const msg = (payErr as { message?: string } | null)?.message
+                csToast.error(code === 'USER_CANCEL' || code === 'PAY_PROCESS_CANCELED'
+                  ? '결제를 취소하셨어요. 다시 결제하려면 [결제하기]를 눌러주세요.'
+                  : (msg ?? '결제창을 열지 못했어요. 결제 방법과 약관 동의를 확인해 주세요.'))
+              }
+              // 정상이면 requestPayment()는 Toss 결제창으로 이동하므로 이후 코드는 실행되지 않는다
+              return
             }
             const nowDt = new Date()
             const padN = (n: number) => String(n).padStart(2, '0')
@@ -5337,6 +5520,14 @@
     font-weight: 700;
   }
 
+  .pay-widget-box {
+    margin-top: 20px;
+    background: var(--cs-white);
+    border-radius: 20px;
+    padding: 8px 0;
+    overflow: hidden;
+  }
+  .pay-widget-error { margin: 8px 20px 12px; color: var(--cs-red-badge); font: var(--text-m-script-14B); }
   .total-dark-box {
     background: var(--cs-dark);
     /* app.css --radius-xl(30px, "총금액 박스·CTA 버튼")와 일치 — PC 30px인데 모바일만

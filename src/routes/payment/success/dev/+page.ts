@@ -57,6 +57,8 @@ export const load: PageLoad = ({ url }) => {
     // 2026-08-19: 계약서명 완료 전까지는 예약이 confirmed가 아님(service-operations.md §9) —
     // cart 제출 시점에 확정된 건수 < 체크한 건수였으면 true로 전달돼 화면 문구를 조건부 표시
     pendingContract:    url.searchParams.get('pendingContract') === 'true',
+    // 판매전용 단독 직접결제(2026-10-01) — 이미 결제까지 끝난 주문이면 "예약신청" 안내 대신 결제 완료 문구·라벨로 표시
+    paid:               url.searchParams.get('paid') === '1',
     isDev: true,
   }
 }

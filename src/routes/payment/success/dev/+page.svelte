@@ -64,7 +64,11 @@
         <path d="M1 7L7 13L19 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
-    <p class="title-text">예약 신청이 완료됐어요! 계약서 서명·결제까지 마치면 예약이 확정돼요.</p>
+    {#if data.paid}
+      <p class="title-text">결제가 완료됐어요! 주문이 확정되었고, 진행 상황은 채팅으로 안내드릴게요.</p>
+    {:else}
+      <p class="title-text">예약 신청이 완료됐어요! 계약서 서명·결제까지 마치면 예약이 확정돼요.</p>
+    {/if}
   </div>
 
   <div class="body">
@@ -106,7 +110,7 @@
 
           {#if item.price > 0}
             <div class="detail-row">
-              <span class="detail-label">대여요금</span>
+              <span class="detail-label">{data.paid ? '대여(판매)요금' : '대여요금'}</span>
               <span class="detail-value">{fmt(item.price)} 원</span>
             </div>
           {/if}
@@ -130,7 +134,7 @@
               </div>
               {#if opt.price}
                 <div class="detail-row">
-                  <span class="detail-label">대여요금</span>
+                  <span class="detail-label">{data.paid ? '대여(판매)요금' : '대여요금'}</span>
                   <span class="detail-value">{fmt(opt.price)} 원</span>
                 </div>
               {/if}
@@ -155,7 +159,7 @@
 
         {#if data.subtotal > 0}
           <div class="detail-row">
-            <span class="detail-label">대여요금</span>
+            <span class="detail-label">{data.paid ? '대여(판매)요금' : '대여요금'}</span>
             <span class="detail-value">{fmt(data.subtotal)} 원</span>
           </div>
         {/if}
@@ -216,12 +220,12 @@
         <div class="price-divider"></div>
 
         <div class="detail-row detail-row--total">
-          <span class="detail-label detail-label--total">결제 예정 금액</span>
+          <span class="detail-label detail-label--total">{data.paid ? '결제 금액' : '결제 예정 금액'}</span>
           <span class="detail-value detail-value--total">{fmt(data.amount)} 원</span>
         </div>
 
         <div class="detail-row">
-          <span class="detail-label">신청일시</span>
+          <span class="detail-label">{data.paid ? '결제일시' : '신청일시'}</span>
           <span class="detail-value">{data.confirmedAt}</span>
         </div>
 

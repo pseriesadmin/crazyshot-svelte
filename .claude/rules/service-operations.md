@@ -700,6 +700,20 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
+## 25. 판매전용 단독 주문 — 장바구니에서 곧바로 PG 결제 (2026-10-01, Migration 613)
+
+```
+판매전용 상품"만" 담은 카트: 장바구니 하단에 Toss 결제위젯 내장 → [결제하기] → 주문 생성·pay-start(서버 금액 대조) → Toss 결제 → 서명 없이 즉시 confirmed(재고 차감) → 기존 완료 화면(/payment/success/dev, paid=1).
+대여 상품이 하나라도 섞인 카트: 기존 그대로(예약신청 → 관리자 전자계약 발송 → 서명 → 결제 → 서명+결제 모두 끝나면 confirmed).
+금액은 서버가 저장한 orders.final_amount만 사용(쿠폰·포인트·배송비 반영 후). 쿠폰·포인트로 0원이면 결제창 없이 /api/checkout/pay-free.
+미결제 이탈: pay-start가 처음 호출된 시점부터 30분(orders.direct_pay_expires_at) 안에 결제하지 않으면 release_reservation_hold가
+조용히 만료(알림 없음, 재고 해제). 이 기한은 판매전용 단독 + 결제 페이지를 연 주문에만 생기며 기존 신청 주문·혼합 주문은 무영향.
+결제 전에는 "예약신청 완료" 채팅카드를 보내지 않는다(결제 후 승인 알림만).
+```
+→ 상세: `src/lib/server/checkout/directPay.ts` · `src/routes/checkout/pay/[orderId]/result` · `src/routes/api/checkout/pay-start`·`pay-free` · `supabase/migrations/20261001100000_613_sale_direct_pay_expiry.sql` · `saleDirectPayExpiry.test.ts`·`saleDirectPayHelper.test.ts`
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
