@@ -4,6 +4,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
+import { rankProductsByRelevance, parsePinId } from '$lib/utils/productSearchRanking'
 import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
 
@@ -341,6 +342,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const sort = (url.searchParams.get('sort') ?? 'newest') as 'newest' | 'oldest' | 'asc' | 'desc'
   const pageParam = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
   const selectedId = url.searchParams.get('selected') ?? null
+  // 검색 근접도 모드: 검색어(q)가 있고 정렬(sort)이 URL에 명시되지 않은 경우만 활성 — 명시 정렬은 기존 그대로
+  const relevanceMode = q.trim() !== '' && !url.searchParams.has('sort')
+  // 제안목록에서 직접 선택한 상품 — 근접도 모드에서 1페이지 최상단에 고정(UUID 형식만 허용)
+  const pinId = relevanceMode ? parsePinId(url.searchParams.get('pin')) : null
   const initialTab = url.searchParams.get('tab') ?? null
 
   // BND-REGWARN-1: 상품 등록 후 경고 파라미터 읽기 (qr/inv/code/price/options/thumb)
@@ -429,6 +434,46 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // ── 검색 근접도 모드: 후보를 근접도순으로 정렬한 id 목록 산출 (페이지는 아래에서 슬라이스) ──────
+  // 후보는 목록과 동일 필터(삭제·부모·카테고리·ilike 4필드 + NLSearch 폴백 id)로 정렬 없이 최대 500건만
+  // 가져와 랭킹 재료로만 쓴다(부모 상품 규모상 충분). 정렬은 순수 함수(rankProductsByRelevance)가 담당.
+  let rankedIds: string[] | null = null
+  if (relevanceMode) {
+    const rankOrFilter = nlsearchFallbackIds.length > 0
+      ? `${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`
+      : productSearchOrFilter(q)
+    let rankQ = admin
+      .from('products')
+      .select('id, name, brand, description, product_caption')
+      .is('deleted_at', null)
+      .is('parent_product_id', null)
+      .or(rankOrFilter)
+      .limit(500)
+    if (categoryValues) rankQ = rankQ.in('category', categoryValues)
+    const { data: rankCandidates, error: rankErr } = await rankQ
+
+    if (!rankErr) {
+      type RankRow = { id: string; name: string; brand: string | null; description: string | null; product_caption: string | null }
+      const candidates = (rankCandidates ?? []) as RankRow[]
+
+      // 제안목록에서 고른 상품이 현재 필터(카테고리 등)의 후보에 없으면 단건 조회해 맨 앞에 추가(총 건수 +1)
+      if (pinId && !candidates.some((r) => r.id === pinId)) {
+        const { data: pinRow } = await admin
+          .from('products')
+          .select('id, name, brand, description, product_caption')
+          .eq('id', pinId)
+          .is('deleted_at', null)
+          .is('parent_product_id', null)
+          .maybeSingle()
+        if (pinRow) candidates.push(pinRow as RankRow)
+      }
+      rankedIds = rankProductsByRelevance(candidates, q, pinId).map((r) => r.id)
+      // 총 건수는 실제로 정렬·노출되는 후보 수와 항상 일치시킨다(500건 상한·pin 추가 시에도 빈 페이지 없음)
+      totalCount = rankedIds.length
+    }
+    // 후보 조회 실패 시 rankedIds=null → 아래에서 기존(등록일순) 목록 쿼리로 안전하게 폴백
+  }
+
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
   const page = Math.min(pageParam, totalPages)
 
@@ -456,7 +501,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   listQ = listQ.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
 
-  const { data: products } = await listQ
+  const LIST_COLS = 'id, category, name, slug, brand, image_urls, is_active, created_at, sale_only'
+  let products: Awaited<typeof listQ>['data']
+  if (rankedIds) {
+    // 근접도 모드: 해당 페이지 id만 조회한 뒤 근접도 순서로 재배열(이후 집계 코드는 products 배열 순서만 따름)
+    const pageIds = rankedIds.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+    if (pageIds.length === 0) {
+      products = []
+    } else {
+      const { data: pageRows } = await admin.from('products').select(LIST_COLS).in('id', pageIds)
+      const byId = new Map((pageRows ?? []).map((r) => [r.id as string, r]))
+      products = pageIds.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r)
+    }
+  } else {
+    products = (await listQ).data
+  }
 
   const productIds = (products ?? []).map((p) => p.id)
 
@@ -604,7 +663,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     categoryLabels,
     category,
     q,
-    sort,
+    // 근접도 모드면 'relevance'(정렬 버튼 라벨 표시용) — 그 외에는 기존 정렬값 그대로
+    sort: rankedIds ? ('relevance' as const) : sort,
     page,
     totalPages,
     totalCount,

@@ -26,7 +26,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { productSearchOrFilter, resolveProductSearchMatchLabel } from '$lib/utils/similarNameSuggest'
+import { productSearchOrFilter, resolveProductSearchMatchLabel, relevanceTier } from '$lib/utils/similarNameSuggest'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
@@ -37,32 +37,6 @@ import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 // ilike 결과 "약한 매칭" 기준 — 이 건수 이하면 동의어확장 + 자연어 폴백 보강 실행
 // (nlsearch.md §2, /api/search/products/+server.ts와 동일 임계값)
 const WEAK_MATCH_THRESHOLD = 3
-
-// 자동완성 정렬 우선순위 — 상품명 시작일치 > 브랜드 정확/토큰 일치 > 브랜드 시작일치 >
-// 상품명 부분일치 > 캡션 부분일치 > 설명 부분일치. 패키지 상품이 brand 컬럼에
-// "CANON|SONY|ULANZI"처럼 여러 브랜드를 구분자로 이어붙여 저장하는 관행 때문에, 단순
-// 가나다순 정렬만으로는 진짜 단독 브랜드 상품이 limit 밖으로 밀려나 자동완성에서 아예
-// 안 보이는 결함이 있었음(2026-09-29, 결합상품 검색 자동완성에서 실사용 중 발견).
-function relevanceTier(
-  row: { name: string; brand: string | null; description: string | null; product_caption: string | null },
-  kw: string
-): number {
-  const needle = kw.trim().toLowerCase()
-  if (!needle) return 6
-  const name = row.name.toLowerCase()
-  const brand = (row.brand ?? '').toLowerCase()
-  const caption = (row.product_caption ?? '').toLowerCase()
-  const desc = (row.description ?? '').toLowerCase()
-  const brandTokens = brand.split(/[|,/]/).map((t) => t.trim()).filter(Boolean)
-
-  if (name.startsWith(needle)) return 0
-  if (brand === needle || brandTokens.includes(needle)) return 1
-  if (brand.startsWith(needle)) return 2
-  if (name.includes(needle)) return 3
-  if (caption.includes(needle)) return 4
-  if (desc.includes(needle)) return 5
-  return 6
-}
 
 // ── GET: 상품 검색 제안 ────────────────────────────────────────────────────────
 export const GET: RequestHandler = async ({ url, locals }) => {
