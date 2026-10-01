@@ -685,6 +685,21 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
+## 24. 판매전용(sale_only) 상품 — 구매 유형·옵션·결합상품 재고 (2026-10-01, Migration 611)
+
+```
+· 판매전용 상품의 "구매신청"은 draft 생성 시점부터 duration_type='purchase' — 대여요금 규칙이 없어도 "요금 미정"으로 막히지 않는다.
+· 판매전용 옵션: 본상품 대여설정과 무관하게 자체 판매금액(sale_price)×수량을 결제에 포함(서버 강제), 확정 시 수량만큼 재고 유닛 비활성(마커=예약 id), 취소 시 복원.
+· 판매전용 결합상품: 날짜와 무관하게 유닛 점유·확정 시 차감, 금액은 결합 조건 유지(요금 제외).
+· 본상품끼리의 날짜 겹침 규칙은 변경 없음(saleOnlyStockFlow S10).
+· 쿠폰 주문의존 조건(Migration 612): "최소 대여일수"·"방문 전용" 쿠폰은 대여 상품에만 해당 — 대여+구매 혼합 주문은 구매 건을 판정에서 제외하고
+  대여 건만 본다. 구매 건만 있는 주문은 이 두 조건 쿠폰 거절(최소 금액 조건은 변경 없음, 주문 합계 기준). 화면(couponOrderConditions)은 이미 같은 규칙.
+· 장바구니 판매전용 단독: 대여설정 영역이 '주문설정'(달력·시간 숨김, 수령 방법·배송지·요청사항 유지)으로 바뀌고 선택한 수령 방법이 배송비·예약에 반영된다.
+```
+→ 상세: `supabase/migrations/20261001080000_611_sale_product_purchase_option_bundle_stock.sql` · `src/__tests__/services/saleProductPurchaseOptionBundle.test.ts`
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```

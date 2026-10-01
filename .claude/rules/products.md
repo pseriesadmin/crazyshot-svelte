@@ -609,6 +609,73 @@ CMS UI           : src/lib/components/cms/ProductDetailPanel.svelte (bundles 탭
 
 ---
 
+### 2-15. 판매전용(sale_only) 핵심 요건 5항목 — 불변 계약 (2026-10-01 명문화, Stephen 요건)
+
+> ⛔ 목적: 개발 보완 때마다 판매상품의 요건 구조가 부수적으로 흔들리는 것을 막는다. 아래 R1~R5는
+> "판매전용 상품은 어느 위치(본상품·옵션·결합)에서 어떻게 쓰여도 대여설정에 종속되지 않는다"는
+> 하나의 원칙에서 나온 **불변 계약**이다. 대여 로직(요금 산식·기간·수령방식·날짜 겹침)을 고칠 때는
+> 이 계약이 그대로인지 반드시 대조한다. 정책 문서이며 구현 상태는 아래 표에 별도 표기한다.
+
+```
+공통 원칙: 판매전용 상품은 대여기간·대여방식·휴무일·보증금·12h/24h 요율과 무관하다.
+          금액 = 자체 sale_price × 수량 (대여 산식 미적용, rental-fee-policy.md §3 판매전용),
+          재고 = 확정(confirmed) 시 수량만큼 재고 유닛 비활성 + 취소 시 마커 일치분만 복원(§3, #553).
+
+R1. 본상품 · 장바구니 단독 담김
+    → 대여설정이 '주문설정'으로 바뀐다(2026-10-01, Stephen 확정): 달력·시간 UI만 감추고(날짜 검증 없음) 수령 방법
+      (+방문지점/배송지)·고객정보·요청사항은 그대로 노출한다. 구매는 반납이 없어 반납 방법은 숨기고, 선택한 수령
+      방법이 배송비 판정·예약 저장에 반영된다(미선택이면 제출 불가). 혼합 카트의 구매 라인은 기존대로 크레이지배송 편도 고정.
+    → 구매 라인으로 분류되는 기준은 예약의 duration_type='purchase' 하나뿐이다(cartPurchaseMode.ts
+      isRentalLine: durationType !== 'purchase'면 대여). 구매신청으로 만든 임시 예약(draft)도 처음부터
+      'purchase'여야 한다 — 비어 있으면 대여로 분류돼 "요금 미정"으로 신청이 막힌다.
+R2. 본상품 · 대여상품과 혼용 담김(mixed)
+    → 판매 라인은 대여설정(달력·방식 교집합·일수)에 영향을 주지 않고 분리 처리된다.
+    → 자체 판매금액(sale_price × 수량)이 결제 합계에 포함되고, 확정 시 재고가 차감된다.
+R3. 옵션상품으로 쓰일 때
+    → 본상품의 대여설정값(기간·방식)과 무관하게 옵션의 자체 판매금액 × 수량을 결제 연산에 포함한다
+      (서버가 단가를 sale_price로 강제 — 화면 값을 믿지 않는다).
+    → 확정 시 수량만큼 재고 차감, 취소 시 복원. 무료 제공(is_free) 옵션은 0원이 우선한다.
+R4. 결합상품(패키지 부품)으로 쓰일 때
+    → 본상품 대여설정값(날짜)과 무관하게 재고를 차감한다(날짜 겹침 점유가 아니라 판매 재고 차감).
+    → 요금은 결합상품 조건을 따른다: 결합상품에는 요금·수량 변수가 없으므로(§2-14) 판매금액도
+      결제에 추가하지 않는다 — compute_reservation_line_amount는 이 경우 변경 대상이 아니다.
+R5. 상품상세 "구매신청" 버튼
+    → 판매전용 상품상세에서 구매신청은 판매 성격을 가진 예약을 만든다: 임시 예약 생성 시점부터
+      duration_type='purchase'. 화면은 가격 Price N원·대여기간/방식 숨김·배송요금만 표시·버튼 "구매신청"
+      (상품상세 판매전용 UI 분기, 2026-09-27).
+```
+
+| 요건 | 판정·집행 지점(수정 시 여기를 같이 본다) | 구현 현황 (2026-10-01) |
+|---|---|---|
+| R1 | `cart/+page.svelte`(datesSet·methodSelectionValid·배송 판정), `cartPurchaseMode.ts`, `cartMethodSelection.ts`, 임시예약 생성 RPC `create_draft_reservation` | 장바구니 분기 ✅ 구현(9/27). 임시예약 duration_type 선지정 ✅ Migration #611 ①(Stage 적용·TDD GREEN, Production 대기) + 장바구니 방어 파생(`cart/+page.server.ts`) |
+| R2 | 장바구니 mixed 분기, `compute_reservation_line_amount`(sale_only 분기, #585), `update_reservation_status`(#553 재고 차감·복원) | ✅ 구현 |
+| R3 | `set_reservation_options`(단가·재고 가드), `compute_reservation_line_amount`, `get_available_stock_counts` | ✅ #611 ②·⑤·⑧ Stage 적용·TDD GREEN(Production 대기). 상품상세 판매 옵션 단가=판매가 표시(`products/[id]/+page.server.ts`) |
+| R4 | `assign_bundle_assets`, `create_hold_reservation`·`promote_draft_reservation`(결합 점유 제외), `update_reservation_status` | ✅ #611 ③·⑥·⑦ Stage 적용·TDD GREEN(Production 대기) |
+| R5 | `products/[id]/+page.svelte`, `CalendarTimePicker.svelte`(saleOnly), 임시예약 생성 RPC | 화면 ✅ 구현(9/27). 예약 성격 트리거는 R1과 같은 #611 ① ✅. 검색·"최신 등록 상품" 카드 판매가 표시(Day 0 해소) ✅ |
+
+```
+영향 최소화 규칙(개발 보완 시 필수):
+  ① 판매 판정은 새로 만들지 않는다 — products.sale_only(자식은 부모 값, COALESCE(parent.sale_only,
+     product.sale_only))와 예약의 duration_type='purchase' 두 신호만 쓴다. 화면·서버가 서로 다른 조건으로
+     판매를 판별하면 "화면은 0원, 서버는 정가 청구" 같은 불일치가 생긴다(#585 사례).
+  ② 금액은 서버가 최종 결정한다 — 판매 금액·옵션 단가는 compute_reservation_line_amount /
+     set_reservation_options가 sale_price로 강제하고, 화면 계산은 표시용일 뿐이다.
+  ③ 대여 쪽 함수(요금 산식·날짜 겹침·휴무일 연장·기간 가드)를 수정할 때는 판매전용 분기를 "건드리지
+     않는 것"이 기본값이다. 수정이 필요하면 CREATE OR REPLACE 전에 현행 정의를 DB에서 조회해 sale_only
+     분기가 그대로 남는지 확인한다(이전 함수 본문을 기억·옛 마이그레이션으로 재작성 금지).
+  ④ 같은 함수를 재정의하는 마이그레이션은 직전 정본 대비 diff로 판매전용 분기·재고 마커
+     (products.auto_deactivated_reservation_id) 처리가 유지되는지 확인한다.
+  ⑤ 판매전용 재고는 "수동 비활성"과 "판매로 자동 비활성"을 마커로 구분한다(§3). 재고 토글·복원 로직을
+     바꿀 때 이 구분이 깨지지 않게 한다.
+  ⑥ 장바구니 라인 분류(rental/purchase/mixed)를 바꾸면 datesSet·methodSelectionValid·배송 판정·
+     canProceed 체인을 처음부터 끝까지 다시 추적한다(2026-09-27 단위 테스트는 통과했는데 화면 배선 누락으로
+     버튼이 영구 비활성화됐던 사례).
+  ⑦ 정책이 모호하면 추측 구현 금지 — Stephen에게 확인(옵션·결합에서의 금액/재고 규칙 포함).
+회귀 방지 테스트(수정 시 함께 실행): saleOnlyStockFlow(라이브)·saleOnlyToggleGuard·
+  cartPurchaseMode·cartMethodSelection 계열·computeReservationLineAmount* · (#611 확정 후)
+  saleProductPurchaseOptionBundle.
+```
+
 ## 3. is_active 토글 — 재고 가용성 연동
 
 ```
@@ -1058,6 +1125,11 @@ Q5. 선택된 상품(rootId)이 현재 페이지네이션 범위(productIds, 20�
 ## GATE C 확인 항목
 
 ```
+[ ] 판매전용 핵심 요건 R1~R5(§2-15)가 유지되는가? — ① 단독 담김 시 '주문설정'(달력·시간만 숨김, 수령 방법 필수·반영) ② 혼용 시
+    대여설정 무영향 + 판매금액×수량 합산 + 재고 차감 ③ 옵션: 서버 sale_price 강제 + 재고 차감
+    ④ 결합: 날짜 무관 재고 차감 + 요금 변수 제외 ⑤ 구매신청이 duration_type='purchase' 예약을 만드는가?
+[ ] 대여 로직(요금 산식·날짜 겹침·기간·휴무일 함수)을 재정의했다면 현행 DB 정의 조회 후 판매전용 분기·
+    재고 마커 처리가 직전 정본 대비 그대로 남아 있는가? (§2-15 영향 최소화 ③④)
 [ ] 판매 재고 자동 비활성 시 마커(auto_deactivated_reservation_id)가 남고, 취소 복원이 마커 일치 재고에만 적용되며 수동 비활성 재고는 유지되는가? toggleStatus가 마커 재고 켜기를 거부하는가? (§3)
 [ ] 새 상품 복제가 동일 부모 코드품번 상품을 만들 수 있는 경로(코드조합 미선택·1단 조합 중복·수량 2개 이상)를
     추가하지 않았는가? 화면 사전 차단과 서버 검사가 같은 규칙인가? (§2-13 R1~R4)
@@ -1141,4 +1213,4 @@ JSONB 파라미터 이중직렬화 버그 수정, 빠른 재고 등록 QR 자동
 재반영" 버튼을 hasOlderDuplicateCode(후발 중복) 조건으로 재설계해 원본/복제본 양쪽 모두
 노출되던 이전 설계를 대체 | 2026-09-24 §2-14 신설 — 결합상품(bundle) 탭 정책(product_bundle_links
 테이블, Migration #544, 6가지 제약, 계약서 행 삽입 정책, Phase 1 name only) + §4-1 탭표 bundles
-행 추가 + GATE C 결합상품 관련 7개 체크항목 추가*
+행 추가 + GATE C 결합상품 관련 7개 체크항목 추가 | 2026-10-01 §2-15 신설 — 판매전용 핵심 요건 5항목(R1~R5: 단독/혼용/옵션/결합/구매신청) 불변 계약·집행 지점·구현 현황·영향 최소화 규칙 + GATE C 2항목 추가*

@@ -64,6 +64,8 @@
     imageUrl: string | null;
     price24h: number;
     category: string | null;
+    isSaleOnly: boolean;
+    salePrice: number | null;
   }
 
   interface DisplayCategory {
@@ -1307,6 +1309,8 @@
             category={item.category ?? ''}
             imageUrl={item.imageUrl ?? '/sample/product-main.png'}
             price24h={item.price24h}
+            isSaleOnly={item.isSaleOnly}
+            salePrice={item.salePrice}
             href="/products/{item.slug ?? item.id}"
             wished={wishedSet.has(item.id)}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}

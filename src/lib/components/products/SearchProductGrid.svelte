@@ -7,6 +7,8 @@
     category?: string
     price24h?: number | null
     price12h?: number | null
+    isSaleOnly?: boolean
+    salePrice?: number | null
     img: string
     href?: string
     wished?: boolean
@@ -50,6 +52,8 @@
               imageUrl={p.img}
               price24h={p.price24h ?? null}
               price12h={p.price12h ?? null}
+              isSaleOnly={p.isSaleOnly ?? false}
+              salePrice={p.salePrice ?? null}
               href={p.href ?? `/products/${p.id}`}
               wished={p.wished ?? false}
               onWishToggle={onWishToggle ? () => onWishToggle(String(p.id)) : undefined}

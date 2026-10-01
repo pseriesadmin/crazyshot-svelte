@@ -215,7 +215,22 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		for (const r of (opt12hRules ?? []) as Array<{ product_id: string; price: number }>) {
 			price12hMap.set(r.product_id, r.price);
 		}
-		optionLinks = optionLinks.map((l) => ({ ...l, price_12h: price12hMap.get(l.option_product_id) ?? null }));
+		// 판매전용 옵션(2026-10-01, Migration 611): 대여요금 대신 자체 판매금액(수량만큼, 정액)을 옵션 단가로 노출 —
+		// set_reservation_options가 같은 값(sale_price)으로 서버에서 강제하므로 화면·결제 금액이 일치한다.
+		const { data: optSaleRows } = await locals.supabase
+			.from('products')
+			.select('id, sale_only, sale_price')
+			.in('id', optionProductIds);
+		const optSaleMap = new Map<string, number>();
+		for (const r of (optSaleRows ?? []) as Array<{ id: string; sale_only: boolean | null; sale_price: number | null }>) {
+			if (r.sale_only) optSaleMap.set(r.id, Number(r.sale_price ?? 0));
+		}
+		optionLinks = optionLinks.map((l) => {
+			const sale = optSaleMap.get(l.option_product_id);
+			return sale != null
+				? { ...l, price_24h: sale, price_12h: null }
+				: { ...l, price_12h: price12hMap.get(l.option_product_id) ?? null };
+		});
 	}
 
 	// 가용 재고 수 — 메인 상품 + 옵션 상품 전부 배치 조회(N+1 방지, Migration 421)
@@ -321,12 +336,12 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	}));
 
 	// 많이 본 상품: 같은 카테고리 최신 5개 (현재 상품 제외)
-	type PopularItem = { id: string; name: string; slug: string | null; imageUrl: string | null; price24h: number; category: string | null };
+	type PopularItem = { id: string; name: string; slug: string | null; imageUrl: string | null; price24h: number; category: string | null; isSaleOnly: boolean; salePrice: number | null };
 	let popularProducts: PopularItem[] = [];
 	if (row.category) {
 		const { data: popRaw } = await locals.supabase
 			.from('products')
-			.select('id, name, slug, image_urls, base_price_daily')
+			.select('id, name, slug, image_urls, base_price_daily, sale_only, sale_price')
 			.eq('category', row.category as string)
 			.eq('is_active', true)
 			.is('deleted_at', null)
@@ -335,7 +350,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			.order('created_at', { ascending: false })
 			.limit(5);
 
-		const popRows = (popRaw ?? []) as Array<{ id: string; name: string; slug: string | null; image_urls: string[]; base_price_daily: number }>;
+		const popRows = (popRaw ?? []) as Array<{ id: string; name: string; slug: string | null; image_urls: string[]; base_price_daily: number; sale_only: boolean | null; sale_price: number | null }>;
 
 		// 2026-09-09: price_rules 24h가 있으면 항상 우선(CMS 값), 없는 상품만 legacy 폴백
 		// (attachPrices()와 동일한 우선순위 수정 — 동일 버그 패턴)
@@ -364,6 +379,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 				imageUrl: p.image_urls?.[0] ?? null,
 				price24h: rule24h != null ? rule24h : legacy,
 				category: row.category as string,
+				isSaleOnly: Boolean(p.sale_only),
+				salePrice: p.sale_price != null ? Number(p.sale_price) : null,
 			};
 		});
 	}

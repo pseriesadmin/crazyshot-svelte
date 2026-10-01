@@ -498,7 +498,8 @@ export const load: PageServerLoad = async ({ locals }) => {
         returnMethod:  r.return_method,
         pickupTime:    r.pickup_time,
         returnTime:    r.return_time,
-        durationType:  r.duration_type,
+        // 판매전용 상품은 구매 성격 — DB 값이 비어 있어도(과거 draft) 구매로 판정
+        durationType:  r.duration_type ?? (product?.sale_only ? 'purchase' : null),
         options:       optionsByReservation[String(r.id)] ?? [],
         status:        r.status,
       }
