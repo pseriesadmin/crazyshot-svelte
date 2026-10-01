@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { buildOptionLinkFlagIndex, optionLinkFlagsFor, type OptionLinkRow } from '$lib/utils/cartOptionLinkFlags'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
@@ -410,19 +411,14 @@ export const load: PageServerLoad = async ({ locals }) => {
       }
     }
 
-    // 옵션상품 배송대여 불가/필수/최소1개선택 여부(product_option_links.delivery_rental_disabled·
-    // is_required·min_select_required) — 상품상세 등록 시점 설정(products.md §옵션상품)을 카트
-    // 화면까지 이어받아 배송방식 선택 제한 + 배지 표시(2026-09-05, products/[id] 옵션선택 UI의
-    // "필수"/"최소 1개 선택"/"배송대여 불가" 배지를 카트 화면에도 동일하게 노출)에 사용.
+    // 옵션상품 배송대여 불가/필수/최소1개선택/수량연동 여부(product_option_links) — 상품상세 등록 시점 설정
+    // (products.md §옵션상품)을 카트 화면까지 이어받아 배송방식 선택 제한 + 배지 표시에 사용.
     // reservation_options에는 이 플래그들이 저장되지 않으므로(옵션 확정 시 스냅샷되지 않음) 매번
-    // product_option_links를 다시 조회 — 동일 optionProductId가 여러 부모상품 링크에 걸쳐있는
-    // edge case까지 안전하게 처리하기 위해 "하나라도 true면 true"(OR)로 보수적으로 판정한다.
-    const optionDeliveryDisabledMap = new Map<string, boolean>()
-    const optionRequiredMap = new Map<string, boolean>()
-    const optionMinSelectMap = new Map<string, boolean>()
-    // OPT-QTYLOCK-1(2026-09-28): 수량이 본상품 수량에 잠기는 옵션인지 — products/[id]와 동일
-    // 판정 기준(product_option_links.qty_follows_main)을 카트 화면 스테퍼 비활성화에도 사용.
-    const optionQtyFollowsMainMap = new Map<string, boolean>()
+    // product_option_links를 다시 조회한다.
+    // ⛔ 2026-10-01 수정(SONY UWP-D21 사례): 과거에는 옵션 id만으로 링크를 모아 "하나라도 true면 true"(OR)로
+    // 판정해, "빠른 재고 등록"이 재고(자식)에 복사해 둔 오래된 링크(부모는 이미 수정됐는데 복사본은 그대로)나
+    // 다른 본상품의 링크가 새어 배송 방식이 장바구니에서 사라졌다. 이제 이 예약의 본상품(부모) + 옵션 쌍의
+    // 링크만 읽는다(상품 상세 get_product_option_links와 동일 기준 — cartOptionLinkFlags.ts).
     // 무료 제공(is_free) 옵션 — 본상품 범위에서만, 대여방식·기간·시간과 무관하게 무조건 0원
     // (2026-09-30, Stephen 확정 · 서버 compute_reservation_line_amount Migration 585와 동일 판정).
     //   ① 무료 판정 키는 "본상품(부모) id : 옵션상품 id" 쌍 — 같은 옵션이 다른 본상품에서 유료이면 그쪽은
@@ -437,28 +433,23 @@ export const load: PageServerLoad = async ({ locals }) => {
       const prod = serverProducts.find(pp => pp.id === rr.product_id)
       mainParentByReservation.set(String(rr.id), (prod?.parent_product_id as string | null | undefined) ?? rr.product_id)
     }
-    const freeOptionKeys = new Set<string>()
+    let optionLinkIndex = buildOptionLinkFlagIndex([])
     if (optionProductIds.length > 0) {
       const { data: optionLinkRows } = await supabase
         .from('product_option_links')
         .select('product_id, option_product_id, delivery_rental_disabled, is_required, min_select_required, qty_follows_main, is_free, deleted_at')
         .in('option_product_id', optionProductIds)
-      for (const l of (optionLinkRows ?? []) as Array<{ product_id: string; option_product_id: string; delivery_rental_disabled: boolean | null; is_required: boolean | null; min_select_required: boolean | null; qty_follows_main: boolean | null; is_free: boolean | null; deleted_at: string | null }>) {
-        if (l.delivery_rental_disabled) optionDeliveryDisabledMap.set(l.option_product_id, true)
-        if (l.is_required) optionRequiredMap.set(l.option_product_id, true)
-        if (l.min_select_required) optionMinSelectMap.set(l.option_product_id, true)
-        if (l.qty_follows_main) optionQtyFollowsMainMap.set(l.option_product_id, true)
-        if (l.is_free && !l.deleted_at) freeOptionKeys.add(`${l.product_id}:${l.option_product_id}`)
-      }
+      optionLinkIndex = buildOptionLinkFlagIndex((optionLinkRows ?? []) as OptionLinkRow[])
     }
 
     const optionsByReservation: Record<string, CartLineItemOption[]> = {}
     for (const row of optionRows) {
       const key = String(row.reservation_id)
       const list = optionsByReservation[key] ?? []
-      // 이 예약의 본상품 링크에서 무료로 지정된 옵션 — 저장된 unit_price와 무관하게 0원 고정
-      const isFreeForThisMain = !!row.option_product_id
-        && freeOptionKeys.has(`${mainParentByReservation.get(key) ?? ''}:${row.option_product_id}`)
+      // 이 예약의 본상품(부모) 링크 기준 플래그 — 무료·배송불가·필수·최소선택·수량연동
+      const linkFlags = optionLinkFlagsFor(optionLinkIndex, mainParentByReservation.get(key) ?? '', row.option_product_id ?? '')
+      // 무료로 지정된 옵션 — 저장된 unit_price와 무관하게 0원 고정
+      const isFreeForThisMain = !!row.option_product_id && linkFlags.isFree
       list.push({
         optionProductId: row.option_product_id,
         name:            row.option_name,
@@ -468,10 +459,10 @@ export const load: PageServerLoad = async ({ locals }) => {
           ? optionPrice12hMap.get(row.option_product_id) ?? null
           : null,
         imageUrl:        row.option_product_id ? optionImageMap.get(row.option_product_id) ?? null : null,
-        deliveryRentalDisabled: row.option_product_id ? (optionDeliveryDisabledMap.get(row.option_product_id) ?? false) : false,
-        isRequired:      row.option_product_id ? (optionRequiredMap.get(row.option_product_id) ?? false) : false,
-        minSelectRequired: row.option_product_id ? (optionMinSelectMap.get(row.option_product_id) ?? false) : false,
-        qtyFollowsMain:  row.option_product_id ? (optionQtyFollowsMainMap.get(row.option_product_id) ?? false) : false,
+        deliveryRentalDisabled: linkFlags.deliveryRentalDisabled,
+        isRequired:      linkFlags.isRequired,
+        minSelectRequired: linkFlags.minSelectRequired,
+        qtyFollowsMain:  linkFlags.qtyFollowsMain,
       })
       optionsByReservation[key] = list
     }

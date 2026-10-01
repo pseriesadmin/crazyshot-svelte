@@ -1471,17 +1471,11 @@ export const actions: Actions = {
           if (priceErr) invWarnings.push(`${i}번째 재고 가격정책 복사 실패 (수동 확인 필요)`)
         }
 
-        const { data: invSourceOptions, error: optionsFetchErr } = await admin
-          .rpc('get_product_option_links', { p_product_id: rootProductId })
-        if (optionsFetchErr) invWarnings.push(`${i}번째 재고 옵션링크 조회 실패 (수동 확인 필요)`)
-        if (invSourceOptions && Array.isArray(invSourceOptions) && invSourceOptions.length > 0) {
-          // JSONB 파라미터는 JS 배열 직접 전달 (JSON.stringify 금지 — string으로 처리되어 silent fail)
-          const { error: optErr } = await admin.rpc('upsert_product_option_links', {
-            p_product_id: newProduct.id,
-            p_option_links: invSourceOptions,
-          })
-          if (optErr) invWarnings.push(`${i}번째 재고 옵션링크 복사 실패 (수동 확인 필요)`)
-        }
+        // 옵션 링크(product_option_links)는 재고(자식)에 복사하지 않는다 — 재고는 부모에 귀속된 개체로서 부모의
+        // 링크를 그대로 따른다(2026-10-01, Stephen 확정). 정본은 부모 상품의 링크뿐이며(products.md §4-0·§4-1),
+        // 상품상세·장바구니·금액 계산(compute_reservation_line_amount)·set_reservation_options는 전부 부모 링크를 읽는다.
+        // 과거에는 여기서 부모 링크를 재고에 복사했고, 이후 부모 설정을 고쳐도 복사본이 따라가지 않아 장바구니
+        // 배송 방식이 사라지는 사고가 났다(SONY UWP-D21). 새 상품으로 복제(new_product)할 때만 새 부모에 복사한다.
 
         createdIds.push(newProduct.id)
       }

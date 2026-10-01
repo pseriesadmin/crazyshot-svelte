@@ -593,6 +593,66 @@ describe('cloneProduct (add_inventory) — 순번 상한 사전 차단', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// 재고(자식)는 부모의 옵션 링크를 복사하지 않고 부모값을 따른다 (2026-10-01, Stephen 확정 — SONY UWP-D21 사고)
+// 사고: 빠른 재고 등록이 부모 링크를 재고에 복사 → 이후 부모를 고쳐도 복사본이 어긋나 장바구니 배송 방식이 사라짐.
+// 정본은 부모 상품의 링크뿐이며(products.md §4-0·§4-1: 재고는 등록정보 읽기전용), 상품상세·장바구니·금액 계산은
+// 모두 부모 링크를 읽는다. 새 부모로 복제(new_product)하는 경우의 복사는 새 "부모"가 정본을 갖는 것이라 정상.
+// ═══════════════════════════════════════════════════════════════
+
+describe('cloneProduct (add_inventory) — 옵션 링크 복사 금지(부모값을 따르는 구조)', () => {
+  it('[RED→GREEN] 부모에 옵션 링크가 있어도 새 재고에 upsert_product_option_links를 호출하지 않는다', async () => {
+    const base = makeAddInventoryAdmin();
+    const rpcMock = vi.fn((name: string) => {
+      if (name === 'get_product_option_links') {
+        return Promise.resolve({
+          data: [{ option_product_id: 'opt-1', is_required: false, delivery_rental_disabled: true, min_select_required: true }],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const admin = { ...base, rpc: rpcMock };
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'parent-product-id',
+        count: '1',
+        mode: 'add_inventory',
+        auto_code: 'true',
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    expect((result as Record<string, unknown>)?.success).toBe(true)
+    const calledNames = rpcMock.mock.calls.map((c) => c[0])
+    expect(calledNames).not.toContain('upsert_product_option_links')
+    // 부모 링크를 읽어 올 이유도 없다(복사 자체를 하지 않음)
+    expect(calledNames).not.toContain('get_product_option_links')
+  });
+
+  it('[회귀] 재고 추가는 링크 복사를 안 해도 품번 발행 등 나머지 동작은 그대로 성공한다', async () => {
+    const admin = makeAddInventoryAdmin();
+    createClientMock.mockReturnValue(admin);
+
+    const result = await actions.cloneProduct({
+      request: makeFormRequest({
+        source_product_id: 'parent-product-id',
+        count: '1',
+        mode: 'add_inventory',
+        auto_code: 'true',
+      }),
+      locals: makeLocals(),
+    } as Parameters<typeof actions.cloneProduct>[0]);
+
+    const r = result as Record<string, unknown>;
+    expect(r?.success).toBe(true);
+    expect(r?.warnings).toBeUndefined();
+    expect(admin.rpc).toHaveBeenCalledWith('generate_inventory_product_code', expect.objectContaining({ p_product_id: 'new-child-id' }));
+  });
+});
+
 // ── 회귀 방지: add_inventory 성공 케이스 ────────────────────────────────────
 describe('cloneProduct (add_inventory) — 정상 동작 (회귀 방지)', () => {
   it('정상 요청 시 { success: true, mode: add_inventory } 반환', async () => {
