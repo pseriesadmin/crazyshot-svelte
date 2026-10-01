@@ -33,6 +33,8 @@
     category: string
     price24h: number
     price12h: number | null
+    isSaleOnly?: boolean
+    salePrice?: number | null
     img: string
     slug?: string
     href?: string
@@ -55,6 +57,8 @@
       price24h: p24,
       // 12h는 검색 API가 내려주는 CMS 실값(price_rules) — 규칙이 없으면 null(12H 표시 생략). 예전 24h×0.7 계산 제거
       price12h: r['price_12h'] != null ? Number(r['price_12h']) : null,
+      isSaleOnly: Boolean(r['sale_only']),
+      salePrice:  r['sale_price'] != null ? Number(r['sale_price']) : null,
       img:      ((r['image_urls'] as string[] | null)?.[0])
         ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
       href:     slug ? `/products/${slug}` : undefined,
@@ -80,7 +84,7 @@
   })
 
   const pickerOptions = $derived<SuggestPickerOption[]>(
-    suggestResults.map(p => ({ id: p.id, label: p.name, meta: [p.price24h.toLocaleString('ko-KR') + '원/일'] }))
+    suggestResults.map(p => ({ id: p.id, label: p.name, meta: [p.isSaleOnly ? (p.salePrice ?? 0).toLocaleString('ko-KR') + '원' : p.price24h.toLocaleString('ko-KR') + '원/일'] }))
   )
 
   /** 입력 중에는 결과 그리드를 건드리지 않고 자동완성 드롭다운만 (디바운스·2자 이상) 갱신 */

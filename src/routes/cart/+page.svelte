@@ -785,7 +785,17 @@
       // T4: 구매(sale_only) 라인은 bulk 패널(날짜/방식/폼) 일괄 적용 대상에서 제외
       // 구매 예약은 날짜·방식을 고객이 선택하지 않으므로 브로드캐스트가 필요 없다
       const line = groupsById.get(it.id)
-      if (!isRentalLine(line?.durationType ?? null)) return it
+      if (!isRentalLine(line?.durationType ?? null)) {
+        // 판매전용 단독 카트(2026-10-01, Stephen 확정): 날짜·시간은 없지만 수령 방법과 고객정보·배송지·요청사항은
+        // 대여와 같은 주문설정으로 입력받는다 — 구매 건은 반납이 없어 반납 방식은 수령 방식과 동일하게 맞춘다.
+        if (!readIsPurchaseOnly()) return it
+        return {
+          ...it,
+          opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.rentalMethod },
+          rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
+          returnForm: mergeFormForBulk(bulkRentalForm, it.returnForm),
+        }
+      }
       return {
         ...it,
         rentalDate: bulkDate || it.rentalDate,
@@ -1300,7 +1310,9 @@
       .map(({ it, product }) => {
         // 구매 라인: rentalMethod가 영구 null이므로 'crazydelivery'(편도 택배 고정)로 판정 (C-3)
         const isPurchase = groupsById.get(it.id)?.durationType === 'purchase'
-        const effectivePickupMethod = isPurchase ? ('crazydelivery' as const) : it.opts.rentalMethod
+        // 판매전용 단독 카트(2026-10-01): 고객이 고른 수령 방법으로 배송비 판정(미선택이면 편도 택배 가정). 혼합은 기존 고정.
+        const purchasePickup = readIsPurchaseOnly() ? (it.opts.rentalMethod ?? ('crazydelivery' as const)) : ('crazydelivery' as const)
+        const effectivePickupMethod = isPurchase ? purchasePickup : it.opts.rentalMethod
         const effectiveReturnMethod = isPurchase ? ('crazydelivery' as const) : it.opts.returnMethod
         return {
           pickupIsDelivery: isShippingFeeMethod(effectivePickupMethod),
@@ -1315,7 +1327,7 @@
   const otShippingFee = $derived(calcShippingFee(sdShippingSettings, checkedShippingItems))
   // 퀵서비스 수령/반납 표기용 — 배송료 계산에서 제외된 퀵은 금액 대신 "실시간 맞춤 요금" 문구로 안내한다.
   const otPickupQuick = $derived(
-    itemsState.some((it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase' && isQuickMethod(it.opts.rentalMethod))
+    itemsState.some((it) => !it.deleted && it.checked && (groupsById.get(it.id)?.durationType !== 'purchase' || readIsPurchaseOnly()) && isQuickMethod(it.opts.rentalMethod))
   )
   const otReturnQuick = $derived(
     itemsState.some((it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase' && isQuickMethod(it.opts.returnMethod))
@@ -1505,7 +1517,8 @@
         // T4: 구매(sale_only) 라인은 교집합 계산에서 제외 — allowed_method_ids가
         // 대여 방식 선택지를 좁히거나 없애는 문제(F8-①) 방지
         const line = groupsById.get(it.id)
-        return isRentalLine(line?.durationType ?? null)
+        // 판매전용 단독 카트(2026-10-01): 수령 방법을 고객이 고르므로 구매 상품의 허용 방식을 그대로 반영
+        return isRentalLine(line?.durationType ?? null) || readIsPurchaseOnly()
       })
       .map(it => groupsById.get(it.id)?.product ?? null)
       .filter((p): p is ProductRow => p !== null)
@@ -1589,7 +1602,8 @@
       pickupVisibleTabs,
       returnVisibleTabs: returnVisibleTabsFor(it.opts.rentalMethod),
       // 구매 라인: T2 우회 조건 전달 — durationType='purchase'이면 방식 검증 스킵 (C-2)
-      durationType: groupsById.get(it.id)?.durationType ?? null,
+      // 판매전용 단독 카트는 수령 방법을 고객이 직접 선택하므로 우회하지 않고 검증한다(혼합 카트의 구매 라인은 기존대로 우회)
+      durationType: readIsPurchaseOnly() ? null : (groupsById.get(it.id)?.durationType ?? null),
     }))
   )
   // 24h 요금이 등록되지 않은 대여 상품이 체크돼 있으면 예약 신청 불가(2026-09-30, Stephen 확정).
@@ -1792,6 +1806,8 @@
   // 대여일수는 DB rental_days(박 수, 당일=0)와 같은 기준으로 센다 — 결제 소진 규칙과 어긋나지 않게.
   // pricingReady는 이 위치보다 아래에서 선언되므로(TDZ) 함수 경유로 읽는다
   function readPricingReady(): boolean { return pricingReady }
+  // cartMode도 아래(2043행 부근)에서 선언되므로 같은 이유(TDZ)로 함수 경유로 읽는다 — 판매전용 단독 카트 판정용
+  function readIsPurchaseOnly(): boolean { return cartMode === 'purchase' }
   const otConditionCtx = $derived<CouponOrderContext>((() => {
     const rentalItems = itemsState.filter(
       (it) => !it.deleted && it.checked && groupsById.get(it.id)?.durationType !== 'purchase',
@@ -2050,6 +2066,12 @@
     )
   )
 
+  // 혼합 → 구매 단독으로 바뀌는 순간(대여 상품 체크 해제 등) 이미 고른 수령 방법·입력값을 구매 라인에 한 번 동기화 —
+  // 안 하면 화면에는 선택값이 보이는데 라인 값은 비어 제출 검증이 막힌다(sp3 2차 검수 M-1)
+  $effect(() => {
+    if (cartMode === 'purchase') untrack(() => applyBulkToItems())
+  })
+
   function fmtKrw(n: number): string {
     return n === 0 ? '0' : n.toLocaleString('ko-KR')
   }
@@ -2150,7 +2172,7 @@
                "헤더 단독" 케이스 자체가 더 이상 존재하지 않으므로 false로 고정 —
                true로 남기면 헤더와 바로 아래 방법 bar 사이에 불필요한 간격이 생긴다. -->
           <button class="bulk-head" class:bulk-head-closed={false} onclick={() => bulkOpen = !bulkOpen}>
-            <span class="bulk-head-title">{cartMode === 'purchase' ? '구매예약옵션' : '대여예약옵션'}</span>
+            <span class="bulk-head-title">{cartMode === 'purchase' ? '주문설정' : '대여예약옵션'}</span>
             <svg width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true" class="bulk-chevron"
                  style="transform:{bulkOpen ? 'rotate(180deg)' : 'rotate(0deg)'}">
               <path d="M1 1L6 7L11 1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -2187,7 +2209,7 @@
                    참이 되는 순간 방법 bar는 사라지고 날짜 bar로 "대체"되도록 수정 — 날짜 bar
                    자체의 노출조건(아래 {#if bulkDate && bulkTime}, 그 안의 {#if
                    bulkReturnDate && bulkReturnTime})은 기존 그대로 전혀 손대지 않음. -->
-              {@const pickupDateBarShown = !!(bulkDate && bulkTime)}
+              {@const pickupDateBarShown = cartMode !== 'purchase' && !!(bulkDate && bulkTime)}
               {@const returnDateBarShown = pickupDateBarShown && !!(bulkReturnDate && bulkReturnTime)}
               <div class="bulk-collapsed-group">
                 {@render bulkHeadButton()}
@@ -2203,7 +2225,7 @@
                 {#if !pickupDateBarShown}
                 <div class="bulk-collapsed-methods">
                   <button class="acc-head" onclick={() => { bulkOpen = true; bulkOpenAcc = 'rental' }}>
-                    <span class="acc-label">대여 방법</span>
+                    <span class="acc-label">{cartMode === 'purchase' ? '수령 방법' : '대여 방법'}</span>
                     <div class="acc-head-right">
                       <span class="acc-value" class:acc-value-unset={!bulkOpts.rentalMethod}>{methodLabel(bulkOpts.rentalMethod)}</span>
                     </div>
@@ -2242,7 +2264,7 @@
                   </div>
                 </div>
                 {/if}
-                {#if !returnDateBarShown}
+                {#if !returnDateBarShown && cartMode !== 'purchase'}
                 <div class="bulk-collapsed-methods">
                   <button class="acc-head" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
                     <span class="acc-label">반납 방법</span>
@@ -2409,6 +2431,8 @@
           <div class="total-gray-section">
             <span class="section-sub-label">약정 요금</span>
             <div class="price-detail-list">
+              <!-- 판매전용 단독 카트(2026-10-01, Stephen 지시)는 대여기간 개념이 없어 행 자체를 숨긴다 -->
+              {#if cartMode !== 'purchase'}
               <div class="price-period-row">
                 <span class="price-period-label">총 대여기간</span>
                 <div class="price-period-values">
@@ -2421,7 +2445,8 @@
                   {/if}
                 </div>
               </div>
-              {@render PriceRow({ label: '대여요금', value: fmtKrw(pricingReady ? otSubtotal : 0) })}
+              {/if}
+              {@render PriceRow({ label: '대여(판매)요금', value: fmtKrw(pricingReady ? otSubtotal : 0) })}
               {#if pricingReady && otMembershipDiscount > 0}
                 {@render PriceRow({ label: `멤버십 할인 (${otDiscountRate}%)`, value: `-${fmtKrw(otMembershipDiscount)}` })}
               {/if}
@@ -2658,8 +2683,11 @@
                 const purchaseDatesCo = isPurchaseCo ? getPurchaseReservationDates(nowTimeCo) : null
 
                 // 수령·반납 방식: 구매는 편도 crazydelivery 고정, 대여는 고객 선택값 사용
-                const pickupMethodCo = isPurchaseCo ? ('crazydelivery' as const) : it.opts.rentalMethod
-                const returnMethodCo = isPurchaseCo ? ('crazydelivery' as const) : it.opts.returnMethod
+                // 판매전용 단독 카트(2026-10-01)는 고객이 고른 수령 방법을 반영(반납은 수령과 동일하게 맞춤), 혼합은 기존 고정
+                const purchaseOnlyCo = isPurchaseCo && cartMode === 'purchase'
+                const purchasePickupCo = purchaseOnlyCo ? (it.opts.rentalMethod ?? ('crazydelivery' as const)) : ('crazydelivery' as const)
+                const pickupMethodCo = isPurchaseCo ? purchasePickupCo : it.opts.rentalMethod
+                const returnMethodCo = isPurchaseCo ? purchasePickupCo : it.opts.returnMethod
 
                 // 대여 라인만 null 체크(구매는 위에서 이미 고정)
                 if (!isPurchaseCo && (!pickupMethodCo || !returnMethodCo)) {
@@ -3200,12 +3228,21 @@
 {/snippet}
 
 {#snippet PurchaseOptionsEditor()}
-  <!-- 구매 전용 옵션 편집기 — 날짜·대여방식 선택 없음. 고객 정보 + 배송지 + 요청사항만 입력 -->
-  <!-- bulkRentalForm/bulkHandleRentalForm/sdHasUserProfileInfo/sdUserProfileInfo 클로저 참조 -->
+  <!-- 판매전용 단독 카트 '주문설정'(2026-10-01, Stephen 확정) — 대여 설정과 같은 구성에서 달력·시간만 감춘다.
+       수령 방법(+방문지점/배송지)·고객정보·요청사항은 그대로, 구매는 반납이 없어 반납 방법은 숨긴다.
+       선택한 수령 방법은 배송비 판정과 예약 저장에 그대로 반영된다. -->
   <div class="accordions">
-    {@render CustomerInfoSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo })}
-    {@render DeliveryAddressSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm, method: 'crazydelivery', type: 'rental', hasUserAddress: sdHasUserAddress, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints })}
-    {@render NotesSection({ form: bulkRentalForm, onFormChange: bulkHandleRentalForm })}
+    <div class="acc-item">
+      <div class="acc-head acc-head-static">
+        <span class="acc-label">수령 방법</span>
+        <div class="acc-head-right">
+          <span class="acc-value" class:acc-value-unset={!bulkOpts.rentalMethod}>{methodLabel(bulkOpts.rentalMethod)}</span>
+        </div>
+      </div>
+      <div class="acc-body">
+        {@render RentalForm({ type: 'rental', calId: 'bulk-rental', selectedDate: '', onDateChange: bulkHandleDate, timeId: 'bulk-rental-t', selectedTime: '', onTimeChange: bulkHandleTime, method: bulkOpts.rentalMethod, form: bulkRentalForm, onMethodChange: bulkHandleMethod, onFormChange: bulkHandleRentalForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, hideDateTime: true })}
+      </div>
+    </div>
   </div>
 {/snippet}
 
@@ -3464,6 +3501,8 @@
   // 기간이 하나의 밴드로 보이도록 함(2026-08-17)
   rangeStart?: string;
   rangeEnd?: string;
+  // 판매전용 단독 카트(2026-10-01): 달력·시간 UI만 감추고 방법·고객정보·배송지·요청사항은 그대로 노출
+  hideDateTime?: boolean;
 })}
   {@const sectionLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
@@ -3588,6 +3627,7 @@
              버튼을 누르면 달력을 열지 않고 경고 토스트로 먼저 안내한다 — 미선택 상태로 달력을
              열어도 실제로는 methodSelectionValid가 제출을 막을 뿐이라, 원인을 이 시점에
              바로 알려주기 위함. -->
+        {#if !props.hideDateTime}
         <div class="datetime-wrap">
           <div class="datetime-btns">
             <button class="datetime-btn datetime-btn-dark" class:datetime-btn-date-selected={!!props.selectedDate} onclick={() => {
@@ -3717,6 +3757,7 @@
             </div>
           {/if}
         </div>
+        {/if}
         {#if isVisit && props.selectedTime && isLockerHour(props.selectedTime)}
           <p class="form-note form-note-locker">
             선택한 {props.type === 'rental' ? '방문대여' : '방문반납'} 시간은 고객센터
@@ -4579,6 +4620,9 @@
     transition: background 0.2s;
   }
   .acc-head:hover { background: #D9D6F0; }
+  /* 판매전용 단독 카트 '주문설정' — 접히지 않는 단일 항목이라 클릭·호버 반응 없음 */
+  .acc-head-static { cursor: default; box-sizing: border-box; }
+  .acc-head-static:hover { background: var(--cs-lilac); }
   .acc-label {
     font-size: 18px;
     font-weight: 400;

@@ -111,9 +111,19 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       locals.supabase,
       rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
     )
+    const saleMap = await getSaleInfoForProducts(
+      locals.supabase,
+      rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+    )
     const results = rpcResults.map((r) => {
       const id = String(r['product_id'] ?? r['id'] ?? '')
-      return { ...r, price_12h: price12hMap[id] ?? null, wished: wishedSet.has(id) }
+      return {
+        ...r,
+        price_12h: price12hMap[id] ?? null,
+        sale_only: saleMap[id]?.sale_only ?? false,
+        sale_price: saleMap[id]?.sale_price ?? null,
+        wished: wishedSet.has(id),
+      }
     })
     return json({ results, query: q, page, limit, search_log_id: searchLogId })
   }
@@ -207,15 +217,36 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     locals.supabase,
     finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
   )
+  const saleMap = await getSaleInfoForProducts(
+    locals.supabase,
+    finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+  )
   const results = finalResults.map((r) => {
     const id = String(r['product_id'] ?? r['id'] ?? '')
     return {
       ...r,
       price_min: r['price_min'] ?? priceMinMap[id] ?? null,
       price_12h: price12hMap[id] ?? null,
+      sale_only: saleMap[id]?.sale_only ?? false,
+      sale_price: saleMap[id]?.sale_price ?? null,
       wished: wishedSet.has(id),
     }
   })
 
   return json({ results, query: q, page, limit, search_log_id: searchLogId })
+}
+
+/** 판매전용(sale_only) 상품은 대여가격이 없는 게 정상 — 카드가 "Day 0" 대신 판매가를 보이도록 판매 정보를 함께 내려준다(products.md §2-9). */
+async function getSaleInfoForProducts(
+  supabase: App.Locals['supabase'],
+  ids: string[],
+): Promise<Record<string, { sale_only: boolean; sale_price: number | null }>> {
+  const out: Record<string, { sale_only: boolean; sale_price: number | null }> = {}
+  const uniq = [...new Set(ids.filter(Boolean))]
+  if (uniq.length === 0) return out
+  const { data } = await supabase.from('products').select('id, sale_only, sale_price').in('id', uniq)
+  for (const r of (data ?? []) as { id: string; sale_only: boolean | null; sale_price: number | null }[]) {
+    if (r.sale_only) out[r.id] = { sale_only: true, sale_price: r.sale_price != null ? Number(r.sale_price) : null }
+  }
+  return out
 }

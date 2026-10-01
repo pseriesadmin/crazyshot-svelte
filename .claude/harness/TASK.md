@@ -7,6 +7,26 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🔴 CRITICAL: 판매전용 상품 구매·옵션·결합·재고 보정 (Migration #611, 2026-10-01, 이 세션'만', ✅ Stephen 직접 지시 — Stage 적용·TDD 13/13 + 회귀 50/50 GREEN, Production 적용·sp3-qa 검수·git commit은 Stephen 대기)
+- 구매신청(draft)부터 duration_type='purchase'(DB) + 장바구니 방어 파생(cart/+page.server.ts) + 기존 NULL 백필 → "요금 미정"·합계 누락 해소
+- 판매전용 옵션: set_reservation_options가 sale_price×수량으로 서버 단가 강제, 확정 시 유닛 비활성(마커)·취소 시 복원, 본상품 대여설정 무관
+- 판매전용 결합: assign_bundle_assets 날짜 무관 점유, 확정 시 차감·취소 복원, 금액 무변경(결합 조건 유지)
+- 검색 API·검색 카드·상품상세 "최신 등록 상품"에 판매가 전달(Day 0 해소), 상품상세 판매 옵션 단가=판매가
+- 알려진 기존 실패(본 작업 무관): getUnavailableDatesForCart 5건(fixture 자식 소프트삭제), 24h 필수 테스트 2건(2026-09-28 폐기 정책), reformulation 1건
+- 수정 파일(이 세션'만'): supabase/migrations/20261001080000_611_sale_product_purchase_option_bundle_stock.sql(신규) · src/__tests__/services/saleProductPurchaseOptionBundle.test.ts(신규) · src/routes/cart/+page.server.ts · src/routes/api/search/products/+server.ts · src/routes/products/search/+page.svelte · src/lib/components/products/SearchProductGrid.svelte · src/routes/products/[id]/+page.server.ts · src/routes/products/[id]/+page.svelte · .claude/rules/products.md(§2-15 현황표) · .claude/rules/service-operations.md(§24)
+- 수정 DB 함수 8종(Stage 현행 정의 위에 변경, Stage=Production 사전 해시 동일 확인): create_draft_reservation · set_reservation_options · update_reservation_status · assign_bundle_assets · promote_draft_reservation · create_hold_reservation · get_available_stock_counts + private.apply_sale_stock_on_confirm / restore_sale_stock_on_cancel(신규, 서버 전용)
+- 합산·쿠폰·포인트 라이브 확인(Stage, 임시 스크래치 후 삭제): 판매 10000×2 + 판매옵션 2000×3씩 → 합계 32000, 정액쿠폰 5000+포인트 1000 → 최종 26000 ✓. 판매 건은 렌탈완료 적립 대상 아님(정책).
+- ✅ 후속 지시 반영(2026-10-01, Stephen): ① 혼합 주문은 "최소 대여일수"·"방문 전용" 쿠폰이 구매 건 때문에 거절되지 않음 ② 구매 단독 주문은 두 쿠폰 거절 유지 → Migration 612(private._validate_and_consume_coupon 집계에서 구매 건 제외, 앵커 치환·멱등) Stage 적용·TDD couponMixedOrderConditions 6/6 + 쿠폰 회귀 29/29 GREEN(Production 대기) ③ 판매상품 단독 장바구니: 대여설정을 '주문설정'으로 — 달력·시간 UI만 숨기고 수령 방법·고객정보·배송지·요청사항 유지, 반납 방법 숨김, 수령 방법을 배송비·예약 저장에 반영(Stephen 선택: 수령 방법만 유지·적용). 수정: cart/+page.svelte(RentalForm hideDateTime prop·PurchaseOptionsEditor 재구성·applyBulkToItems·methodSelectionValid·checkedShippingItems·체크아웃 방식 결정·cartProductRows·제목). svelte-check 통과. ④ 약정 요금 라벨 '대여요금'→'대여(판매)요금'(공통 노출), 구매 단독이면 '총 대여기간' 행 숨김. Claude Browser(Stephen 명시 요청)로 구매 단독 카트 확인 완료: 제목 '주문설정'·달력/시간/반납 없음·수령 방법 선택 시 방문지점/배송비 무료 반영·'총 대여기간' 행 숨김(대여 포함 시 표시). 수정 파일 추가: src/__tests__/services/couponMixedOrderConditions.test.ts(신규) · supabase/migrations/20261001090000_612_coupon_conditions_exclude_purchase_lines.sql(신규)
+- ✅ sp3-qa-agent 독립검수(2026-10-01): 블로킹 0건 · GATE E 조건부 통과. 검수 에이전트는 DB 조회 도구가 없어 본 세션이 보충 확인 — 신규 private 함수 2종 anon·authenticated 실행 불가(Stage, has_function_privilege 실측 — service_role도 불가, 호출자가 SECURITY DEFINER라 정상), 판매전용 상품의 12h 잔존 요금 규칙 Stage 0건·Production 0건(MEDIUM-1 현재 데이터상 미발현).
+  - MEDIUM-1(후속·미조치): 판매전용 옵션에 12h 요금 규칙이 남아 있으면 정액이 깨질 수 있음(compute #585 분기) — 요금 규칙을 지우지 않고 판매전환하는 경우 대비, 필요 시 compute에서 판매전용 옵션 규칙 분기 건너뛰기
+  - MEDIUM-2(후속·미조치): 확정 시 재고 부족하면 가능한 만큼 차감+sale_stock_shortage 반환 — 호출부(try_confirm_reservation·approveReservation 등)의 경고 처리 확인 필요, 미차감 수량은 이후 점유로 안 잡혀 과판매 가능
+  - MEDIUM-3(후속·미조치): sync_order_after_composition_change(#497)·CMS 예약편집 RPC(#428/429)가 update_reservation_status를 거치지 않고 직접 status='cancelled' → 판매 재고 복원 안 됨(본상품도 기존부터 동일, 옵션·결합으로 범위 확대)
+  - LOW: 611 파일 untracked(커밋 시 포함), has_function_privilege 실측 기록 보강(본 줄로 갈음)
+- ✅ sp3-qa-agent 2차 재검수(2026-10-01): 블로킹 0 · GATE E 통과 가능, 테스트 170/170. MEDIUM M-1(혼합→구매 단독 전환 시 구매 라인 수령 방법 미동기화로 제출 막힘)·LOW L-1(퀵 안내 누락)·L-3(문서 GATE C 문구)은 본 세션이 즉시 수정(cartMode 전환 $effect 동기화·otPickupQuick 보정·products.md 문구). LOW L-2(구매 단독 수령 시간 미저장 — CMS 시간 표시 확인 필요)·L-4(반납 방식=수령 방식 저장, 과금 영향 없음)는 기록만. 1차 MEDIUM 3건은 후속 유지.
+- ✅ Production(vnbpmvxruyciuuaermyh) Migration 611→612 순서 적용 완료(2026-10-01, Stephen 승인): 적용 전 8개 함수 정규화 해시가 Stage 사전 상태와 동일·Migration 605 적용 확인, 적용 후 10개 함수(신규 private 2종 포함) 해시·권한(anon/authenticated) Stage=Production 완전 일치, private 신규 함수 2종 anon·authenticated 실행 불가, 보정 대상(판매전용 draft/hold의 duration_type NULL) 잔여 0건. 앱 코드는 아직 미커밋·미배포 — DB 적용이 선행됐으므로 배포 순서 조건 충족(Stephen이 커밋·PR 머지). 상세 해시: apply_sale_stock_on_confirm 70038d6a2f / restore b3c9b692c3 / update_reservation_status d9d322e10d / set_reservation_options 3c62fb86ca / assign_bundle_assets d659d4220a / create_draft dd6ab94d7c / create_hold 86f5a7018e / promote b87b62118b / get_available_stock_counts 98363673bf / _validate_and_consume_coupon 1c9e557f27
+- (적용 완료 전 기록) Production 적용 전 선행(2차 검수): 611→612 순서, Production에 Migration 605 적용 확인(612 앵커), DRIFT 절차 1~4 양쪽 실행(private 함수 2종 권한 포함), DB 마이그레이션 먼저 → 앱 코드 배포 나중(611 없이 앱 먼저 배포 시 구매신청이 "요금 미정"으로 막힘)
+- 대기: Production 적용(Stephen 승인 후 · 선행 #547/#553/#585/#586/#588 적용 확인 · 앵커 불일치 시 안전 중단 · 적용 후 해시·권한 대조), Stage 화면 확인
+
 ## NOW — 🔴 CRITICAL: 내정보·퀵 배송료·쿠폰 다중 선택/조건부 노출/CMS 지급 확인·적립 기준 재정의(A-1) 묶음 (신고 12건, Migration #604·#605·#606 + #531~534 저장소 복원, 2026-10-01, 이 세션'만', ✅ GATE B 승인 — Stephen 단계별 진행 지시, Stage·Production DB 적용 완료 · GATE E 조건부 통과 — sp3-qa-agent 독립검수(블로킹 0건, MEDIUM 2건 중 M-2는 본 세션이 해시 대조로 해소, M-1 use_coupons 권한은 Migration #607로 해소 — Stage·Production 적용 완료), git commit은 Stephen 대기)
 
 ⚠️ 세션 스코프: 이 세션이 수정한 파일만 기록. 같은 파일에 다른 세션(포인트 세션: Migration #596~603·subscriptionBenefits.ts·cms/promotion/point/*·cart/+page.server.ts의 구독 적립률 합산 hunk)의 수정이 섞여 있어 커밋은 한 번에 묶는다.
@@ -49,7 +69,10 @@
   - reservationApprovalNotify.test.ts 7건 실패(예약 생성 시 상품·날짜 겹침 제약) — 이번 작업 무관 추정, 수정 전 상태와 비교 미실시
   - Production/Stage 마이그레이션 목록 차이(558·562·556b는 Stage에만) — 이번 작업 이전부터, 별도 확인 필요
 
-GATE E 3차(2026-10-01, sp3-qa-agent) ✅ 조건부 통과 — 블로킹 0·미디엄 0·로우 3(--cs-purple-op10은 불투명 #E1DEF3이라 기존 rgba보다 약간 진함·모달 오버레이 rgba는 cms-uiux 문서화 패턴·후기 별점 제거 Stephen 확인 대기). 지적된 문서 정합성 2건(service-operations 푸터 v1.9·§23 GATE C 항목) 및 §23 권한 이력 서술(497=기본권한 잔존, 532=authenticated 명시 GRANT) 정정 완료. QA는 DB 도구가 없어 DB 대조 불가 — 해시·권한은 본 세션 직접 대조값(2차 기록) 유효. 대상: ①Low A1 3건 수정(CouponDetailPanel `.dist-chip-*` 토큰화·coupon/new `.code-preview-hint` PC 토큰·LogTab/ReviewTab 새 줄 hex→토큰)
+배포 점검(2026-10-01, Stephen 커밋·푸시 c04b4c1 stage 브랜치 후): Vercel Stage 미리보기 dpl_EBSm4HJm… READY(alias stage.crazyshot.kr, 빌드 ~65초), stage.crazyshot.kr /·/cart·/products 200, 런타임 오류 로그 0.
+  Production은 아직 이전 코드(main 66267f5, PR #406 머지분)로 READY — 이번 커밋은 PR #407(stage→main) 머지 시 배포됨. Production DB는 코드보다 먼저 적용 완료(605 컬럼·함수 6종·인덱스 3종·order_coupons·마이그레이션 605~610·558·562 등록 확인).
+  이전 코드+신규 DB 공존 구간 점검: 최근 3시간 Production 응답 200 312건·303 2건, 4xx/5xx 0건.
+  GATE E 3차(2026-10-01, sp3-qa-agent) ✅ 조건부 통과 — 블로킹 0·미디엄 0·로우 3(--cs-purple-op10은 불투명 #E1DEF3이라 기존 rgba보다 약간 진함·모달 오버레이 rgba는 cms-uiux 문서화 패턴·후기 별점 제거 Stephen 확인 대기). 지적된 문서 정합성 2건(service-operations 푸터 v1.9·§23 GATE C 항목) 및 §23 권한 이력 서술(497=기본권한 잔존, 532=authenticated 명시 GRANT) 정정 완료. QA는 DB 도구가 없어 DB 대조 불가 — 해시·권한은 본 세션 직접 대조값(2차 기록) 유효. 대상: ①Low A1 3건 수정(CouponDetailPanel `.dist-chip-*` 토큰화·coupon/new `.code-preview-hint` PC 토큰·LogTab/ReviewTab 새 줄 hex→토큰)
   ②문서 보완(service-operations.md §22 취소 형제·구독 min_purchase 기준 변경·NULL 예약 행, §23 신설 607~610·558·562 권한 잠금/드리프트 정렬) ③Stage 2099 잔존 fixture·간헐 실패·후기 별점 제거는 Stephen 결정/별도 태스크로 남김
 GATE E: sp3-qa-agent 독립검수 결과(조건부 통과, 블로킹 0건)
   - 자동 게이트: utils 108건·라이브 서비스 51건 통과, svelte-check 신규 오류 0, build 성공, console.log/any/TODO/Svelte4 문법 추가 없음
