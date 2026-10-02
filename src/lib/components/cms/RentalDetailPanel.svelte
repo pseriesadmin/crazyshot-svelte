@@ -15,6 +15,7 @@
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
+  import { pickLowestUnit } from '$lib/utils/availableUnitOrder'
 
   interface RentalListRow {
     /** 고객 취소 후 관리자 취소확인 대기 — /cms/rentals 로더가 부착(헤더 [예약취소]=취소확인) */
@@ -890,10 +891,27 @@
     }
   }
 
+  // 자동 선택 2단계 확인 — 1차 클릭은 대상 코드를 안내하며 무장, 2차 클릭에서 실제 재배정
+  let autoPickArmedId = $state<number | null>(null)
+
+  function handleAutoPick(targetReservationId: number): void {
+    if (!pickLowestUnit(availableUnits)) return
+    if (autoPickArmedId !== targetReservationId) {
+      autoPickArmedId = targetReservationId
+      return
+    }
+    const lowest = pickLowestUnit(availableUnits)
+    autoPickArmedId = null
+    if (lowest) void handleReassign(targetReservationId, lowest.id)
+  }
+
   async function openReassign(targetReservationId: number): Promise<void> {
+    autoPickArmedId = null
     if (reassignTargetId === targetReservationId) {
-      // 이미 열린 경우 토글 닫기
+      // 이미 열린 경우 토글 닫기 — 캐시 키도 비워 다시 열 때 가용 재고를 재조회한다
+      // (그 사이 다른 예약이 가져간 코드가 낡은 목록에 남지 않게)
       reassignTargetId = null
+      availableUnitsFetchedForId = null
       return
     }
     reassignTargetId = targetReservationId
@@ -1614,7 +1632,12 @@
         </div>
       </div>
       {#each productGroups as group (group.key)}
-        <div class="info-section">
+        <!-- 재배정 목록(SuggestPicker 레이어, position:absolute)이 박스 경계에서 잘리지 않도록
+             재배정 줄이 열린 그룹만 overflow 클리핑을 해제 -->
+        <div
+          class="info-section"
+          class:picker-open={reassignTargetId !== null && group.units.some(u => u.reservationId === reassignTargetId)}
+        >
           {#if group.representative.imageUrl}
             <div class="info-row">
               <span class="info-label">상품 이미지</span>
@@ -1682,9 +1705,20 @@
                 {:else if availableUnits.length === 0}
                   <span class="reassign-empty">이 날짜에 교체 가능한 재고가 없습니다.</span>
                 {:else}
+                  <div class="reassign-meta">
+                    <span class="reassign-count">교체 가능 {availableUnits.length}개</span>
+                    <button
+                      type="button"
+                      class="btn-reassign-small"
+                      onclick={() => handleAutoPick(unit.reservationId)}
+                      disabled={reassigning}
+                      aria-label="가용 재고 중 가장 낮은 순번 자동 선택"
+                    >{autoPickArmedId === unit.reservationId
+                      ? `${pickLowestUnit(availableUnits)?.product_code ?? '(코드 없음)'} 배정 확인`
+                      : '자동 선택'}</button>
+                  </div>
                   <div class="reassign-picker-wrap">
                     <SuggestPicker
-                      noFilter={true}
                       options={availableUnits.map(u => ({
                         id: u.id,
                         label: u.product_code ?? '(코드 없음)',
@@ -1698,7 +1732,7 @@
                           id={ctrl.id}
                           name={ctrl.name}
                           class="reassign-input"
-                          placeholder="재고 선택..."
+                          placeholder="품번 검색 또는 선택 (예: 0025)"
                           value={ctrl.value}
                           oninput={ctrl.oninput}
                           onkeydown={ctrl.onkeydown}
@@ -2864,6 +2898,21 @@
 
   .reassign-row {
     padding: 6px 14px 10px;
+  }
+  .reassign-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .reassign-count {
+    font-size: 12px;
+    color: var(--cs-text-mid);
+  }
+  /* 재배정 줄이 열린 상품 그룹만 클리핑 해제 — SuggestPicker 목록 레이어가 잘리지 않게 */
+  .info-section.picker-open {
+    overflow: visible;
   }
   .reassign-picker-wrap {
     width: 100%;
