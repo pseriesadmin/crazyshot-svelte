@@ -11,6 +11,11 @@
     noGnbOffset?: boolean   // GNB 없는 페이지 — PC sticky top을 0으로
     /** 페이지 타이틀 서체 — §13-2: en=Tilt Warp 계열, kr=SB Aggro/Noto 한글 메뉴 */
     titleLocale?: 'en' | 'kr'
+    /** 지정하면 뒤로가기가 브라우저 기록(history.back) 대신 이 주소로 이동한다 — 새 탭·팝업으로 열려 이전 기록이 없거나
+     *  화면끼리 서로 되돌아가는 순환(예: /account ↔ /account/rental)이 생길 수 있는 화면용 */
+    backHref?: string
+    /** backHref 이동 시 기록을 새로 쌓지 않고 현재 항목을 교체한다(순환 방지) */
+    backReplace?: boolean
   }
 
   let {
@@ -20,7 +25,9 @@
     mobileOnly = false,
     transparent = false,
     noGnbOffset = false,
-    titleLocale = 'kr'
+    titleLocale = 'kr',
+    backHref,
+    backReplace = false
   }: Props = $props()
 
   let moreMenuOpen = $state(false)
@@ -43,6 +50,10 @@
   })
 
   function goBack() {
+    if (backHref) {
+      goto(backHref, { replaceState: backReplace })
+      return
+    }
     if (history.length > 1) {
       history.back()
     } else {
