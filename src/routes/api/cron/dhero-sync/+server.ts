@@ -20,7 +20,10 @@ import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
 import type { RequestHandler } from './$types'
 
 // 두발히어로 종료 상태(배송완료·반송완료·분실완료)에 해당하는 예약 status 값
-const TERMINAL_RESERVATION_STATUSES = ['completed', 'returned', 'cancelled', 'damage_claimed']
+// 'expired'(HOLD 자동만료)도 더 이상 진행되지 않는 예약이라 재시도 대상에서 제외한다 —
+// 2026-09-10 Migration #487(rental-lifecycle.md)에서 CMS 쪽 3곳이 동일한 누락으로 발견·수정된
+// 바 있는데, 이 크론 파일은 그때 점검 대상에서 빠져 예약 하나가 18일 넘게 계속 재조회됐다.
+const TERMINAL_RESERVATION_STATUSES = ['completed', 'returned', 'cancelled', 'damage_claimed', 'expired']
 
 export const GET: RequestHandler = async ({ request }) => {
   const cronSecret = env.CRON_SECRET

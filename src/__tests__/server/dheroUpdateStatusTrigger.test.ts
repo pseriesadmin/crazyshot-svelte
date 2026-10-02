@@ -303,8 +303,11 @@ describe('updateStatus 액션 — dhero fail-soft 트리거', () => {
   })
 
   it('케이스 3 (EC-1) — cancelled 전이 + tracking_number 있음 → cancelDelivery 호출, 성공', async () => {
+    // 2026-09-14 Defect 1·2 수정 이후: manager 역할의 cancelled 전이는 update_reservation_status가
+    // 아니라 cancel_reservation_payment RPC(Toss 환불+DB 반영 일괄 처리)를 거친다.
     mockRpc.mockImplementation((fn: string) => {
       if (fn === 'update_reservation_status') return Promise.resolve({ data: { ok: true }, error: null })
+      if (fn === 'cancel_reservation_payment') return Promise.resolve({ data: { success: true }, error: null })
       if (fn === 'send_rental_chat_notification') return Promise.resolve({ data: null, error: null })
       return Promise.resolve({ data: null, error: null })
     })
@@ -343,8 +346,11 @@ describe('updateStatus 액션 — dhero fail-soft 트리거', () => {
   })
 
   it('케이스 3 (EC-2) — cancelDelivery 412 실패(배송출발 이후) 시에도 예약취소 자체는 성공', async () => {
+    // 2026-09-14 Defect 1·2 수정 이후: manager 역할의 cancelled 전이는 update_reservation_status가
+    // 아니라 cancel_reservation_payment RPC(Toss 환불+DB 반영 일괄 처리)를 거친다.
     mockRpc.mockImplementation((fn: string) => {
       if (fn === 'update_reservation_status') return Promise.resolve({ data: { ok: true }, error: null })
+      if (fn === 'cancel_reservation_payment') return Promise.resolve({ data: { success: true }, error: null })
       if (fn === 'send_rental_chat_notification') return Promise.resolve({ data: null, error: null })
       return Promise.resolve({ data: null, error: null })
     })
@@ -381,7 +387,7 @@ describe('updateStatus 액션 — dhero fail-soft 트리거', () => {
 
     // fail-soft: 예약취소 자체는 성공, 배송취소 실패는 경고만
     expect(result).not.toHaveProperty('status', 500)
-    expect(mockRpc).toHaveBeenCalledWith('update_reservation_status', expect.objectContaining({ p_new_status: 'cancelled' }))
+    expect(mockRpc).toHaveBeenCalledWith('cancel_reservation_payment', expect.objectContaining({ p_reservation_id: 1005 }))
     // 경고 플래그가 결과에 포함됨
     expect(result).toMatchObject(
       expect.objectContaining({ dhero_cancel_failed: true }) // GREEN: 이 플래그가 있어야 함
