@@ -164,9 +164,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
       if (arEnabled) {
         // GSD-20: canned_responses에 image_url/cta_label/cta_url 컬럼 추가로 조회 확장
+        // Migration #617: pending_review=true(CSV 일괄등록 등 관리자 미검토) 항목은 제외 —
+        // shortcut/match_keywords가 비어 있어도 title/content가 매칭 대상에 포함되므로
+        // 이 필터 없이는 미검토 원문이 자동매칭·자동발송될 수 있다.
       const { data: candidates } = await admin
           .from('canned_responses')
           .select('id, title, content, category, shortcut, match_keywords, usage_count, image_url, cta_label, cta_url')
+          .eq('pending_review', false)
         // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
         const synonymGroups = await loadSynonymGroups()
         const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)

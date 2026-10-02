@@ -22,6 +22,7 @@
     image_url: string | null
     cta_label: string | null
     cta_url: string | null
+    pending_review?: boolean
   }
 
   const MAX_KEYWORDS = 10
@@ -141,6 +142,12 @@
     <h3 class="panel-title">{isNew ? '새 빠른답변' : '빠른답변 편집'}</h3>
     <button class="btn-close" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
+
+  {#if item?.pending_review}
+    <div class="pending-banner">
+      ⚠️ CSV 일괄등록으로 생성돼 아직 검토 전인 항목입니다 — 지금은 실시간 고객채팅 자동매칭 대상이 아닙니다. 내용을 확인하고 "저장"을 누르면 검토 완료 처리되어 자동매칭 대상에 포함됩니다.
+    </div>
+  {/if}
 
   <div class="panel-body">
     <!-- 제목 -->
@@ -396,6 +403,15 @@
     transition: background 0.12s, color 0.12s;
   }
   .btn-close:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+
+  /* Migration #617 — 미검토(pending_review) 안내 배너 */
+  .pending-banner {
+    flex-shrink: 0;
+    padding: 10px 24px;
+    background: var(--cs-red-xlight, rgba(255,53,53,0.08));
+    color: var(--cs-red-badge, #FF3535);
+    font: 700 12px/1.5 'Noto Sans KR', sans-serif;
+  }
 
   /* §1 DetailPanel 필수 구조 — display:block 필수(flex 자식 압축·클립 버그 방지), gap 대신 margin-top */
   .panel-body {

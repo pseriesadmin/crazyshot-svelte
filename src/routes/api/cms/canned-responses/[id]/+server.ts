@@ -41,6 +41,10 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     return json({ error: '변경할 내용이 없습니다.' }, { status: 400 })
   }
 
+  // Migration #617: 관리자가 이 패널에서 저장(PATCH)하는 행위 자체가 "검토 완료"이므로
+  // CSV 일괄등록(bulk-import) 등으로 pending_review=true였던 항목도 저장 즉시 해제한다.
+  updates.pending_review = false
+
   if (updates.category && !VALID_CATEGORIES.includes(updates.category as string)) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })
   }
@@ -58,7 +62,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     .from('canned_responses')
     .update(updates)
     .eq('id', id)
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
     .single()
 
   if (error) {
