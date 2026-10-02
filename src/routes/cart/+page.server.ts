@@ -9,6 +9,7 @@ import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coup
 import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
+import { getDocGateStatus, type DocGateRow } from '$lib/utils/docApproval'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -148,7 +149,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_profiles')
-      .select('membership_grade, credit_score, points, full_name, phone, email')
+      .select('membership_grade, credit_score, points, full_name, phone, email, identity_doc_url, identity_type, identity_verified_at, identity_approved_at, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at')
       .eq('id', session.user.id)
       .maybeSingle(),
 
@@ -671,6 +672,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     membershipGrade: (profileResult.data as ProfileRow | null)?.membership_grade ?? null,
     crazyScore:      (profileResult.data as ProfileRow | null)?.credit_score     ?? null,
     userPoints:      (profileResult.data as ProfileRow | null)?.points           ?? 0,
+    docGate:         getDocGateStatus(profileResult.data as ProfileRow | null),
     userCoupons:     filteredCoupons as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
     hasUserAddress,
@@ -761,7 +763,7 @@ interface CartLineItem {
   status:        string
 }
 
-interface ProfileRow {
+interface ProfileRow extends DocGateRow {
   membership_grade: string | null
   credit_score:     number | null
   points:           number

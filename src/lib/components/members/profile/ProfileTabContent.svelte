@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, onDestroy } from 'svelte'
+  import { browser } from '$app/environment'
+  import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte'
@@ -384,6 +386,43 @@
 
   /* ── 본인증명·외국인증명 탭 UI (이번 세션 신규) */
   let activeDocTab = $state<'identity' | 'foreign'>('identity')
+
+  /* ── 필수 등록 파일 안내·이탈 경고 (2026-10-02)
+     본인증명: (주민등록증 또는 운전면허증) + 주민등록등본
+     외국인증명: 체류 유형별 증명서 4종 전부(docApproval.ts 정본)
+     "일부만 등록하고 필수를 채우지 않은 채" 화면을 떠나면 경고한다(아예 미등록은 선택이므로 제외). */
+  const DOC_REQUIRED_GUIDE: Record<'identity' | 'foreign', string> = {
+    identity: '본인 증명은 주민등록증(또는 운전면허증) + 주민등록등본이 필요합니다.',
+    foreign: '외국인 증명은 선택한 체류 유형의 증명서 4종을 모두 등록해야 합니다.',
+  }
+
+  function selectDocTab(tab: 'identity' | 'foreign'): void {
+    activeDocTab = tab
+    const incomplete = tab === 'identity'
+      ? !identityRequiredMet(identityType)
+      : !foreignRequiredMet(foreignTypeList)
+    if (incomplete) csToast.info(DOC_REQUIRED_GUIDE[tab])
+  }
+
+  // ?doc=identity|foreign 으로 진입하면 해당 증명 탭을 열고 그 카드 위치로 스크롤한다(2026-10-02)
+  // — 예약신청 전 "본인증명정보를 등록해주세요" 토스트의 '확인' 랜딩, CMS 서류 요청 채팅 딥링크 공용.
+  let docDeepLinkHandled = false
+  $effect(() => {
+    if (!browser || !docCardEl || docDeepLinkHandled) return
+    const doc = new URL(window.location.href).searchParams.get('doc')
+    if (doc !== 'identity' && doc !== 'foreign') return
+    docDeepLinkHandled = true
+    activeDocTab = doc
+    void tick().then(() => docCardEl?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  })
+
+  // 화면 이탈(다른 섹션 전환·페이지 이동) 시 부분 등록 상태면 경고 — 이탈 자체는 막지 않는다
+  onDestroy(() => {
+    if (!browser) return
+    const identityPartial = identityType.length > 0 && !identityRequiredMet(identityType)
+    const foreignPartial = foreignTypeList.length > 0 && !foreignRequiredMet(foreignTypeList)
+    if (identityPartial || foreignPartial) csToast.warning('필수 파일을 등록하세요.')
+  })
 
   /* ── 본인증명 업로드 */
   const IDENTITY_TYPES = [
@@ -1230,7 +1269,7 @@
           class:active={activeDocTab === 'identity'}
           role="tab"
           aria-selected={activeDocTab === 'identity'}
-          onclick={() => activeDocTab = 'identity'}
+          onclick={() => selectDocTab('identity')}
         >본인 증명</button>
         <button
           type="button"
@@ -1238,14 +1277,14 @@
           class:active={activeDocTab === 'foreign'}
           role="tab"
           aria-selected={activeDocTab === 'foreign'}
-          onclick={() => activeDocTab = 'foreign'}
+          onclick={() => selectDocTab('foreign')}
         >외국인 증명</button>
       </div>
 
       {#if activeDocTab === 'identity'}
         <div class="doc-section-head">
           <div class="doc-section-head-text">
-            <p class="doc-subtitle">신원 확인용 증명서를 등록하세요</p>
+            <p class="doc-subtitle">주민등록증(운전면허증), 주민등록등본 필수 등록</p>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
           {#if identityDocUrls.length > 0 && !showIdentityForm && !identityApproved}
@@ -1391,7 +1430,7 @@
       {:else}
         <div class="doc-section-head">
           <div class="doc-section-head-text">
-            <p class="doc-subtitle">여권 또는 외국인등록증을 등록하세요</p>
+            <p class="doc-subtitle">체류 유형별 증명서 4종 필수 등록</p>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
           {#if foreignDocUrls.length > 0 && !showForeignForm && !foreignApproved}
