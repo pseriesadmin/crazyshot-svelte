@@ -200,7 +200,7 @@
     min-height: 44px;
   }
   .combo-btn:hover:not(:disabled) {
-    border-color: var(--cs-purple);
+    /* 호버는 BG 색상 변경만(보더 변경 금지, front-uiux.md §16) */
     background: #F5F4FA;
   }
   .combo-btn-active {
