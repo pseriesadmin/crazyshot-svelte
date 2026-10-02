@@ -1,16 +1,13 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { isRealMemberSession } from '$lib/utils/authGuard'
+import { parseLoginBannerSettings, orderLoginBanners, type LoginBannerRow } from '$lib/utils/loginBanner'
 
 // ──────────────────────────────────────────────────────────────
-// 광고 배너 타입 (CMS → 프로모션 → 광고 / promotion_banners 테이블)
-//
-// placement: 'login_mobile' — 로그인 모바일 gnb-mobile-nav 하단 배너
-// html_content: 관리자가 CMS에서 작성한 HTML (서버사이드 렌더링 전용)
-//               {@html} 사용 — CMS 관리자 전용 입력이므로 XSS 위험 없음
-// link_url: 배너 클릭 시 이동 URL (null 이면 링크 없음)
-// priority: 높을수록 우선 표시
-// is_active: false 이면 표시 안 함
+// 모바일 기본(고정) 배너 타입 — 등록된 배너가 없을 때 쓰는 대체 배너.
+// 실제 운영 배너는 로그인 화면의 "배너 관리"(LoginBannerModal)로 등록하며 banners 테이블
+// (slot_key 'login_pc'/'login_mobile')과 cms_settings.login_banner_mode 에 저장된다(fetchBanner 참고).
+// html_content: 코드에 고정된 HTML(서버 코드 상수, 사용자 입력 아님) — {@html} 로 렌더링
 // ──────────────────────────────────────────────────────────────
 
 export type PromoBanner = {
@@ -64,24 +61,29 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   return fetchBanner(locals).then((rest) => ({ ...rest, isCmsAdmin: false }))
 }
 
+// 로그인 화면 배너 — 관리 모달(LoginBannerModal)이 저장하는 곳과 같은 곳을 읽는다(2026-10-02):
+//   배너: banners 테이블 slot_key 'login_pc' / 'login_mobile' (공개 조회 정책이 is_active·노출 기간을 걸러줌, deleted_at 제외, sort_order 순)
+//   설정: cms_settings.login_banner_mode { pc_mode, mobile_mode, mobile_visible }
+// 배너는 목록(순서대로=등록순, 랜덤=서버에서 섞은 순서)으로 내려가고 화면이 4초마다 돌려 보여준다. 목록이 비면 화면은 기존 고정 배너(DEFAULT_BANNER·PC 고정 문구)를 그대로 쓴다. mobile_visible=false 면 모바일 배너 영역 숨김.
+// 이전에는 존재하지 않는 promotion_banners 테이블을 읽어 항상 고정 배너만 보였다.
 async function fetchBanner(locals: App.Locals) {
-
-  // CMS → 프로모션 → 광고 (promotion_banners) 에서 로그인 모바일 배너 조회
-  // promotion_banners 테이블 미생성 시 catch → DEFAULT_BANNER fallback
+  const empty = { banner: DEFAULT_BANNER, pcBanners: [] as LoginBannerRow[], mobileBanners: [] as LoginBannerRow[], mobileVisible: true }
   try {
-    const { data, error } = await locals.supabase
-      .from('promotion_banners')
-      .select('bg_image_url, overlay_image_url, html_content, link_url')
-      .eq('placement', 'login_mobile')
-      .eq('is_active', true)
-      .order('priority', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (error || !data) return { banner: DEFAULT_BANNER }
-    return { banner: data as PromoBanner }
+    const columns = 'id, title, sub_copy, image_url, link_url'
+    const [pcRes, mobileRes, settingsRes] = await Promise.all([
+      locals.supabase.from('banners').select(columns).eq('slot_key', 'login_pc').is('deleted_at', null).order('sort_order', { ascending: true }),
+      locals.supabase.from('banners').select(columns).eq('slot_key', 'login_mobile').is('deleted_at', null).order('sort_order', { ascending: true }),
+      locals.supabase.from('cms_settings').select('value').eq('key', 'login_banner_mode').maybeSingle(),
+    ])
+    const settings = parseLoginBannerSettings((settingsRes.data as { value: unknown } | null)?.value)
+    return {
+      banner: DEFAULT_BANNER,
+      pcBanners: orderLoginBanners((pcRes.data ?? []) as LoginBannerRow[], settings.pcMode),
+      mobileBanners: orderLoginBanners((mobileRes.data ?? []) as LoginBannerRow[], settings.mobileMode),
+      mobileVisible: settings.mobileVisible,
+    }
   } catch {
-    // promotion_banners 테이블 미생성 단계 — 정적 기본 배너 표시
-    return { banner: DEFAULT_BANNER }
+    // 조회 실패 시 기존 고정 배너로 안전하게 대체
+    return empty
   }
 }
