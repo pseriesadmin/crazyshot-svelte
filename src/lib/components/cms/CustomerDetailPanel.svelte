@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
+  import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
   import { supabase } from '$lib/services/supabase'
   import { validateUploadFile } from '$lib/utils/fileValidation'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
@@ -917,6 +918,10 @@
     return new Date(approvedAt) < new Date(verifiedAt)
   }
 
+  // 승인 버튼은 필수 서류 조합을 모두 갖춘 증명에만 노출(서버 /api/cms/approve-doc도 같은 기준으로 거절)
+  const identityDocsReady = $derived(identityRequiredMet(row.identity_type))
+  const foreignDocsReady  = $derived(foreignRequiredMet(row.foreign_type))
+
   let approvingIdentity = $state(false)
   let approvingForeign  = $state(false)
 
@@ -1115,12 +1120,16 @@
             >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
           {/if}
           {#if row.identity_doc_url?.length && needsDocApproval(row.identity_verified_at, row.identity_approved_at)}
-            <button
-              type="button"
-              class="btn-approve"
-              disabled={approvingIdentity}
-              onclick={() => approveDoc('identity')}
-            >{approvingIdentity ? '처리 중...' : '승인'}</button>
+            {#if identityDocsReady}
+              <button
+                type="button"
+                class="btn-approve"
+                disabled={approvingIdentity}
+                onclick={() => approveDoc('identity')}
+              >{approvingIdentity ? '처리 중...' : '승인'}</button>
+            {:else}
+              <span class="doc-incomplete-hint">필수 서류 미비</span>
+            {/if}
           {:else if row.identity_doc_url?.length && row.identity_approved_at}
             <span class="badge-approved">승인완료</span>
           {/if}
@@ -1214,12 +1223,16 @@
             >{reuploadForeignOpen ? '취소' : '재등록'}</button>
           {/if}
           {#if row.is_foreign && foreignDocList(row).length > 0 && needsDocApproval(row.foreign_verified_at, row.foreign_approved_at)}
-            <button
-              type="button"
-              class="btn-approve"
-              disabled={approvingForeign}
-              onclick={() => approveDoc('foreign')}
-            >{approvingForeign ? '처리 중...' : '승인'}</button>
+            {#if foreignDocsReady}
+              <button
+                type="button"
+                class="btn-approve"
+                disabled={approvingForeign}
+                onclick={() => approveDoc('foreign')}
+              >{approvingForeign ? '처리 중...' : '승인'}</button>
+            {:else}
+              <span class="doc-incomplete-hint">필수 서류 미비</span>
+            {/if}
           {:else if row.is_foreign && foreignDocList(row).length > 0 && row.foreign_approved_at}
             <span class="badge-approved">승인완료</span>
           {/if}
@@ -2672,6 +2685,14 @@
   }
   .btn-approve:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
   .btn-approve:disabled { opacity: 0.5; cursor: default; }
+  /* 필수 서류 조합 미충족 — 승인 버튼 자리에 표시하는 안내 문구(버튼과 같은 우측 정렬) */
+  .doc-incomplete-hint {
+    margin-left: auto;
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-warning);
+  }
   .badge-approved {
     display: inline-flex;
     align-items: center;

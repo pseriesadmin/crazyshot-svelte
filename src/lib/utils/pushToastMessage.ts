@@ -43,6 +43,7 @@ const IMPORTANT_NOTIFY_LABELS: Record<string, string> = {
   payment_completed:          '결제',
   contract_signed:            '전자계약',
   new_session:                '상담',
+  identity_review:            '본인증명',
 }
 
 /**

@@ -62,6 +62,7 @@
     { key: 'payment_completed', label: '결제완료', field: 'admin_notify_payment_completed' as const },
     { key: 'new_session', label: '신규상담', field: 'admin_notify_new_session' as const },
     { key: 'urgent_chat_message', label: '긴급상담', field: 'admin_notify_urgent_chat_message' as const },
+    { key: 'identity_review', label: '본인증명승인', field: 'admin_notify_identity_review' as const },
   ] as const
 
   let togglingAdminCell = $state<string | null>(null)
@@ -114,6 +115,7 @@
     { value: 'payment_completed', label: '결제완료(관리자)' },
     { value: 'new_session', label: '신규상담(관리자)' },
     { value: 'urgent_chat_message', label: '긴급상담(관리자)' },
+    { value: 'identity_review', label: '본인증명승인(관리자)' },
   ])
 
   // 로그 "이벤트" 열 한글 표기 — 설정 라벨 + 관리자 이벤트 라벨, 매핑 없으면 원문 코드 그대로
@@ -206,7 +208,7 @@
         <h2 class="section-title">관리자 알림 수신 설정</h2>
         <span class="section-badge">{adminList.length}명</span>
       </div>
-      <p class="section-desc">고객의 예약신청·전자서명·결제완료 행위 발생 시 각 관리자 계정이 푸시알림을 받을지 설정합니다.</p>
+      <p class="section-desc">고객의 예약신청·전자서명·결제완료·본인증명 등록(승인 요청) 등 행위 발생 시 각 관리자 계정이 푸시알림을 받을지 설정합니다.</p>
 
       {#if adminList.length > 0}
         <div class="admin-table-wrap">

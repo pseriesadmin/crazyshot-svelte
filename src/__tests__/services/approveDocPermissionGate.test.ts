@@ -27,8 +27,16 @@ vi.mock('$lib/server/push', () => ({
 }))
 
 const mockRpc = vi.fn()
+// 필수 서류 조합 게이트(docApproval.ts)가 user_profiles를 조회하므로 필수 조합을 갖춘 고객으로 응답
+function makeProfileChain() {
+  const chain: Record<string, unknown> = {}
+  chain.select = () => chain
+  chain.eq = () => chain
+  chain.maybeSingle = async () => ({ data: { identity_type: ['resident', 'resident_copy'], foreign_type: null }, error: null })
+  return chain
+}
 vi.mock('@supabase/supabase-js', () => ({
-  createClient: () => ({ rpc: mockRpc, from: vi.fn() }),
+  createClient: () => ({ rpc: mockRpc, from: () => makeProfileChain() }),
 }))
 
 const { POST } = await import('../../routes/api/cms/approve-doc/+server')

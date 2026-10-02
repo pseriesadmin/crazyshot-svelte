@@ -101,6 +101,9 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 고객 관리(열람) | `/cms/customers` | ✅ 계정별 권한설정으로 On/Off(2026-09-15 확정, 기본값 허용) | ✅ | ✅ |
 | 고객 관리(편집·삭제·블랙리스트·점수·포인트) | `/cms/customers` → `toggleBlacklist`·`cancelSubscription`·`updateCustomerInfo`·`adjustScore`·`grantCustomerPoints`·`deleteCustomer` | ❌ | ✅ | ✅ |
 | 레거시 회원 일괄 등록 | `/cms/customers/legacy-import` | ❌ | ✅ | ✅ |
+| 본인증명·외국인증명 서류 승인(2026-10-02) | `/api/cms/approve-doc` POST — 세션 + manager 이상, 필수 서류 조합(`docApproval.ts`: 본인증명=주민등록증|운전면허증+주민등록등본 / 외국인증명=체류유형별 4종 전부 — 단기: 여권사진면·숙소예약확인서·입국 E-Ticket·출국 E-Ticket / 장기: 외국인등록증 앞·뒷면·여권사진면·외국인사실증명서) 미충족이면 400, 대상 없음 404. 승인 RPC(`approve_customer_doc`)는 service_role 전용이라 이 엔드포인트가 유일한 진입점 | ❌ | ✅ | ✅ |
+| 고객 서류 관리자 대리 재등록 | `/api/cms/upload-doc` POST — 세션 + manager 이상 (파일 1건·종류 1개만 보내 기존 목록 전체를 교체하므로, 교체 후 필수 조합이 깨지면 승인 불가) | ❌ | ✅ | ✅ |
+| 푸시알림 설정(관리자 수신 설정 포함) | `/cms/set/push` — 페이지·액션 manager 이상, 관리자 수신 열 6종(예약신청·전자서명·결제완료·신규상담·긴급상담·본인증명승인[`identity_review`, Migration #631]). 마스터(superadmin) 계정 행 변경은 `requireAccountMutationAccess`(진짜 superadmin만) | ❌ | ✅ | ✅ |
 | 구독 관리 | `/cms/subscriptions`, `/cms/subscriptions/new` | ❌ | ✅ | ✅ |
 | 프로모션 배너 | `/cms/promotion/ad` | ❌ | ✅ | ✅ |
 | 프로모션 쿠폰 | `/cms/promotion/coupon` | ❌ | ✅ | ✅ |
