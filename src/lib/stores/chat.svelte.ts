@@ -185,6 +185,8 @@ export function upsertSession(session: ChatSession): void {
         user_name: existing.user_name,
         user_handle: existing.user_handle,
         unread_count: existing.unread_count,
+        // is_urgent는 /api/chat/sessions GET에서만 계산되는 파생값 — Realtime UPDATE payload(raw row)에는 없어 보존하지 않으면 배지가 사라진다
+        is_urgent: existing.is_urgent,
         ...session,
       },
       ...chatStore.sessions.slice(idx + 1),

@@ -207,20 +207,25 @@
       created_at: new Date().toISOString(),
     })
 
-    const { response, error } = await sendMessage({ session_id: session.id, content })
+    try {
+      const { response, error } = await sendMessage({ session_id: session.id, content })
 
-    removeMessage(tempId)
+      removeMessage(tempId)
 
-    if (error) {
-      errorMsg = error
-    } else if (response) {
-      // Realtime으로 이미 수신될 수 있으나 fallback으로 직접 push
-      pushMessage(response.user_message)
-      if (response.ai_message) pushMessage(response.ai_message)
-      errorMsg = null
+      if (error) {
+        // 대화 목록을 에러 화면으로 교체하지 않고 토스트로만 안내 — 입력창이 비워진 뒤라 보내지 못한 내용을 함께 보여준다
+        const preview = content.length > 30 ? `${content.slice(0, 30)}…` : content
+        csToast.error(`메시지를 보내지 못했어요. 다시 보내주세요. (${error}) — "${preview}"`)
+      } else if (response) {
+        // Realtime으로 이미 수신될 수 있으나 fallback으로 직접 push
+        pushMessage(response.user_message)
+        if (response.ai_message) pushMessage(response.ai_message)
+        errorMsg = null
+      }
+    } finally {
+      removeMessage(tempId)
+      isSending = false
     }
-
-    isSending = false
   }
 
   // ── 파일 업로드 ──

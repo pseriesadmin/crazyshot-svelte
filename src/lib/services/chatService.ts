@@ -130,11 +130,17 @@ export async function loadMessages(
 export async function sendMessage(
   req: SendMessageRequest
 ): Promise<{ response: SendMessageResponse | null; error: string | null }> {
-  const res = await fetch('/api/chat/message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
+  let res: Response
+  try {
+    res = await fetch('/api/chat/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+  } catch {
+    // 오프라인·서버 불가 등으로 fetch 자체가 reject되는 경우 — 호출부가 입력 잠금 해제·안내를 할 수 있게 오류 결과로 변환
+    return { response: null, error: '네트워크 연결을 확인해 주세요.' }
+  }
   if (!res.ok) {
     const { error } = await res.json().catch(() => ({ error: 'Network error' }))
     return { response: null, error }
