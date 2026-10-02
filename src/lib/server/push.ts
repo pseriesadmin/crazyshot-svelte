@@ -8,7 +8,7 @@ import { cert, getApps, initializeApp, type App } from 'firebase-admin/app'
 import { getMessaging } from 'firebase-admin/messaging'
 import type { Database, NotificationToken, PushNotificationConfig } from '$lib/types/database'
 import { callTypedRpc } from '$lib/utils/rpc'
-import { sendReservationLifecycleSmsFallback } from './sms'
+import { sendLifecycleSms } from './sms'
 
 export interface PushPayload {
   title: string
@@ -273,15 +273,15 @@ export async function sendPushToUser(
  * 직후에 병행 호출한다. 예약 행(user_id·상품명)을 직접 조회하므로 채팅 RPC와 완전히 독립적으로
  * 동작하며, 실패해도 절대 throw하지 않는다(호출부의 채팅 발송 성공 여부에 영향 없음).
  *
- * options.skipSmsFallback: true를 전달하면 푸시 미수신(no_token/delivery_failed) 시에도
- * SMS 폴백을 발송하지 않는다. 호출부에서 이미 SMS를 직접 발송한 경우 중복 방지를 위해 사용.
- * 미전달 시 기존 동작(폴백 SMS 발송) 그대로 유지 — 기존 호출부(수동 버튼 등) 회귀 없음.
+ * SMS: 푸시와 무관하게 대상 타입이면 항상 동시 발송(sms.ts sendLifecycleSms). options.skipSms
+ * (구 skipSmsFallback 별칭)로 건너뛸 수 있다 — 호출부가 이미 SMS를 직접 보냈거나 묶음 주문에서
+ * 대표 1건만 보낼 때 이중 발송 방지용. smsLink/forceSms는 링크 지정·중복판정 우회용.
  */
 export async function sendReservationLifecyclePush(
   admin: SupabaseClient,
   reservationId: number,
   notifyType: string,
-  options?: { skipSmsFallback?: boolean },
+  options?: { skipSmsFallback?: boolean; skipSms?: boolean; smsLink?: string; forceSms?: boolean },
 ): Promise<void> {
   try {
     const copy = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]
@@ -299,18 +299,18 @@ export async function sendReservationLifecyclePush(
     const productsField = row.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
 
-    const pushResult = await sendPushToUser(row.user_id, notifyType, {
+    await sendPushToUser(row.user_id, notifyType, {
       title: copy.title,
       body: copy.body(productName),
       link: '/account/rental',
     })
 
-    // SMS 폴백: 푸시 미수신(토큰 없음 또는 전달 실패) + 크리티컬 이벤트(reservation_approval·
-    // return_remind)일 때만 고객 휴대폰으로 SMS 보조 발송 (Solapi HMAC 인증).
-    // SOLAPI_API_KEY/SOLAPI_API_SECRET 미설정 시 sendSms 내부에서 graceful skip되므로 조건 분기 불필요.
-    // options.skipSmsFallback: true 시 이 블록 전체를 건너뜀 — 호출부에서 이미 SMS를 직접
-    // 발송한 경우 중복 방지 목적. 기존 호출부(수동 버튼 등)는 옵션 미전달 → 기존 동작 유지.
-    if (!pushResult.delivered && (pushResult.reason === 'no_token' || pushResult.reason === 'delivery_failed') && !options?.skipSmsFallback) {
+    // SMS 동시 발송(2026-10-02, Stephen 확정): 푸시 성공 여부와 무관하게 대상 타입이면 항상 SMS도
+    // 발송한다. 수신동의(allow_rental_alert)·블랙리스트는 보지 않는다(예약·대여 관련 필수 안내).
+    // 제외 조건(번호 없음·탈퇴·비대상 타입·같은 날 중복·dev)은 sendLifecycleSms가 처리한다.
+    // options.skipSms(또는 구 skipSmsFallback): 호출부가 이미 SMS를 직접 보냈거나 묶음 주문에서
+    // 대표 1건만 SMS를 보낼 때 이중 발송을 막기 위해 건너뛴다.
+    if (!options?.skipSms && !options?.skipSmsFallback) {
       const { data: userProfile } = await admin
         .from('user_profiles')
         .select('phone')
@@ -318,11 +318,56 @@ export async function sendReservationLifecyclePush(
         .maybeSingle()
       const phone = (userProfile as { phone?: string | null } | null)?.phone
       if (phone) {
-        await sendReservationLifecycleSmsFallback(phone, productName, notifyType)
+        await sendLifecycleSms(admin, {
+          phone,
+          userId: row.user_id,
+          notifyType,
+          productName,
+          reservationId,
+          linkOverride: options?.smsLink,
+          force: options?.forceSms,
+        })
       }
     }
   } catch {
     // 예약 정보 조회 실패 등 — 호출부(채팅 발송)로 전파하지 않음
+  }
+}
+
+/**
+ * 계약서 카드(contract_link·contract_signed)처럼 sendReservationLifecyclePush를 거치지 않고
+ * sendPushToUser를 직접 부르는 지점용 SMS 동시 발송 헬퍼(2026-10-02).
+ * 예약에서 상품명·고객 번호를 조회해 sendLifecycleSms를 호출한다. 실패해도 throw하지 않는다.
+ */
+export async function sendCardSms(
+  admin: SupabaseClient,
+  params: { userId: string; reservationId: number | null | undefined; notifyType: string; link?: string; force?: boolean },
+): Promise<void> {
+  try {
+    if (params.reservationId == null) return
+    const [{ data: profile }, { data: resv }] = await Promise.all([
+      admin.from('user_profiles').select('phone').eq('id', params.userId).maybeSingle(),
+      admin
+        .from('rental_reservations')
+        .select('products!rental_reservations_product_id_fkey(name)')
+        .eq('id', params.reservationId)
+        .maybeSingle(),
+    ])
+    const phone = (profile as { phone?: string | null } | null)?.phone
+    if (!phone) return
+    const productsField = (resv as { products?: { name?: string } | { name?: string }[] | null } | null)?.products
+    const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
+    await sendLifecycleSms(admin, {
+      phone,
+      userId: params.userId,
+      notifyType: params.notifyType,
+      productName,
+      reservationId: params.reservationId,
+      linkOverride: params.link,
+      force: params.force,
+    })
+  } catch {
+    // SMS 보조 발송 실패는 호출부 흐름에 영향 없음
   }
 }
 

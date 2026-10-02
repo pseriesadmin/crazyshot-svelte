@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
-import { sendPushToAdmins, sendPushToUser } from '$lib/server/push'
+import { sendCardSms, sendPushToAdmins, sendPushToUser } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { applyCustomerSignatureMarker } from '$lib/utils/contract-substitution'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
@@ -279,6 +279,13 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
             title: '전자계약 서명이 완료됐어요',
             body: reservationCode ? `${reservationCode} 예약의 서명이 정상 접수됐어요.` : '서명이 정상적으로 접수됐어요.',
             link: '/account/rental',
+          })
+
+          // SMS 동시 발송(2026-10-02) — 채팅카드 contract_signed와 같은 링크
+          await sendCardSms(admin, {
+            userId: signing.user_id,
+            reservationId: signReservationId,
+            notifyType: 'contract_signed',
           })
         }
       }

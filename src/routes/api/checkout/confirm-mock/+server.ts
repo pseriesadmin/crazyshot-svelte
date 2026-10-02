@@ -82,7 +82,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       await sendPaymentCompletedAdminPush(admin, hold.id, session.user.id, 0)
       // 예약승인 고객 푸시 병행 발송 (기존엔 관리자 푸시만 있었음 — 실결제 자동승인 경로에
       // 고객 FCM 푸시가 누락돼 있던 갭 수정, 2026-08-09)
-      await sendReservationLifecyclePush(admin, hold.id, 'reservation_approval')
+      // SMS는 묶음 주문당 1통만 — 첫 승인 건에서만 발송하고 나머지는 skipSms(2026-10-02)
+      await sendReservationLifecyclePush(admin, hold.id, 'reservation_approval', {
+        skipSms: confirmedReservations.length > 1,
+      })
     }
   }
 
