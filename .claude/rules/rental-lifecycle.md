@@ -301,8 +301,13 @@ cancelled / damage_claimed → 취소 UI (✕ 아이콘 + 빨간 텍스트)
 > locker_guide` RPC로 방문대여/방문반납 + 영업외시간(23:00~08:59) + 1시간 이내 임박 조건을
 > 만족하는 예약을 직접 선점해 발송한다 — `hold_expired`와 달리 순수 SQL(pg_cron)이 아니라
 > 앱코드 경유 Vercel Cron이라 채팅카드(`send_rental_chat_notification`)·브라우저 푸시
-> (`sendReservationLifecyclePush`)·알리고 SMS(`sendSms`) 세 경로 전부 구조적 제약 없이
+> (`sendReservationLifecyclePush`)·Solapi SMS(`sendSms`) 세 경로 전부 구조적 제약 없이
 > 정상 발송된다.
+>
+> 📱 **SMS 동시 발송(2026-10-02)**: 위 AUTO_NOTIFY·수동버튼 알림 중 reservation_approval·shipment_notify·
+> tracking_notify·dhero_place_guide·return_registration·return_remind·reservation_cancelled(+ 계약서
+> contract_link·contract_signed)는 채팅카드와 동시에 SMS도 나간다(알림 off·블랙리스트 무관, 같은 날
+> 중복 차단, 정본 service-operations.md §15). rental_confirm·rental_complete·damage_claimed·hold_expired는 SMS 대상 아님.
 >
 > ⚠️ **채팅카드(위 표) ≠ 브라우저 푸시(FCM) — 2026-08-19 명문화**: 위 표는 `send_rental_chat_
 > notification` RPC의 채팅카드 발송만 다룬다. 브라우저 푸시는 `src/lib/server/push.ts`의

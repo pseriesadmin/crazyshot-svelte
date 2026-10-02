@@ -7,7 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
-import { sendPushToUser } from '$lib/server/push'
+import { sendCardSms, sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contract-substitution'
 import { buildQrDataUrl } from '$lib/utils/qrIssue'
@@ -189,6 +189,15 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
     title: '전자계약이 도착했어요',
     body: '계약서를 확인하고 서명해주세요.',
     link: signingUrl,
+  })
+
+  // SMS 동시 발송 — 재발송도 매번 발송(force, Stephen 확정 2026-10-02). 링크는 서명 URL 그대로.
+  await sendCardSms(admin, {
+    userId: contract.user_id,
+    reservationId: contract.reservation_id,
+    notifyType: 'contract_link',
+    link: signingUrl,
+    force: true,
   })
 
   // P8A-3: sent 이벤트 감사로그 (silent fail)

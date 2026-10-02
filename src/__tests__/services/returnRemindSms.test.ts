@@ -217,8 +217,8 @@ describe('sendReservationLifecyclePush — skipSmsFallback 옵션으로 SMS 중�
 
   it('skipSmsFallback: true 시 push가 no_token이어도 SMS fallback이 발송되지 않는다', async () => {
     const fallbackSpy = vi
-      .spyOn(smsModule, 'sendReservationLifecycleSmsFallback')
-      .mockResolvedValue(undefined)
+      .spyOn(smsModule, 'sendLifecycleSms')
+      .mockResolvedValue({ sent: true, reason: 'sent' })
 
     await sendReservationLifecyclePush(
       makeMockAdmin('01099998888'),  // phone 있어도 skip돼야 함
@@ -230,10 +230,10 @@ describe('sendReservationLifecyclePush — skipSmsFallback 옵션으로 SMS 중�
     expect(fallbackSpy).not.toHaveBeenCalled()
   })
 
-  it('skipSmsFallback 미전달 + no_token + phone 있음 → SMS fallback 정확히 1회 발송', async () => {
+  it('skipSmsFallback 미전달 + phone 있음 → 푸시 결과와 무관하게 SMS 정확히 1회 발송(2026-10-02 항상 발송 정책)', async () => {
     const fallbackSpy = vi
-      .spyOn(smsModule, 'sendReservationLifecycleSmsFallback')
-      .mockResolvedValue(undefined)
+      .spyOn(smsModule, 'sendLifecycleSms')
+      .mockResolvedValue({ sent: true, reason: 'sent' })
 
     await sendReservationLifecyclePush(
       makeMockAdmin('01099998888'),
@@ -243,13 +243,16 @@ describe('sendReservationLifecyclePush — skipSmsFallback 옵션으로 SMS 중�
     )
 
     expect(fallbackSpy).toHaveBeenCalledTimes(1)
-    expect(fallbackSpy).toHaveBeenCalledWith('01099998888', '테스트 카메라', 'return_remind')
+    expect(fallbackSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ phone: '01099998888', productName: '테스트 카메라', notifyType: 'return_remind', reservationId: 99999 }),
+    )
   })
 
-  it('skipSmsFallback 미전달 + no_token + phone 없음 → SMS fallback 미발송 (phone null 가드)', async () => {
+  it('skipSmsFallback 미전달 + no_token + phone 없음 → SMS 미발송 (phone null 가드)', async () => {
     const fallbackSpy = vi
-      .spyOn(smsModule, 'sendReservationLifecycleSmsFallback')
-      .mockResolvedValue(undefined)
+      .spyOn(smsModule, 'sendLifecycleSms')
+      .mockResolvedValue({ sent: true, reason: 'sent' })
 
     await sendReservationLifecyclePush(
       makeMockAdmin(null),  // phone 없음
@@ -257,7 +260,7 @@ describe('sendReservationLifecyclePush — skipSmsFallback 옵션으로 SMS 중�
       'return_remind',
     )
 
-    // phone이 null이면 sendReservationLifecycleSmsFallback 호출 자체가 없음
+    // phone이 null이면 sendLifecycleSms 호출 자체가 없음
     expect(fallbackSpy).not.toHaveBeenCalled()
   })
 })

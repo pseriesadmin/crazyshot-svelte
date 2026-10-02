@@ -65,7 +65,7 @@ export const GET: RequestHandler = async ({ request }) => {
         })
         if (notifyError) throw new Error(notifyError.message)
 
-        await sendReservationLifecyclePush(admin, row.reservation_id, 'locker_guide')
+        await sendReservationLifecyclePush(admin, row.reservation_id, 'locker_guide', { skipSms: true }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
 
         if (row.phone && row.password) {
           await sendSms(

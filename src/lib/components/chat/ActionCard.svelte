@@ -4,6 +4,7 @@
 
   import type { ActionPayload, CtaModalRequest } from '$lib/types/chat'
   import { csToast } from '$lib/utils/toast'
+  import { smsNotifyTypesForCard } from '$lib/utils/smsCardTypes'
 
   interface Props {
     payload: ActionPayload
@@ -216,6 +217,22 @@
         if (!terminal || attempt === 1) return
         await new Promise((r) => setTimeout(r, 2000))
       }
+    })()
+    return () => { cancelled = true }
+  })
+
+  // 관리자 전용 — 이 카드가 SMS로도 동시 발송됐는지 한 줄 표시(2026-10-02). 고객 화면에는 노출하지
+  // 않으며(chat_messages에 저장 금지, service-operations.md §17) 관리자 뷰에서만 API로 라이브 조회한다.
+  let smsSentLive = $state(false)
+  $effect(() => {
+    if (!isAdmin || !messageId || smsNotifyTypesForCard(payload.type).length === 0) {
+      smsSentLive = false
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const data = await fetchJsonSafe<{ sent: boolean }>(`/api/cms/chat/sms-status/${messageId}`)
+      if (!cancelled) smsSentLive = data?.sent === true
     })()
     return () => { cancelled = true }
   })
@@ -599,6 +616,9 @@
             {isBlocked ? blockedLabel : ctaLabel}
           </button>
         {/if}
+        {#if smsSentLive}
+          <p class="sms-sent-note">SMS 발송 성공.</p>
+        {/if}
       </div>
     </div>
   {:else}
@@ -665,6 +685,9 @@
         >
           {isBlocked ? blockedLabel : ctaLabel}
         </button>
+      {/if}
+      {#if smsSentLive}
+        <p class="sms-sent-note">SMS 발송 성공.</p>
       {/if}
     </div>
   {/if}
@@ -953,6 +976,13 @@
   }
 
   /* SHIPMENT_TRACKING_CARD — 운송장 미등록 안내 문구 (죽은 CTA 버튼 대체) */
+  /* 관리자 뷰 전용 SMS 동시 발송 결과 한 줄 */
+  .sms-sent-note {
+    font: 400 12px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-mid, #777);
+    margin: 6px 0 0;
+  }
+
   .shipment-pending-note {
     font: 400 12px/1.5 'Noto Sans KR', sans-serif;
     color: var(--cs-text-mid, #777);
