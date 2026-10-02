@@ -1,5 +1,6 @@
 // /api/cms/canned-responses — 캔드 리스폰스 목록 조회 / 신규 등록
 // 편집 권한: is_cms_user() (파트너 포함 모든 CMS 사용자)
+import { isValidCtaUrl } from '$lib/utils/ctaUrl'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -74,6 +75,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const ctaLabel  = typeof body.cta_label === 'string' ? body.cta_label.trim() || null : null
   const ctaUrl    = typeof body.cta_url === 'string'   ? body.cta_url.trim() || null : null
 
+  if (ctaUrl && !isValidCtaUrl(ctaUrl)) {
+    return json({ error: '버튼 링크는 http(s):// 또는 /로 시작해야 합니다.' }, { status: 400 })
+  }
   if (!title)   return json({ error: '제목을 입력해주세요.' }, { status: 400 })
   if (!content) return json({ error: '내용을 입력해주세요.' }, { status: 400 })
 

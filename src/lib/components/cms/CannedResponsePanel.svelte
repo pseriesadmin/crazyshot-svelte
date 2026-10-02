@@ -6,6 +6,7 @@
   import { invalidateAll } from '$app/navigation'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
+  import { isValidCtaUrl } from '$lib/utils/ctaUrl'
   import { CANNED_RESPONSE_CATEGORIES } from '$lib/constants/cannedResponseCategories'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙)
@@ -96,6 +97,17 @@
 
   async function handleSave(): Promise<void> {
     if (!localTitle.trim() || !localContent.trim() || !localHelpCategory || isSaving) return
+    // CTA 입력 검증 — 링크는 http(s):// 또는 / 로 시작해야 고객 화면에서 열린다. 버튼 텍스트만 있고 링크가
+    // 없으면 눌러도 동작하지 않는 버튼이 되므로 막는다(2026-10-02).
+    const ctaUrlTrim = localCtaUrl.trim()
+    if (ctaUrlTrim && !isValidCtaUrl(ctaUrlTrim)) {
+      csToast.error('버튼 링크는 http:// 또는 https://로 시작하거나 /로 시작하는 사이트 내부 경로여야 합니다.')
+      return
+    }
+    if (localCtaLabel.trim() && !ctaUrlTrim) {
+      csToast.error('버튼 텍스트를 쓰려면 버튼 링크 URL도 입력해 주세요.')
+      return
+    }
     isSaving = true
     try {
       const url    = isNew ? '/api/cms/canned-responses' : `/api/cms/canned-responses/${item!.id}`

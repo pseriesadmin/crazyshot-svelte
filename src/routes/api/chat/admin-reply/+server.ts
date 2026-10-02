@@ -7,6 +7,7 @@ import type { RequestHandler } from './$types'
 import { recordSynonymLearning } from '$lib/server/synonymLearning'
 import { sendPushToUser } from '$lib/server/push'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
+import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -32,8 +33,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const content         = (body?.content            as string | undefined)?.trim() ?? ''
   const cannedResponseId = (body?.canned_response_id as string | undefined)?.trim() || null
   // GSD-16: product_link 액션카드 페이로드 (선택적)
-  const actionPayload   = (body?.action_payload     as Record<string, unknown> | undefined) ?? null
-  const messageType     = actionPayload ? 'action_card' : 'text'
+  let actionPayload     = (body?.action_payload     as Record<string, unknown> | undefined) ?? null
 
   if (!sessionId || !content) {
     return json({ error: 'session_id와 content는 필수입니다.' }, { status: 400 })
@@ -44,6 +44,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (content.length > 1000) {
     return json({ error: '메시지는 1000자를 초과할 수 없습니다.' }, { status: 400 })
   }
+
+  // 빠른답변을 선택해 보낸 경우 그 답변의 CTA(이미지·버튼·링크)를 서버가 DB 기준으로 카드로 붙인다 —
+  // 과거엔 content만 전송돼 CTA가 통째로 빠졌다(2026-10-02). 클라이언트가 보낸 payload는 신뢰·덮어쓰지 않는다
+  // (product_link 등 다른 카드가 이미 있으면 그대로 유지). 본문을 수정해 보내면 canned_response_id가
+  // 클라이언트에서 이미 비워지므로 편집된 메시지는 CTA 없이 텍스트로만 나간다.
+  if (cannedResponseId && !actionPayload) {
+    const { data: cannedRow } = await admin
+      .from('canned_responses')
+      .select('id, image_url, cta_label, cta_url')
+      .eq('id', cannedResponseId)
+      .maybeSingle()
+    if (cannedRow) actionPayload = buildCannedCtaPayload(cannedRow as { id: string; image_url: string | null; cta_label: string | null; cta_url: string | null })
+  }
+  const messageType = actionPayload ? 'action_card' : 'text'
 
   // 세션 확인
   const { data: chatSession, error: sessionErr } = await admin

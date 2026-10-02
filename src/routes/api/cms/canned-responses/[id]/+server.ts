@@ -1,4 +1,5 @@
 // /api/cms/canned-responses/[id] — 단건 수정 / 삭제
+import { isValidCtaUrl } from '$lib/utils/ctaUrl'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -35,6 +36,9 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
   }
   if ('cta_url' in body) {
     updates.cta_url = typeof body.cta_url === 'string' ? body.cta_url.trim() || null : null
+    if (updates.cta_url && !isValidCtaUrl(updates.cta_url as string)) {
+      return json({ error: '버튼 링크는 http(s):// 또는 /로 시작해야 합니다.' }, { status: 400 })
+    }
   }
 
   if (Object.keys(updates).length === 0) {
