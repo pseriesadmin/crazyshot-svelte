@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { isCouponEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
+import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
@@ -195,6 +196,7 @@ export const load: PageServerLoad = async ({ params }) => {
   type RawUserCouponRow = {
     id: string
     coupon_id: string | null
+    used_at: string | null
     used_count: number
     first_viewed_at: string | null
     coupons: {
@@ -231,7 +233,7 @@ export const load: PageServerLoad = async ({ params }) => {
   let userPoints = 0
 
   if (reservation?.user_id) {
-    const [profileResult, couponResult, usedCouponsResult] = await Promise.all([
+    const [profileResult, couponResult] = await Promise.all([
       admin
         .from('user_profiles')
         .select('membership_grade, points')
@@ -239,7 +241,7 @@ export const load: PageServerLoad = async ({ params }) => {
         .maybeSingle(),
       admin
         .from('user_coupons')
-        .select(`id, coupon_id, used_count, first_viewed_at,
+        .select(`id, coupon_id, used_at, used_count, first_viewed_at,
           coupons(
             id, code, type, discount_type, discount_value, description,
             is_active, deleted_at, valid_from, valid_until, validity_type, valid_days,
@@ -248,20 +250,9 @@ export const load: PageServerLoad = async ({ params }) => {
             is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
             per_user_limit, applicable_categories
           )`)
-        .eq('user_id', reservation.user_id)
-        .is('used_at', null),
-      // 1인당 사용 한도 검증용 — 이미 사용 완료한 쿠폰들을 coupon_id별로 집계 (2026-09-21 추가)
-      admin
-        .from('user_coupons')
-        .select('coupon_id')
-        .eq('user_id', reservation.user_id)
-        .not('used_at', 'is', null),
+        .eq('user_id', reservation.user_id),
+      // 사용한 쿠폰도 함께 가져와 1인당 사용 횟수(per_user_limit) 소진 여부를 아래에서 판정한다 (Migration 623)
     ])
-
-    const usedCountByCoupon = new Map<string, number>()
-    for (const row of (usedCouponsResult.data ?? []) as Array<{ coupon_id: string }>) {
-      usedCountByCoupon.set(row.coupon_id, (usedCountByCoupon.get(row.coupon_id) ?? 0) + 1)
-    }
 
     // 적용 카테고리 검증용 — 이 계약서에 연결된 예약 1건의 상품 카테고리
     const reservationProductCategory = (signing.contracts as unknown as {
@@ -290,7 +281,8 @@ export const load: PageServerLoad = async ({ params }) => {
         if (c.valid_until && c.valid_until < now) return false
       }
       // 필수 회원 분류(general/student/subscriber) 판정은 학생·구독 여부를 조회한 뒤 아래 2차 필터에서 수행
-      if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
+      // 1인당 사용 횟수 소진(Migration 623) — 0=무제한, N=N번 사용하면 제외. (총 발행 개수는 발급 단계에서만 집행)
+      if (isUserCouponExhausted(uc.used_at, uc.used_count, c.per_user_limit)) return false
       if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
       return true
     })
@@ -357,7 +349,7 @@ export const load: PageServerLoad = async ({ params }) => {
           isFirstRental:        contractIsFirstRental,
           isStudent:            contractIsStudent,
           hasActiveSubscription: contractHasSubscription,
-          usedCountForCoupon:   usedCountByCoupon.get(uc.coupon_id ?? '') ?? 0,
+          usedCountForCoupon:   userCouponUsedCount(uc.used_at, uc.used_count),
           cartCategories:       contractCartCategories,
         },
       ).ok

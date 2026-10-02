@@ -21,6 +21,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { UserCouponCard } from '$lib/server/account/loadUserCoupons'
+import { isUserCouponExhausted } from '$lib/utils/couponUsage'
 import type { RequestHandler } from './$types'
 
 interface RawCoupon {
@@ -32,11 +33,13 @@ interface RawCoupon {
   min_purchase_amount: number | null
   validity_type: string | null
   valid_days: number | null
+  per_user_limit: number | null
 }
 
 interface RawUserCouponRow {
   id: string
   used_at: string | null
+  used_count: number | null
   redeemed_code: string | null
   first_viewed_at: string | null
   coupons: RawCoupon | null
@@ -55,7 +58,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
   const { data, error } = await admin
     .from('user_coupons')
     .select(
-      'id, used_at, redeemed_code, first_viewed_at, coupons!inner(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, validity_type, valid_days, is_active, deleted_at)',
+      'id, used_at, used_count, redeemed_code, first_viewed_at, coupons!inner(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, validity_type, valid_days, per_user_limit, is_active, deleted_at)',
     )
     .eq('user_id', userId)
     .eq('coupons.is_active', true)
@@ -84,7 +87,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
           ? `${c.discount_value.toLocaleString('ko-KR')}원 할인`
           : `${c.discount_value}% 할인`)
 
-      const status: UserCouponCard['status'] = row.used_at ? 'used' : 'usable'
+      // 1인당 사용 횟수를 모두 쓴 경우에만 '사용 완료'(Migration 623) — loadUserCoupons.ts와 동일 판정
+      const status: UserCouponCard['status'] = isUserCouponExhausted(row.used_at, row.used_count, c.per_user_limit) ? 'used' : 'usable'
 
       // relative_days 모드는 절대 종료일(valid_until)이 없으므로 first_viewed_at + valid_days로
       // 역산해 표시한다(loadUserCoupons.ts와 동일) — 아직 첫 확인 전이면 null(상시로 표시).

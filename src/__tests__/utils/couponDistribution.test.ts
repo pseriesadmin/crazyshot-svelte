@@ -51,3 +51,28 @@ describe('지급 결과 요약', () => {
     expect(statusLabel('already_used')).toBe('이미 사용')
   })
 })
+
+describe('총 발행 개수 한도 초과(limit_reached) — Migration 623', () => {
+  it('집계: limit_reached는 별도 카운트로 센다', () => {
+    const c = countStatuses(['will_issue', 'limit_reached', 'limit_reached', 'already_held'])
+    expect(c.issuable).toBe(1)
+    expect(c.limitReached).toBe(2)
+    expect(c.alreadyHeld).toBe(1)
+    expect(c.notFound).toBe(0)
+  })
+  it('전원 한도 초과면 지급을 막고 사유를 안내한다', () => {
+    const r = buildConfirmMessage(countStatuses(['limit_reached', 'limit_reached']))
+    expect(r.kind).toBe('blocked')
+    expect(r.message).toBe('총 발행 개수 한도에 도달해 더 이상 지급할 수 없습니다.')
+  })
+  it('일부만 지급 가능하면 한도 초과 인원을 안내문에 덧붙인다', () => {
+    const r = buildConfirmMessage(countStatuses(['will_issue', 'will_issue', 'limit_reached']))
+    expect(r.kind).toBe('confirm')
+    expect(r.message).toBe('2명에게 지급할까요? (총 발행 개수 한도로 1명은 지급 불가)')
+  })
+  it('결과 요약·라벨: 한도 초과가 있을 때만 요약에 붙는다', () => {
+    expect(formatResultSummary(countStatuses(['issued', 'already_held']))).toBe('지급 1명 / 이미 보유 1명 / 회원 없음 0명')
+    expect(formatResultSummary(countStatuses(['issued', 'limit_reached']))).toBe('지급 1명 / 이미 보유 0명 / 회원 없음 0명 / 발행 한도 초과 1명')
+    expect(statusLabel('limit_reached')).toBe('발행 한도 초과')
+  })
+})

@@ -99,9 +99,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: `쿠폰 발급 오류: ${distErr.message}` }, { status: 500 })
   }
 
-  const distData = distResult as { ok?: boolean; error?: string } | null
+  const distData = distResult as { ok?: boolean; error?: string; results?: Array<{ status?: string }> } | null
   if (!distData?.ok) {
     return json({ error: distData?.error ?? '쿠폰 발급에 실패했습니다.' }, { status: 422 })
+  }
+  // 총 발행 개수 한도 도달(Migration 623) — 발급이 건너뛰어졌으면 고객 카드·푸시를 보내지 않는다
+  if (distData.results?.[0]?.status === 'limit_reached') {
+    return json({ error: '총 발행 개수 한도에 도달해 쿠폰을 지급할 수 없습니다.' }, { status: 422 })
   }
 
   // COUPON_GIFT_CARD 메시지 INSERT — 즉시 발급이므로 approval_status 없음
