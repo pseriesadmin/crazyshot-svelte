@@ -29,7 +29,9 @@
   let rowsMap       = $state(new Map<number, RentalListRow>(
     untrack(() => initial.rows.map(r => [r.reservation_id, r]))
   ))
-  let selectedRow   = $state<RentalListRow | null>(null)
+  // $state.raw: 프록시로 감싸지 않아야 아래 재동기화 $effect의 `latest !== selectedRow` 비교가 같은 원본 객체끼리 이뤄진다
+  // (프록시와 원본은 항상 !== 라 효과가 무한 반복되어 effect_update_depth_exceeded로 상세 모달이 닫히지 않던 결함, 2026-10-02)
+  let selectedRow   = $state.raw<RentalListRow | null>(null)
   // 클릭한 지점(라벨셀 또는 막대) 근처에 상세 팝오버를 띄우기 위한 앵커 좌표
   // (뷰포트 기준 fixed 포지셔닝 — 우측 고정 드로어 대신 "선택한 위치에 노출" 요구 반영,
   // 2026-08-13 Stephen "선택한 위치에 노출해" 피드백)
