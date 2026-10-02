@@ -9,6 +9,7 @@
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
   import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
+  import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete, missingCartFormFields } from '$lib/utils/cartFormCompleteness';
   import { calcStackedCouponDiscount, canAddCoupon, type StackableCoupon } from '$lib/utils/couponStacking';
   import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
@@ -616,12 +617,20 @@
     // copyToReturn 사용자 선택과 무관하게 항상 동일 방식으로 동기화
     const wasLocked = isDeliveryLocked(bulkOpts.rentalMethod)
     const forceCopy = isDeliveryLocked(v)
+    // 반납 방법을 수령과 다르게 고른 상태(방문→퀵 등)에서 체크가 켜져 있어도 수령 방법 변경이 반납 방법을 덮어쓰지 않는다 —
+    // 수령·반납 방법이 같은 상태(lockstep)일 때만 함께 따라간다(2026-10-02)
+    const lockstep = bulkOpts.returnMethod === bulkOpts.rentalMethod
     bulkOpts = {
       ...bulkOpts,
       rentalMethod: v,
-      ...(forceCopy || bulkOpts.copyToReturn ? { returnMethod: v } : {}),
+      ...(forceCopy || (bulkOpts.copyToReturn && lockstep) ? { returnMethod: v } : {}),
       ...(forceCopy ? { copyToReturn: true } : wasLocked ? { copyToReturn: false } : {}),
     }
+    // 배송 잠금으로 "반납에 동일 적용"이 강제 체크되면 반납 폼도 수령 폼 값으로 맞춘다(2026-10-02, QA MEDIUM-1) —
+    // 맞추지 않으면 체크박스는 "동일 적용"인데 반납 폼이 비어 입력 완전성 게이트(formsComplete)가 영문 모를 반납 항목으로 막는다.
+    if (forceCopy) copyRentalFormToReturn()
+    // 수령 방법을 방문·퀵·무인보관함이 아닌 방법으로 바꿨는데 반납 방법이 따라가지 않는 상태(lockstep 아님)면 동일 적용을 해제한다(QA MEDIUM-B)
+    else if (bulkOpts.copyToReturn && !lockstep && !isContractInfoMethod(v)) bulkOpts = { ...bulkOpts, copyToReturn: false }
     // 2026-09-09(Stephen 확정, §case①·② 통합) — 수령이 배송(is_delivery_type)이면 반납이
     // 요청 A로 강제고정(forceCopy)됐는지와 무관하게, 반납방식이 무엇이든(배송 재선택 포함)
     // "대여일 00:00 ~ 반납일 24:00"(rental-fee-policy.md §1 ①·②·§3) 표준값을 예약정보에
@@ -648,23 +657,56 @@
       resetReturnTimeForMethodChange()
     }
     bulkOpts = { ...bulkOpts, returnMethod: v }
+    // 수령 방법의 고객정보·주소 입력이 끝난 뒤 반납 방법을 고르면 "설정옵션을 반납방법에 적용합니다"(반납에 동일 적용)를 자동으로 켜고
+    // 수령 폼을 반납 폼에 복사한다(2026-10-02, Stephen 확정). 방문·퀵·무인보관함은 전자계약 때문에 고객정보·주소가 필수라
+    // 수령과 반납 방법이 서로 달라도(방문→퀵 등) 적용한다. 배송 계열은 수령·반납이 다를 수 있어 무조건 반영하지 않는다.
+    // 방문지점은 두 방법이 모두 지점 방식(방문·무인보관함)일 때만 복사한다. 이미 켜져 있으면 다시 하지 않는다.
+    // 이미 켜져 있는데 반납 방법을 방문·퀵·무인보관함이 아닌 방법(배송 계열)으로 바꾸면 동일 적용을 해제한다 — 켜진 채 남으면 이후
+    // 수령 폼 수정이 반납 폼을 계속 덮어쓴다(QA MEDIUM-B). 반납 폼에 사용자가 직접 입력한 값이 있으면 자동 적용하지 않는다(QA MEDIUM-A).
+    if (bulkOpts.copyToReturn && !isContractInfoMethod(v)) {
+      bulkOpts = { ...bulkOpts, copyToReturn: false }
+    } else if (
+      !bulkOpts.copyToReturn &&
+      isContractInfoMethod(bulkOpts.rentalMethod) && isContractInfoMethod(v) &&
+      isCustomerAndAddressComplete(bulkRentalForm) &&
+      isCartFormEmpty(bulkReturnForm)
+    ) {
+      bulkOpts = { ...bulkOpts, copyToReturn: true }
+      copyRentalFormToReturn(isPointMethod(bulkOpts.rentalMethod) && isPointMethod(v))
+    }
     applyBulkToItems()
   }
   function bulkHandleRentalForm(f: FormState) {
+    markFormTouched(bulkRentalTouched, bulkRentalForm, f)
     bulkRentalForm = f
-    if (bulkOpts.copyToReturn) bulkReturnForm = { ...f }
+    if (bulkOpts.copyToReturn) {
+      markFormTouched(bulkReturnTouched, bulkReturnForm, f)
+      bulkReturnForm = { ...f }
+    }
     applyBulkToItems()
   }
   function bulkHandleReturnForm(f: FormState) {
+    markFormTouched(bulkReturnTouched, bulkReturnForm, f)
     bulkReturnForm = f
     applyBulkToItems()
+  }
+  // 수령 폼 값을 반납 폼으로 통째로 복사(반납에 동일 적용) — 복사한 모든 필드는 사용자가 정한 값이므로 touched 처리
+  // 전자계약에 고객정보·주소가 필수인 방법(방문·퀵·무인보관함) / 방문지점을 고르는 방법(방문·무인보관함)
+  function isContractInfoMethod(m: DeliveryMethod | null): boolean { return m === 'visit' || m === 'quick' || m === 'locker' }
+  function isPointMethod(m: DeliveryMethod | null): boolean { return m === 'visit' || m === 'locker' }
+  function copyRentalFormToReturn(keepPoint = true) {
+    const next = { ...bulkRentalForm, ...(keepPoint ? {} : { pickupPointId: '' }) }
+    markFormTouched(bulkReturnTouched, bulkReturnForm, next)
+    bulkReturnForm = next
   }
   function bulkHandleCopy(v: boolean) {
     // 배송 잠금 상태에서는 강제 체크 고정 — 해제 시도 무시(요청 A)
     if (!v && isDeliveryLocked(bulkOpts.rentalMethod)) return
     if (v) {
-      bulkOpts = { ...bulkOpts, copyToReturn: true, returnMethod: bulkOpts.rentalMethod }
-      bulkReturnForm = { ...bulkRentalForm }
+      // 반납 방법을 이미 방문·퀵·무인보관함 중에서 골랐다면 그 선택을 유지한다(수령과 달라도 정보만 복사)
+      const keepReturnMethod = isContractInfoMethod(bulkOpts.rentalMethod) && isContractInfoMethod(bulkOpts.returnMethod)
+      bulkOpts = { ...bulkOpts, copyToReturn: true, ...(keepReturnMethod ? {} : { returnMethod: bulkOpts.rentalMethod }) }
+      copyRentalFormToReturn(!keepReturnMethod || (isPointMethod(bulkOpts.rentalMethod) && isPointMethod(bulkOpts.returnMethod)))
     } else {
       bulkOpts = { ...bulkOpts, copyToReturn: false }
     }
@@ -763,19 +805,28 @@
     applyBulkToItems()
   }
 
-  // 통합 입력값이 비어있으면(사용자가 손대지 않은 필드) 기존 개별 값 유지 — 덮어써서 날리지 않도록 방어
-  function mergeFormForBulk(bulkForm: FormState, itemForm: FormState): FormState {
+  // 통합 입력값이 비어있으면(사용자가 손대지 않은 필드) 기존 개별 값 유지 — 덮어써서 날리지 않도록 방어.
+  // 단 사용자가 통합 폼에서 직접 지운 필드(touched)는 비어 있는 값 그대로 반영한다(2026-10-02, QA MEDIUM-2 —
+  // 지웠는데도 개별 상품에 옛 값이 남아 입력 완전성 게이트가 통과되던 부작용 해소).
+  const bulkRentalTouched = new Set<keyof FormState>()
+  const bulkReturnTouched = new Set<keyof FormState>()
+  const FORM_KEYS: Array<keyof FormState> = ['name', 'email', 'phone', 'addr', 'addrDetail', 'postalCode', 'notes', 'memberCheck', 'memberCheck2', 'pickupPointId']
+  function markFormTouched(touched: Set<keyof FormState>, prev: FormState, next: FormState) {
+    for (const k of FORM_KEYS) if (prev[k] !== next[k]) touched.add(k)
+  }
+  function mergeFormForBulk(bulkForm: FormState, itemForm: FormState, touched: Set<keyof FormState>): FormState {
+    const pick = <K extends keyof FormState>(k: K): FormState[K] => (touched.has(k) ? bulkForm[k] : (bulkForm[k] || itemForm[k]))
     return {
-      name: bulkForm.name || itemForm.name,
-      email: bulkForm.email || itemForm.email,
-      phone: bulkForm.phone || itemForm.phone,
-      addr: bulkForm.addr || itemForm.addr,
-      addrDetail: bulkForm.addrDetail || itemForm.addrDetail,
-      postalCode: bulkForm.postalCode || itemForm.postalCode,
-      notes: bulkForm.notes || itemForm.notes,
-      memberCheck: bulkForm.memberCheck || itemForm.memberCheck,
-      memberCheck2: bulkForm.memberCheck2 || itemForm.memberCheck2,
-      pickupPointId: bulkForm.pickupPointId || itemForm.pickupPointId,
+      name: pick('name'),
+      email: pick('email'),
+      phone: pick('phone'),
+      addr: pick('addr'),
+      addrDetail: pick('addrDetail'),
+      postalCode: pick('postalCode'),
+      notes: pick('notes'),
+      memberCheck: pick('memberCheck'),
+      memberCheck2: pick('memberCheck2'),
+      pickupPointId: pick('pickupPointId'),
     }
   }
 
@@ -794,8 +845,8 @@
         return {
           ...it,
           opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.rentalMethod },
-          rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
-          returnForm: mergeFormForBulk(bulkRentalForm, it.returnForm),
+          rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm, bulkRentalTouched),
+          returnForm: mergeFormForBulk(bulkRentalForm, it.returnForm, bulkRentalTouched),
         }
       }
       return {
@@ -808,8 +859,8 @@
         rentalTime: bulkTime || it.rentalTime,
         returnTime: bulkReturnTime || it.returnTime,
         opts: { ...it.opts, rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod },
-        rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm),
-        returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm),
+        rentalForm: mergeFormForBulk(bulkRentalForm, it.rentalForm, bulkRentalTouched),
+        returnForm: mergeFormForBulk(bulkReturnForm, it.returnForm, bulkReturnTouched),
       }
     })
     // sync_cart_dates() RPC — TASK-D 연동 시 호출 예정
@@ -1009,17 +1060,34 @@
   // canProceed: 6가지 조건 모두 충족
   const canProceed = $derived(hasItems && datesSet && pickupPointsSet && deadlineOk && identityOk && agreed)
 
-  // "정보 미입력" 경고 토스트 전용 — 고객 정보(이름/이메일/휴대번호) 미기재 감지(2026-09-09,
-  // Stephen 확인). ⚠️ canProceed에는 포함하지 않음(스코프 확정: 경고 토스트만 우선 추가 —
-  // 이 필드들이 실제로 서버 어디에도 저장되지 않는 별도 이슈가 있어 제출 자체를 막는 건
-  // 이번 작업 범위 밖). rentalForm(수령 방식 아코디언)만 검사 — 고객 정보는 한 사람 기준이라
-  // returnForm 쪽 중복 입력까지 요구하면 불필요한 이중 입력 요구가 됨.
-  const customerInfoSet = $derived(
+  // ⚠️ 2026-10-02: 이름/이메일/휴대번호/주소/요청 사항 미입력은 이제 경고 토스트가 아니라 제출 게이트(formsComplete, 아래)로 막는다.
+  // 수령·반납 입력 정보 완전성(2026-10-02, Stephen 확정): 이름·전자메일·휴대번호·기본주소·상세주소·요청 사항을
+  // 수령·반납 양쪽 모두 빠짐없이 입력해야 예약신청이 가능하다(방문·무인보관함·퀵·택배 등 방식 무관).
+  // 대여 라인이 대상이고, 판매전용 구매 라인은 단독 카트(주문설정)일 때만 대상이다(혼합 카트의 구매 라인은 폼을 받지 않는다).
+  const formsComplete = $derived(
     itemsState.every(it => {
       if (it.deleted || !it.checked) return true
-      return it.rentalForm.name !== '' && it.rentalForm.email !== '' && it.rentalForm.phone !== ''
+      const isRental = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
+      if (!isRental && !readIsPurchaseOnly()) return true
+      return isCartFormComplete(it.rentalForm) && isCartFormComplete(it.returnForm)
     })
   )
+  // 입력이 비어 있는 항목 안내(화면 표시·토스트용) — 수령/반납 구분하여 한글 라벨로
+  const missingFormSummary = $derived.by(() => {
+    const rental = new Set<string>()
+    const ret = new Set<string>()
+    for (const it of itemsState) {
+      if (it.deleted || !it.checked) continue
+      const isRental = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
+      if (!isRental && !readIsPurchaseOnly()) continue
+      missingCartFormFields(it.rentalForm).forEach(f => rental.add(f))
+      missingCartFormFields(it.returnForm).forEach(f => ret.add(f))
+    }
+    const parts: string[] = []
+    if (rental.size > 0) parts.push(`수령: ${[...rental].join('·')}`)
+    if (ret.size > 0) parts.push(`반납: ${[...ret].join('·')}`)
+    return parts.join(' / ')
+  })
 
   // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
   // 판매전용 단독 카트는 곧바로 PG 결제로 이어지므로 '결제하기'(2026-10-01) — 대여 포함 카트는 기존 문구 유지
@@ -1063,8 +1131,8 @@
         // methodSelectionValid로 정상 차단되지만) 경고 토스트만 조용히 누락됐다.
         // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
         // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
-        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !customerInfoSet || !methodSelectionValid)) {
-          csToast.warning('대여예약정보를 모두 확인해 주세요.')
+        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
+          csToast.warning(missingFormSummary ? `입력하지 않은 항목이 있습니다 — ${missingFormSummary}` : '대여예약정보를 모두 확인해 주세요.')
         }
       },
       { threshold: 0, rootMargin: '150px 0px 150px 0px' }
@@ -1672,7 +1740,7 @@
   const priceUnsetBlocked = $derived(
     itemsState.some(it => !it.deleted && it.checked && itemPriceUnset(groupsById.get(it.id)))
   )
-  const readyToSubmit = $derived(canProceed && methodSelectionValid && !priceUnsetBlocked)
+  const readyToSubmit = $derived(canProceed && formsComplete && methodSelectionValid && !priceUnsetBlocked)
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
   // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
@@ -2705,7 +2773,7 @@
         </button>
         <span class="footer-terms-text" style:color={agreed ? 'var(--cs-purple)' : 'var(--cs-purple-op10)'}>등록한 대여조건 및 <button type="button" class="terms-guide-link" onclick={() => (showGuideModal = true)}>이용안내</button>에 모두 동의합니다.</span>
       </label>
-      {#if canProceed && !methodSelectionValid}
+      {#if canProceed && formsComplete && !methodSelectionValid}
         <p class="footer-method-warning">수령·반납 방식을 다시 선택해주세요.</p>
       {/if}
       {#if priceUnsetBlocked}
@@ -3637,38 +3705,13 @@
 
 {#snippet DeliveryAddressSection(p: { form: FormState; onFormChange: (f: FormState) => void; method: DeliveryMethod | null; type: 'rental' | 'return'; hasUserAddress?: boolean; userAddressInfo?: UserAddressInfo; pickupPoints?: PickupPointRow[] })}
   {@const isPointPickupMethod = p.method === 'visit' || p.method === 'locker'}
-  {@const addrLabel = isPointPickupMethod ? '방문지점 정보' : (p.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
-  <div class="form-section">
-    <div class="form-section-header">
-      <span class="form-section-label">{addrLabel}</span>
-      {#if !isPointPickupMethod}
-        <label class="form-check-label" class:form-check-label-disabled={!p.hasUserAddress}>
-          <button
-            class="checkbox-btn checkbox-btn-terms"
-            class:checked={p.form.memberCheck2}
-            disabled={!p.hasUserAddress}
-            onclick={() => {
-              const next = !p.form.memberCheck2
-              p.onFormChange(next
-                ? {
-                    ...p.form,
-                    memberCheck2: true,
-                    addr:       p.userAddressInfo?.road_address  ?? p.form.addr,
-                    addrDetail: p.userAddressInfo?.detail_address ?? p.form.addrDetail,
-                  }
-                : { ...p.form, memberCheck2: false })
-            }}
-            aria-label="회원정보 반영"
-          >
-            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-            </svg>
-          </button>
-          <span>회원정보 반영</span>
-        </label>
-      {/if}
-    </div>
-    {#if isPointPickupMethod}
+  {@const addrLabel = isPointPickupMethod ? '고객 주소 정보' : (p.type === 'rental' ? '배송지 정보' : '반납위치 지정정보')}
+  <!-- 방문·무인보관함: 지점 선택 영역 + (2026-10-02, Stephen 확정) 고객 주소 입력 영역을 함께 노출한다 — 계약서 {{주소}}의 정본 -->
+  {#if isPointPickupMethod}
+    <div class="form-section">
+      <div class="form-section-header">
+        <span class="form-section-label">방문지점 정보</span>
+      </div>
       <div class="visit-info">
         {#if p.pickupPoints && p.pickupPoints.length > 0}
           <div class="pickup-point-list">
@@ -3688,22 +3731,51 @@
           <p class="visit-info-empty">등록된 방문 지점이 없습니다. 고객센터로 문의해 주세요.</p>
         {/if}
       </div>
-    {:else}
-      <div class="form-fields">
-        <PostcodeSearchButton
-          value={p.form.addr}
-          placeholder="기본주소 입력 (클릭하여 검색)"
-          onselect={(road, postal) => {
-            p.onFormChange({ ...p.form, addr: road, postalCode: postal })
-            if (p.method) validateDeliveryAddress(road, postal, p.method)
+    </div>
+  {/if}
+  <div class="form-section">
+    <div class="form-section-header">
+      <span class="form-section-label">{addrLabel}</span>
+      <label class="form-check-label" class:form-check-label-disabled={!p.hasUserAddress}>
+        <button
+          class="checkbox-btn checkbox-btn-terms"
+          class:checked={p.form.memberCheck2}
+          disabled={!p.hasUserAddress}
+          onclick={() => {
+            const next = !p.form.memberCheck2
+            p.onFormChange(next
+              ? {
+                  ...p.form,
+                  memberCheck2: true,
+                  addr:       p.userAddressInfo?.road_address  ?? p.form.addr,
+                  addrDetail: p.userAddressInfo?.detail_address ?? p.form.addrDetail,
+                }
+              : { ...p.form, memberCheck2: false })
           }}
-        />
-        {#if p.form.postalCode}
-          <p class="cart-postal-hint">[{p.form.postalCode}]</p>
-        {/if}
-        <input class="f-input" placeholder="상세주소 입력" value={p.form.addrDetail} oninput={(e) => p.onFormChange({ ...p.form, addrDetail: readInputValue(e) })}/>
-      </div>
-    {/if}
+          aria-label="회원정보 반영"
+        >
+          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
+              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+            </svg>
+        </button>
+        <span>회원정보 반영</span>
+      </label>
+    </div>
+    <div class="form-fields">
+      <PostcodeSearchButton
+        value={p.form.addr}
+        placeholder="기본주소 입력 (클릭하여 검색)"
+        onselect={(road, postal) => {
+          p.onFormChange({ ...p.form, addr: road, postalCode: postal })
+          // 배송가능 지역 사전검증은 배송 방식에만 의미가 있다(방문·무인보관함은 배송이 아님)
+          if (p.method && !isPointPickupMethod) validateDeliveryAddress(road, postal, p.method)
+        }}
+      />
+      {#if p.form.postalCode}
+        <p class="cart-postal-hint">[{p.form.postalCode}]</p>
+      {/if}
+      <input class="f-input" placeholder="상세주소 입력" value={p.form.addrDetail} oninput={(e) => p.onFormChange({ ...p.form, addrDetail: readInputValue(e) })}/>
+    </div>
   </div>
 {/snippet}
 
