@@ -253,6 +253,10 @@
                       {STATUS_LABEL[row.status] ?? row.status}
                     </span>
                   {/if}
+                  {#if row.status_mixed}
+                    <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
+                    <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info);margin-left:4px;">일부 진행</span>
+                  {/if}
                   {#if row.status === 'hold' && row.payment_confirmed_at}
                     <span class="status-badge" style="background:rgba(245,158,11,0.12);color:var(--cs-warning);margin-left:4px;">결제완료</span>
                   {/if}
@@ -277,6 +281,9 @@
                 <td><span class="customer-name">{row.customer_name ?? '-'}</span></td>
                 <td>
                   <span class="product-name">{row.product_name}</span>
+                  {#if (row.order_item_count ?? 1) > 1}
+                    <span class="product-more" title="같은 주문(예약코드)에 묶인 상품 {row.order_item_count}건">외 {row.order_item_count - 1}건</span>
+                  {/if}
                   {#if row.product_category}
                     <span class="product-cat">{row.product_category}</span>
                   {/if}
@@ -513,6 +520,7 @@
   .customer-name { font-weight: 700; color: var(--cs-text); }
   .product-name  { font-weight: 600; color: var(--cs-text); }
   .product-cat   { font: var(--text-pc-script-12); color: var(--cs-text-light); margin-left: 4px; }
+  .product-more  { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-mid); margin-left: 4px; }
   .product-code  {
     font: var(--text-pc-script-12);
     font-family: monospace;

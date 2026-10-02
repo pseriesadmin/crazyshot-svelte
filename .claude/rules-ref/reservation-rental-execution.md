@@ -442,6 +442,9 @@ Migration 285도 이미 Production에 적용돼 실제로 hold 29건을 expired�
 계약 발송            : src/routes/api/cms/contracts/[id]/send-chat/+server.ts (✅ §3 결함B-2 수정완료)
 서명 처리            : src/routes/api/contracts/[token]/sign/+server.ts (✅ §3 결함B-2 수정완료·배포됨, try_confirm_reservation RPC / ⚠️ §0-4 #7 통합알림 부분은 코드수정완료이나 git 미커밋 — Production 미배포, 2026-08-18 감사 확인)
 예약승인(단건/배치)   : src/routes/cms/reservation/+page.server.ts (approveReservation, updateStatus 액션)
+                       ⚠️ 2026-10-02(Migration 618) 목록은 주문 1건 = 1행(대표 행) — approveReservation은 대표 행에서
+                       같은 주문의 hold 형제도 함께 승인(상세: service-operations.md §4, rental-lifecycle.md
+                       "주문 단위 목록 표시", 테스트 approveReservationOrderWide.test.ts)
 배치알림 판단로직     : src/lib/server/reservationApprovalNotify.ts (resolveApprovalNotifyPlan,
                        ✅ §0-6 expired 처리 수정완료, ⚠️ git 미커밋 — Production 미배포,
                        2026-08-18 sp3-qa-agent GATE E 발견·즉시수정)

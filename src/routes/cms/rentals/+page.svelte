@@ -222,6 +222,10 @@
                   <span class="status-badge" style="background:{st.bg};color:{st.color}">
                     {STATUS_LABEL[row.status] ?? row.status}
                   </span>
+                  {#if row.status_mixed}
+                    <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
+                    <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info)">일부 진행</span>
+                  {/if}
                   {#if row.cancel_pending}
                     <!-- 고객 취소 후 관리자 취소확인 대기 — 패널 헤더 [예약취소]로 확인 -->
                     <span class="status-badge" style="background:var(--cs-error);color:var(--cs-white)">예약취소</span>
@@ -242,6 +246,9 @@
                 <td>
                   <div class="product-cell">
                     <span class="product-name">{row.product_name}</span>
+                    {#if (row.order_item_count ?? 1) > 1}
+                      <span class="product-more" title="같은 주문(예약코드)에 묶인 상품 {row.order_item_count}건">외 {row.order_item_count - 1}건</span>
+                    {/if}
                     {#if row.product_category}
                       <span class="product-cat">{row.product_category}</span>
                     {/if}
@@ -483,6 +490,7 @@
   .product-cell  { display: flex; flex-direction: column; gap: 2px; }
   .product-name  { font-weight: 600; }
   .product-cat   { font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .product-more  { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-mid); }
   .product-code  {
     font: var(--text-pc-script-12);
     font-family: monospace;

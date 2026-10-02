@@ -77,6 +77,12 @@
     /** 방문 지점명(Migration #480) — "수령방식"/"반납방식" 표시 시 "방식명 (지점명)"으로 조합 */
     pickup_point_name?:    string | null
     return_point_name?:    string | null
+    /** Migration 618 — 이 행(대표 예약) 자신의 실제 상태. 묶음 목록의 status는 "주문 상태"(형제 중 가장 덜 진행된 단계) */
+    own_status?:           string
+    /** Migration 618 — 같은 주문에 묶인 예약(상품) 수 */
+    order_item_count?:     number
+    /** Migration 618 — 활성 형제의 진행 단계가 서로 다른가("일부 진행") */
+    status_mixed?:         boolean
   }
 
   interface PaymentDetail {
@@ -173,13 +179,21 @@
   }
 
   async function processProductQrMatch(scannedId: string): Promise<void> {
-    if (!isProductMatch(scannedId, row)) {
+    // 주문 1건 = 목록 1행(Migration 618) — 스캔한 상품이 대표 상품이 아니라 같은 주문의 다른 상품일 수 있어
+    // 주문에 속한 상품(유닛) 전체에서 일치하는 예약을 찾아 그 예약 기준으로 처리한다.
+    const unit = lifecycleUnits.find(u =>
+      isProductMatch(scannedId, {
+        product_id:   u.reservationId === row.reservation_id ? row.product_id : '',
+        product_code: u.code,
+      })
+    )
+    if (!unit) {
       csToast.error('스캔한 상품이 예약 상품과 일치하지 않습니다')
       return
     }
 
-    const target = nextStatus(row.status, row.pickup_method, row.return_method)
-    if (!QR_AUTO_STATUSES.has(row.status) || !target) {
+    const target = unit.next
+    if (!QR_AUTO_STATUSES.has(unit.status) || !target) {
       goto(`/cms/mobile/qr/${encodeURIComponent(scannedId)}`)
       return
     }
@@ -188,11 +202,11 @@
       const res = await fetch('/api/cms/rental-qr-transition', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reservationId: row.reservation_id, newStatus: target, productId: scannedId }),
+        body: JSON.stringify({ reservationId: unit.reservationId, newStatus: target, productId: scannedId }),
       })
       const body = await res.json()
       if (body.ok) {
-        csToast.success(row.status === 'confirmed' ? '반출로 자동 기록되었습니다' : '반납으로 자동 기록되었습니다')
+        csToast.success(unit.status === 'confirmed' ? '반출로 자동 기록되었습니다' : '반납으로 자동 기록되었습니다')
         onrefresh()
       } else {
         csToast.error(body.message ?? '처리에 실패했습니다')
@@ -451,8 +465,10 @@
   // 같은 주문(orders/order_items, Migration 280)에 묶인 다른 상품 — 대여정보 탭 "상품 정보"
   // 섹션에 장바구니에 함께 담긴 상품 전부를 반복 표시하기 위함(옵션상품/결제정보 탭과 동일한
   // lazy-fetch 패턴). 단일 상품 예약이면 빈 배열.
+  // 주문 1건 = 목록 1행(Migration 618): 다중 상품 주문은 상품별 반출·반납 버튼(lifecycleUnits)이 형제 정보에 의존하므로
+  // 어느 탭으로 열어도(initialTab 등) 조회한다.
   $effect(() => {
-    if (activeTab !== 'rental') return
+    if (activeTab !== 'rental' && !isMultiOrder) return
     if (rentalSiblingsLoading) return
     if (rentalSiblingsFetchedForId === row.reservation_id) return
 
@@ -514,6 +530,33 @@
       trackingNumber: s.trackingNumber,
     })),
   ])
+
+  // 주문 1건 = 목록 1행(Migration 618, Stephen Q1 B안) — 목록·상태 표시는 주문 단위지만 반출·반납은
+  // 상품(예약)별로 따로 처리한다. 대표 행(row) 자신 + 같은 주문 형제 상품을 각자의 상태·수령/반납 방식 기준의
+  // 다음 단계와 함께 하나의 배열로 정규화(상태 버튼 목록·QR 스캔 매칭 공용). row.status는 "주문 상태"이므로
+  // 대표 자신의 상태는 own_status를 쓴다.
+  interface LifecycleUnit {
+    reservationId: number
+    name:          string
+    code:          string | null
+    status:        string
+    pickupMethod:  string | null
+    returnMethod:  string | null
+    next:          string | null
+  }
+  let isMultiOrder = $derived((row.order_item_count ?? 1) > 1)
+  let lifecycleUnits = $derived<LifecycleUnit[]>(
+    [
+      {
+        reservationId: row.reservation_id, name: row.product_name, code: row.product_code,
+        status: row.own_status ?? row.status, pickupMethod: row.pickup_method, returnMethod: row.return_method,
+      },
+      ...rentalSiblings.map(s => ({
+        reservationId: s.reservationId, name: s.productName, code: s.productCode,
+        status: s.status, pickupMethod: s.pickupMethod, returnMethod: s.returnMethod,
+      })),
+    ].map(u => ({ ...u, next: nextStatus(u.status, u.pickupMethod, u.returnMethod) }))
+  )
 
   // 2026-09-03 버그 수정: 형제 유닛이 앵커(row)와 무관하게 개별적으로 이미 결제확인됐거나
   // 만료·취소 등으로 상태가 벗어나 있을 수 있어, canEditProducts/canReassignProductCode
@@ -867,6 +910,13 @@
   const RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES = new Set([
     'shipped', 'in_use', 'return_requested', 'returned',
   ])
+  // 주문 1건 = 목록 1행(Migration 618): row.status는 "주문 상태(가장 덜 진행된 단계)"라 일부 상품이 이미 반출된 주문도
+  // confirmed로 보일 수 있다 — 취소는 주문 전체 환불이므로 대표 자신·주문 내 어느 상품이라도 잠금 상태면 잠근다.
+  let changeCancelLocked = $derived(
+    RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status)
+    || RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.own_status ?? row.status)
+    || lifecycleUnits.some(u => RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(u.status))
+  )
 
   // §9 게이팅 완료 후 승인이력 표시 대상 상태 (rental-lifecycle.md 전체 상태 머신 기준)
   const APPROVAL_HISTORY_STATUSES = new Set([
@@ -1293,8 +1343,8 @@
           <button
             type="submit"
             class="btn-header-action"
-            disabled={isChanging || RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status) || !canChangeOrCancelReservation}
-            title={RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status)
+            disabled={isChanging || changeCancelLocked || !canChangeOrCancelReservation}
+            title={changeCancelLocked
               ? '출고 이후 상태에서는 예약변경이 불가합니다'
               : !canChangeOrCancelReservation
                 ? '예약변경 및 취소 권한이 없습니다'
@@ -1336,8 +1386,8 @@
           <button
             type="submit"
             class="btn-header-action btn-header-action--danger"
-            disabled={isCancelling || RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status) || !canChangeOrCancelReservation}
-            title={RESERVATION_CHANGE_CANCEL_LOCKED_STATUSES.has(row.status)
+            disabled={isCancelling || changeCancelLocked || !canChangeOrCancelReservation}
+            title={changeCancelLocked
               ? '출고 이후 상태에서는 예약취소가 불가합니다'
               : !canChangeOrCancelReservation
                 ? '예약변경 및 취소 권한이 없습니다'
@@ -1942,8 +1992,8 @@
         {#if row.status === 'hold' && !isRentalView}
           {#if orderSiblings.length > 0}
             <p class="order-batch-note">
-              이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 함께 진행 중입니다.
-              모든 상품이 승인 완료되면 알림이 한 번에 발송됩니다.
+              이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 하나의 예약입니다.
+              승인하기를 누르면 주문의 모든 상품이 함께 승인되고 알림이 한 번에 발송됩니다.
             </p>
           {/if}
           <form
@@ -1990,7 +2040,51 @@
             <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>거부</button>
           </form>
 
-        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 -->
+        <!-- 대여 라이프사이클 — 한 주문에 상품이 여러 개(주문 1건 = 1행, Migration 618, Q1 B안):
+             상품(예약)별로 각자의 다음 단계 버튼을 따로 처리한다. 상태는 상품마다 달라질 수 있다. -->
+        {:else if isMultiOrder}
+          {#if rentalSiblingsFetchedForId !== row.reservation_id || rentalSiblingsLoading}
+            <p class="order-batch-note">주문에 묶인 상품을 불러오는 중입니다…</p>
+          {:else if rentalSiblingsError}
+            <p class="order-batch-note">{rentalSiblingsError}</p>
+          {:else if lifecycleUnits.some(u => u.next)}
+          <div class="unit-actions">
+            {#each lifecycleUnits as u (u.reservationId)}
+              <div class="unit-action-row">
+                <span class="unit-action-name">{u.name}</span>
+                <span class="unit-action-status">{STATUS_LABEL[u.status] ?? u.status}</span>
+                {#if u.next}
+                  <form
+                    method="POST"
+                    action="/cms/reservation?/updateStatus"
+                    use:enhance={() => {
+                      isSubmitting = true
+                      return async ({ result, update }) => {
+                        isSubmitting = false
+                        if (result.type === 'success') {
+                          csToast.success('상태가 변경되었습니다.')
+                          // 상품별 처리 후 형제 목록(각 상품 상태·다음 단계 버튼)을 다시 조회해 화면에 남은 이전 상태를 없앤다
+                          rentalSiblingsFetchedForId = null
+                          onrefresh()
+                        }
+                        else csToast.error('처리 중 오류가 발생했습니다.')
+                        await update()
+                      }
+                    }}
+                  >
+                    <input type="hidden" name="reservation_id" value={u.reservationId} />
+                    <input type="hidden" name="status" value={u.next} />
+                    <button type="submit" class="btn-action" disabled={isSubmitting}>
+                      {nextLabel(u.status, u.pickupMethod, u.returnMethod)}
+                    </button>
+                  </form>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {/if}
+
+        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 (단일 상품 주문) -->
         {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
           <form
             method="POST"
@@ -2018,7 +2112,7 @@
              그 대화 내용을 확인한 뒤 여기서 직접 전환한다(키워드 매칭만으로 자동 종료 금지).
              확정~반납접수(실물이 고객에게 나가있는) 단계에서만 노출 — hold는 파손이
              성립할 수 없어 제외. reservation·rentals 두 화면 모두에서 노출(isRentalView 무관). -->
-        {#if ['confirmed', 'shipped', 'in_use', 'return_requested'].includes(row.status)}
+        {#if ['confirmed', 'shipped', 'in_use', 'return_requested'].includes(row.own_status ?? row.status)}
           <form
             method="POST"
             action="/cms/reservation?/updateStatus"
@@ -2884,6 +2978,35 @@
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 32px; /* spacing-4xl — cms-uiux.md DetailPanel 레이아웃 표준과 동일 값 */
+  }
+  /* 주문 내 상품별 반출·반납 처리 목록(Migration 618) — 상품명 · 상태 · 다음 단계 버튼 한 줄씩 */
+  .unit-actions {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .unit-action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
+  .unit-action-name {
+    flex: 1;
+    min-width: 0;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .unit-action-status {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
   }
   .order-batch-note {
     flex-basis: 100%;
