@@ -245,9 +245,17 @@ holiday_extra_fee = GREATEST(N - 1, 0) × daily요율 × 0.5   ← ⛔ 폐기됨
 ### 이중할인 방지 — delivery_fee와 완전히 동일한 패턴
 
 ```
-holiday_extra_fee는 rental_fee(쿠폰·회원등급 % 할인 대상)에서 분리된 별도 값으로 계산되어,
+⛔ 2026-10-02 폐기(Migration 626, Stephen 확정) — 아래는 과거 정책이다. 현재는 휴무일 연장요금이
+"총 기본 대여요금(T)"에 합산되어 멤버십·쿠폰 할인(정률 합산·1일차 기준 R1 포함) 대상에 포함된다:
+  T = Σ(상품·옵션 요금(연장일 차감 후)) + Σ휴무일 연장요금
+  결제금액 = T − 멤버십 할인 − 쿠폰 할인 − 포인트 + 배송비   (연장요금을 따로 더하지 않는다)
+  orders.holiday_extra_fee는 "T에 포함된 연장요금"을 보여주는 표시용 컬럼으로 유지.
+  서버: create_reservation_order·sync_order_after_composition_change가 같은 T를 계산(종전엔 create가 연장요금을 빼먹었음).
+  화면: cart otSubtotal = 상품·옵션 + itemHolidayExtra, 합계는 연장요금을 다시 더하지 않음(행은 "(대여요금에 포함)" 표기).
+  적립(award_rental_complete_points)은 원래 "상품+옵션+연장요금 − 할인 몫"이라 변경 없음.
+[과거 서술] holiday_extra_fee는 rental_fee(쿠폰·회원등급 % 할인 대상)에서 분리된 별도 값으로 계산되어,
 할인 계산 기준(v_total)에는 절대 포함되지 않고 v_final 계산 맨 끝(할인·포인트 차감 이후)에
-delivery_fee와 나란히 가산된다 — "이미 확정된 고정금액"이라 할인이 중복 적용되지 않는다.
+delivery_fee와 나란히 가산됐다 — "이미 확정된 고정금액"이라 할인이 중복 적용되지 않는다는 설계였다.
 ```
 
 ### 재고 이중배정 방지 — create_hold_reservation 시점에 이미 확장된 날짜로 배정
@@ -576,3 +584,17 @@ prop 신설 + `highlightDates` 의미 변경) + CMS 안내 스크립트 신설
 (`delivery_cutoff_settings.holiday_guide_text`, Migration #505). 요금 계산 로직은 단 한
 줄도 무변경 — 계획서 `wobbly-cuddling-marble.md` PART A(CMS)+PART B(front) 전체 반영,
 Stage 실데이터(추석 9/24~26)로 라이브 검증 완료(선택 9/25→25=레드·24=무색·23=퍼플 확인).*
+
+---
+
+## "1일차 요금"(first_day_amount) 정의 — 1일차 한정 쿠폰의 기준 (2026-10-02, Migration 621)
+
+```
+정본: compute_reservation_line_amount의 5번째 반환 컬럼 first_day_amount (요금 계산 자체는 변경 없음).
+  본상품 1일차 = 24시간 이상 대여(12h 블록 2개 이상 · 배송 잠금 · 12h 요금 미등록 시 1분이라도 대여)면 1일(24h) 요금,
+                12h 블록뿐이면 전체(12h) 요금. 휴무일 연장 차감 후 최종 본상품 요금이 상한(LEAST).
+  옵션 1일차   = 일 단가(12h 단가 있음) 옵션은 하루치(24h 미만이면 12h 단가), 12h 단가 없는 정액 옵션은 전액.
+  판매전용     = 판매가 + 옵션 전액.
+화면(cartRentalFee.ts calcFirstDayFee·hasFullRentalDay, cart/+page.svelte itemFirstDayAmount)은 같은 정의를 쓴다.
+쿠폰 산식은 service-operations.md §21 "2026-10-02 전면 개정판" 참고(정률은 합산, 1일차 한정은 R1=B1×R/T 기준).
+```

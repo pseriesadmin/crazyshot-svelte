@@ -111,6 +111,28 @@ export interface RentalFeeInput {
 }
 
 /**
+ * 대여기간에 "온전한 1일(24h 단위)"이 포함되는지 — 서버 compute_reservation_line_amount의 v_days >= 1 판정과 동일.
+ *   배송 잠금: 항상 1일 이상 / 12h 요금 미등록: 1분이라도 대여하면 올림 1일 / 그 외: 12h 블록이 2개 이상(= 720분 초과)
+ */
+export function hasFullRentalDay(input: RentalFeeInput): boolean {
+  const { startDate, endDate, pickupTime, returnTime, halfDayPrice, deliveryLocked } = input
+  const totalMinutes = calcRentalMinutes(startDate, endDate, pickupTime, returnTime, deliveryLocked)
+  if (totalMinutes <= 0) return false
+  if (deliveryLocked) return true
+  if (halfDayPrice === null) return true
+  return Math.ceil(totalMinutes / BLOCK_MINUTES) >= 2
+}
+
+/**
+ * 1일차 본상품 요금 — 서버 first_day_amount(Migration 621)와 동일.
+ * 24시간 이상 대여면 1일(24h) 요금, 12h 블록뿐이면 전체 요금. netFee = 휴무일 연장분을 뺀 최종 본상품 요금.
+ */
+export function calcFirstDayFee(input: RentalFeeInput, netFee: number): number {
+  if (netFee <= 0) return 0
+  return hasFullRentalDay(input) ? Math.min(input.dailyPrice, netFee) : netFee
+}
+
+/**
  * 대여요금(옵션 제외) — compute_reservation_line_amount RPC와 동일 산식(12시간 블록 올림).
  * 총 대여시간(분)을 720분(12h) 단위로 올림한 블록 수 기준:
  *   블록수 짝수 → (블록수/2)일 × daily

@@ -467,6 +467,7 @@ export interface Coupon {
   valid_days: number | null;           // relative_days 모드: 첫 확인일로부터 유효일수
   applies_to_rental: boolean;          // 적용 대상: 대여상품 — Migration #615 (기본 true, applies_to_sale과 최소 하나 true)
   applies_to_sale: boolean;            // 적용 대상: 판매상품 — Migration #615
+  discount_scope: 'order' | 'first_day'; // 할인 적용 범위 — Migration #620 (first_day = 대여 1일차 요금 기준, 정률 전용)
   description: string | null;
   created_at: string;
   updated_at: string;

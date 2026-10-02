@@ -15,7 +15,7 @@
  *   EC-1: fixed 쿠폰 2장 동시 사용 → 둘 다 소진 + order_coupons 2행 + 합산 할인 정확
  *   EC-2: fixed + percentage 혼합 → percentage는 fixed 차감 후 잔액 기준으로 계산됨
  *         (쿠폰별 독립 합산이 아님을 증명 — 독립 합산이면 다른 숫자가 나옴)
- *   EC-3: percentage 쿠폰 2장 → coupon_id 오름차순 순차 적용(각 단계 잔액 갱신)
+ *   EC-3: percentage 쿠폰 2장 → 같은 기준 금액에 율을 합산 적용(순차 복리 아님, Migration 621), 합계는 잔액을 넘지 않는다
  *   EC-4: 하나가 부적격(이미 사용됨)이면 all-or-nothing 롤백 — 나머지 하나도 소진되지 않음
  *   EC-5: free_shipping 쿠폰 여러 장의 합계가 배송비를 초과해도 배송비 한도로만 캡핑
  */
@@ -342,7 +342,7 @@ describe('쿠폰 다중중첩 체크아웃 — use_coupons/order_coupons (TDD-RE
   }, 30000)
 
   // ── EC-3: percentage 쿠폰 2장 — coupon_id 오름차순 순차 적용(대칭 50%+50%로 순서 무관 검증) ──
-  it('EC-3: percentage 50%+50% 순차 적용 → 100000*50%=50000, 남은 50000*50%=25000 (합계 75000, 독립합산이면 100000)', async () => {
+  it('EC-3: percentage 50%+50% 합산 적용 → 50000+50000=100000 (순차 복리면 75000이던 구정책 폐기)', async () => {
     const user = await createTestUser()
     const orderId = await setupOrderWithSubtotal(user.id, 100000)
 
@@ -357,10 +357,10 @@ describe('쿠폰 다중중첩 체크아웃 — use_coupons/order_coupons (TDD-RE
 
     const rows = await getOrderCoupons(orderId)
     const sumDiscount = rows.reduce((s, r) => s + Number(r.discount_amount), 0)
-    expect(sumDiscount).toBe(75000) // 순차 적용 특성상 대칭이어도 100000이 아니라 75000
+    expect(sumDiscount).toBe(100000) // 정률 합산 정책: 같은 기준(100000)에 50%씩
 
     const order = await getOrderRow(orderId)
-    expect(Number(order?.coupon_discount_amount)).toBe(75000)
+    expect(Number(order?.coupon_discount_amount)).toBe(100000)
   }, 30000)
 
   // ── EC-4: all-or-nothing — 하나가 이미 사용된 쿠폰이면 나머지도 소진되지 않음 ──

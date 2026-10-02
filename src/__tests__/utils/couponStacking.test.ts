@@ -6,7 +6,7 @@ const c = (over: Partial<StackableCoupon> & { id: string }): StackableCoupon => 
   coupon_id: over.id, discount_type: 'fixed', discount_value: 0, max_discount_amount: null, allow_coupon_stacking: true, ...over,
 })
 
-describe('쿠폰 다중 선택 할인 계산 — 서버 sync 산식과 동일 (B-2)', () => {
+describe('쿠폰 다중 선택 할인 계산 — 서버 apply_order_coupon_discounts(Migration 621)와 동일', () => {
   it('Stage 라이브 검증값: 정액 3,000원 + 정률 10% → 상품 50,000원에서 7,700원', () => {
     const r = calcStackedCouponDiscount([
       c({ id: 'a', discount_type: 'fixed', discount_value: 3000 }),
@@ -16,13 +16,37 @@ describe('쿠폰 다중 선택 할인 계산 — 서버 sync 산식과 동일 (B
     expect(r.percentage).toBe(4700) // (50,000 − 3,000) × 10%
     expect(r.total).toBe(7700)
   })
-  it('정률 쿠폰 2장은 coupon_id 오름차순 순차 적용(잔액 감쇠)', () => {
+  it('정률 쿠폰 2장은 같은 기준에 율을 합산한다(순차 복리 아님)', () => {
     const r = calcStackedCouponDiscount([
       c({ id: 'z', coupon_id: 'z', discount_type: 'percentage', discount_value: 50 }),
       c({ id: 'a', coupon_id: 'a', discount_type: 'percentage', discount_value: 10 }),
     ], 100000, 0)
-    // a(10%) → 10,000, 잔액 90,000 → z(50%) → 45,000
-    expect(r.percentage).toBe(55000)
+    // 10% + 50% = 60% → 60,000 (복리였다면 55,000)
+    expect(r.percentage).toBe(60000)
+  })
+  it('1일차 한정 쿠폰: 미친할인 30%(주문) + 방문 10%(1일차), 2일 대여(1일차 25,000/총 50,000) → 15,000 + 2,500', () => {
+    const r = calcStackedCouponDiscount([
+      c({ id: 'c30', coupon_id: 'a', discount_type: 'percentage', discount_value: 30 }),
+      c({ id: 'c10', coupon_id: 'b', discount_type: 'percentage', discount_value: 10, discount_scope: 'first_day' }),
+    ], 50000, 0, 25000)
+    expect(r.byCoupon).toEqual({ c30: 15000, c10: 2500 })
+    expect(r.percentage).toBe(17500)
+  })
+  it('정액 + 1일차 한정: 기준은 정액 차감 후 잔액 중 1일차 몫(R1 = B1×R/T)', () => {
+    const r = calcStackedCouponDiscount([
+      c({ id: 'f', discount_type: 'fixed', discount_value: 10000 }),
+      c({ id: 'p', coupon_id: 'p', discount_type: 'percentage', discount_value: 10, discount_scope: 'first_day' }),
+    ], 50000, 0, 25000)
+    // R=40,000, R1=20,000 → 2,000
+    expect(r.byCoupon.p).toBe(2000)
+  })
+  it('합계가 잔액을 넘지 않는다: 60% + 60% → 잔액 100,000까지만', () => {
+    const r = calcStackedCouponDiscount([
+      c({ id: 'a', coupon_id: 'a', discount_type: 'percentage', discount_value: 60 }),
+      c({ id: 'b', coupon_id: 'b', discount_type: 'percentage', discount_value: 60 }),
+    ], 100000, 0)
+    expect(r.byCoupon).toEqual({ a: 60000, b: 40000 })
+    expect(r.total).toBe(100000)
   })
   it('최대 할인 한도는 단계별로 적용', () => {
     const r = calcStackedCouponDiscount([c({ id: 'a', discount_type: 'percentage', discount_value: 30, max_discount_amount: 5000 })], 100000, 0)

@@ -343,6 +343,20 @@ chat.ts(`ActionCardType` 유니온)도 함께 업데이트됨.
 (2026-08-19 전역감사로 발견 → 같은 날 5종 전부 sendPushToUser 연결 완료, admin-reply와
 동일하게 기존 발신허브 재사용).
 
+✅ **3축 동기화 — SMS 동시 발송 추가(2026-10-02, Stephen 확정)**: 예약·대여 대화카드 10종
+(contract_link·contract_signed·reservation_approval·shipment_notify·tracking_notify·
+dhero_place_guide·return_registration·return_remind·reservation_cancelled + 반납예정)은 채팅카드·푸시와
+**동시에 SMS도** 발송된다(푸시 성공 여부와 무관, 기존 "푸시 실패 시 폴백"은 이 경로로 흡수). 정본:
+`sms.ts` `LIFECYCLE_SMS_COPY`·`sendLifecycleSms`, 허브 연결은 `push.ts` `sendReservationLifecyclePush`
+(+ 허브를 우회하는 계약서 2곳은 `sendCardSms`). 규칙:
+  · 수신동의(allow_rental_alert)·블랙리스트는 보지 않는다 — 예약·대여 관련 안내는 항상 발송.
+  · 제외: 전화번호 없음 / 탈퇴(requested·purged) / 비대상 타입(locker_guide는 비밀번호 포함 자체 SMS가 있어 제외) /
+    개발환경(dev) / 같은 날(KST) 동일 (reservation_id, notify_type) 중복(`sms_notification_logs`, Migration 626).
+    계약서 재발송(contract_link)은 중복 판정에서 제외(매번 발송).
+  · 묶음 주문은 SMS 1통만(confirm-mock은 첫 건 외 `skipSms`, 승인 헬퍼는 건당 1회 호출).
+  · 새 notify_type을 추가할 때는 **SQL 채팅카드 · push.ts 푸시 · sms.ts SMS 3곳**을 세트로 확인한다.
+  · SQL(pg_cron) 전용 발생 이벤트(hold_expired·연체료 요청)는 앱코드 경로가 없어 SMS도 불가(푸시와 동일 한계).
+
 ⚠️ **iOS Safari 구조적 한계(2026-08-19 진단 → 같은 날 부분 해소)**: iOS 16.4+ Safari는 Web
 Push를 "홈 화면에 추가"된 독립형(standalone) 웹앱에서만 허용하며, 일반 브라우저 탭에서는
 `Notification.requestPermission()` 자체가 동작하지 않는 플랫폼 제약이다(코드로 우회 불가).
@@ -623,31 +637,75 @@ create_reservation_order/sync, Migration 531~534)는 2026-09-23에 Stage·Produc
   서버는 create_reservation_order(COUPON_STACKING_NOT_ALLOWED)와 use_coupons(COUPON_STACK_REJECTED:…:COUPON_STACKING_NOT_ALLOWED)가
   이중으로 거부한다. 설정 저장은 cms_set_allow_coupon_stacking RPC(쿠폰 생성·수정 액션이 호출).
 
-할인 산식(서버 정본과 화면이 동일, 단위 테스트 대상 couponStacking.ts):
-  정액 합산(F) → 정률은 coupon_id 오름차순 순차 적용(잔액·최대 한도 단계별) → 무료배송은 배송비 한도.
+⛔ 할인 산식(아래는 2026-10-02 폐기된 과거 버전 — 기록만 유지, 현재 유효한 산식은 바로 아래
+"### 할인 산식 — 2026-10-02 전면 개정판 (Stephen 확정 · Migration 620·621 구현·Stage 검증 완료)
 
-조건부 쿠폰 노출(B-1): 최소 대여금액·최소 대여기간·방문 전용은 주문 의존 조건이라 서버 로더가 판정할 수 없다(날짜 미선택
-draft 예약은 금액이 0이고 수령 방식은 체크아웃 전까지 DB에 없음). 서버는 사용자 의존 조건만 걸러(isCouponUserEligible) 쿠폰과
-조건 필드를 내려주고, 장바구니가 현재 선택 상태로 판정해(couponOrderConditions.ts) 미충족 쿠폰은 숨기지 않고 사유와 함께 비활성
-표시한다. 대여일수는 DB rental_days(박 수, 당일=0)와 같은 기준으로 센다.
-최종 방어: create-order API가 주문 생성 직후 validate_order_coupons(부작용 없는 사전검증)를 호출해 부적격 쿠폰만 제외하고 주문을
-다시 계산(droppedCoupons 응답) → 화면은 금액이 달라졌음을 안내하고 재신청하게 한다. 결제 소진은 use_coupons(all-or-nothing).
-
-필수 회원 분류(user_grade_required)는 Migration 528부터 general/student/subscriber 값이다 — membership_grade와 직접 비교하지 말고
-matchesUserGradeRequired()를 쓴다(장바구니·계약서 2곳 교정).
-
-⛔ 사고 교훈: create_reservation_order의 다중쿠폰 경로는 출력 컬럼 order_id와 order_coupons.order_id가 이름이 같아
-"column reference order_id is ambiguous"로 항상 실패하고 있었다(Migration 533) — 2026-09-23 배포 후 되돌려진 원인으로 추정.
-605에서 DELETE를 별칭으로 한정하고 ON CONFLICT를 제약 이름으로 지정해 수정. RETURNS TABLE 출력 컬럼명과 같은 이름의 테이블 컬럼을
-다루는 함수는 항상 별칭/제약 이름을 써야 한다.
 ```
-쿠폰 "적용 대상"(2026-10-01, CMS 설정 Migration 615 + 장바구니·서버 연동 Migration 616): coupons.applies_to_rental / applies_to_sale(기본 둘 다 true).
-  한쪽 전용 쿠폰은 그 종류의 상품이 선택된 상품(주문)에 하나라도 있어야 사용 가능 — 대여 전용 쿠폰 + 판매 단독, 판매 전용 쿠폰 + 대여 단독은 비활성/거절,
-  혼합 주문은 둘 다 활성. 화면(couponOrderConditions.ts 'RENTAL_ONLY_COUPON'/'SALE_ONLY_COUPON')과 서버(_validate_and_consume_coupon 'COUPON_NOT_APPLICABLE', use_coupon·use_coupons·validate_order_coupons 공통 경로)가 같은 규칙.
-  ⛔ 미결(Stephen 결정 대기, 구현 안 함): 혼합 주문에서 한쪽 전용 쿠폰의 할인 금액 범위(대여 금액에만 적용할지) · 무료배송 쿠폰 대상 · 최소 금액 기준 금액 · 대여 전용 쿠폰이 판매 몫 적립 기준에 잡히는 조정.
-→ 상세: `supabase/migrations/20261001020000_605_coupon_stacking_rules_and_order_validation.sql` ·
-`src/lib/utils/couponStacking.ts` · `couponOrderConditions.ts` · `src/lib/server/coupons/consumeCoupons.ts` ·
-`src/__tests__/services/couponStackingRules.test.ts`(Stage 라이브 4건) · `couponMultiStacking.test.ts`(5건)
+배경: 정률 쿠폰 2장 이상을 "순차 복리"로 계산하던 방식이 "30%+10% = 40%"라는 체감 기대치보다 항상
+적게 깎았고, "방문 픽업·반납 (1일차 10%)" 쿠폰이 이름과 달리 주문 전체 잔액에 10%가 적용되던 결함을
+교정한다. 아래가 유일한 현재 산식이다 — 서버 정본은 apply_order_coupon_discounts(Migration 621)이고
+create_reservation_order·sync_order_after_composition_change가 같은 함수를 호출한다.
+
+① 정액(fixed) 쿠폰 먼저: F = Σ정액,  R = max(T − F, 0)   (T = 주문 상품 합계, 정액은 액면 그대로 기록)
+   ⛔ 2026-10-02(Migration 626, Stephen 확정): T에는 휴무일 연장요금이 포함된다(T = 상품·옵션 + 연장요금) — 멤버십·쿠폰 할인 대상 포함,
+      결제금액 = T − 할인 − 포인트 + 배송비(연장요금을 따로 더하지 않음). 상세: rental-fee-policy.md "이중할인 방지" 절.
+② 정률(percentage) 쿠폰은 복리가 아니라 같은 기준 금액에 "율을 합산"해 적용한다(각자 계산한 원화 금액을 더함):
+     discount_scope='order'     → 기준 R           → step = ROUND(R × rate/100)
+     discount_scope='first_day' → 기준 R1 = B1×R/T → step = ROUND(B1 × R × rate / (T × 100))
+   쿠폰별 한도 max_discount_amount가 있으면 step = LEAST(step, 한도) — 한도는 쿠폰 단위.
+   합계가 R을 넘지 않도록 coupon_id 오름차순으로 잘라낸다(60%+60% → 60% + 40%).
+   예) 미친할인 30%(order) + 방문 10%(first_day), 2일 대여 → 1일차 40%, 2일차 30%.
+③ B1(1일차 요금) = Σ상품별 LEAST(라인 합계, first_day_amount):
+     본상품: 24시간 이상 대여면 1일(24h) 요금(휴무일 연장 차감 후 요금이 상한), 12h 블록뿐이면 전체 요금
+     옵션: 일 단가 옵션은 하루치(24h 미만이면 12h 단가), 정액(12h 단가 없음) 옵션은 전액을 1일차에 포함
+     판매전용: 판매가 + 옵션 전액
+   서버 compute_reservation_line_amount의 5번째 반환 컬럼 first_day_amount가 정본, 화면은
+   cartRentalFee.ts calcFirstDayFee/hasFullRentalDay + cart/+page.svelte itemFirstDayAmount가 같은 정의.
+④ 무료배송: FS = min(Σ free_shipping, 배송비) — 변경 없음.
+최종 쿠폰 할인 = F + Σ정률 + FS.
+
+예) 35,000원(1일 대여) + 정액 10,000 + 30%(order) + 10%(first_day): R=25,000, B1=35,000 → R1=25,000
+    → 10,000 + 7,500 + 2,500 = 20,000원, 결제 15,000원.
+
+⛔ 1일차 한정은 정률 쿠폰 전용이다(DB CHECK coupons_first_day_percentage_only). 정액의 1일차 한정·"N일차까지"·
+   "2일차부터"·요일/시간대·상품별 조건은 아직 없다 — Phase 2 별건(TASK.md "쿠폰 일자별 정률 합산 재설계").
+⛔ 계산 지점이 세 곳(couponStacking.ts · apply_order_coupon_discounts · RentalDetailPanel 아코디언의
+   orderCouponBreakdown.ts)이다 — 하나만 고치면 화면·서버·관리자 설명이 어긋난다(pay-start는 화면 합계≠서버 final_amount면 거절).
+⚠️ 배포 직후 열려 있던 장바구니 화면은 옛 산식으로 계산한 금액을 들고 있어 결제 시도 시 거절될 수 있다(새로고침 안내).
+```
+
+### 구현 현황(2026-10-02)
+
+```
+✅ Stage(ezyvffjvuwmtuhpxdjrw) 적용·TDD 14/14 GREEN(couponDayScopePercentSum.test.ts), Production 적용은 sp3-qa 통과 후.
+   Migration 620(coupons.discount_scope + cms_set_coupon_discount_scope + 방문 쿠폰 first_day 지정),
+   621(first_day_amount·order_first_day_base·apply_order_coupon_discounts·create/sync 교체·pending 주문 재계산).
+   CMS 쿠폰 생성·상세 패널에 "할인 적용 범위(주문 전체 / 대여 1일차만)" 칩(정률 쿠폰에만 노출) 추가.
+```
+
+### 총 발행 개수 · 1인당 사용 횟수 (2026-10-02, Migration 623·624, Stephen 확정)
+
+```
+쿠폰 패널의 두 한도 항목은 아래 의미로 확정됐다(과거 "전체 발급 한도"는 실제로는 장바구니에서 누적 사용 횟수로 쿠폰을 숨기는 필터였고,
+"1인당 사용 횟수"는 사용자당 쿠폰 1장 구조상 항상 1회로만 동작해 의미가 없었다).
+
+① 총 발행 개수 = coupons.total_usage_limit (컬럼명은 호환 때문에 유지, 의미만 "발행 개수")
+   0/NULL = 무제한. N = N명에게 발급되면 이후 모든 배포 경로(수동 지급·자동배포·쿠폰 선물)가 자동 중단.
+   집행 지점은 하나 — user_coupons BEFORE INSERT 트리거(private.user_coupons_enforce_issue_cap)가 한도 초과 행을 조용히 건너뛴다.
+   배포 함수는 결과로 알린다: 수동 지급 사전조회/결과의 'limit_reached'(발행 한도 초과), 쿠폰 선물 직접발송·승인은 거절(카드·푸시 없음).
+   한도를 이미 발급된 수보다 낮춰도 기존 보유분은 유지되고 신규 발급만 막힌다. 구독 혜택 쿠폰은 발급마다 새 쿠폰 행이라 무관.
+   ⛔ 장바구니 노출과는 무관 — 장바구니에서 이 값으로 쿠폰을 숨기던 옛 필터(total_usage_limit ≤ usage_count)는 제거됐다. 다시 넣지 말 것.
+
+② 1인당 사용 횟수 = coupons.per_user_limit
+   0 = 무제한(몇 번을 써도 장바구니에 계속 노출), N = 한 사용자가 N번까지, 기본 1 = 기존 동작(ALREADY_USED), NULL = 1회.
+   사용자는 같은 쿠폰을 1장만 보유(UNIQUE(user_id, coupon_id))하므로 그 1행의 used_count로 센다 — private._validate_and_consume_coupon이
+   used_at이 있어도 한도 미소진이면 재사용을 허용하고(N>1 소진은 PER_USER_LIMIT_EXCEEDED), order_id·used_at은 마지막 사용 기준으로 갱신된다.
+   소진 판정은 src/lib/utils/couponUsage.ts(isUserCouponExhausted) 하나 — 장바구니·계약서·마이페이지·CMS 고객 쿠폰·couponEligibility가 공유한다.
+   ⛔ 쿠폰 사용 판정에 `used_at IS NULL`만으로 "사용 가능"을 가정하는 새 코드를 쓰지 말 것(재사용 쿠폰이 빠진다).
+   사용 이력은 order_coupons가 보존한다(CMS 사용 채번 목록·분석 리포트는 사용자당 1행 기준).
+```
+→ 상세: `supabase/migrations/20261002060000_623_coupon_issue_cap_and_per_user_reuse.sql` · `20261002070000_624_coupon_gift_issue_cap_guard.sql` ·
+`src/__tests__/services/couponIssueCapAndReuse.test.ts`(Stage 라이브 11건) · `src/__tests__/utils/couponUsage.test.ts`
 
 ---
 
@@ -771,6 +829,10 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 [ ] 렌탈 적립(§22)의 계산식을 바꿀 때 — SQL 함수·장바구니 cartEarnPoints.ts·두 테스트를 함께 고쳤는가? 할인 풀에서 무료배송 쿠폰 분과 구매 라인 몫을 빼먹지 않았는가?
 [ ] 쿠폰 다중 선택(§21) 변경 시 — 주문 의존 조건 판정을 서버 로더로 되돌리지 않았는가? 중복 불가 쿠폰 혼합이
     화면(안내창)·create_reservation_order·use_coupons 세 곳에서 모두 막히는가?
+[ ] 할인 산식(§21 "2026-10-02 전면 개정판")을 구현·수정할 때 — 정률 쿠폰 2장 이상을 "순차
+    복리"로 되돌리지 않았는가? 같은 기준 금액에 율을 합산하는가? 1일차 한정(discount_scope='first_day')
+    쿠폰이 R1=B1×R/T(1일차 몫)만 기준으로 계산되는가? 화면(couponStacking.ts)·서버(apply_order_coupon_discounts)·
+    관리자 아코디언(orderCouponBreakdown.ts) 세 곳이 전부 동일한가?
 [ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
     설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
 [ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?
@@ -779,7 +841,12 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
-*service-operations.md v1.9 | 2026-10-01 §21(쿠폰 다중 선택·쿠폰끼리 중복 허용·조건부 쿠폰 노출)·§22(렌탈완료 적립 차감 후 기준금액·구독 더블 적립)·§23(쿠폰·주문 RPC 권한 잠금과 구조 드리프트 정렬, Migration 605~610·558·562) 신설 | 2026-09-24 §20 신설 — CMS 상품 등록·복제·재고 추가 코드품번 제한 정책(동일 부모 코드품번 금지·복제 범위·재고 추가 50개/순번 상한 사전 차단, 정본 products.md §2-13) | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
+*service-operations.md v1.10 | 2026-10-02 §21 할인 산식 전면 개정(Stephen 확정, Migration 620·621 Stage 구현·검증) — ① 정률 쿠폰 2장 이상을 "순차 복리"에서 "같은 기준금액(R0)에 각자 계산 후 금액
+합산"으로 교체(기존 방식이 체감 기대치보다 항상 적게 할인되던 문제 해소) ② 정액→정률 적용
+순서는 기존 유지 ③ "1일차한정" 등 대여기간 일부에만 적용되는 할인 신설(대상 상품의 하루
+단가만 기준, discount_scope 신규 컬럼 제안) — 현재 운영 중인 "방문 픽업·반납 1일차 10%할인"
+쿠폰이 실제로는 이름과 달리 주문 전체에 적용되고 있음을 발견·기록. GATE C 1건 추가. |
+2026-10-01 §21(쿠폰 다중 선택·쿠폰끼리 중복 허용·조건부 쿠폰 노출)·§22(렌탈완료 적립 차감 후 기준금액·구독 더블 적립)·§23(쿠폰·주문 RPC 권한 잠금과 구조 드리프트 정렬, Migration 605~610·558·562) 신설 | 2026-09-24 §20 신설 — CMS 상품 등록·복제·재고 추가 코드품번 제한 정책(동일 부모 코드품번 금지·복제 범위·재고 추가 50개/순번 상한 사전 차단, 정본 products.md §2-13) | Harness Flow v3.2 | 2026-08-17 신설 — chat.md·contract.md·
 payment.md·rental-lifecycle.md·products.md·security-auth.md에 흩어진 front-cms 상호운영
 원칙을 인덱스로 통합. 세부 내용은 각 원본 문서가 정본, 이 문서는 포인터만 유지. | 2026-08-17
 §9 추가 — 예약승인(confirmed) 게이팅 설계 확정(구현 대기) 반영. | 2026-08-18 §9를 "구현·

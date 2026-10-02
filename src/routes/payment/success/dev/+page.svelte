@@ -192,8 +192,8 @@
 
         {#if data.holidayExtraFee > 0}
           <div class="detail-row">
-            <span class="detail-label">휴무일 연장요금</span>
-            <span class="detail-value">{fmt(data.holidayExtraFee)} 원</span>
+            <span class="detail-label">휴무일 연장요금 (대여요금에 포함)</span>
+            <span class="detail-value">({fmt(data.holidayExtraFee)} 원)</span>
           </div>
         {/if}
 

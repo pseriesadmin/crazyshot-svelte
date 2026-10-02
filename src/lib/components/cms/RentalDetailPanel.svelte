@@ -13,6 +13,7 @@
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
 
   interface RentalListRow {
@@ -382,6 +383,91 @@
         if (orderSiblingsFetchedForId === id) { orderSiblingsError = '주문 상품 정보를 불러오지 못했습니다.'; orderSiblingsLoading = false }
       })
   })
+
+  // 결제정보 탭 "할인쿠폰 적용" 아코디언(2026-10-02) — 주문에 적용된 쿠폰별 할인율·금액과 "직전 금액 → 할인액 → 할인 후 요금" 단계.
+  // 서버가 정본(sync_order_after_composition_change)과 같은 산식으로 계산해 내려주며(/api/cms/reservations/[id]/order-coupons)
+  // 화면은 표시만 한다. 결제금액의 정본은 항상 row.order_amount(orders.final_amount)다.
+  interface OrderCouponStep {
+    couponId:          string
+    name:              string
+    discountType:      string
+    rateLabel:         string
+    rate:              number | null
+    scope:             'order' | 'first_day'
+    baseAmount:        number
+    basisLabel:        string
+    discountAmount:    number
+    balanceAfter:      number
+    capped:            boolean
+    maxDiscountAmount: number | null
+  }
+  interface OrderCouponData {
+    totalAmount:    number
+    storedDiscount: number
+    totalDiscount:  number
+    finalBalance:   number
+    consistent:     boolean
+    steps:          OrderCouponStep[]
+  }
+  // 조회 키 = 예약 id + 기본 대여요금 + 주문 결제금액 + 쿠폰 할인액 — 상품 추가·제거·옵션 변경 등으로 금액이 바뀌면(onrefresh → 행 갱신) 다시 조회한다(검수 MEDIUM-1)
+  let orderCouponsFetchedKey   = $state<string | null>(null)
+  let couponAccRid             = $state<number | null>(null)
+  let orderCoupons              = $state<OrderCouponData | null>(null)
+  let orderCouponsLoading       = $state(false)
+  let orderCouponsError         = $state<string | null>(null)
+  let couponAccOpen             = $state(false)
+
+  $effect(() => {
+    if (activeTab !== 'payment') return
+    if ((row.coupon_discount_amount ?? 0) <= 0 || row.order_id == null) return
+    if (orderCouponsLoading) return
+    const key = `${row.reservation_id}:${row.total_amount ?? ''}:${row.order_amount ?? ''}:${row.coupon_discount_amount ?? ''}`
+    if (orderCouponsFetchedKey === key) return
+
+    const id = row.reservation_id
+    orderCouponsFetchedKey = key
+    orderCoupons        = null
+    orderCouponsError   = null
+    orderCouponsLoading = true
+
+    fetch(`/api/cms/reservations/${id}/order-coupons`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('조회 실패')))
+      .then(d => {
+        if (orderCouponsFetchedKey === key) {
+          orderCoupons = d as OrderCouponData
+          orderCouponsLoading = false
+        }
+      })
+      .catch(() => {
+        if (orderCouponsFetchedKey === key) { orderCouponsError = '쿠폰 내역을 불러오지 못했습니다.'; orderCouponsLoading = false }
+      })
+  })
+
+  // 다른 예약(행)으로 전환되면 아코디언을 접는다(같은 행의 갱신에서는 열린 상태 유지, 검수 LOW-1)
+  $effect(() => {
+    const rid = row.reservation_id
+    if (couponAccRid !== null && couponAccRid !== rid) couponAccOpen = false
+    couponAccRid = rid
+  })
+
+  // 쿠폰 1건의 계산식 문구 — 어떤 기준 금액에서 할인액이 나왔는지(정액 차감 / 정률은 기준 금액 × 율 / 배송비 차감)
+  function couponCalcText(st: OrderCouponStep): string {
+    const base = formatAmount(st.baseAmount)
+    const disc = formatAmount(st.discountAmount)
+    if (st.discountType === 'fixed') {
+      return st.discountAmount > st.baseAmount
+        ? `${base} − ${disc} → 0원 (남은 금액까지만 차감)`
+        : `${base} − ${disc} = ${formatAmount(st.balanceAfter)}`
+    }
+    if (st.discountType === 'percentage') {
+      const capNote = st.capped && st.maxDiscountAmount != null ? ` (최대 한도 ${formatAmount(st.maxDiscountAmount)} 적용)` : ''
+      return `${st.basisLabel} ${base} × ${st.rate}% = ${disc}${capNote}`
+    }
+    if (st.discountType === 'free_shipping') {
+      return `배송비 ${base} − ${disc} = ${formatAmount(st.balanceAfter)}`
+    }
+    return '할인 없음'
+  }
 
   let optionsFetchedForId = $state<number | null>(null)
   let options              = $state<ReservationOption[]>([])
@@ -2258,10 +2344,73 @@
           <span class="info-label">회원등급 할인</span>
           <span class="info-value amount-discount">-{formatAmount(row.discount_amount ?? 0)}</span>
         </div>
-        <div class="info-row">
-          <span class="info-label">할인쿠폰 적용</span>
-          <span class="info-value amount-discount">-{formatAmount(row.coupon_discount_amount ?? 0)}</span>
-        </div>
+        {#if (row.coupon_discount_amount ?? 0) > 0 && row.order_id != null}
+          <!-- 쿠폰 사용 주문: 클릭하면 적용된 쿠폰 목록과 쿠폰별 할인율(금액)·할인 후 요금 계산을 펼친다(아코디언) -->
+          <div class="coupon-acc">
+            <button
+              type="button"
+              class="info-row coupon-acc-head"
+              aria-expanded={couponAccOpen}
+              aria-controls="coupon-acc-body"
+              onclick={() => { couponAccOpen = !couponAccOpen }}
+            >
+              <span class="info-label">할인쿠폰 적용</span>
+              <span class="info-value amount-discount">
+                -{formatAmount(row.coupon_discount_amount ?? 0)}
+                {#if orderCoupons && orderCoupons.steps.length > 0}
+                  <span class="info-note">쿠폰 {orderCoupons.steps.length}장</span>
+                {/if}
+              </span>
+              <span class="coupon-acc-chev"><ChevronIcon direction={couponAccOpen ? 'up' : 'down'} size={7} /></span>
+            </button>
+
+            {#if couponAccOpen}
+              <div class="coupon-acc-body" id="coupon-acc-body">
+                {#if orderCouponsLoading}
+                  <div class="coupon-acc-msg">쿠폰 내역 조회 중…</div>
+                {:else if orderCouponsError}
+                  <div class="coupon-acc-msg coupon-acc-msg--error">{orderCouponsError}</div>
+                {:else if !orderCoupons || orderCoupons.steps.length === 0}
+                  <div class="coupon-acc-msg">쿠폰 상세 내역이 없습니다.</div>
+                {:else}
+                  <div class="coupon-total-row">
+                    <span>기본 대여요금</span>
+                    <b>{formatAmount(orderCoupons.totalAmount)}</b>
+                  </div>
+                  {#each orderCoupons.steps as st, i (st.couponId)}
+                    <div class="coupon-step">
+                      <div class="coupon-step-head">
+                        <span class="coupon-step-no">{i + 1}</span>
+                        <span class="coupon-step-name">{st.name}</span>
+                        <span class="coupon-step-rate">{st.rateLabel}{st.scope === 'first_day' ? ' · 1일차 한정' : ''}</span>
+                      </div>
+                      <div class="coupon-step-calc">{couponCalcText(st)}</div>
+                      <div class="coupon-step-result">
+                        <span>{st.discountType === 'free_shipping' ? '배송비 잔액' : '할인 후 요금'}</span>
+                        <span class="coupon-step-minus amount-discount">-{formatAmount(st.discountAmount)}</span>
+                        <b>{formatAmount(st.balanceAfter)}</b>
+                      </div>
+                    </div>
+                  {/each}
+                  <div class="coupon-total-row coupon-total-row--sum">
+                    <span>쿠폰 적용 후 대여요금 <span class="info-note">(쿠폰 할인 합계 -{formatAmount(orderCoupons.totalDiscount)})</span></span>
+                    <b>{formatAmount(orderCoupons.finalBalance)}</b>
+                  </div>
+                  {#if !orderCoupons.consistent}
+                    <div class="coupon-acc-msg coupon-acc-msg--error">
+                      화면 계산 합계({formatAmount(orderCoupons.totalDiscount)})가 주문에 저장된 쿠폰 할인액({formatAmount(orderCoupons.storedDiscount)})과 다릅니다. 결제금액은 저장된 값을 기준으로 합니다.
+                    </div>
+                  {/if}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="info-row">
+            <span class="info-label">할인쿠폰 적용</span>
+            <span class="info-value amount-discount">-{formatAmount(row.coupon_discount_amount ?? 0)}</span>
+          </div>
+        {/if}
         <div class="info-row">
           <span class="info-label">포인트 사용</span>
           <span class="info-value amount-discount">-{formatAmount(row.selected_points ?? 0)}</span>
@@ -2902,6 +3051,86 @@
   .approval-step-dot--done      { background: var(--cs-purple); }
   .approval-step-dot--confirmed { background: var(--cs-orange, #FF4500); }
   .amount-discount { color: var(--cs-error, #ef4444); }
+
+  /* 할인쿠폰 적용 아코디언(2026-10-02) — 머리는 기존 .info-row 모양 유지, 호버는 배경색만, 외곽선·그림자 없음 */
+  .coupon-acc { border-bottom: 1px solid var(--cs-lilac); }
+  .coupon-acc-head {
+    width: 100%;
+    background: transparent;
+    border: none;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .coupon-acc-head:hover { background: var(--cs-surface-gray); }
+  .coupon-acc-chev { flex-shrink: 0; display: inline-flex; align-items: center; }
+  .coupon-acc-body {
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .coupon-acc-msg { font: var(--text-pc-script-12); color: var(--cs-text-mid); text-align: center; padding: 8px 0; }
+  .coupon-acc-msg--error { color: var(--cs-error, #ef4444); }
+  .coupon-total-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 2px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    font-weight: 700;
+  }
+  .coupon-total-row b { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 700; }
+  .coupon-total-row--sum { padding-top: 4px; }
+  .coupon-total-row--sum b { color: var(--cs-purple); }
+  .coupon-step {
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .coupon-step-head { display: flex; align-items: center; gap: 8px; }
+  .coupon-step-no {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--cs-lilac);
+    color: var(--cs-purple-dark);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .coupon-step-name { flex: 1; min-width: 0; font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 700; word-break: keep-all; }
+  .coupon-step-rate {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--cs-lilac);
+    color: var(--cs-purple-dark);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .coupon-step-calc { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .coupon-step-result {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .coupon-step-result > span:first-child { flex: 1; font-weight: 700; }
+  .coupon-step-minus { font-weight: 700; }
+  .coupon-step-result b { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 700; min-width: 84px; text-align: right; }
   .sibling-status-badge {
     display: inline-block;
     margin-left: 8px;

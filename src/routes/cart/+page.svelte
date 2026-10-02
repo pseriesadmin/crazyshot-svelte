@@ -18,7 +18,7 @@
   import { env as publicEnv } from '$env/dynamic/public';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
-  import { calcRentalDays, calcRentalFee, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
+  import { calcRentalDays, calcRentalFee, calcFirstDayFee, hasFullRentalDay, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import { deriveCartMode, getPurchaseReservationDates, isRentalLine } from '$lib/utils/cartPurchaseMode';
   import {
@@ -824,7 +824,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
+  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; discount_scope?: string; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -1255,6 +1255,53 @@
     return line.options.reduce((s, o) => s + itemOptionFee(line, it, o), 0)
   }
 
+  // 휴무일 연장요금(수량 1 기준, 본상품 + 옵션) — 서버 compute_reservation_line_amount.holiday_extra_fee와 동일.
+  // 2026-10-02(Stephen 확정): 이 금액은 "총 기본 대여요금(T)"에 합산되어 멤버십·쿠폰 할인 대상에 포함된다(Migration 626).
+  // 판매전용(구매) 라인은 대여기간이 없어 0, 24h 요금 미등록은 산정 불가라 0.
+  function itemHolidayExtra(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
+  ): number {
+    if (!line || line.durationType === 'purchase') return 0
+    const r24 = itemRate24h(line)
+    if (r24 === null) return 0
+    const ext = itemHolidayExtension(it)
+    return calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24)
+      + calcOptionsHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, line.options ?? [])
+  }
+
+  // 1일차 요금(본상품 + 옵션) — 서버 compute_reservation_line_amount.first_day_amount(Migration 621)와 동일.
+  // "1일차 한정" 쿠폰(discount_scope='first_day')의 기준 금액. 수량 1 기준(호출부에서 qty 배수 적용).
+  function itemFirstDayAmount(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
+  ): number {
+    if (!line) return 0
+    const total = itemRentalFee(line, it) + itemOptionsAmount(line, it)
+    if (line.durationType === 'purchase') return total
+    const r24 = itemRate24h(line)
+    if (r24 === null) return 0
+    const r12 = itemRate12h(line)
+    const ext = itemHolidayExtension(it)
+    const feeInput = {
+      startDate: ext.effectiveStart,
+      endDate: ext.effectiveEnd,
+      pickupTime: it.rentalTime,
+      returnTime: it.returnTime,
+      dailyPrice: r24,
+      halfDayPrice: r12,
+      deliveryLocked: isDeliveryTypeMethod(it.opts.rentalMethod),
+    }
+    const mainFirst = calcFirstDayFee(feeInput, itemRentalFee(line, it))
+    const fullDay = hasFullRentalDay(feeInput)
+    const optsFirst = line.options.reduce((sum, o) => {
+      const optFee = itemOptionFee(line, it, o)
+      if (o.unitPrice12h == null) return sum + optFee
+      return sum + Math.min(optFee, o.qty * (fullDay ? o.unitPrice : o.unitPrice12h))
+    }, 0)
+    return Math.min(mainFirst + optsFirst, total)
+  }
+
   // ── 등급별 할인율
   const GRADE_RATE: Record<string, number> = { NONE: 0, EASY: 0, POP: 10, CRAZY: 20 }
 
@@ -1263,11 +1310,22 @@
 
   // 대여료 소계 — 체크된(선택된) 상품만 합산 (체크 해제 시 약정요금에서 제외)
   // 옵션상품 금액(itemOptionsAmount)도 기본 대여료와 동일하게 qty 배수 적용해 합산
+  // 2026-10-02(Stephen 확정): 휴무일 연장요금도 이 총 기본 대여요금(T)에 합산한다 — 멤버십·쿠폰 할인 대상 포함(Migration 626).
   const otSubtotal = $derived(
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
+      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it) + itemHolidayExtra(line, it)) * Math.max(line?.qty ?? 1, 1)
+    }, 0)
+  )
+
+  // 주문의 1일차 기준 금액(합계) — 서버 order_first_day_base와 동일(상품별 min(라인 합계, 1일차 요금) × 수량)
+  const otFirstDayBase = $derived(
+    itemsState.reduce((sum, it) => {
+      if (it.deleted || !it.checked) return sum
+      const line = groupsById.get(it.id)
+      const lineTotal = itemRentalFee(line, it) + itemOptionsAmount(line, it)
+      return sum + Math.min(itemFirstDayAmount(line, it), lineTotal) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -1637,9 +1695,8 @@
   // Set<string> 형태. courierClosedMap과 동일한 원본(data.courierClosedDates)에서 파생.
   const courierClosedSet = $derived(new Set<string>(courierClosedMap.keys()))
 
-  // 휴무일 연장요금 — 체크된 상품(qty 배수 포함) 합산. otSubtotal(할인 계산 기준)에는
-  // 포함시키지 않고 otDeliveryFee와 동일하게 할인 이후 별도로 가산한다(rental-fee-policy.md
-  // 신설 절, 서버 compute_reservation_line_amount/create_reservation_order와 동일 원칙).
+  // 휴무일 연장요금 — 체크된 상품(qty 배수 포함) 합산. 2026-10-02(Stephen 확정)부터 otSubtotal(총 기본 대여요금 T)에
+  // 이미 포함돼 할인 대상이 된다 — 이 값은 "T에 포함된 연장요금" 표시용이며 합계에 다시 더하지 않는다(Migration 626).
   // 판매전용(sale_only) 상품은 대여기간 개념이 없어 서버와 동일하게 0 처리.
   // 2026-09-19 Stephen 확정 — 옵션상품도 무조건 포함해 50% 할인요금을 부과(calcOptionsHolidayExtraFee).
   // 과거엔 본상품(r24)만 계산했으나, 옵션도 그 옵션 자체의 요율로 동일 연장일수에 대해 계산해 합산한다.
@@ -1647,13 +1704,7 @@
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      if (line?.durationType === 'purchase') return sum
-      const r24 = itemRate24h(line)
-      if (r24 === null) return sum   // 24h 요금 미등록 — 산정 불가
-      const ext = itemHolidayExtension(it)
-      const mainExtra = calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24)
-      const optionsExtra = calcOptionsHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, line?.options ?? [])
-      return sum + (mainExtra + optionsExtra) * Math.max(line?.qty ?? 1, 1)
+      return sum + itemHolidayExtra(line, it) * Math.max(line?.qty ?? 1, 1)
     }, 0)
   )
 
@@ -1904,9 +1955,8 @@
   // 2026-09-21 추가: percentage 할인은 "최대 할인 한도"(max_discount_amount)를 초과할 수
   // 없다 — 서버(sync_order_after_composition_change, Migration 511)와 동일하게 캡핑.
   // 0 또는 미설정은 무제한을 의미(products.md류 "0=무제한" 표기 관례와 동일).
-  // ⚠️ 2026-10-01 다중 쿠폰 선택 — 쿠폰별 독립 합산이 아니라 서버(create_reservation_order/
-  // sync_order_after_composition_change, Migration 533·534)와 같은 순차 산식을 쓴다:
-  //   정액 합산 → 정률 쿠폰은 coupon_id 오름차순으로 잔액에 순차 적용(최대 한도 단계별) → 무료배송은 배송비 한도.
+  // ⚠️ 2026-10-02 정률 합산 정책(Migration 621) — 서버 apply_order_coupon_discounts와 같은 산식:
+  //   정액 합산 → 정률 쿠폰은 같은 기준 금액에 율을 합산(1일차 한정 쿠폰은 1일차 몫 기준, 쿠폰별 한도) → 무료배송은 배송비 한도.
   // 계산은 단위 테스트 대상 순수 함수(couponStacking.ts)로 분리했다.
   const otSelectedStackables = $derived<StackableCoupon[]>(
     sdCoupons
@@ -1919,9 +1969,10 @@
         discount_value: Number(uc.coupons!.discount_value),
         max_discount_amount: uc.coupons!.max_discount_amount == null ? null : Number(uc.coupons!.max_discount_amount),
         allow_coupon_stacking: uc.coupons!.allow_coupon_stacking !== false,
+        discount_scope: uc.coupons!.discount_scope === 'first_day' ? 'first_day' as const : 'order' as const,
       })),
   )
-  const otStackedDiscount = $derived(calcStackedCouponDiscount(otSelectedStackables, otSubtotal, otDeliveryFee))
+  const otStackedDiscount = $derived(calcStackedCouponDiscount(otSelectedStackables, otSubtotal, otDeliveryFee, otFirstDayBase))
   const otCouponDiscount = $derived(otStackedDiscount.total)
 
   // 회원등급 할인 — 서버(Migration 510)와 동일 정책: 선택된 쿠폰 중 "중복 사용 허용"이
@@ -1965,7 +2016,7 @@
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
   const otMaxPoints = $derived(
     otSelectedCouponsAllowPoints
-      ? Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount))
+      ? Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount))
       : 0
   )
 
@@ -1979,7 +2030,7 @@
   })
 
   // 합계 (배송비 + 쿠폰 할인 - 포인트 사용) — otNetBeforeVat 자체가 이미 부가세 포함가라 otVat을 더하지 않음
-  const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee + otHolidayExtraFee - otCouponDiscount - otPointsUsed))
+  const otTotal = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount - otPointsUsed))
 
   // 보증금 (PRD.1.2.2.1.11) — 체크된(선택된) 상품만 합산
   // 2026-08-28: 그룹 qty만큼 곱하지 않던 기존 결함을 그룹 도입과 함께 수정 — 예약행(재고단위)이
@@ -2009,7 +2060,7 @@
   const otEarnBase = $derived(calcEarnBase({
     rentalAmount: otRentalOnlySubtotal,
     holidayFee: otHolidayExtraFee,
-    allAmount: otSubtotal,
+    allAmount: otSubtotal - otHolidayExtraFee,   // calcEarnBase는 연장요금을 따로 받는다(T에서 분리)
     allHolidayFee: otHolidayExtraFee,
     membershipDiscount: otMembershipDiscount,
     couponDiscount: otCouponDiscount,
@@ -2566,7 +2617,7 @@
                 {@render PriceRow({ label: '배송요금', value: pricingReady && otDeliveryFee > 0 ? fmtKrw(otDeliveryFee) : (pricingReady ? '무료' : fmtKrw(0)) })}
               {/if}
               {#if pricingReady && otHolidayExtraFee > 0}
-                {@render PriceRow({ label: '휴무일 연장요금', value: fmtKrw(otHolidayExtraFee) })}
+                {@render PriceRow({ label: '휴무일 연장요금 (대여요금에 포함)', value: `(${fmtKrw(otHolidayExtraFee)}원)`, raw: true })}
               {/if}
               {@render PriceRow({ label: '부가세 (10%, 포함)', value: `(${fmtKrw(pricingReady ? otVat : 0)}원)`, raw: true })}
               {#if pricingReady && otPointsUsed > 0}
