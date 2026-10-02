@@ -115,7 +115,7 @@
     <div class="mobile-layout">
       <div class="bg-[#ecebf4] flex flex-col items-center relative min-h-screen">
 
-        <SubGnb title="내정보" mobileOnly />
+        <SubGnb title="내정보" mobileOnly backHref="/" />
 
         <!-- 프로필 카드 -->
         <div class="relative shrink-0 w-full">
@@ -157,7 +157,7 @@
     </div>
 
     <!-- ───────────────── PC SubGnb (≥ 768px) ───────────────── -->
-    <SubGnb title="내정보" pcOnly noGnbOffset />
+    <SubGnb title="내정보" pcOnly noGnbOffset backHref="/" />
 
     <!-- ───────────────── PC 레이아웃 (≥ 1024px) ───────────────── -->
     <div class="pc-layout">

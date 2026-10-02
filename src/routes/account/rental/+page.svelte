@@ -176,18 +176,12 @@
 
 <div class="page-wrap">
 
-  <SubGnb title="대여" mobileOnly />
+  <!-- PC·모바일 공통 단일 SubGnb(front-uiux §13). 이 화면은 GNB가 없어(layout 제외) noGnbOffset.
+       채팅 카드에서 새 탭으로 열리면 이전 기록이 없고 /account와 서로 되돌아가는 순환이 생기므로
+       뒤로가기는 history.back이 아니라 기록을 교체(replace)하며 /account로 이동한다. -->
+  <SubGnb title="대여" noGnbOffset backHref="/account" backReplace />
 
   <div class="content">
-
-    <!-- 뒤로가기 — SubGnb가 PC에서는 렌더링되지 않아(mobileOnly) 채팅 대화카드 등으로
-         이 화면에 새 탭/직접 진입 시 PC에서 이동 수단이 전혀 없던 문제 방지 -->
-    <button type="button" class="btn-back" onclick={() => goto('/account')}>
-      <svg width="8" height="14" viewBox="0 0 8 14" fill="none" aria-hidden="true">
-        <path d="M7 1L1 7L7 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      마이페이지
-    </button>
 
     {#if data.rentals.length === 0}
       <div class="empty-state">
@@ -421,27 +415,6 @@
     width: 100%;
     box-sizing: border-box;
   }
-
-  /* 뒤로가기 — /account/rental/[id]/+page.svelte와 동일 스펙(SubGnb mobileOnly라
-     PC에서는 이 버튼이 유일한 이동 수단).
-     모바일에서는 SubGnb 자체 뒤로가기 화살표와 중복이라 숨김 처리(PC 전용으로 전환) —
-     "전체 대여 목록" 헤더 신설로 중복 노출이 눈에 띄어 제거 요청됨. */
-  .btn-back {
-    display: none;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    color: var(--cs-text-mid);
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 13px;
-    font-weight: 700;
-    min-height: 44px;
-    min-width: 44px;
-  }
-  .btn-back:hover { color: var(--cs-purple); }
 
   /* 빈 상태 */
   .empty-state {
@@ -801,7 +774,8 @@
 
   @media (min-width: 768px) {
     .content {
-      padding: 100px 40px 60px;
+      /* PC SubGnb(sticky)가 상단을 차지하므로 상단 여백은 카드 간격 수준으로만 둔다 */
+      padding: 20px 40px 60px;
       max-width: 720px;
     }
     /* 이번 요청은 모바일 반응형 한정 — PC는 기존 그대로 유지 */
@@ -810,10 +784,6 @@
     }
     .list-wrap {
       gap: 27px;
-    }
-    /* PC는 SubGnb가 렌더링되지 않아(mobileOnly) 이 버튼이 유일한 뒤로가기 수단 — 그대로 노출 */
-    .btn-back {
-      display: inline-flex;
     }
   }
 </style>
