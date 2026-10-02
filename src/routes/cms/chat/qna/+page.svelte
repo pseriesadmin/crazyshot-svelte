@@ -6,6 +6,7 @@
   import { page } from '$app/state'
   import CannedResponsePanel from '$lib/components/cms/CannedResponsePanel.svelte'
   import { csToast } from '$lib/utils/toast'
+  import { extractQaPairsFromCsvText } from '$lib/utils/kakaoCsvQaExtractor'
   import { CANNED_RESPONSE_CATEGORIES, getCategoryLabel } from '$lib/constants/cannedResponseCategories'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
@@ -134,6 +135,66 @@
     await invalidateAll()
     selectItem(id)
     showNew = false
+  }
+
+  // CSV 상담로그 업로드 → (고객 질문, 상담원 답변) 쌍 추출 → 빠른답변 일괄 등록
+  // 분류(category/help_category)·단축키·매칭키워드는 기본값만 채우고 생성된 각 항목을
+  // 직접 열어 관리자가 검토·수정·삭제한다(Stephen 확정) — 자동 생성만으로 끝나지 않는다.
+  let csvInputEl = $state<HTMLInputElement | null>(null)
+  let isImportingCsv = $state(false)
+
+  function openCsvUpload(): void {
+    csvInputEl?.click()
+  }
+
+  async function handleCsvFilesSelected(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement
+    const files = input.files ? Array.from(input.files) : []
+    if (files.length === 0) return
+
+    isImportingCsv = true
+    try {
+      const allPairs: Array<{ title: string; content: string }> = []
+      let unreadableFiles = 0
+
+      for (const file of files) {
+        try {
+          const text = await file.text()
+          allPairs.push(...extractQaPairsFromCsvText(text))
+        } catch {
+          unreadableFiles += 1
+        }
+      }
+
+      if (unreadableFiles > 0) {
+        csToast.warning(`${unreadableFiles}개 파일을 읽지 못했습니다.`)
+      }
+
+      if (allPairs.length === 0) {
+        csToast.warning('업로드한 CSV에서 추출된 질문·답변 쌍이 없습니다.')
+        return
+      }
+
+      const res = await fetch('/api/cms/canned-responses/bulk-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: allPairs }),
+      })
+      const d = await res.json().catch(() => ({})) as { created?: number; error?: string }
+
+      if (!res.ok) {
+        csToast.error(d.error ?? 'CSV 등록 실패')
+        return
+      }
+
+      csToast.success(`CSV ${files.length}개에서 빠른답변 ${d.created ?? allPairs.length}건이 생성되었습니다.`)
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류')
+    } finally {
+      isImportingCsv = false
+      input.value = ''
+    }
   }
 
   async function toggleAutoReply(): Promise<void> {
@@ -349,6 +410,22 @@
           </button>
         </div>
 
+        <!-- CSV 상담로그 업로드 — (고객 질문, 상담원 답변) 쌍을 빠른답변으로 일괄 등록 -->
+        <input
+          bind:this={csvInputEl}
+          type="file"
+          accept=".csv,text/csv"
+          multiple
+          style="display:none"
+          onchange={handleCsvFilesSelected}
+        />
+        <button
+          class="cta-btn cta-secondary"
+          onclick={openCsvUpload}
+          disabled={isImportingCsv}
+          title="카카오채널 상담로그 CSV를 업로드하면 고객 질문·상담원 답변 쌍을 자동 추출해 빠른답변으로 등록합니다"
+        >{isImportingCsv ? '등록 중…' : 'CSV 업로드'}</button>
+
         <!-- 신규 등록 -->
         {#if !showNew}
           <button class="cta-btn" onclick={openNew}>+ 신규 등록</button>
@@ -380,6 +457,9 @@
           >
             <div class="ic-top">
               <span class="ic-title">{item.title}</span>
+              {#if item.pending_review}
+                <span class="ic-pending" title="CSV 일괄등록 후 아직 열어서 검토·저장하지 않은 항목 — 실시간 고객채팅 자동매칭에서 제외된 상태">미검토</span>
+              {/if}
               {#if item.category}
                 <span class="ic-cat">{getCategoryLabel(item.category)}</span>
               {/if}
@@ -1085,6 +1165,17 @@
     border-radius: var(--radius-full, 99px);
     font: 700 11px/20px 'Noto Sans KR', sans-serif;
     color: var(--cs-purple);
+    flex-shrink: 0;
+  }
+
+  /* Migration #617 — CSV 일괄등록 후 미검토 상태(자동매칭 후보 제외 중) 배지 */
+  .ic-pending {
+    height: 20px;
+    padding: 0 8px;
+    background: var(--cs-red-xlight, rgba(255,53,53,0.10));
+    border-radius: var(--radius-full, 99px);
+    font: 700 11px/20px 'Noto Sans KR', sans-serif;
+    color: var(--cs-red-badge, #FF3535);
     flex-shrink: 0;
   }
 

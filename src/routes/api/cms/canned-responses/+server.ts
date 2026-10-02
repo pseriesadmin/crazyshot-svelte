@@ -24,6 +24,7 @@ export interface CannedResponse {
   image_url?: string | null
   cta_label?: string | null
   cta_url?: string | null
+  pending_review?: boolean
 }
 
 // GET /api/cms/canned-responses?category=return
@@ -38,7 +39,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
   let query = admin
     .from('canned_responses')
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
     .order('usage_count', { ascending: false })
     .order('title', { ascending: true })
 
@@ -100,8 +101,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       image_url: imageUrl,
       cta_label: ctaLabel,
       cta_url: ctaUrl,
+      // pending_review 미지정 — 관리자가 직접 작성한 단건 등록은 DB 기본값(false)대로
+      // 즉시 신뢰 가능(검토 대기 아님). CSV 일괄등록(bulk-import)만 true로 명시 삽입.
     })
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
     .single()
 
   if (error) {
