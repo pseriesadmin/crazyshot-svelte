@@ -1,6 +1,7 @@
 import { writable, derived } from 'svelte/store';
 import type { User, Session } from '@supabase/supabase-js';
 import { auth as authService, supabase, rpc } from '$lib/services/supabase';
+import { setRememberChoice } from '$lib/utils/authCookies';
 
 // Store types
 interface AuthState {
@@ -110,9 +111,14 @@ export const performSignUp = async (email: string, password: string) => {
   }
 };
 
-export const performSignIn = async (email: string, password: string) => {
+/**
+ * @param remember 로그인 유지 선택 — 지정하면 로그인 직전에 표식 쿠키(cs-remember)로 남겨 이후 인증 쿠키 수명에 반영된다
+ *   (true=장기 유지, false=브라우저 종료 시 로그아웃). 생략하면 표식을 건드리지 않는다(기존 동작).
+ */
+export const performSignIn = async (email: string, password: string, remember?: boolean) => {
   try {
     authState.update((state) => ({ ...state, loading: true, error: null }));
+    if (typeof remember === 'boolean') setRememberChoice(remember);
 
     const data = await authService.signIn(email, password);
 

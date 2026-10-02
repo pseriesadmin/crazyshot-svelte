@@ -3,6 +3,7 @@ import type { Handle } from '@sveltejs/kit'
 import { stringify } from 'devalue'
 import { requireSupabasePublicEnv } from '$lib/env/supabasePublic'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { REMEMBER_COOKIE, adjustAuthCookieOptions } from '$lib/utils/authCookies'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -60,9 +61,11 @@ export const handle: Handle = async ({ event, resolve }) => {
         cookies: {
           getAll: () => event.cookies.getAll(),
           setAll: (cookiesToSet) => {
+            // 로그인 유지 선택('0'=유지 안 함)이면 인증 쿠키를 세션 쿠키로 쓴다 — 표식 없음·'1'은 기존대로 장기 유지
+            const remember = event.cookies.get(REMEMBER_COOKIE)
             cookiesToSet.forEach(({ name, value, options }) => {
               try {
-                event.cookies.set(name, value, { ...options, path: '/' })
+                event.cookies.set(name, value, { ...adjustAuthCookieOptions(options, remember), path: '/' })
               } catch {
                 // 응답 생성 후 auth refresh 쿠키 — SSR 안전 무시
               }

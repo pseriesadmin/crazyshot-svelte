@@ -22,7 +22,8 @@
   const PASSWORD_MAX_LENGTH = 72    // Supabase Auth/bcrypt 72바이트 이후 절단 한계
   let email = $state('')
   let password = $state('')
-  let rememberMe = $state(false)
+  // 로그인 상태 유지 기본 선택(2026-10-02, Stephen 확정) — 해제하면 브라우저 종료 시 로그아웃(utils/authCookies.ts)
+  let rememberMe = $state(true)
   let showPassword = $state(false)
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
@@ -63,7 +64,7 @@
       // 이메일은 반드시 trim 후 전송 — 복사·붙여넣기 시 섞여 들어간 공백/개행이 있으면
       // Supabase가 계정을 못 찾아 "Invalid login credentials"로 오인되는 문제 방지
       // (비밀번호는 트림하지 않음 — 공백이 실제 비밀번호의 일부일 수 있음)
-      await performSignIn(email.trim(), password)
+      await performSignIn(email.trim(), password, rememberMe)
       const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
       goto(redirectTo)
     } catch (err) {
@@ -221,19 +222,21 @@
 
           <!-- Remember me + Forgot -->
           <div class="d-meta-row">
+            <!-- front-uiux §17 체크 확인 버튼 표준(인라인 SVG + .checkbox-btn) — <input type="checkbox"> 금지.
+                 라벨 안에 버튼을 두어 "Remember me" 글자를 눌러도 같은 버튼 클릭으로 토글된다 -->
             <label class="d-remember">
-              <input
-                type="checkbox"
-                class="d-checkbox-input"
-                bind:checked={rememberMe}
-              />
-              <span class="d-checkbox-box" aria-hidden="true">
-                {#if rememberMe}
-                  <svg width="14" height="10" viewBox="0 0 14 10" fill="none" aria-hidden="true">
-                    <path d="M1 5L5 9L13 1" stroke="var(--cs-purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                {/if}
-              </span>
+              <button
+                type="button"
+                class="checkbox-btn checkbox-btn-terms"
+                class:checked={rememberMe}
+                onclick={() => rememberMe = !rememberMe}
+                aria-label="로그인 상태 유지"
+                aria-pressed={rememberMe}
+              >
+                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
+                </svg>
+              </button>
               <span class="d-remember-label">Remember me</span>
             </label>
             <button type="button" class="d-forgot" onclick={() => { modalInitialMode = 'reset-pw'; showSignUpModal = true }}>
@@ -256,12 +259,6 @@
               aria-busy={isLoading}
             >
               {isLoading ? '로그인 중...' : 'Sign In'}
-              {#if !isLoading}
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-                  <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
-                </svg>
-              {/if}
             </button>
           {:else}
             <!-- 기본 상태 → Sign Up 버튼 -->
@@ -500,20 +497,22 @@
 
       <!-- Remember me + Forgot -->
       <div class="m-meta-row">
-        <div class="m-remember">
+        <!-- label 래퍼 — "Remember me" 글자를 눌러도 같은 버튼 클릭으로 토글(PC와 동일) -->
+        <label class="m-remember">
           <button
             type="button"
             class="checkbox-btn checkbox-btn-terms"
             class:checked={rememberMe}
             onclick={() => rememberMe = !rememberMe}
             aria-label="로그인 상태 유지"
+            aria-pressed={rememberMe}
           >
             <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
               <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
             </svg>
           </button>
           <span class="m-remember-label">Remember me</span>
-        </div>
+        </label>
         <button type="button" class="m-forgot" onclick={() => { modalInitialMode = 'reset-pw'; showSignUpModal = true }}>
           Forgot password?
         </button>
@@ -534,12 +533,6 @@
             aria-busy={isLoading}
           >
             {isLoading ? '로그인 중...' : 'Sign In'}
-            {#if !isLoading}
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M14.43 18.82C14.24 18.82 14.05 18.75 13.9 18.6C13.61 18.31 13.61 17.83 13.9 17.54L19.44 12L13.9 6.46C13.61 6.17 13.61 5.69 13.9 5.4C14.19 5.11 14.67 5.11 14.96 5.4L21.03 11.47C21.32 11.76 21.32 12.24 21.03 12.53L14.96 18.6C14.81 18.75 14.62 18.82 14.43 18.82Z" fill="white"/>
-                <path d="M20.33 12.75H3.5C3.09 12.75 2.75 12.41 2.75 12C2.75 11.59 3.09 11.25 3.5 11.25H20.33C20.74 11.25 21.08 11.59 21.08 12C21.08 12.41 20.74 12.75 20.33 12.75Z" fill="white"/>
-              </svg>
-            {/if}
           </button>
         {:else}
           <button
@@ -767,6 +760,21 @@
     white-space: nowrap;
   }
 
+  /* PC 중간 폭(768~1119px) — 폼 패널 최소 폭 유지(Stephen 승인 2026-10-02).
+     타이틀 패널 520px·간격 100px이 고정이면 폼 패널이 `화면폭−80−620`px로 줄어 768px에서 68px, 900px에서 200px가 되어
+     입력칸·제목·버튼이 깨졌다. 이 구간에서만 타이틀 패널·간격을 화면폭에 비례해 줄이고 폼 패널은 380px 아래로 줄지 않게 한다
+     (768px: 261+38+389 / 900px: 306+45+469 / 1119px: 380+56+603). 1120px 이상은 기존 그대로. */
+  @media (min-width: 768px) and (max-width: 1119px) {
+    .d-card { gap: clamp(32px, 5vw, 100px); }
+    .d-title-panel { width: clamp(260px, 34vw, 520px); }
+    /* 뒤쪽 기본 규칙 `.d-form-panel { min-width: 0 }`과 우선순위가 같아 지던 문제(QA LOW-1) — 부모 선택자로 우선순위를 높인다 */
+    .d-card .d-form-panel { min-width: 380px; }
+    /* 줄어든 타이틀 패널 안에서 큰 문구가 잘리지 않도록 같은 비율로 축소 */
+    .d-title-content { padding: 30px clamp(20px, 4vw, 50px); }
+    .d-welcome-en { font-size: clamp(40px, 5.8vw, 80px); letter-spacing: 1px; }
+    .d-welcome-sub { font-size: clamp(14px, 1.9vw, 20px); }
+  }
+
   /* 관리자 전용 배너 관리 버튼 — 패널 우측 상단 고정 */
   .d-admin-edit-btn {
     position: absolute;
@@ -859,6 +867,7 @@
   .d-meta-row {
     display: flex;
     align-items: center;
+    justify-content: center; /* 폼 패널 안에서 가운데 정렬(Stephen 지시 2026-10-02) — 기존엔 왼쪽 정렬 */
     gap: 30px;
   }
   .d-remember {
@@ -868,17 +877,8 @@
     cursor: pointer;
     user-select: none;
   }
-  .d-checkbox-input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .d-checkbox-box {
-    width: 24px;
-    height: 24px;
-    background: var(--cs-white);
-    border-radius: 6px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+  /* §17 수직정렬 광학보정 — 텍스트 옆 단독 배치라 이 화면 라벨 범위로만 스코프(전역 .checkbox-btn-terms 불변) */
+  .d-remember .checkbox-btn-terms { transform: translateY(2px); }
   .d-remember-label {
     font-family: var(--font-kr);
     font-size: 12px;
@@ -1202,18 +1202,28 @@
   .m-meta-row {
     display: flex;
     align-items: center;
+    /* 두 항목 사이 가로 여백 30% 축소 + 가운데 정렬(Stephen 지시 2026-10-02): 고정 gap 대신 줄 전체 좌우에 패딩을 넣어
+       양끝 정렬(space-between)된 항목을 안쪽으로 모은다. 기존 여백 약 82px(카드폭 329 − Remember me 125.5 − Forgot 121.5)
+       → 좌우 13px씩(26px) 줄이면 약 56px(≈30% 축소). 폭이 달라지면 여백이 자연스럽게 따라 줄고 줄바꿈은 생기지 않는다 */
     justify-content: space-between;
+    padding: 0 13px;
     margin-top: -22px;
   }
   .m-remember {
     display: flex;
     align-items: center;
     gap: 7px;
+    cursor: pointer;
+    user-select: none;
   }
   .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
   .checkbox-btn-terms { color: var(--cs-purple-op10); }
   .checkbox-btn-terms.checked { color: var(--cs-purple); }
-  .checkbox-btn-terms svg { width: 18px; height: 12px; }
+  /* front-uiux §17 반응형 크기 — Mobile 22×15 기본, PC(≥768px) 18×12 (비율 3:2 유지) */
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) {
+    .checkbox-btn-terms svg { width: 18px; height: 12px; }
+  }
   .m-remember-label {
     font: var(--text-m-script-14B);
     color: var(--cs-text-light);
