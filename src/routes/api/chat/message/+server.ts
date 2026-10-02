@@ -22,6 +22,7 @@ import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 import { sendPushToUser, sendUrgentChatAdminPush } from '$lib/server/push'
+import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -176,17 +177,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
 
         if (match) {
-          // GSD-20: 이미지/CTA 있으면 action_card 형태로, 없으면 기존 텍스트 메시지 유지
-          const hasCta = !!(match.image_url || match.cta_label)
-          const cannedActionPayload = hasCta
-            ? {
-                type: 'canned_cta',
-                button_label: match.cta_label ?? '확인하기',
-                action_url: match.cta_url ?? null,
-                product_image: match.image_url ?? null,
-                canned_response_id: match.id,
-              }
-            : null // text 타입은 action_payload null — message_type='text'에 non-null payload를 허용하지 않는 DB 제약 방어
+          // GSD-20: 이미지/CTA(이미지·버튼 텍스트·링크 중 하나라도)가 있으면 action_card, 없으면 텍스트.
+          // 관리자 수동 전송(admin-reply)과 같은 공용 함수 — 두 경로가 어긋나지 않게 한다(2026-10-02).
+          // text 타입은 action_payload null — message_type='text'에 non-null payload를 허용하지 않는 DB 제약 방어
+          const cannedActionPayload = buildCannedCtaPayload(match)
+          const hasCta = cannedActionPayload !== null
 
           // sender_type='admin' INSERT는 RLS(participant_insert_message)가 실제 cms_role
           // 보유 계정에게만 허용 — 이 메시지는 관리자가 아니라 시스템 자동응답이므로
