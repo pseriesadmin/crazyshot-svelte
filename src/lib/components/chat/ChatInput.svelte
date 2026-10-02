@@ -98,7 +98,8 @@
   let productDropdownItems = $state<ProductItem[]>([])
   let showProductDropdown = $state(false)
   let productDropdownIdx = $state(-1)
-  let productSearchTimer = $state<ReturnType<typeof setTimeout> | null>(null)
+  // 렌더링에 쓰이지 않는 타이머 핸들 — $state로 두면 아래 @ effect가 읽고 쓰는 같은 상태가 되어 effect_update_depth_exceeded로 멈춘다
+  let productSearchTimer: ReturnType<typeof setTimeout> | null = null
 
   // 상품검색 팝업 상태 (isAdmin=true 전용 버튼)
   let showProductSearchPopup = $state(false)
@@ -182,9 +183,10 @@
       return
     }
     const query = val.slice(1).toLowerCase()
+    let nextItems: CannedItem[]
     if (query === '') {
       // '/' 입력만 → 전체 목록 (사용 순)
-      dropdownItems = cannedAll.slice(0, 8)
+      nextItems = cannedAll.slice(0, 8)
     } else {
       // 매칭 우선순위: ① 관리자가 등록한 전용 키워드(match_keywords) → ② 단축키(shortcut)
       // 접두 매칭 → ③ 제목(title) 부분일치. 응답 본문(content) 전체는 더 이상 매칭 대상이
@@ -201,14 +203,17 @@
           !byShortcut.includes(c) &&
           c.title.toLowerCase().includes(query)
       )
-      dropdownItems = [...byKeyword, ...byShortcut, ...byTitle].slice(0, 8)
+      nextItems = [...byKeyword, ...byShortcut, ...byTitle].slice(0, 8)
     }
-    showDropdown = dropdownItems.length > 0
+    // 방금 쓴 상태(dropdownItems)를 같은 effect 안에서 다시 읽지 않는다 — 읽으면 자기 자신을 의존성으로 등록해
+    // 매 실행마다 스스로를 무효화(effect_update_depth_exceeded)하며 드롭다운이 멈춘다
+    dropdownItems = nextItems
+    showDropdown = nextItems.length > 0
     // 목록이 있으면 항상 첫 항목을 하이라이트해둔다 — 화살표 없이 바로 Enter를 눌러도
     // (아래 handleKeydown의 dropdownIdx>=0 분기가 동작해) 선택되도록 하기 위함. 이전에는
     // 항상 -1로 리셋돼, 화면에 보이는 미리보기가 아니라 입력창의 "/검색어" 원문이 그대로
     // 전송되는 결함이 있었다.
-    dropdownIdx = dropdownItems.length > 0 ? 0 : -1
+    dropdownIdx = nextItems.length > 0 ? 0 : -1
   })
 
   // GSD-17: @ 멘션 트리거 — 입력 시 300ms 디바운스 후 상품 검색

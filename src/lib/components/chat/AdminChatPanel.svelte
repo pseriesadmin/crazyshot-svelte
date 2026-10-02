@@ -452,9 +452,25 @@
       applyIncomingMessagePreview(message)
       // 기존 채팅목록에 새 대화(수신/발신) 도착 시 점멸 표시
       flashSession(message.session_id)
+      // 긴급 배지(is_urgent)는 서버가 의도분류 로그를 근거로 계산하는 값이라 Realtime payload에 없다 —
+      // 메시지 도착 후 잠시 뒤(의도 로그 기록 대기) 목록을 다시 받아 배지를 즉시 반영·해제한다
+      if (!message.admin_only) scheduleSessionsRefetch()
     })
-    return unsub
+    return () => {
+      unsub()
+      if (sessionsRefetchTimer) { clearTimeout(sessionsRefetchTimer); sessionsRefetchTimer = null }
+    }
   })
+
+  let sessionsRefetchTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleSessionsRefetch(): void {
+    if (sessionsRefetchTimer) clearTimeout(sessionsRefetchTimer)
+    sessionsRefetchTimer = setTimeout(async () => {
+      sessionsRefetchTimer = null
+      const { sessions } = await loadAdminSessions()
+      if (sessions.length > 0) setSessions(sessions)
+    }, 3000)
+  }
 
   // auto_pending 주기적 갱신 — 5분마다 API 호출 → auto_pending_inactive_sessions() RPC 트리거
   // open 세션이 1시간 비활성 시 pending으로 자동 전환되는 조건을 수동 새로고침 없이도 반영
@@ -589,10 +605,10 @@
     sessionManualMode = selectedSession?.manual_mode ?? false
   })
 
-  async function handleSelectSession(sid: string): Promise<void> {
+  function handleSelectSession(sid: string): void {
     selectedSessionId = sid
-    // 세션 입장 API — admin_id 배정
-    await fetch(`/api/chat/sessions/${sid}/join`, { method: 'POST' })
+    // admin_id는 관리자가 실제로 답변(admin-reply/admin-attachment)할 때만 배정한다 —
+    // 열람만으로 배정하면 긴급 판정·긴급 푸시가 무력화된다(service-operations.md §13 ④)
   }
 
   // CS-A1: 세션 선택 시 기존 CS 기록 로드
