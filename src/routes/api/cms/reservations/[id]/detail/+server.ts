@@ -31,6 +31,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     p_page: 1,
     p_per_page: 1,
     p_reservation_id: reservationId,
+    // 주문 1건 = 1행 — 형제 예약 id로 열어도 그 주문의 대표 행을 돌려준다(Migration 618)
+    p_group_by_order: true,
   })
 
   if (error) return json({ error: error.message }, { status: 500 })

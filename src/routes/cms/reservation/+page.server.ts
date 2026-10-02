@@ -18,6 +18,7 @@ import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
+import { resolveRepresentativeReservationId } from '$lib/server/resolveOrderRepresentative'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 
@@ -88,6 +89,12 @@ export interface RentalListRow {
   dhero_return_book_id: string | null
   dhero_synced_at:      string | null
   tracking_number:      string | null
+  /** Migration 618 — 이 행(대표 예약) 자신의 실제 상태. 묶음 모드의 status는 "주문 상태"(형제 중 가장 덜 진행된 단계)다 */
+  own_status:           string
+  /** Migration 618 — 같은 주문에 묶인 예약(상품) 수. 1이면 단일 상품 주문 */
+  order_item_count:     number
+  /** Migration 618 — 활성 형제의 진행 단계가 서로 다른가(예: 일부만 반출) — "일부 진행" 표기용 */
+  status_mixed:         boolean
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -105,7 +112,11 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const dateTo   = url.searchParams.get('date_to')   ?? ''
   const page     = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')
-  const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
+  const selectedRaw   = selectedParam ? parseInt(selectedParam, 10) : null
+  // 목록은 "주문 1건 = 1행"(대표 예약)이므로 비대표 형제 id로 들어온 딥링크도 대표 행으로 연다(Migration 618)
+  const selectedId    = selectedRaw != null && Number.isFinite(selectedRaw)
+    ? await resolveRepresentativeReservationId(admin, selectedRaw)
+    : null
   // '계약대기' 필터칩(2026-08-20 신설 → 2026-09-08 범위 확정) — status='hold' 중 전자계약이
   // 발송된 적이 있는 건 전부(서명 여부 무관, Stephen 확정) 골라내는 별도 차원의 조건.
   // status와 독립적인 파라미터라 URL도 별도로 관리.
@@ -145,6 +156,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     p_exclude_statuses:                RENTAL_VIEW_STATUSES,
     p_require_contract_sent_unsigned:  contractPending || null,
     p_exclude_contract_sent:           isReservationPendingTab || null,
+    // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
+    p_group_by_order:                  true,
   })
 
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
@@ -179,8 +192,34 @@ export const actions: Actions = {
     const data  = await request.formData()
     const reservationId = Number(data.get('reservation_id'))
 
+    // 주문 1건 = 목록 1행(Migration 618) — "승인하기"는 같은 주문의 신청대기(hold) 상품 전체에 적용한다
+    // (고객이 한 번에 신청한 한 건이므로 일부만 승인된 채 남지 않게). 요청한 예약이 이미 hold가 아니어도
+    // (대표 행이 먼저 승인된 혼합 주문 등) 주문 안의 다른 hold 상품을 승인할 수 있어야 한다.
+    let holdIds: number[] = []
+    try {
+      const { data: ownItem } = await admin
+        .from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle()
+      const orderId = (ownItem as { order_id: number | null } | null)?.order_id
+      let memberIds: number[] = [reservationId]
+      if (orderId != null) {
+        const { data: sibItems } = await admin
+          .from('order_items').select('reservation_id').eq('order_id', orderId)
+        const mapped = ((sibItems ?? []) as Array<{ reservation_id: number | null }>)
+          .map((r) => r.reservation_id)
+          .filter((v): v is number => v != null)
+        if (mapped.length > 0) memberIds = mapped
+      }
+      const { data: holdRows } = await admin
+        .from('rental_reservations').select('id').in('id', memberIds).eq('status', 'hold')
+      holdIds = ((holdRows ?? []) as Array<{ id: number }>).map((r) => r.id)
+    } catch (err) {
+      console.error('[cms/reservation] approveReservation 주문 내 hold 조회 실패:', reservationId, err)
+    }
+
+    // 주(主) 승인 대상 — 요청한 예약이 hold면 그것, 아니면 주문 내 첫 hold(없으면 요청 예약 그대로 시도해 기존 에러를 돌려준다)
+    const primaryId = holdIds.includes(reservationId) ? reservationId : (holdIds[0] ?? reservationId)
     const { data: result, error } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: reservationId,
+      p_reservation_id: primaryId,
       p_new_status:     'confirmed',
     })
 
@@ -188,13 +227,29 @@ export const actions: Actions = {
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
 
+    // 나머지 hold 형제 — 개별 실패는 건너뛰되(fail-soft) 흔적은 남긴다. 알림 판단(아래)이 실제 상태를 다시 읽는다.
+    for (const sid of holdIds.filter((id) => id !== primaryId)) {
+      try {
+        const { data: sr, error: se } = await admin.rpc('update_reservation_status', {
+          p_reservation_id: sid,
+          p_new_status:     'confirmed',
+        })
+        const sres = sr as { ok: boolean; error?: string } | null
+        if (se || !sres?.ok) {
+          console.error('[cms/reservation] approveReservation 형제 승인 실패:', sid, se?.message ?? sres?.error)
+        }
+      } catch (err) {
+        console.error('[cms/reservation] approveReservation 형제 승인 예외:', sid, err)
+      }
+    }
+
     // 예약 승인 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2 수정, 2026-08-31)
     // mode='hold'(같은 주문의 다른 상품 미승인)이면 채팅·푸시 둘 다 보류 — service-operations.md §4/§15
     // fail-soft(2026-09-08 수정) — updateStatus 액션과 동일한 무한로딩 결함 방지(예약 id 139
     // 사례). 상태전이는 이미 위에서 성공했으므로 알림 실패가 "승인하기" 버튼 응답을 막으면 안 됨.
     try {
-      const notifyPlan = await resolveApprovalNotifyPlan(admin, reservationId)
-      await sendApprovalNotifications(admin, reservationId, notifyPlan)
+      const notifyPlan = await resolveApprovalNotifyPlan(admin, primaryId)
+      await sendApprovalNotifications(admin, primaryId, notifyPlan)
     } catch { /* 승인 알림 발송 실패는 무시 */ }
     return { ok: true }
   },

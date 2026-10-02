@@ -8,6 +8,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
+import { resolveRepresentativeReservationId } from '$lib/server/resolveOrderRepresentative'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 
 import type { RentalListRow } from '../reservation/+page.server'
@@ -25,7 +26,11 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const search = url.searchParams.get('search') ?? ''
   const page   = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')
-  const selectedId    = selectedParam ? parseInt(selectedParam, 10) : null
+  const selectedRaw   = selectedParam ? parseInt(selectedParam, 10) : null
+  // 목록은 "주문 1건 = 1행"(대표 예약)이므로 비대표 형제 id로 들어온 딥링크도 대표 행으로 연다(Migration 618)
+  const selectedId    = selectedRaw != null && Number.isFinite(selectedRaw)
+    ? await resolveRepresentativeReservationId(admin, selectedRaw)
+    : null
 
   // 대여 라이프사이클 전용: 예약 단계(pending/hold/cancelled)는 /cms/reservation에서 관리
   // p_include_statuses를 SQL WHERE에 반영해 LIMIT/OFFSET·total_count가 이 스코프 기준으로
@@ -41,6 +46,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     p_page:             page,
     p_per_page:         30,
     p_include_statuses: RENTAL_STATUSES,
+    // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
+    p_group_by_order:   true,
   })
 
   if (error) console.error('[cms/rentals] get_rental_list error:', error.message)
@@ -70,12 +77,16 @@ export const load: PageServerLoad = async ({ parent, url }) => {
         const { data, error: pendingListErr } = await admin.rpc('get_rental_list', {
           p_status: null, p_search: null, p_date_from: null, p_date_to: null,
           p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled'], p_reservation_id: id,
+          // 주문 단위 취소이므로 대표 행 1개로 묶어 가져온다(같은 주문의 형제가 각각 "취소중" 행으로 중복 노출되지 않게)
+          p_group_by_order: true,
         })
         if (pendingListErr) console.error('[cms/rentals] 취소중 예약 상세 조회 실패:', id, pendingListErr.message)
         return ((data ?? []) as RentalListRow[])[0] ?? null
       }))
+      const seenPending = new Set<number>()
       const pending = fetched
         .filter((r): r is RentalListRow => r !== null)
+        .filter((r) => (seenPending.has(r.reservation_id) ? false : (seenPending.add(r.reservation_id), true)))
         .map(r => ({ ...r, cancel_pending: true }))
       rentals.unshift(...pending)
     }

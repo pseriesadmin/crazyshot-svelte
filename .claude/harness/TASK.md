@@ -7,6 +7,135 @@
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
 
+## NOW — 🔴 CRITICAL: CMS 예약목록·대여현황 "주문 1건 = 목록 1행" 통일 — 장바구니 다중 상품이 하나의 코드품번·하나의 행으로 시작~끝 (2026-10-02, 이 세션'만', ✅ GATE B 승인 — Stephen "Q1 B안, Q2·Q3 권장대로 승인. 진행해." · Stage 적용·TDD GREEN 완료, sp3-qa-agent 독립검수 진행 중, Production 적용·git commit은 Stephen 확인 후)
+
+⚠️ 세션 스코프: 이 세션이 만드는 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
+
+**신고 내용(Stephen)**: `/cms/reservation?selected=236` — 고객이 장바구니에 담은 2개 상품이 같은 코드품번(CSRSV26100027)인데 목록이 2행으로 나뉨. 정책상 장바구니의 1개 이상 상품은 항상 하나의 코드품번으로 예약신청·전자계약·결제를 한 번에 처리해야 하고, 예약목록(예약신청~계약·결제)과 대여현황(반출·반납) 모두 한 행으로 시작해서 끝나야 한다.
+
+**원인 진단(2026-10-02, 운영 DB 읽기 조회 + 코드 대조)**:
+  - 예약 235(SONY PXW-Z90)·236(모노포드+헤드)은 둘 다 독립 본상품(옵션 링크 없음)이고 주문 45에 묶여 있으며 예약코드는 Migration 400으로 동일. 그러나 DB에는 `rental_reservations` 행이 상품 수만큼(2행) 존재.
+  - `get_rental_list`(Migration 471 등)는 `FROM rental_reservations rr LEFT JOIN order_items oi …` 구조로 예약 행 1개당 1행을 반환하고 주문 단위로 묶는 단계가 없음 → 목록 2행. 목록 화면(`reservation/+page.svelte`·`rentals/+page.svelte`)에도 묶음 로직 없음(주문 태그 표시만).
+  - 이력: 8/14 이후 다중 상품 주문 19건 전부 상품별 행으로 저장·표시돼 왔음(Migration 400 이전에는 예약코드도 상품별로 달랐음). "예전엔 묶여 보였다"는 증거는 없음 — 옵션상품(`reservation_options`)이 붙은 1행 주문 또는 단일상품 주문(전체 45건 중 26건)을 본 것으로 추정. 최근 커밋(옵션 링크 판정 2ceebc6 등)은 원인 아님.
+  - 정책 반쪽 구현: 8/31 Migration 400이 "예약=주문=하나의 코드"를 코드 번호 통일까지만 구현하고 목록·상태 처리 단위는 미반영. `service-operations.md §4`("예약 행은 상품별 독립, 주문으로만 연결")가 정책과 어긋난 채 남아있음.
+
+**설계 원칙(이 작업의 불변 전제)**:
+  - 상품별 예약 행(`rental_reservations`)은 재고 배정·QR 스캔·결합/옵션 배정의 단위라 **유지**한다. 바꾸는 것은 "CMS 목록 표시 단위 + 관리자 조작 단위"다(주문 기준 대표 1행).
+  - 대표 행 = 주문 내 `MIN(reservation_id)`(Migration 400의 예약코드 대표 규칙과 동일). 주문에 속하지 않은 예약(order_items 없음, 레거시 등)은 기존처럼 자기 자신이 1행.
+  - 상품별 상태가 서로 다를 수 있는 구간(반출·반납·부분취소)의 표시/조작 규칙은 Q1~Q3으로 Stephen 확정 후 구현.
+
+**GATE B 확인 질문(Stephen 답변 필요 — 서비스 의도 언어)**:
+  - Q1. 한 주문 안의 상품들이 서로 다른 날 반출·반납되면(예: 카메라는 오늘, 삼각대는 내일 반납) 한 행에서 어떻게 처리할까요? (A) 한 행에서 상품 전체를 한 번에 반출·반납 처리하고 상품별 개별 처리는 안 함 / (B) 한 행은 유지하되 패널 안에서 상품별로 반출·반납을 따로 처리 — 권장 B(현업 유연성, QR 스캔은 원래 상품별).
+  - Q2. 한 행에 표시되는 "상태" 규칙 — 상품별 상태가 섞였을 때 가장 앞선(진행이 덜 된) 단계를 대표로 보여주고 배지에 "일부 반출" 같은 보조 표기를 붙이는 방식으로 진행해도 될까요? (권장)
+  - Q3. 상품별 부분 취소(한 주문 중 1개만 취소)는 현재 지원하지 않고 주문 전체 취소만 가능한 현행 정책을 그대로 유지할까요? (현행 취소 로직은 이미 형제 전체를 처리함 — 권장 유지)
+
+**수행 계획(승인 후, 순서 고정)**:
+  [0] 사전 조사(읽기 전용): `get_rental_list` 현행 DB 정의 조회(CREATE OR REPLACE 전 필수 — 마이그레이션 파일 기억 재작성 금지), 이 RPC 호출 지점 4곳(`cms/reservation`·`cms/rentals`·`api/cms/reservations/[id]/detail`·`api/cms/dashboard/gantt-window`)의 행 단위 가정 점검, `RentalDetailPanel`의 `order-siblings`/`rental-siblings`/결제·계약 조회가 대표 행 id 기준으로 정상 동작하는지 확인, `updateStatus`/`approveReservation`/QR 경로의 형제 처리 현황 표로 정리.
+  [1] TDD(RED 먼저, 🔴 결제·예약·다중 DB): `get_rental_list`가 주문당 1행(대표 id)·총건수·페이지네이션·상태필터·검색(상품명·품번·예약코드가 형제 상품에도 매칭)·날짜필터에서 정확한지 Stage 라이브 통합테스트 작성. 시나리오: 단일상품 주문 / 다중상품 주문 / 주문 없는 레거시 예약 / 상품별 상태 혼합 / 취소·만료 주문 / 검색어가 비대표 형제 상품에만 일치.
+  [2] Migration #618(신규, 기존 파일 수정 금지): `get_rental_list` 주문 단위 대표 행 반환으로 재정의 — 응답에 `order_item_count`·`order_reservation_ids`(형제 id 배열)·`order_status_summary` 추가(기존 컬럼 전부 유지, 하위호환). 필터·카운트·LIMIT/OFFSET을 묶은 이후 기준으로 계산(Migration 201의 페이지네이션 정합 원칙 유지). Stage 적용·TDD GREEN 후 Production 적용(순서 위반 금지, project_id 재확인).
+  [3] 서버: `cms/reservation/+page.server.ts`·`cms/rentals/+page.server.ts`·gantt-window 등 호출부를 새 응답 형태에 맞춤(대표 행 기준 선택·딥링크 `?selected=` 호환: 비대표 형제 id로 들어와도 대표 행으로 해석).
+  [4] 화면: 목록 행에 "상품 N건" 표기(대표 상품명 + 외 N), 상세 패널 헤더·결제·계약은 이미 주문 단위(Migration 399·order-siblings)이므로 대표 행으로 일관 동작 확인, Q1 확정안에 따라 반출·반납 단계의 상품별 처리 UI(B안이면 패널 내 상품별 처리 버튼) 적용. 신규 UI는 `cms bds`(`cms-uiux.md`) 먼저 Read 후 지침 값 복사.
+  [5] 상태 전환 일관성: 승인·취소·반출·반납이 주문 내 형제에 일관 적용되는지 점검(취소는 현행 형제 전체 처리 확인됨, 승인은 `resolveApprovalNotifyPlan`·게이팅 기존 동작 유지, 반출·반납은 Q1에 따름). 알림은 기존 배치 알림 경로 유지(중복 발송 없음 확인).
+  [6] 문서 정합: `service-operations.md §4`·`rental-lifecycle.md`·`reservation-rental-execution.md`에 "목록·조작 단위 = 주문(대표 행), 재고·QR 단위 = 상품별 예약 행" 명문화(정책 문서와 구현 불일치 해소).
+  [7] GATE C: `npm run check`·eslint·관련 TDD + 기존 회귀(`holdExpiration*`·`reservationExpiredTerminal`·`checkoutOrderGrouping` 계열) 실행 → sp3-qa-agent 독립검수 → Production 적용 확인(코드 배포 ≠ DB 적용, `service-operations.md §9` 배포순서 사고 재발 방지) → GATE E.
+
+**범위 외(건드리지 않음)**: 재고 배정·결합상품 점유·옵션상품 저장 구조, 장바구니·체크아웃·결제 승인 로직, 예약코드 발급 로직(Migration 400), 고객 마이페이지 목록(별도 화면 — 필요 시 별도 확인 후 착수).
+
+**위험·주의**: `get_rental_list`는 CMS 4개 화면이 공유하는 핵심 RPC — 반환 행 의미가 "예약 행"에서 "주문 대표 행"으로 바뀌므로 호출부 전수 점검 필수(특히 간트차트는 상품별 행이 필요할 수 있어 별도 파라미터로 기존 동작 유지 검토). 이미 hold 상태인 운영 주문(예: 주문 42·45)도 마이그레이션 직후 즉시 묶여 보이므로 Production 적용 전 영향 주문 목록을 별도 확인한다. git commit은 Stephen만 실행.
+
+수정 예정 파일(승인 후 확정): supabase/migrations/20261002xxxxxx_618_get_rental_list_order_level.sql(신규), src/routes/cms/reservation/+page.server.ts·+page.svelte, src/routes/cms/rentals/+page.server.ts·+page.svelte, src/routes/api/cms/reservations/[id]/detail/+server.ts, src/routes/api/cms/dashboard/gantt-window/+server.ts(필요 시), src/lib/components/cms/RentalDetailPanel.svelte(Q1 B안일 때), src/__tests__/services/rentalListOrderLevel.test.ts(신규), 문서 3종.
+
+**GATE B 확정(2026-10-02, Stephen)**: Q1=B안(한 행 유지 + 패널 내 상품별 반출·반납 처리) / Q2=권장(가장 덜 진행된 단계 + "일부 진행" 표기) / Q3=권장(부분 취소 미지원·주문 전체 취소 현행 유지).
+
+**수행 결과(2026-10-02, 이 세션'만')**:
+  [0] 사전 조사: get_rental_list 현행 DB 정의 조회(Stage·Production 해시 동일 20766a3f…, 저장소 Migration 480과 일치) · 호출부 4곳 점검(기본 모드 유지: gantt-window / 묶음 모드 적용: reservation·rentals 로더·detail API). 취소·승인 형제 처리 현황 확인(취소는 기존에 형제 전체 처리, 승인은 대표 1건만이어서 이번에 보완).
+  [1] TDD RED→GREEN: rentalListOrderLevel.test.ts(Stage 라이브 10건) — RED 확인(함수에 p_group_by_order 없음으로 9건 실패, 무회귀 1건만 통과) → Migration 적용 후 10/10 GREEN. approveReservationOrderWide.test.ts(모킹 5건) GREEN.
+  [2] Migration #618(20261002010000_618_get_rental_list_group_by_order.sql): 신규 파라미터 p_group_by_order(기본 false=기존 동작) + 반환 컬럼 own_status·order_item_count·status_mixed 추가, 묶음 모드는 대표 행(MIN id)·주문 상태·주문 단위 필터/검색/날짜/총건수/페이지네이션. **Stage(ezyvffjvuwmtuhpxdjrw) 적용 완료, Production 미적용.**
+      ⚠️ 부수 발견·조치: Migration 263이 회수했던 get_rental_list 실행권한이 471~480 DROP/CREATE로 재개방돼 있었음(운영 DB에서 anon·authenticated도 실행 가능 — 고객 이름·이메일·전화번호 반환). 호출부가 전부 service_role이라 618에서 service_role 전용으로 잠금(Stage 확인: anon=false·authenticated=false·service_role=true). Production은 618 적용 시 함께 닫힘.
+  [3] 서버: resolveOrderRepresentative.ts(딥링크 형제 id→대표 id), reservation·rentals 로더(p_group_by_order·selected 환산·취소중 행 중복 제거), detail API(묶음 모드), approveReservation(대표 승인 시 같은 주문의 hold 형제 일괄 승인, 형제 실패 fail-soft).
+  [4] 화면: 목록 "외 N건"·"일부 진행" 표기(reservation·rentals), RentalDetailPanel — 다중 상품 주문의 상품별 반출·반납 버튼 목록(기존 .btn-action·.status-badge 재사용, 신규 스타일은 gap/배경 토큰만), QR 스캔은 스캔한 상품이 속한 예약 기준, 파손신고 버튼은 대표 자신의 상태(own_status) 기준, 승인 안내 문구를 "주문 전체 승인"으로 정정.
+  [6] 문서: service-operations.md §4(과거 "상품별 독립" 서술 폐기·갱신), rental-lifecycle.md "주문 단위 목록 표시" 신설, reservation-rental-execution.md 파일 인덱스 보강.
+  검증: svelte-check 신규 오류 0(기존 vite.config.ts 1건만) · eslint 신규 오류 0(기존 reservation/+page.server.ts 3건·테스트 H-01 라이브 INSERT는 기존 관례와 동일).
+  회귀 실행: paymentContractOrderRedesign 23/23·tossPaymentGroupRpc 21/21(간헐 실패는 기존 테스트의 무작위 날짜 충돌, 재실행 통과) / 실패 10건은 전부 이번 변경 무관 — dheroUpdateStatusTrigger 케이스3 EC-1·EC-2 및 contractSigningGate "마지막 형제 통합 카드 1건"은 수정 전 HEAD(별도 worktree)에서도 동일 실패 확인, reservationApprovalNotify 7건은 Stage 테스트 잔여 데이터(먼 미래 예약 524건)와의 날짜 배제제약 충돌(fixture 생성 단계 실패).
+  Production 영향 주문(활성 상태 + 상품 2개 이상, 2026-10-02 조회): 주문 2(in_use+returned, QA)·3(completed×3, QA)·13(expired×4+confirmed, QA)·14(expired×2+damage_claimed)·42(hold×2, 이기성)·45(hold×2, 조이서) — 적용 즉시 한 행으로 합쳐 보임. 주문 13·14의 만료 형제는 주문 단위 규칙상 더 이상 별도 행으로 나오지 않음(전부 취소·만료가 아니므로).
+  **원인 시점 확정(2026-10-02, 운영 DB 조회)**: 증상이 눈에 띄기 시작한 시점 = **2026-08-31 17:18 KST**, Migration 400(`reservation_code_order_wide`, 운영 적용 version 20260831081824). 그 전(8/14 주문 2~13)은 한 주문의 행마다 예약코드가 달라 "서로 다른 예약"으로 보였고, 400이 "예약=주문=하나의 코드"로 코드만 통일하면서 목록은 그대로(1행=1상품, 8/17 작업 문서의 "목록 구조 변경 금지"·"상품끼리 코드 공유 금지" 결정과 8/31 결정이 충돌한 채 후자만 반쪽 구현) — 이후 9/1 주문 14부터 같은 코드가 여러 행으로 노출. SQL·화면 어디에도 주문 단위로 묶는 로직이 존재한 적은 없음(DISTINCT ON/GROUP BY/클라이언트 묶음 이력 0건).
+  **sp3-qa-agent 1차 검수(2026-10-02)**: 수정 후 재검수 — 블로킹 1(B-1 새 RPC 에러 미처리)·MEDIUM 5(M-1 대표가 hold 아닐 때 승인 불가 / M-2 대표가 취소 예약이면 버튼·QR 오작동 / M-3 형제 정보가 rental 탭에서만 로드 / M-4 예약취소 잠금이 주문 최소상태 기준 / M-5 단건 조회 성능)·LOW 6. 같은 날 B-1·M-1~M-5·L-1·L-4 수정 반영(Migration 618 파일 갱신 — 대표=활성 중 MIN id, p_reservation_id 선제한 / Stage는 DO 치환으로 동일 반영, Production 미적용). 테스트 rentalListOrderLevel 12건·approveReservationOrderWide 7건 GREEN, svelte-check 신규 오류 0, 변경 파일 RPC 에러처리 위반 0. sp3-qa-agent 재검수(2026-10-02): **조건부 통과** — B-1·M-1~M-5 반영 확인, 신규 M-6(상품별 처리 후 형제 상태 미갱신) 지적 → 같은 날 수정(유닛 폼 성공 시 rentalSiblingsFetchedForId 초기화) + 승인 알림 판단을 실제 승인된 id(primaryId) 기준으로 보강(테스트 추가). vitest 19/19·svelte-check 신규 오류 0·eslint 0.
+  Production 읽기 전용 점검(2026-10-02): 다중 상품 주문 19건 중 M-1(대표가 hold 아닌데 형제 hold) 0건, M-2(대표가 취소·만료인데 형제 활성) 2건 = 주문 13(QA)·14(마도라, 레거시) — 수정된 대표 규칙(활성 중 MIN id)으로 정상 처리됨.
+  **Production 적용 완료(2026-10-02, Stephen "Production에 #618 적용해")**: Migration #618을 crazyshot(vnbpmvxruyciuuaermyh)에 적용. 사후 검증 — 함수 시그니처 12인자 1개(구 11인자 제거), anon=false·authenticated=false·service_role=true·SECURITY DEFINER, 기본 모드 199행=전체 예약 199건(기존 동작 무회귀), 묶음 모드 161행(주문 단위 합침), 예약목록 스코프 138행. 조이서님 주문 45: get_rental_list(p_reservation_id=237, 묶음) → 대표 236·order_item_count 2·total_count 1. Stage·Production prosrc md5 일치(17504f6d854164795baafff35db094dd — Stage는 중간 DO 치환으로 주석 5줄이 빠져 있던 것을 같은 주석으로 맞춰 해소). 이번 세션 Stage 테스트 재실행 19/19 GREEN.
+  **배포 위험 사전 검측(2026-10-02)**: ① 구 코드(11인자 호출)와 새 함수 호환 — Production 기본 모드 199행=전체 예약, Stage 무회귀 테스트 통과 ② DB 함수·크론·뷰·엣지 함수의 내부 호출 0건, 앱 호출부 8곳 전부 service_role(묶음 모드 사용 3곳, 간트·모바일·대시보드는 기본 모드) ③ 운영 PostgREST에 anon 키로 호출 시 기본·묶음 모드 모두 401 permission denied(새 시그니처 인식 + 권한 잠금 확인) ④ 운영 탭별 목록 비교: 신청대기 4→2행(주문 42·45 합침), 대여현황 14→11행(주문 2·3 합침), 취소/만료 169→136행(33행은 같은 주문 대표 행으로 합쳐짐) — 합쳐진 행 외 신규 노출 0건 ⑤ 한 주문에 취소·만료+활성이 섞인 레거시 주문 13·14의 만료 행 43~46·90·91 6건은 어느 탭에도 별도 행으로 나오지 않음(패널 "상품 정보"에는 상태와 함께 표시) ⑥ vite build 성공(adapter-vercel) ⑦ 운영 응답 시간 목록 25ms·단건 15ms(199행) ⑧ 실제 RPC 상태 전이 테스트 추가(rentalListOrderLevel 13건 GREEN): 상품 1개 승인 → 주문 hold·일부 진행, 전부 승인 → confirmed. 롤백: 코드만 이전 커밋으로 재배포하면 됨(구 코드는 새 함수와 호환, DB 롤백 불필요).
+  남은 단계: **코드 배포·git commit은 Stephen 직접**(DB는 이미 적용 — 코드 배포 전까지 CMS 화면은 기존 동작 그대로 예약 1건=1행, 배포 즉시 주문 단위로 바뀜) → 배포 후 실화면 확인(?selected=236/237, 승인하기·상품별 반출) → GATE E.
+
+
+## NOW — 🟡 BOUNDARY: /cms/chat/qna 빠른답변 — CSV 상담로그 업로드 시 (고객 질문, 상담원 답변) 쌍 일괄 등록 (2026-10-02, 이 세션'만', ✅ Stephen 직접 지시(매핑 규칙 4건 확정 + BLOCKING 해소 지시 + Stage 실데이터 업로드 지시) — sp3-qa-agent 1차 검수 BLOCKING 1건 발견 → 해소(Migration #617) → 63개 CSV 216건 Stage 업로드 완료, Production 실데이터 업로드·git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
+
+배경: Stephen이 카카오채널 고객상담 CSV 63건을 첨부하며 "/cms/chat/qna" 화면의 "+ 신규 등록" 버튼 영역에 CSV 업로드로 답변목록을 일괄 등록하는 기능을 요청. 사전 조사(Explore 서브에이전트)로 해당 버튼이 실제로는 canned_responses(빠른답변) 등록 버튼임을 확인 후, 매핑 규칙이 불명확하고 CSV 원문에 타 고객 개인정보(실명·연락처·등본 비밀번호 등)가 섞여 있어 자동매칭 유출 위험이 있어 AskUserQuestion으로 확인 요청 → Stephen 확정: ① 내용=고객 질문성 문장 1개에 매칭되는 상담원 발화 1개 ② 제목=그 고객 질문 문장 ③ category/help_category는 안전한 기본값만 채우고 관리자가 직접 분류 ④ shortcut/match_keywords는 비워서 생성(자동매칭 절대 금지) — 관리자가 각 항목에서 직접 추가/삭제.
+
+수행 작업:
+  [1] src/lib/utils/kakaoCsvQaExtractor.ts(신규) — RFC4180 호환 CSV 파서(따옴표 필드 내 줄바꿈·쉼표·이스케이프된 큰따옴표 처리) + (고객 질문, 상담원 답변) 1:1 추출 로직. 상담원 판정은 괄호 없는 정확한 "주식회사 크레이지샷"만 인정(AI매니저/메뉴 자동응답 제외). "채팅 운영시간 안내" 영업시간 외 자동발송 안내문(괄호 없는 발신자명으로 찍히지만 실제 사람 답변이 아님)이 엉뚱한 질문에 "답변"으로 잘못 매칭되는 결함을 실제 CSV 테스트 중 발견해 별도 필터로 제외.
+  [2] src/routes/api/cms/canned-responses/bulk-import/+server.ts(신규) — 기존 단일 등록 POST(/api/cms/canned-responses)와 동일한 인증 게이트(getCmsRoleForAction, 모든 CMS 사용자)·직접 테이블 insert 패턴. category=null·help_category='etc' 기본값만 채우고 shortcut/match_keywords는 비워서 생성(Stephen 확정 ③④ 그대로 반영). 최대 1000건/요청 제한.
+  [3] src/routes/cms/chat/qna/+page.svelte — "+ 신규 등록" 옆에 "CSV 업로드" 버튼(cta-secondary, 기존 스타일 재사용) + 숨김 file input(multiple, .csv) + 업로드 핸들러 추가. 여러 파일 선택 시 전체 파일에서 추출한 쌍을 합쳐 1회 bulk-import 호출, 결과 건수 토스트 표시 후 invalidateAll. 생성된 항목은 기존 목록에 섞여 들어가 기존 클릭→CannedResponsePanel 수정 흐름을 그대로 재사용(요구사항 "각 생성 목록마다 들어가서 직접 수정" 충족 — 신규 수정 UI 불필요).
+
+검증: 첨부된 실제 CSV 63개 전체로 파서 단독 테스트(node) — 3,048행 → 216건 추출, 0건 추출 파일 11개(질문성 발화 없는 경우, 정상). svelte-check 신규 오류 0(기존 vite.config.ts 1건만 — 무관), eslint 신규 오류 0(object-injection 경고 1건은 문자열 인덱싱 오탐, 기존 수기 파서들과 동일 패턴). 실화면 클릭 테스트는 미실시(CLAUDE.md 기본값 — Claude Browser 사용 금지, Stephen 직접 확인 필요).
+
+수정 파일(이 세션'만', 1차): src/lib/utils/kakaoCsvQaExtractor.ts(신규), src/routes/api/cms/canned-responses/bulk-import/+server.ts(신규), src/routes/cms/chat/qna/+page.svelte
+
+QA 1차 검수(2026-10-02, sp3-qa-agent): **BLOCKING 1 · MEDIUM 1 · LOW 2**.
+  - **BLOCKING-1(해소 완료)**: "shortcut·match_keywords를 비우면 자동매칭 안 됨"이라는 설계 전제가 틀림 — 실시간 자동매칭(`matchCannedResponse`→`cannedResponseSearchIndex.ts`)은 title/content도 항상 fuzzy 검색 대상에 포함(shortcut/keywords와 무관). 검토 전 CSV 원문(타 고객 개인정보 포함 가능)이 생성 즉시 자동매칭 후보가 되는 구조적 결함.
+  - MEDIUM-1(미해소, 범위 외로 보류): `isCustomerMessage()`가 스태프명이 아니면 전부 고객으로 간주 — AI매니저/메뉴봇의 질문형 정형문구("무엇을 도와드릴까요?" 등)가 고객 질문으로 오분류될 수 있음. Stephen 지시 범위(BLOCKING만) 밖이라 이번엔 미수정.
+  - LOW 2(미해소, 비차단): 비표준 CSV(따옴표 없이 쉼표 섞인 메시지) 뒷부분 조용히 잘림 / 동일 CSV 재업로드 시 중복 생성 방지 없음.
+
+**BLOCKING-1 해소 작업 (2026-10-02, 이 세션'만' 2차)**:
+  [1] Migration #617(`supabase/migrations/20261002000000_617_canned_responses_pending_review.sql`) — `canned_responses.pending_review BOOLEAN NOT NULL DEFAULT false` 신설. Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 양쪽 적용 완료(information_schema 조회로 컬럼·기본값·NOT NULL 확인).
+  [2] `bulk-import/+server.ts` — insert에 `pending_review: true` 추가(CSV 일괄등록만 검토대기로 생성).
+  [3] `api/chat/message/+server.ts` — 자동매칭 후보 조회 쿼리에 `.eq('pending_review', false)` 추가(matchCannedResponse 호출부, 프로젝트 전체에서 유일한 호출 지점 grep으로 확인).
+  [4] `api/cms/canned-responses/[id]/+server.ts` PATCH — 저장(=관리자 검토 완료) 시 항상 `pending_review=false`로 자동 해제. `api/cms/canned-responses/+server.ts`(GET·POST 단건 생성, select에 pending_review 추가·단건 생성은 기본값 false 유지) · `cms/chat/qna/+page.server.ts`(목록 select·타입에 pending_review 추가) · `cms/chat/qna/+page.svelte`(목록 카드에 "미검토" 배지) · `CannedResponsePanel.svelte`(미검토 항목 열람 시 상단 경고 배너)도 함께 반영.
+  검증: svelte-check·eslint 신규 오류 0(기존 1건은 무관). Stage에서 더미 행으로 end-to-end 라이브 검증 — pending_review=true 삽입 → 매칭후보 조건(`pending_review=false`)으로 조회 시 0건(정상 제외) → UPDATE로 false 전환 → DELETE로 정리, 잔여 0건 확인.
+**실데이터 업로드 실행 (2026-10-02, 이 세션'만' 3차, ✅ Stephen 직접 지시 — DB 대상은 AskUserQuestion으로 Stage 확정)**:
+  - 일회성 스크립트(`kakaoCsvQaExtractor.ts`와 동일 로직 포팅, 프로젝트 외 임시 파일 — 커밋 대상 아님, 실행 후 삭제)로 63개 CSV 전체 파싱 → 216건 추출(중복 0건) → `canned_responses`에 100건씩 배치 insert(`category:null, help_category:'etc', shortcut:null, match_keywords:[], pending_review:true`).
+  - 실행 전 .env.local의 `PUBLIC_SUPABASE_URL`이 정확히 Stage(`ezyvffjvuwmtuhpxdjrw`)인지 스크립트 내부에서 하드 가드(불일치 시 즉시 종료) 후 실행 — Production 오타깃 방지.
+  - 결과(Stage, SQL 직접 재조회): `pending_review=true` 216건(신규) / `false` 24건(기존 수기 등록분, 무영향) / 전체 240건 — 기대치와 정확히 일치 확인.
+  - 생성된 216건은 전부 미검토 상태(목록 "미검토" 배지 표시) — 관리자가 `/cms/chat/qna`에서 각 항목을 열어 검토·저장해야 실시간 고객채팅 자동매칭 대상이 됨(BLOCKING-1 수정으로 보장됨).
+  - Production은 아직 실데이터 미반영 — Stage 결과 확인 후 Stephen이 Production 반영 여부·시점 결정.
+
+수정 파일(이 세션'만', 누적): src/lib/utils/kakaoCsvQaExtractor.ts(신규), src/routes/api/cms/canned-responses/bulk-import/+server.ts(신규), src/routes/cms/chat/qna/+page.svelte, src/routes/cms/chat/qna/+page.server.ts, src/routes/api/cms/canned-responses/+server.ts, src/routes/api/cms/canned-responses/[id]/+server.ts, src/routes/api/chat/message/+server.ts, src/lib/components/cms/CannedResponsePanel.svelte, supabase/migrations/20261002000000_617_canned_responses_pending_review.sql(신규)
+
+알려진 범위 외/한계: 고객 질문 판정은 "?"/"？" 포함 여부만 사용(물음표 없는 구어체 질문은 미추출) / MEDIUM-1(봇 자동발신 오분류) 미수정 / 괄호 없는 "주식회사 크레이지샷" 발신자가 향후 또 다른 자동정형문구를 쓰게 되면 추가 필터 보강 필요 / CSV 인코딩은 UTF-8 가정(File.text() 기본 디코딩) / Production 실데이터 미반영.
+
+git: Stephen 대기.
+
+## DONE — 🟡 BOUNDARY: 관리자 상담 입력창 빠른답변('/')·상품멘션('@') 드롭다운이 눌리지도 닫히지도 않는 버그 수정 (2026-10-02, 이 세션'만', ✅ Stephen 직접 지시("상담채팅 오류 내역 재검증 — 1번"), DB·API 변경 없음 · ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·MEDIUM 0·LOW 3), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
+
+원인(jsdom 실제 mount로 재현 — 수정 전 `effect_update_depth_exceeded`): `src/lib/components/chat/ChatInput.svelte`의 effect 2곳이 자기 자신을 무한 무효화해 Svelte가 effect 처리를 중단 → 드롭다운 상태가 갱신되지 않아 항목 클릭·바깥 클릭·Esc 모두 먹통.
+  ① '/' 빠른답변 effect: 방금 대입한 `dropdownItems`를 같은 effect 안에서 다시 읽음(`showDropdown = dropdownItems.length > 0`) → 지역변수 `nextItems`로 계산해 대입·판정(읽기 제거).
+  ② '@' 상품멘션 effect: `productSearchTimer`가 `$state`인데 같은 effect가 읽고 씀 → 렌더링과 무관한 타이머 핸들이라 일반 `let`으로 변경.
+검증: `src/__tests__/components/chatInputCannedDropdown.mount.test.ts` 4건(항목 mousedown 선택·바깥 클릭 닫힘·Esc 닫힘·@ 상품검색 드롭다운) — 수정 전 RED(effect_update_depth_exceeded)·수정 후 GREEN. 컴포넌트 mount 테스트는 기본 설정에서 불가해 전용 설정 `vitest.component.config.ts`(browser 조건·jsdom)로 실행(`npx vitest run --config vitest.component.config.ts`), 기본 `vitest`에서는 skip. svelte-check 신규 오류 0.
+수정 파일(이 세션'만'): src/lib/components/chat/ChatInput.svelte, vitest.component.config.ts(신규), src/__tests__/components/chatInputCannedDropdown.mount.test.ts(신규)
+QA 결과(2026-10-02, sp3-qa-agent GATE E): **통과 — BLOCKING 0·MEDIUM 0·LOW 3**. 두 effect 수정이 근본 해결(남은 read-write 패턴 없음, cannedLoaded·바깥클릭 effect는 안전)·'/' 필터 우선순위·8개 제한·Enter/화살표/Esc·@ 디바운스 회귀 없음·기본 vitest에서 mount 테스트 skip(전용 설정 4/4 통과)·svelte-check 신규 오류 0 확인. 수정 전 RED는 검수 에이전트가 재현하지 못했으나 본 세션이 수정 전 코드로 effect_update_depth_exceeded 실패를 직접 확인. LOW: 필터 우선순위·화살표 선택 mount 테스트 없음/@ 테스트 400ms 실시간 대기 / 전용 설정이 어떤 npm 스크립트·CI에도 미등록 / fetch stub URL 분기. 유사 패턴 스캔(수정 안 함): MessageList.svelte:104-122(가드 후 return, 위험 낮음)·AdminChatPanel.svelte:421-435(effect 내 setSessions·handleSelectSession 내부 의존성 미확인).
+LOW 3건 조치(2026-10-02): ① 컴포넌트 mount 테스트 4→8건(빈 쿼리 8개 제한·첫 항목 하이라이트·필터 우선순위(키워드→단축키→제목, 본문 제외)·ArrowDown+Enter·화살표 없이 Enter, @ 대기는 실시간 sleep 대신 vi.waitFor) ② `package.json`에 `test:component` 스크립트 등록(`npm run test:component`) ③ fetch 가짜 응답을 정확한 경로로 구분하고 모르는 경로는 즉시 오류. 수정 전 ChatInput 복원 시 8건 전부 effect_update_depth_exceeded RED·수정본 8/8 GREEN 확인. 수정 파일 추가: package.json. CI 연결(워크플로 등록)은 미실시.
+알려진 한계: 실브라우저 화면 확인 미실시(Stephen 확인 필요) / ChatInput 외 다른 컴포넌트의 같은 유형(읽고-쓰는 effect) 전수 점검은 미실시 / 상담채팅 오류 내역 2번 이후는 Stephen 전달 대기.
+git: Stephen 대기.
+
+## DONE — 🔴 CRITICAL: 채팅 점검 결함 수정 — 관리자 긴급 배지(B1·M1) + 사용자 전송 실패 처리(M1·M2) + 첨부 세션 정책·서버 검증(M3·M4) (2026-10-02, 이 세션'만', ✅ Stephen 직접 지시("1·2번 선행 후 3·4번 모두 진행"), DB·마이그레이션 변경 없음, `src/routes/api/**` 수정 포함(프로즌 경로 — Stephen 승인) · ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·MEDIUM 0·LOW 6 중 LOW-1 즉시 반영), git commit은 Stephen 대기)
+
+⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경(CannedResponsePanel·canned-responses API·qna 페이지·message/+server.ts 등)은 미수정.
+
+배경: 사용자·관리자 채팅 전역 읽기 전용 점검(에이전트 2종, 2026-10-02)에서 발견된 결함 중 Stephen이 지정한 항목.
+수행 작업:
+  [1] 관리자 B1(BLOCKING): `upsertSession`이 `is_urgent`를 보존하지 않아 Realtime UPDATE마다 긴급 배지가 꺼지던 문제 — 보존 + 새 메시지 도착 3초 뒤 세션 목록 재조회(`admin_only` 제외)로 배지 즉시 반영·해제.
+  [2] 관리자 M1: 세션 클릭만으로 `/join`이 `admin_id`를 배정해 긴급 판정(§13④)·긴급 푸시가 무력화되던 문제 — 클릭 시 `/join` 호출 제거(admin_id는 admin-reply/admin-attachment 답변 시에만 배정). `/join` 엔드포인트 파일은 유지(호출처 없음).
+  [3] 사용자 M1·M2: `sendMessage` fetch 예외를 오류 결과로 변환 + `handleSend` try/finally로 입력 잠금·임시 말풍선 항상 해제 + 전송 실패 시 대화 화면을 에러 화면으로 바꾸지 않고 토스트(보내지 못한 내용 30자 포함)로만 안내.
+  [4] 사용자 M3: `/api/chat/attachment` — 종료(closed)·대기(pending) 세션 첨부 시 텍스트 메시지와 동일하게 service_role로 open 복귀(기존: closed 400 거절, pending 승격 없음).
+  [5] 사용자 M4: `chatAttachmentValidation.ts` 신설 — 첨부 file_url은 `{SUPABASE_URL}/storage/v1/object/public/chat-attachments/{세션id}/{파일}`만 허용(하위경로·`..`·인코딩 우회·공백/줄바꿈·2048자 초과 거부), 파일명 1~255자·줄바꿈 금지, is_image 불리언, 잘못된 JSON은 400.
+테스트(TDD): `stores/chatSessionUrgentPreserve.test.ts` 3건(보존 로직 제거 시 RED 확인) · `server/chatAttachmentValidation.test.ts` 9건 · `server/chatAttachmentEndpoint.test.ts` 6건(closed/pending 복귀·타인 403·임의 URL 400·잘못된 JSON 400 — 수정 전 RED 3건 확인) 전부 GREEN. 관련 server/stores 테스트 59/61 파일 통과, 실패 2파일(`accountWithdrawalRestore`·`dheroUpdateStatusTrigger`)은 이번 변경과 무관(해당 파일 미수정). svelte-check 신규 오류 0(기존 vite.config.ts 1건).
+수정 파일(이 세션'만'): src/lib/stores/chat.svelte.ts, src/lib/components/chat/AdminChatPanel.svelte, src/lib/services/chatService.ts, src/lib/components/chat/ChatWindow.svelte, src/routes/api/chat/attachment/+server.ts, src/lib/server/chatAttachmentValidation.ts(신규), src/__tests__/stores/chatSessionUrgentPreserve.test.ts(신규), src/__tests__/server/chatAttachmentValidation.test.ts(신규), src/__tests__/server/chatAttachmentEndpoint.test.ts(신규)
+알려진 범위 외: 첨부 시 관리자 푸시 없음(정책 미정) / ChatWindow 파일 업로드·전송 실패는 여전히 `errorMsg` 전체화면(메시지 전송과 달리 미변경) / chat-attachments 버킷 정책·서버측 MIME·용량 검증은 DB·스토리지 설정 영역이라 미확인 / 관리자 M2~M7·사용자 LOW는 미착수.
+QA 결과(2026-10-02, sp3-qa-agent GATE E): **통과 — BLOCKING 0·MEDIUM 0·LOW 6**. URL 검증 우회 경로 없음·정상 업로드 호환·세션 승격이 message 경로와 일치·`/join` 제거 회귀 없음(close·execute-action·북마크는 admin_id 비의존)·타이머 정리 확인, vitest 18/18·svelte-check 신규 오류 0. LOW-1(supabaseUrl 빈 값이면 상대경로 통과) → ✅ 빈 값 fail-closed 가드+테스트 추가. 미조치 LOW: service_role update error 미확인(message 경로와 동일 패턴) / 3초 재조회가 늦게 오면 사이의 Realtime upsert를 setSessions가 덮을 수 있음(5분 폴링과 같은 기존 패턴) / handleSend catch 없음(isSending은 해제됨) / %252e·`?`·`#`·확장자 특수문자 테스트 미보유 / `/join` 엔드포인트 호출처 없음(삭제 여부 Stephen 결정).
+git: Stephen 대기.
+
 ## DONE — 🟢 ROUTINE: 홈 히어로(PC·모바일) 새로고침 시 기본 배경 이미지가 잠깐 노출되던 깜빡임 수정 (2026-10-01, 이 세션'만', ✅ Stephen 직접 지시("모바일·PC 둘 다 수정"), DB·마이그레이션 변경 없음 · ✅ GATE E 통과 — sp3-qa-agent 독립검수(블로킹 0·MEDIUM 0·LOW 2 정보성), git commit은 Stephen 대기)
 
 ⚠️ 세션 스코프: 이 세션이 수정한 것만 기록. 같은 작업트리의 다른 세션 미커밋 변경은 미수정.
