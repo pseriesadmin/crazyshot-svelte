@@ -13,7 +13,8 @@ import {
  *   N일 전체에 대해 각각 하루요금의 50% 부과("첫날 무료" 예외 완전 폐기)
  *   N=0 → 0 / N=1 → daily×0.5 / N=3 → daily×1.5
  *   옵션상품도 동일 규칙 적용(과거엔 미적용이었으나 이번 개정으로 본상품과 통일)
- *   holiday_extra_fee는 쿠폰·회원등급 할인 대상 제외(delivery_fee와 동일 패턴)
+ *   ⛔ 2026-10-02 정책 변경(Migration 626, Stephen 확정): 연장요금은 총 기본 대여요금(T)에 합산되어 쿠폰·멤버십 할인 대상에 포함된다.
+ *   (연장요금 자체의 산식(daily×0.5)은 그대로 — 할인은 합산된 T에 적용되며 연장요금 산식에 반영되지 않는다. 합산·할인 검증은 holidayFeeInDiscountBase.test.ts)
  *
  * ⛔ 폐기된 과거 규칙(2026-09-04 Stephen 3차 최종 확정, 2026-09-19 폐기): N 중 1일 무료 +
  * 나머지(N-1)일만 50%, 옵션 자체는 특례 미적용(연장일도 정상가). 이 파일의 과거 버전이
@@ -244,7 +245,7 @@ describe("calcHolidayExtension 휴무일 자동연장 계산", () => {
   })
 })
 
-describe("이중할인 방지 — holiday_extra_fee는 쿠폰·회원등급 할인에서 제외", () => {
+describe("연장요금 산식은 할인과 독립 — 할인은 합산된 총액(T)에 적용(Migration 626)", () => {
   const DAILY = 100000
 
   it("EC-DISC-1: 쿠폰이 0원이든 10000원 할인이든 holiday_extra_fee는 동일", () => {
@@ -254,7 +255,7 @@ describe("이중할인 방지 — holiday_extra_fee는 쿠폰·회원등급 할�
     expect(feeWithNoCoupon).toBe(feeWithCoupon)
   })
 
-  it("EC-DISC-2: 회원등급 20% 할인이 있어도 holiday_extra_fee는 daily 기준 고정값", () => {
+  it("EC-DISC-2: 회원등급 20% 할인이 있어도 연장요금 산식 자체는 daily 기준 고정값(할인은 T에 적용)", () => {
     const N = 3
     const expected = N * DAILY * 0.5
     expect(calcHolidayExtraFee(2, 1, DAILY)).toBe(expected)
