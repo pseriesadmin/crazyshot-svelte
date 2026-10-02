@@ -14,6 +14,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public'
+import { approveTestCustomer } from '../helpers/approveTestCustomer'
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -35,6 +36,7 @@ async function createSession(): Promise<SupabaseClient> {
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true })
   if (error || !data.user) throw new Error(`임시 사용자 생성 실패: ${error?.message}`)
   const userId = data.user.id
+  await approveTestCustomer(admin, userId)
   const asUser = createClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY)
   const { error: signInErr } = await asUser.auth.signInWithPassword({ email, password })
   if (signInErr) throw new Error(`임시 사용자 로그인 실패: ${signInErr.message}`)

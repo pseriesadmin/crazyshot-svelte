@@ -93,7 +93,7 @@ export function leadTimeMessage(rule: LeadRule): string {
 /** 서버 검증 예외 접두사(PICKUP_LEAD_TIME:·RENTAL_PERIOD_EXCEEDED:, Migration 588)를 떼고 고객용 문구만 남긴다 */
 export function stripServerGuardPrefix(message: string | null | undefined): string | undefined {
   if (!message) return undefined
-  return message.replace(/^(PICKUP_LEAD_TIME|RENTAL_PERIOD_EXCEEDED):\s*/, '')
+  return message.replace(/^(PICKUP_LEAD_TIME|RENTAL_PERIOD_EXCEEDED|DOC_NOT_APPROVED):\s*/, '')
 }
 
 /** 지금(KST)의 날짜 YYYY-MM-DD */

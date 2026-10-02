@@ -15,6 +15,7 @@
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
+  import { DOC_GATE_MESSAGES } from '$lib/utils/docApproval'
   import { browser } from '$app/environment';
   import { env as publicEnv } from '$env/dynamic/public';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
@@ -2803,6 +2804,11 @@
             csToast.warning('미입력 항목을 확인하세요')
             return
           }
+          // 본인증명정보 미등록·승인 대기 중에는 예약신청 차단(2026-10-02) — 상품상세 게이트와 동일 기준
+          if (data.docGate !== 'approved') {
+            csToast.warning(data.docGate === 'pending' ? DOC_GATE_MESSAGES.pending : DOC_GATE_MESSAGES.none)
+            return
+          }
           isConfirming = true
           try {
             // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로
@@ -2898,7 +2904,7 @@
                 const reissueJson = await reissueRes.json().catch(() => ({ ok: false }))
                 const reissueTyped = reissueJson as { ok: boolean; newReservationId?: number; error?: string }
                 if (!reissueTyped.ok) {
-                  csToast.error(reissueTyped.error ?? '재발행에 실패했습니다. 다시 시도해주세요.')
+                  csToast.error(stripServerGuardPrefix(reissueTyped.error) ?? '재발행에 실패했습니다. 다시 시도해주세요.')
                   return
                 }
                 newReservationIds.push(String(reissueTyped.newReservationId))

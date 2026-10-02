@@ -8,6 +8,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public'
 import { parseLeadRuleText, resolveLeadRule } from '$lib/utils/pickupLeadTime'
+import { approveTestCustomer } from '../helpers/approveTestCustomer'
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -52,6 +53,7 @@ async function makeSession(): Promise<SupabaseClient> {
   const { data, error } = await admin.auth.admin.createUser({ email, password: 'Test1234!', email_confirm: true })
   if (error || !data.user) throw new Error(`사용자 생성 실패: ${error?.message}`)
   const uid = data.user.id
+  await approveTestCustomer(admin, uid)
   cleanups.push(async () => {
     await admin.from('rental_reservations').delete().eq('user_id', uid)
     await admin.auth.admin.deleteUser(uid)

@@ -21,6 +21,7 @@
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
+  import { getDocGateStatus, DOC_GATE_MESSAGES, type DocGateRow } from '$lib/utils/docApproval';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
   import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
@@ -477,17 +478,22 @@
     // 영구히 막게 됨 — 두 문서 URL 존재 여부로만 판정한다.
     const { data: verifyRow } = await supabase
       .from('user_profiles')
-      .select('identity_doc_url, foreign_doc_url')
+      .select('identity_doc_url, identity_type, identity_verified_at, identity_approved_at, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at')
       .eq('user_id', currentSession.user.id)
       .maybeSingle();
-    const hasVerifiedDoc = !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.identity_doc_url
-      || !!(verifyRow as { identity_doc_url: string | null; foreign_doc_url: string | null } | null)?.foreign_doc_url;
-    if (!hasVerifiedDoc) {
-      csToast.warning('내정보(개인정보)에서 본인증명정보를 등록(확인)해주세요.', {
+    // 2026-10-02: 서류를 등록했어도 관리자가 CMS 고객정보에서 '승인'하기 전에는 예약 차단.
+    // (기존 판정은 identity_doc_url이 빈 배열[]이어도 truthy라 미등록 상태도 통과하던 결함이 있었다)
+    const docGate = getDocGateStatus(verifyRow as DocGateRow | null);
+    if (docGate === 'pending') {
+      csToast.warning(DOC_GATE_MESSAGES.pending);
+      return;
+    }
+    if (docGate === 'none') {
+      csToast.warning(DOC_GATE_MESSAGES.none, {
         actionLabel: '확인',
         onClick: () => {
           const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
-          goto(`/account/profile?tab=profile&returnTo=${returnTo}`);
+          goto(`/account/profile?tab=profile&doc=identity&returnTo=${returnTo}`);
         },
       });
       return;
