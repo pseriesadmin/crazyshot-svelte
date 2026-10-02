@@ -2,6 +2,7 @@ import { browser } from '$app/environment';
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
 import { createBrowserClient } from '@supabase/ssr';
+import { createBrowserCookieAdapter } from '$lib/utils/authCookies';
 import type { Database } from '$lib/types/database';
 import type {
   AtomicReserveAssetArgs,
@@ -24,7 +25,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 // 브라우저: createBrowserClient (쿠키 기반 — 서버 safeGetSession과 세션 공유)
 // SSR: createClient (세션 미저장 — 서버는 event.locals.supabase 사용)
 export const supabase = browser
-  ? createBrowserClient<Database>(supabaseUrl, supabaseAnonKey)
+  ? createBrowserClient<Database>(supabaseUrl, supabaseAnonKey, { cookies: createBrowserCookieAdapter() })
   : createClient<Database>(supabaseUrl, supabaseAnonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });

@@ -157,7 +157,7 @@
     try {
       // 이메일은 반드시 trim 후 전송 — auth/login/+page.svelte와 동일 이유(복사·붙여넣기
       // 공백/개행으로 인한 "Invalid login credentials" 오탐 방지). 비밀번호는 트림 안 함.
-      await performSignIn(loginEmail.trim(), loginPassword)
+      await performSignIn(loginEmail.trim(), loginPassword, rememberLogin)
       reset()
       onsuccess()
     } catch (err) {

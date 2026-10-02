@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { sendSms } from '$lib/server/sms'
+import { REMEMBER_COOKIE } from '$lib/utils/authCookies'
 import type { Actions, PageServerLoad } from './$types'
 
 // ── 비밀번호 재설정 링크(복구) 관련 상수·헬퍼 ──────────────────
@@ -134,6 +135,16 @@ export const actions: Actions = {
     if (!email || !password) {
       return fail(400, { error: '이메일과 비밀번호를 입력해주세요.' })
     }
+
+    // 로그인 유지 선택을 인증 쿠키 수명에 반영 — signInWithPassword가 인증 쿠키를 쓰기 *전에* 표식을 남겨야 한다
+    // (hooks.server.ts setAll이 이 표식을 보고 '0'이면 세션 쿠키로 쓴다). 브라우저 클라이언트가 읽도록 httpOnly 아님.
+    cookies.set(REMEMBER_COOKIE, rememberMe ? '1' : '0', {
+      path: '/',
+      httpOnly: false,
+      sameSite: 'lax',
+      secure: true,
+      maxAge: 60 * 60 * 24 * 365,
+    })
 
     const { data, error } = await locals.supabase.auth.signInWithPassword({ email, password })
 
