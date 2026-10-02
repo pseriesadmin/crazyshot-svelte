@@ -75,9 +75,12 @@
   // "대여·판매 모두 적용"으로 남아 있으므로 재설정을 안내한다. 1회만 노출하고 URL에서 파라미터를 제거한다.
   let appliesWarnShown = false
   $effect(() => {
-    if (page.url.searchParams.get('warn') !== 'applies' || appliesWarnShown) return
+    const warn = page.url.searchParams.get('warn')
+    if ((warn !== 'applies' && warn !== 'scope') || appliesWarnShown) return
     appliesWarnShown = true
-    csToast.warning('쿠폰은 발행됐지만 적용 대상(대여/판매) 저장에 실패해 "모두 적용"으로 남아 있습니다. 쿠폰 상세 패널에서 다시 설정해주세요.')
+    csToast.warning(warn === 'scope'
+      ? '쿠폰은 발행됐지만 "대여 1일차만" 설정 저장에 실패해 "주문 전체"로 남아 있습니다. 쿠폰 상세 패널에서 다시 설정해주세요.'
+      : '쿠폰은 발행됐지만 적용 대상(대여/판매) 저장에 실패해 "모두 적용"으로 남아 있습니다. 쿠폰 상세 패널에서 다시 설정해주세요.')
     const u = new URL(page.url)
     u.searchParams.delete('warn')
     goto(u.toString(), { replaceState: true, noScroll: true })
@@ -294,7 +297,7 @@
           <thead>
             <tr>
               <th>코드</th><th>쿠폰이름</th><th>유형</th><th class="col-hide">할인</th>
-              <th class="col-hide">유효기간</th><th>사용/한도</th><th>상태</th><th>관리</th>
+              <th class="col-hide">유효기간</th><th>사용 횟수</th><th>상태</th><th>관리</th>
             </tr>
           </thead>
           <tbody>
@@ -328,7 +331,7 @@
                     {formatDate(c.valid_from)} ~ {formatDate(c.valid_until)}
                   {/if}
                 </td>
-                <td>{c.usage_count} / {cc.total_usage_limit ?? '∞'}</td>
+                <td>{c.usage_count.toLocaleString('ko-KR')}회{cc.total_usage_limit ? ` · 발행한도 ${Number(cc.total_usage_limit).toLocaleString('ko-KR')}` : ''}</td>
                 <td>
                   <!-- 2026-09-23(Stephen 지시) — "상태" 컬럼을 쿠폰 상세 패널과 동일하게
                        자동배포 상태(auto_distribute_enabled, Migration #527) 기준으로
@@ -473,7 +476,7 @@
         <thead>
           <tr>
             <th>쿠폰 코드</th><th>유형</th>
-            <th>사용/한도</th><th>만료일</th><th>연장</th>
+            <th>사용 횟수</th><th>만료일</th><th>연장</th>
           </tr>
         </thead>
         <tbody>
@@ -482,7 +485,7 @@
             <tr>
               <td class="td-code">{codeDisplay(c)}</td>
               <td><span class="badge badge-info">{typeLabel(c.type)}</span></td>
-              <td>{c.usage_count} / {cc.total_usage_limit ?? '∞'}</td>
+              <td>{c.usage_count.toLocaleString('ko-KR')}회{cc.total_usage_limit ? ` · 발행한도 ${Number(cc.total_usage_limit).toLocaleString('ko-KR')}` : ''}</td>
               <td class="td-date">{formatDate(c.valid_until)}</td>
               <td>
                 <button class="btn-ghost sm"

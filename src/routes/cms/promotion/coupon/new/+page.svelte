@@ -19,7 +19,6 @@
   let f_discount_type  = $state('fixed')
   let f_discount_value = $state(0)
   let f_max_discount   = $state(0)
-  let f_per_user_limit = $state(1)
   let f_total_limit    = $state(0)
   let f_min_rental_amount = $state(0)
   let f_min_rental_days   = $state(0)
@@ -31,8 +30,12 @@
   let f_allow_points   = $state(true)
   let f_allow_stacking = $state(false)
   // 쿠폰끼리 중복 허용(allow_coupon_stacking) — 정책상 기본 허용, 끄면 다른 쿠폰과 함께 선택·사용 불가
+  // 1인당 사용 횟수(Migration 623) — 0=무제한(장바구니에 매번 노출), N=N번 사용하면 제외, 기본 1
+  let f_per_user_limit = $state(1)
   let f_allow_coupon_stacking = $state(true)
   // 적용 대상(applies_to_rental/sale) — 기본 둘 다. 하나만 켜면 그 대상에만, 둘 다 켜면 모두 적용. 최소 1개 필수.
+  // 할인 적용 범위(Migration 620) — 정률 쿠폰만 '대여 1일차'로 한정 가능, 기본은 주문 전체
+  let f_scope_first_day = $state(false)
   let f_applies_rental = $state(true)
   let f_applies_sale = $state(true)
   function toggleApplies(target: 'rental' | 'sale') {
@@ -498,8 +501,10 @@
         {#if f_discount_type === 'percentage'}
           <div class="form-field">
             <label for="fc-maxd">최대 할인 한도 (원, 0=무제한)</label>
-            <input id="fc-maxd" name="max_discount_amount" type="number" min="0"
-              class="f-input" bind:value={f_max_discount} />
+            <input id="fc-maxd" type="text" inputmode="numeric" class="f-input"
+              value={f_max_discount.toLocaleString('ko-KR')}
+              oninput={(e) => { f_max_discount = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+            <input type="hidden" name="max_discount_amount" value={f_max_discount} />
           </div>
         {/if}
       </div>
@@ -519,14 +524,18 @@
             class="f-input" bind:value={f_min_rental_days} />
         </div>
         <div class="form-field">
-          <label for="fc-pul">1인당 사용 횟수</label>
-          <input id="fc-pul" name="per_user_limit" type="number" min="1"
-            class="f-input" bind:value={f_per_user_limit} />
+          <label for="fc-pul">1인당 사용 횟수 (0=무제한)</label>
+          <input id="fc-pul" type="text" inputmode="numeric" class="f-input"
+            value={f_per_user_limit.toLocaleString('ko-KR')}
+            oninput={(e) => { f_per_user_limit = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+          <input type="hidden" name="per_user_limit" value={f_per_user_limit} />
         </div>
         <div class="form-field">
-          <label for="fc-tul">전체 발급 한도 (0=무제한)</label>
-          <input id="fc-tul" name="total_usage_limit" type="number" min="0"
-            class="f-input" bind:value={f_total_limit} />
+          <label for="fc-tul">총 발행 개수 (0=무제한)</label>
+          <input id="fc-tul" type="text" inputmode="numeric" class="f-input"
+            value={f_total_limit.toLocaleString('ko-KR')}
+            oninput={(e) => { f_total_limit = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+          <input type="hidden" name="total_usage_limit" value={f_total_limit} />
         </div>
         <div class="form-field">
           <label for="fc-grade">필수 회원 분류 (선택)</label>
@@ -592,6 +601,17 @@
       <input type="hidden" name="is_student_only" value={String(f_student)} />
       <input type="hidden" name="is_walk_in_only" value={String(f_walk_in)} />
       <input type="hidden" name="is_subscription_only" value={String(f_subscription)} />
+
+      {#if f_discount_type === 'percentage'}
+        <div class="fs-title">할인 적용 범위</div>
+        <div class="s-chip-group">
+          <button type="button" class="s-chip" class:s-chip--on={!f_scope_first_day}
+            onclick={() => f_scope_first_day = false}>주문 전체</button>
+          <button type="button" class="s-chip" class:s-chip--on={f_scope_first_day}
+            onclick={() => f_scope_first_day = true}>대여 1일차만</button>
+        </div>
+      {/if}
+      <input type="hidden" name="discount_scope" value={f_discount_type === 'percentage' && f_scope_first_day ? 'first_day' : 'order'} />
 
       <div class="fs-title">결합 옵션</div>
       <div class="s-chip-group">

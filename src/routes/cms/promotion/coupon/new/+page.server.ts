@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeFreeShippingValue } from '$lib/utils/couponFreeShipping'
+import { parsePerUserLimit } from '$lib/utils/couponUsage'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
 
@@ -153,13 +154,16 @@ export const actions: Actions = {
     const min_rental_days      = Number(form.get('min_rental_days') ?? 0)
     const max_discount_amount  = Number(form.get('max_discount_amount') ?? 0) || null
     const user_grade_required  = String(form.get('user_grade_required') ?? '') || null
-    const per_user_limit       = Number(form.get('per_user_limit') ?? 1)
     const total_usage_limit    = Number(form.get('total_usage_limit') ?? 0) || null
+    // 1인당 사용 횟수(Migration 623) — 0=무제한은 명시 입력일 때만, 빈 값·숫자 아님은 기본 1
+    const per_user_limit       = parsePerUserLimit(form.get('per_user_limit'))
     const validity_type        = String(form.get('validity_type') ?? 'fixed_period')
     const allow_with_points    = form.get('allow_with_points') !== 'false'
     const allow_stacking       = form.get('allow_stacking') === 'true'
     // 쿠폰끼리 중복 허용(Migration 605) — 폼에 값이 없으면(구 화면) 정책 기본값 true
     const allow_coupon_stacking = form.get('allow_coupon_stacking') !== 'false'
+    // 할인 적용 범위(Migration 620) — 정률 쿠폰만 first_day 가능, 그 외는 항상 order
+    const discount_scope_raw = String(form.get('discount_scope') ?? 'order')
     // 적용 대상(Migration 615) — 폼에 값이 없으면(구 화면) 정책 기본값 둘 다 true. 둘 다 false는 서버에서도 거절.
     const applies_to_rental = form.get('applies_to_rental') !== 'false'
     const applies_to_sale   = form.get('applies_to_sale') !== 'false'
@@ -275,6 +279,18 @@ export const actions: Actions = {
       if (stackError) console.error('[coupon/new] cms_set_allow_coupon_stacking 실패:', stackError.message)
     }
 
+    // "할인 적용 범위"(1일차 한정)도 전용 RPC(Migration 620). 정률 쿠폰에서 first_day를 고른 경우에만 호출.
+    // 실패하면 기본값(주문 전체)으로 남아 의도보다 크게 할인되므로 목록 화면이 warn=scope 경고 토스트로 알린다.
+    let scopeFailed = false
+    if (result.id && discount_scope_raw === 'first_day' && String(form.get('discount_type') ?? '') === 'percentage') {
+      const { data: scopeData, error: scopeError } = await db.rpc('cms_set_coupon_discount_scope', { p_id: result.id, p_scope: 'first_day' })
+      const scopeResult = scopeData as { ok?: boolean } | null
+      if (scopeError || !scopeResult?.ok) {
+        scopeFailed = true
+        console.error('[coupon/new] cms_set_coupon_discount_scope 실패:', scopeError?.message ?? JSON.stringify(scopeData))
+      }
+    }
+
     // "적용 대상"(대여/판매)도 전용 RPC로 저장(Migration 615). 기본값(둘 다)과 다를 때만 호출하고,
     // 실패해도 이미 생성된 쿠폰을 되돌리지 않는다(상세 패널에서 재설정 가능) — 대신 목록 화면이
     // warn=applies 경고 토스트로 알린다(기본값 "둘 다 적용"으로 남아 의도보다 넓게 쓰일 수 있기 때문).
@@ -290,6 +306,6 @@ export const actions: Actions = {
       }
     }
 
-    throw redirect(303, appliesFailed ? '/cms/promotion/coupon?tab=manage&warn=applies' : '/cms/promotion/coupon?tab=manage')
+    throw redirect(303, appliesFailed ? '/cms/promotion/coupon?tab=manage&warn=applies' : scopeFailed ? '/cms/promotion/coupon?tab=manage&warn=scope' : '/cms/promotion/coupon?tab=manage')
   },
 }

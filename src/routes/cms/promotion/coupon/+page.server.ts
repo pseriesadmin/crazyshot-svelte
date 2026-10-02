@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeFreeShippingValue } from '$lib/utils/couponFreeShipping'
+import { parsePerUserLimit } from '$lib/utils/couponUsage'
 import type { PageServerLoad, Actions } from './$types'
 import type { Coupon } from '$lib/types/database'
 import { countStatuses, splitDistributionTargets, type PreviewStatus, type DistributeStatus } from '$lib/utils/couponDistribution'
@@ -227,7 +228,8 @@ export const actions: Actions = {
     const min_purchase_amount = Number(form.get('min_purchase_amount') ?? 0)
     const min_rental_amount   = Number(form.get('min_rental_amount') ?? 0)
     const min_rental_days     = Number(form.get('min_rental_days') ?? 0)
-    const per_user_limit      = Number(form.get('per_user_limit') ?? 1)
+    // 1인당 사용 횟수(Migration 623) — 0=무제한은 명시 입력일 때만, 빈 값·숫자 아님은 기본 1
+    const per_user_limit      = parsePerUserLimit(form.get('per_user_limit'))
     const applicableRaw       = form.get('applicable_categories')
     const applicable_categories = applicableRaw ? JSON.parse(String(applicableRaw)) : null
     const is_first_rental_only = form.get('is_first_rental_only') === 'true'
@@ -246,6 +248,10 @@ export const actions: Actions = {
       appliesRentalRaw === null || appliesSaleRaw === null
         ? null
         : { rental: appliesRentalRaw === 'true', sale: appliesSaleRaw === 'true' }
+    // 할인 적용 범위(Migration 620) — 폼에 값이 없으면 변경하지 않는다(null). 정률이 아니면 항상 order.
+    const discountScopeRaw = form.get('discount_scope')
+    const discount_scope: 'order' | 'first_day' | null =
+      discountScopeRaw === null ? null : (discount_type === 'percentage' && discountScopeRaw === 'first_day' ? 'first_day' : 'order')
     const valid_days           = Number(form.get('valid_days') ?? 0) || null
 
     if (!id) return { ok: false, error: '쿠폰 ID가 없습니다.' }
@@ -278,6 +284,11 @@ export const actions: Actions = {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = locals.supabase as unknown as any
+    // 'order'로 되돌리는 경우는 유형 변경(정률→정액) 전에 먼저 적용해야 DB 제약(1일차는 정률 전용)에 걸리지 않는다
+    if (discount_scope === 'order') {
+      const { error: scopeError } = await db.rpc('cms_set_coupon_discount_scope', { p_id: id, p_scope: 'order' })
+      if (scopeError) return { ok: false, error: scopeError.message }
+    }
     const { data, error } = await db.rpc('cms_update_coupon', {
       p_id: id,
       p_discount_type: discount_type,
@@ -308,6 +319,10 @@ export const actions: Actions = {
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) return { ok: false, error: result?.error ?? '수정 실패' }
 
+    if (discount_scope === 'first_day') {
+      const { error: scopeError } = await db.rpc('cms_set_coupon_discount_scope', { p_id: id, p_scope: 'first_day' })
+      if (scopeError) return { ok: false, error: scopeError.message }
+    }
     if (allow_coupon_stacking !== null) {
       const { data: stackData, error: stackError } = await db.rpc('cms_set_allow_coupon_stacking', { p_id: id, p_allow: allow_coupon_stacking })
       if (stackError) return { ok: false, error: stackError.message }

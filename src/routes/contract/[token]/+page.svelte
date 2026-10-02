@@ -317,6 +317,7 @@
     SUBSCRIPTION_ONLY:      '구독자 전용 쿠폰입니다. 쿠폰이 적용되지 않았습니다.',
     ORDER_CONTEXT_REQUIRED: '쿠폰을 적용할 수 없는 상태입니다. 고객센터에 문의해 주세요.',
     ALREADY_USED:           '이미 사용된 쿠폰입니다.',
+    PER_USER_LIMIT_EXCEEDED: '이 쿠폰의 사용 가능 횟수를 모두 사용했습니다.',
     COUPON_EXPIRED:         '쿠폰 유효기간이 만료되었습니다.',
   }
 
@@ -351,7 +352,8 @@
           if (body.couponError) {
             csToast.warning(COUPON_ERR_MSG[body.couponError] ?? '쿠폰이 적용되지 않았습니다.')
           }
-          window.location.href = '/contract/complete'
+          // 기록을 교체한다 — 쌓으면 뒤로가기가 이미 서명된 링크(/contract/signed)로 되돌아가 막다른 화면에 갇힌다
+          window.location.replace('/contract/complete')
         } else {
           const body = await res.json().catch(() => ({})) as { error?: string }
           payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'

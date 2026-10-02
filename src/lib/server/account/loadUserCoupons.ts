@@ -3,6 +3,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '$lib/types/database'
 import { isCouponEligible, buildCouponEligibilityContext } from '$lib/server/coupons/couponEligibility'
+import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 
 export interface UserCouponCard {
   id: string
@@ -42,6 +43,7 @@ interface RawUserCouponRow {
   id: string
   coupon_id: string | null
   used_at: string | null
+  used_count: number | null
   redeemed_code: string | null
   first_viewed_at: string | null
   coupons: RawCoupon | null
@@ -60,7 +62,7 @@ export async function loadUserCoupons(
   const [{ data }, userCtx] = await Promise.all([
     supabase
       .from('user_coupons')
-      .select('id, coupon_id, used_at, redeemed_code, first_viewed_at, coupons(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, min_rental_amount, min_rental_days, is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only, per_user_limit, type, applicable_categories, validity_type, valid_days)')
+      .select('id, coupon_id, used_at, used_count, redeemed_code, first_viewed_at, coupons(code, discount_type, discount_value, display_name, valid_until, min_purchase_amount, min_rental_amount, min_rental_days, is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only, per_user_limit, type, applicable_categories, validity_type, valid_days)')
       .eq('user_id', userId)
       .order('created_at', { ascending: false }),
     // [4A] 사용자 컨텍스트 1회 조회 (주문 컨텍스트 없음 — coupon list 탭은 order 없음)
@@ -69,14 +71,6 @@ export async function loadUserCoupons(
 
   const now = Date.now()
   const rows = (data ?? []) as unknown as RawUserCouponRow[]
-
-  // [4A] per_user_limit 계산을 위해 coupon_id별 사용 횟수 집계 (in-memory, 추가 DB쿼리 없음)
-  const usedCountByCouponId = new Map<string, number>()
-  for (const row of rows) {
-    if (row.coupon_id && row.used_at) {
-      usedCountByCouponId.set(row.coupon_id, (usedCountByCouponId.get(row.coupon_id) ?? 0) + 1)
-    }
-  }
 
   return rows
     .filter(row => row.coupons !== null)
@@ -96,7 +90,8 @@ export async function loadUserCoupons(
       // ORDER_CONTEXT_REQUIRED는 "주문 없이 판정 불가" = 일단 표시(용도에 맞는 상황에서 검증)
       // CATEGORY_NOT_APPLICABLE(cartCategories=null)도 카트 없이 판정 불가로 동일 처리
       const c = row.coupons as RawCoupon
-      const perUserCount = row.coupon_id ? (usedCountByCouponId.get(row.coupon_id) ?? 0) : 0
+      // 한 사용자는 같은 쿠폰을 1장만 보유하고 그 행의 used_count가 사용 횟수다(Migration 623)
+      const perUserCount = userCouponUsedCount(row.used_at, row.used_count)
       const result = isCouponEligible(
         {
           min_purchase_amount:   c.min_purchase_amount   ?? 0,
@@ -129,7 +124,8 @@ export async function loadUserCoupons(
             ? '무료배송'
             : `${discountValue}% 할인`)
 
-      const status: UserCouponCard['status'] = row.used_at ? 'used' : 'usable'
+      // 1인당 사용 횟수를 모두 쓴 경우에만 '사용 완료' — 0=무제한이거나 횟수가 남은 쿠폰은 계속 '사용 가능'(Migration 623)
+      const status: UserCouponCard['status'] = isUserCouponExhausted(row.used_at, row.used_count, c.per_user_limit) ? 'used' : 'usable'
 
       // relative_days 모드는 절대 종료일(valid_until)이 없으므로, 이미 "첫 확인"이 기록된
       // 경우(=이 화면을 여는 이 요청에서 막 마킹된 경우 포함) 실제 종료 시점을

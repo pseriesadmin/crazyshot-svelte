@@ -6,6 +6,7 @@ import { buildOptionLinkFlagIndex, optionLinkFlagsFor, type OptionLinkRow } from
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadCourierClosedDates } from '$lib/server/courierClosedDates'
 import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
+import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
 import type { PageServerLoad } from './$types'
@@ -137,7 +138,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     // fail-soft — RPC(마이그레이션 미적용 등)가 실패해도 나머지 카트 로드 흐름은 계속 진행
   }
 
-  const [cartResult, profileResult, couponResult, usedCouponsResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
+  const [cartResult, profileResult, couponResult, addressResult, firstRentalResult, studentResult, subscriptionResult] = await Promise.all([
     supabase
       .from('rental_reservations')
       .select('id, product_id, start_date, end_date, status, pickup_method, return_method, pickup_time, return_time, duration_type')
@@ -153,9 +154,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_coupons')
-      .select(`id, coupon_id, used_count, first_viewed_at,
+      .select(`id, coupon_id, used_at, used_count, first_viewed_at,
         coupons(
-          id, code, type, discount_type, discount_value, display_name, allow_stacking, allow_coupon_stacking,
+          id, code, type, discount_type, discount_value, display_name, allow_stacking, allow_coupon_stacking, discount_scope,
           is_active, deleted_at, valid_from, valid_until, validity_type, valid_days,
           user_grade_required, usage_limit, usage_count, total_usage_limit,
           is_first_rental_only, is_student_only, is_subscription_only, is_walk_in_only,
@@ -163,17 +164,9 @@ export const load: PageServerLoad = async ({ locals }) => {
           per_user_limit, applicable_categories, max_discount_amount, allow_with_points,
           applies_to_rental, applies_to_sale
         )`)
-      .eq('user_id', session.user.id)
-      .is('used_at', null),
-
-    // 1인당 사용 한도(per_user_limit) 검증용 — 이 사용자가 이미 사용 완료한 쿠폰들을
-    // coupon_id별로 집계(basic 쿼리는 used_at IS NULL만 조회하므로 이미 사용한 건은
-    // 여기서 별도로 가져와야 함, 2026-09-21 추가)
-    supabase
-      .from('user_coupons')
-      .select('coupon_id')
-      .eq('user_id', session.user.id)
-      .not('used_at', 'is', null),
+      .eq('user_id', session.user.id),
+    // 사용한 쿠폰도 함께 가져와 1인당 사용 횟수(per_user_limit) 소진 여부를 아래에서 판정한다
+    // (Migration 623 — 0=무제한이면 한 번 썼어도 계속 노출, N이면 N번 쓴 뒤 제외)
 
     // "회원정보 반영" 체크박스 활성화 판단 + 실제 자동채움용 — 기본 배송지(is_default) 우선,
     // 없으면 등록순 첫 배송지
@@ -251,8 +244,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
     // 등급 조건: user_grade_required가 설정된 쿠폰은 회원 등급 일치 필수
     if (c.user_grade_required && !matchesUserGradeRequired(c.user_grade_required, gradeUser)) return false
-    // 전체 발급 한도 소진
-    if (c.total_usage_limit !== null && c.usage_count >= c.total_usage_limit) return false
+    // 1인당 사용 횟수 소진(Migration 623) — 0=무제한, N=N번 사용하면 장바구니 목록에서 제외
+    if (isUserCouponExhausted(uc.used_at, uc.used_count, c.per_user_limit)) return false
+    // (총 발행 개수 total_usage_limit는 "배포 중단"용이라 장바구니 노출과 무관 — 발급 단계(user_coupons 트리거)에서만 집행)
     // 개별 사용 한도 소진
     if (c.usage_limit > 0 && c.usage_count >= c.usage_limit) return false
     return true
@@ -567,12 +561,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     : null
   const allWalkIn = cartRsvs.length > 0 ? cartRsvs.every(r => r.pickup_method === 'visit') : null
 
-  // 1인당 사용 한도 검증용 — coupon_id별 이미 사용 완료한 횟수 (2026-09-21 추가)
-  const usedCountByCoupon = new Map<string, number>()
-  for (const row of (usedCouponsResult.data ?? []) as Array<{ coupon_id: string }>) {
-    usedCountByCoupon.set(row.coupon_id, (usedCountByCoupon.get(row.coupon_id) ?? 0) + 1)
-  }
-
   // 적용 카테고리 검증용 — 카트에 담긴 상품들의 카테고리 목록 (2026-09-21 추가)
   const cartCategories = [...new Set(serverProducts.map(p => p.category).filter((c): c is string => c != null))]
 
@@ -602,7 +590,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         isFirstRental,
         isStudent,
         hasActiveSubscription,
-        usedCountForCoupon:    usedCountByCoupon.get(uc.coupon_id) ?? 0,
+        usedCountForCoupon:    userCouponUsedCount(uc.used_at, uc.used_count),
         cartCategories,
       },
     )
@@ -842,6 +830,7 @@ interface RawCouponFields {
 interface RawUserCouponRow {
   id:              string
   coupon_id:       string
+  used_at:         string | null
   used_count:      number
   first_viewed_at: string | null
   coupons:         RawCouponFields | null

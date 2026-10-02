@@ -13,6 +13,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { userCouponUsedCount } from '$lib/utils/couponUsage'
 
 // ── 7개 자격조건 필드 (coupons 테이블 컬럼과 1:1 대응) ──────────────────────
 export interface CouponEligibilityFields {
@@ -256,11 +257,13 @@ export async function buildCouponEligibilityContext(
         }
       }
     }).from('user_coupons')
-      .select('id')
+      .select('used_at, used_count')
       .eq('user_id', userId)
       .eq('coupon_id', couponId)
       .not('used_at', 'is', null)
-    usedCountForCoupon = usedRows?.length ?? 0
+    // 한 사용자는 같은 쿠폰을 1장만 보유하고 그 행의 used_count가 사용 횟수다(Migration 623)
+    usedCountForCoupon = ((usedRows ?? []) as Array<{ used_at: string | null; used_count: number | null }>)
+      .reduce((sum, r) => sum + userCouponUsedCount(r.used_at, r.used_count), 0)
   }
 
   // ── 사용자 컨텍스트 ─────────────────────────────────────────────────────

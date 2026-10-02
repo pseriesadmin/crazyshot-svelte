@@ -102,7 +102,7 @@
   // 검증)으로 여전히 쓰이므로 건드리지 않고, 이 폼의 바인딩만 total_usage_limit으로 교정.
   let u_discount_type   = $state<string>(coupon.discount_type)
   let u_discount_value  = $state(coupon.discount_value)
-  let u_max_discount    = $state(cc.max_discount_amount ?? 0)
+  let u_max_discount    = $state(Number(cc.max_discount_amount ?? 0))
   let u_total_usage_limit = $state(cc.total_usage_limit ?? 0)
   let u_display_name    = $state(cc.display_name ?? '')
   let u_user_grade      = $state(cc.user_grade_required ?? '')
@@ -119,9 +119,10 @@
   // 2026-09-21 추가 — 생성화면(/cms/promotion/coupon/new)에는 있으나 이 수정 패널에는 없어
   // 발행 후 확인·변경이 불가능했던 필드들("4번 지적사항" 구현)
   let u_description          = $state(cc.description ?? '')
-  let u_min_purchase_amount  = $state(cc.min_purchase_amount ?? 0)
+  let u_min_purchase_amount  = $state(Number(cc.min_purchase_amount ?? 0))
   let u_min_rental_amount    = $state(cc.min_rental_amount ?? 0)
   let u_min_rental_days      = $state(cc.min_rental_days ?? 0)
+  // 1인당 사용 횟수(Migration 623) — 0=무제한(장바구니에 매번 노출), N=N번 사용하면 장바구니에서 제외, 기본 1
   let u_per_user_limit       = $state(cc.per_user_limit ?? 1)
   let u_categories           = $state<string[]>(cc.applicable_categories ?? [])
   let u_first_rental         = $state(cc.is_first_rental_only === true)
@@ -133,6 +134,8 @@
   // 쿠폰끼리 중복 허용 — 컬럼 기본값 true(정책상 기본 허용), 명시적으로 false일 때만 끔
   let u_allow_coupon_stacking = $state(cc.allow_coupon_stacking !== false)
   // 적용 대상(Migration 615) — 컬럼 기본값 둘 다 true. 하나만 켜면 그 대상에만, 둘 다 켜면 모두 적용. 최소 1개 필수.
+  // 할인 적용 범위(Migration 620) — 정률 쿠폰만 '대여 1일차'로 한정 가능
+  let u_scope_first_day = $state(cc.discount_scope === 'first_day')
   let u_applies_rental = $state(cc.applies_to_rental !== false)
   let u_applies_sale = $state(cc.applies_to_sale !== false)
   function toggleApplies(target: 'rental' | 'sale') {
@@ -144,6 +147,13 @@
     }
     u_applies_rental = rental
     u_applies_sale = sale
+  }
+
+  // 천 단위 콤마 표시 입력(uiux-index.md "금액 입력폼 표준" — coupon/new와 동일 관례): 화면은 콤마 포함 문자열,
+  // 제출값은 각 입력 옆 hidden input(raw 숫자)이 담당한다.
+  function parseAmountDigits(raw: string): number {
+    const digits = raw.replace(/[^0-9]/g, '')
+    return digits ? parseInt(digits, 10) : 0
   }
 
   function toggleCat(c: string) {
@@ -158,7 +168,7 @@
     const ccEff = coupon as any
     u_discount_type  = coupon.discount_type
     u_discount_value = coupon.discount_value
-    u_max_discount   = ccEff.max_discount_amount ?? 0
+    u_max_discount   = Number(ccEff.max_discount_amount ?? 0)
     u_total_usage_limit = ccEff.total_usage_limit ?? 0
     u_display_name   = ccEff.display_name ?? ''
     u_user_grade     = ccEff.user_grade_required ?? ''
@@ -168,7 +178,7 @@
     u_valid_until    = coupon.valid_until ? coupon.valid_until.substring(0, 10) : ''
     u_valid_days     = ccEff.valid_days ?? null
     u_description         = ccEff.description ?? ''
-    u_min_purchase_amount = ccEff.min_purchase_amount ?? 0
+    u_min_purchase_amount = Number(ccEff.min_purchase_amount ?? 0)
     u_min_rental_amount   = ccEff.min_rental_amount ?? 0
     u_min_rental_days     = ccEff.min_rental_days ?? 0
     u_per_user_limit      = ccEff.per_user_limit ?? 1
@@ -180,6 +190,7 @@
     u_allow_points        = ccEff.allow_with_points !== false
     u_allow_stacking      = ccEff.allow_stacking === true
     u_allow_coupon_stacking = ccEff.allow_coupon_stacking !== false
+    u_scope_first_day     = ccEff.discount_scope === 'first_day'
     u_applies_rental      = ccEff.applies_to_rental !== false
     u_applies_sale        = ccEff.applies_to_sale !== false
   })
@@ -189,7 +200,7 @@
   const origInfo = $derived({
     discountType: coupon.discount_type,
     discountValue: coupon.discount_value,
-    maxDiscount: cc.max_discount_amount ?? 0,
+    maxDiscount: Number(cc.max_discount_amount ?? 0),
     totalUsageLimit: cc.total_usage_limit ?? 0,
     displayName: cc.display_name ?? '',
     userGrade: cc.user_grade_required ?? '',
@@ -198,7 +209,7 @@
     validUntil: coupon.valid_until ? coupon.valid_until.substring(0, 10) : '',
     validDays: cc.valid_days ?? null,
     description: cc.description ?? '',
-    minPurchaseAmount: cc.min_purchase_amount ?? 0,
+    minPurchaseAmount: Number(cc.min_purchase_amount ?? 0),
     minRentalAmount: cc.min_rental_amount ?? 0,
     minRentalDays: cc.min_rental_days ?? 0,
     perUserLimit: cc.per_user_limit ?? 1,
@@ -210,6 +221,7 @@
     allowPoints: cc.allow_with_points !== false,
     allowStacking: cc.allow_stacking === true,
     allowCouponStacking: cc.allow_coupon_stacking !== false,
+    scopeFirstDay: cc.discount_scope === 'first_day',
     appliesRental: cc.applies_to_rental !== false,
     appliesSale: cc.applies_to_sale !== false,
   })
@@ -237,6 +249,7 @@
     u_allow_points !== origInfo.allowPoints ||
     u_allow_stacking !== origInfo.allowStacking ||
     u_allow_coupon_stacking !== origInfo.allowCouponStacking ||
+    u_scope_first_day !== origInfo.scopeFirstDay ||
     u_applies_rental !== origInfo.appliesRental ||
     u_applies_sale !== origInfo.appliesSale
   )
@@ -527,21 +540,28 @@
                   }
                 }} />
             {:else}
-              <input id="uc-dval" name="discount_value" type="number" min="0"
-                class="f-input" bind:value={u_discount_value} />
+              <!-- 정액(원): 천 단위 콤마 표시 — 표시용 입력(콤마 포함)과 제출값을 분리, 제출은 항상 숫자 -->
+              <input id="uc-dval" type="text" inputmode="numeric" class="f-input"
+                value={Number(u_discount_value).toLocaleString('ko-KR')}
+                oninput={(e) => { u_discount_value = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+              <input type="hidden" name="discount_value" value={u_discount_value} />
             {/if}
           </div>
           {#if u_discount_type === 'percentage'}
             <div class="form-field">
               <label for="uc-maxd">최대 할인 한도 (원, 0=무제한)</label>
-              <input id="uc-maxd" name="max_discount_amount" type="number" min="0"
-                class="f-input" bind:value={u_max_discount} />
+              <input id="uc-maxd" type="text" inputmode="numeric" class="f-input"
+                value={u_max_discount.toLocaleString('ko-KR')}
+                oninput={(e) => { u_max_discount = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+              <input type="hidden" name="max_discount_amount" value={u_max_discount} />
             </div>
           {/if}
           <div class="form-field">
-            <label for="uc-tul">전체 발급 한도 (0=무제한)</label>
-            <input id="uc-tul" name="total_usage_limit" type="number" min="0"
-              class="f-input" bind:value={u_total_usage_limit} />
+            <label for="uc-tul">총 발행 개수 (0=무제한)</label>
+            <input id="uc-tul" type="text" inputmode="numeric" class="f-input"
+              value={u_total_usage_limit.toLocaleString('ko-KR')}
+              oninput={(e) => { u_total_usage_limit = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+            <input type="hidden" name="total_usage_limit" value={u_total_usage_limit} />
           </div>
           <div class="form-field">
             <!-- 2026-09-23(버그 수정, Stephen 지적) — "등급"이라는 표현 자체가 이 서비스
@@ -573,6 +593,7 @@
          </div>
         </div>
         <div class="validity-group">
+          <div class="section-title">유효 기간</div>
           <div class="radio-group">
             <label class="radio-lbl">
               <input type="radio" name="validity_type" value="fixed_period" bind:group={u_validity_type} />
@@ -613,13 +634,17 @@
          <div class="form-grid">
           <div class="form-field">
             <label for="uc-mpa">최소 구매금액 (원, 0=없음)</label>
-            <input id="uc-mpa" name="min_purchase_amount" type="number" min="0"
-              class="f-input" bind:value={u_min_purchase_amount} />
+            <input id="uc-mpa" type="text" inputmode="numeric" class="f-input"
+              value={u_min_purchase_amount.toLocaleString('ko-KR')}
+              oninput={(e) => { u_min_purchase_amount = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+            <input type="hidden" name="min_purchase_amount" value={u_min_purchase_amount} />
           </div>
           <div class="form-field">
             <label for="uc-mra">최소 대여금액 (원, 0=없음)</label>
-            <input id="uc-mra" name="min_rental_amount" type="number" min="0"
-              class="f-input" bind:value={u_min_rental_amount} />
+            <input id="uc-mra" type="text" inputmode="numeric" class="f-input"
+              value={u_min_rental_amount.toLocaleString('ko-KR')}
+              oninput={(e) => { u_min_rental_amount = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+            <input type="hidden" name="min_rental_amount" value={u_min_rental_amount} />
           </div>
           <div class="form-field">
             <label for="uc-mrd">최소 대여기간 (일, 0=없음)</label>
@@ -627,9 +652,11 @@
               class="f-input" bind:value={u_min_rental_days} />
           </div>
           <div class="form-field">
-            <label for="uc-pul">1인당 사용 횟수</label>
-            <input id="uc-pul" name="per_user_limit" type="number" min="1"
-              class="f-input" bind:value={u_per_user_limit} />
+            <label for="uc-pul">1인당 사용 횟수 (0=무제한)</label>
+            <input id="uc-pul" type="text" inputmode="numeric" class="f-input"
+              value={u_per_user_limit.toLocaleString('ko-KR')}
+              oninput={(e) => { u_per_user_limit = parseAmountDigits((e.currentTarget as HTMLInputElement).value) }} />
+            <input type="hidden" name="per_user_limit" value={u_per_user_limit} />
           </div>
          </div>
         </div>
@@ -645,6 +672,19 @@
           <input type="hidden" name="applicable_categories"
             value={u_categories.length ? JSON.stringify(u_categories) : ''} />
         {/if}
+
+        {#if u_discount_type === 'percentage'}
+          <div class="validity-group">
+           <div class="section-title">할인 적용 범위</div>
+           <div class="s-chip-group">
+            <button type="button" class="s-chip" class:s-chip--on={!u_scope_first_day}
+              onclick={() => u_scope_first_day = false}>주문 전체</button>
+            <button type="button" class="s-chip" class:s-chip--on={u_scope_first_day}
+              onclick={() => u_scope_first_day = true}>대여 1일차만</button>
+           </div>
+          </div>
+        {/if}
+        <input type="hidden" name="discount_scope" value={u_discount_type === 'percentage' && u_scope_first_day ? 'first_day' : 'order'} />
 
         <div class="validity-group">
          <div class="section-title">적용 대상</div>
@@ -1021,6 +1061,7 @@
   }
   .dist-chip-will_issue, .dist-chip-issued { background: var(--cs-purple-op10); color: var(--cs-purple); }
   .dist-chip-already_held, .dist-chip-already_used { background: var(--cs-white); color: var(--cs-text-mid); }
+  .dist-chip-limit_reached { background: var(--cs-red-xlight); color: var(--cs-red-badge); }
   .dist-chip-not_found { background: var(--cs-red-xlight); color: var(--cs-red-badge); }
   .dist-result { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
   .dist-result-summary { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); margin: 0; }
