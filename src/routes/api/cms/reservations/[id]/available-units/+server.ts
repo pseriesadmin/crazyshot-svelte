@@ -28,6 +28,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { sortUnitsByCode } from '$lib/utils/availableUnitOrder'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -106,9 +107,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const busyIds = new Set((busyRows ?? []).map(r => (r as { product_id: string }).product_id))
 
-  const availableUnits = siblingsList
-    .filter(s => !busyIds.has(s.id))
-    .map(s => ({ id: s.id, product_code: s.product_code }))
+  // 정렬 없이 반환하면 DB 반환 순서(0031, 0036, 0032 …)로 노출돼 특정 품번이 "누락된 것처럼" 보인다
+  const availableUnits = sortUnitsByCode(
+    siblingsList
+      .filter(s => !busyIds.has(s.id))
+      .map(s => ({ id: s.id, product_code: s.product_code })),
+  )
 
   return json({ units: availableUnits })
 }
