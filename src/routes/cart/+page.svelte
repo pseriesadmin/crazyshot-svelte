@@ -9,7 +9,7 @@
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
   import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
-  import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete, missingCartFormFields } from '$lib/utils/cartFormCompleteness';
+  import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete } from '$lib/utils/cartFormCompleteness';
   import { calcStackedCouponDiscount, canAddCoupon, type StackableCoupon } from '$lib/utils/couponStacking';
   import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
@@ -657,24 +657,31 @@
       resetReturnTimeForMethodChange()
     }
     bulkOpts = { ...bulkOpts, returnMethod: v }
-    // 수령 방법의 고객정보·주소 입력이 끝난 뒤 반납 방법을 고르면 "설정옵션을 반납방법에 적용합니다"(반납에 동일 적용)를 자동으로 켜고
-    // 수령 폼을 반납 폼에 복사한다(2026-10-02, Stephen 확정). 방문·퀵·무인보관함은 전자계약 때문에 고객정보·주소가 필수라
-    // 수령과 반납 방법이 서로 달라도(방문→퀵 등) 적용한다. 배송 계열은 수령·반납이 다를 수 있어 무조건 반영하지 않는다.
-    // 방문지점은 두 방법이 모두 지점 방식(방문·무인보관함)일 때만 복사한다. 이미 켜져 있으면 다시 하지 않는다.
-    // 이미 켜져 있는데 반납 방법을 방문·퀵·무인보관함이 아닌 방법(배송 계열)으로 바꾸면 동일 적용을 해제한다 — 켜진 채 남으면 이후
-    // 수령 폼 수정이 반납 폼을 계속 덮어쓴다(QA MEDIUM-B). 반납 폼에 사용자가 직접 입력한 값이 있으면 자동 적용하지 않는다(QA MEDIUM-A).
+    // 반납 방법을 (다시) 고른 것은 명시적 선택이므로 이전의 "자동 적용 안 함"(사용자가 체크를 직접 끈 것)을 해제한다.
+    copyAutoDismissed = false
+    // 동일 적용이 켜진 채 반납 방법을 방문·퀵·무인보관함이 아닌 방법(배송 계열)으로 바꾸면 해제한다 — 켜진 채 남으면 이후
+    // 수령 폼 수정이 반납 폼을 계속 덮어쓴다(QA MEDIUM-B).
     if (bulkOpts.copyToReturn && !isContractInfoMethod(v)) {
       bulkOpts = { ...bulkOpts, copyToReturn: false }
-    } else if (
-      !bulkOpts.copyToReturn &&
-      isContractInfoMethod(bulkOpts.rentalMethod) && isContractInfoMethod(v) &&
-      isCustomerAndAddressComplete(bulkRentalForm) &&
-      isCartFormEmpty(bulkReturnForm)
-    ) {
-      bulkOpts = { ...bulkOpts, copyToReturn: true }
-      copyRentalFormToReturn(isPointMethod(bulkOpts.rentalMethod) && isPointMethod(v))
+    } else {
+      tryAutoCopyToReturn()
     }
     applyBulkToItems()
+  }
+  // 수령·반납 방법이 모두 방문·퀵·무인보관함이고 수령 폼의 고객정보·주소가 입력 완료됐으며 반납 폼이 비어 있으면
+  // "설정옵션을 반납방법에 적용합니다"(반납에 동일 적용)를 자동으로 켜고 수령 폼을 반납 폼에 복사한다(2026-10-02, Stephen 확정).
+  // 방문·퀵·무인보관함은 전자계약에 고객정보·주소가 필수라 수령과 반납 방법이 달라도 적용한다(배송 계열은 무조건 반영하지 않음).
+  // 방문지점은 두 방법이 모두 지점 방식(방문·무인보관함)일 때만 복사한다. 반납 폼에 사용자가 입력한 값이 있으면 덮어쓰지 않는다.
+  // 사용자가 체크를 직접 끈 뒤에는(copyAutoDismissed) 수령 폼을 고쳐도 다시 켜지 않는다 — 반납 방법을 다시 고르면 해제된다.
+  let copyAutoDismissed = false
+  function tryAutoCopyToReturn(): boolean {
+    if (bulkOpts.copyToReturn) return false
+    if (!isContractInfoMethod(bulkOpts.rentalMethod) || !isContractInfoMethod(bulkOpts.returnMethod)) return false
+    // 반납 폼에 사용자가 입력했거나 반납 지점을 먼저 골라 둔 상태면 덮어쓰지 않는다(QA MEDIUM-1)
+    if (!isCustomerAndAddressComplete(bulkRentalForm) || !isCartFormEmpty(bulkReturnForm) || bulkReturnForm.pickupPointId !== '') return false
+    bulkOpts = { ...bulkOpts, copyToReturn: true }
+    copyRentalFormToReturn(isPointMethod(bulkOpts.rentalMethod) && isPointMethod(bulkOpts.returnMethod))
+    return true
   }
   function bulkHandleRentalForm(f: FormState) {
     markFormTouched(bulkRentalTouched, bulkRentalForm, f)
@@ -682,6 +689,9 @@
     if (bulkOpts.copyToReturn) {
       markFormTouched(bulkReturnTouched, bulkReturnForm, f)
       bulkReturnForm = { ...f }
+    } else if (!copyAutoDismissed) {
+      // 반납 방법을 먼저 고르고 수령 정보를 나중에 입력 완료한 경우에도 자동 적용한다(2026-10-02, Stephen 확정)
+      tryAutoCopyToReturn()
     }
     applyBulkToItems()
   }
@@ -702,6 +712,7 @@
   function bulkHandleCopy(v: boolean) {
     // 배송 잠금 상태에서는 강제 체크 고정 — 해제 시도 무시(요청 A)
     if (!v && isDeliveryLocked(bulkOpts.rentalMethod)) return
+    copyAutoDismissed = !v
     if (v) {
       // 반납 방법을 이미 방문·퀵·무인보관함 중에서 골랐다면 그 선택을 유지한다(수령과 달라도 정보만 복사)
       const keepReturnMethod = isContractInfoMethod(bulkOpts.rentalMethod) && isContractInfoMethod(bulkOpts.returnMethod)
@@ -827,6 +838,20 @@
       memberCheck: pick('memberCheck'),
       memberCheck2: pick('memberCheck2'),
       pickupPointId: pick('pickupPointId'),
+    }
+  }
+
+  // 상품 카드가 실제로 갖게 될(=통합 폼 값이 병합된) 수령·반납 폼 — 고객정보·주소·지점 입력은 한 사람 기준이라 통합 폼 하나로만 받는다.
+  // 통합 폼을 마지막으로 고친 뒤 새로 생긴 상품 카드(예: 서버 갱신으로 대표 예약 id가 바뀐 카드)의 개별 폼은 비어 있을 수 있는데,
+  // 입력 게이트·지점 확인·서버 저장이 이 값을 쓰면 화면의 통합 폼이 가득 차 있어도 신청이 영구히 막히거나 빈 주소가 저장된다(2026-10-02).
+  // 날짜·시간·방법은 이 병합 대상이 아니다(신규 상품에 조용히 전파하지 않는 기존 정책 유지).
+  function effectiveForms(it: CartItemUiState): { rental: FormState; ret: FormState } {
+    const rentalLine = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
+    return {
+      rental: mergeFormForBulk(bulkRentalForm, it.rentalForm, bulkRentalTouched),
+      ret: rentalLine
+        ? mergeFormForBulk(bulkReturnForm, it.returnForm, bulkReturnTouched)
+        : mergeFormForBulk(bulkRentalForm, it.returnForm, bulkRentalTouched),
     }
   }
 
@@ -1051,8 +1076,9 @@
       if (it.deleted || !it.checked) return true
       const pickupPointNeeded = (it.opts.rentalMethod === 'visit' || it.opts.rentalMethod === 'locker') && visitPickupPoints.length > 0
       const returnPointNeeded = (it.opts.returnMethod === 'visit' || it.opts.returnMethod === 'locker') && visitPickupPoints.length > 0
-      return (!pickupPointNeeded || it.rentalForm.pickupPointId !== '') &&
-        (!returnPointNeeded || it.returnForm.pickupPointId !== '')
+      const ef = effectiveForms(it)
+      return (!pickupPointNeeded || ef.rental.pickupPointId !== '') &&
+        (!returnPointNeeded || ef.ret.pickupPointId !== '')
     })
   )
 
@@ -1060,8 +1086,8 @@
   // canProceed: 6가지 조건 모두 충족
   const canProceed = $derived(hasItems && datesSet && pickupPointsSet && deadlineOk && identityOk && agreed)
 
-  // ⚠️ 2026-10-02: 이름/이메일/휴대번호/주소/요청 사항 미입력은 이제 경고 토스트가 아니라 제출 게이트(formsComplete, 아래)로 막는다.
-  // 수령·반납 입력 정보 완전성(2026-10-02, Stephen 확정): 이름·전자메일·휴대번호·기본주소·상세주소·요청 사항을
+  // ⚠️ 2026-10-02: 이름/이메일/휴대번호/주소 미입력은 이제 경고 토스트가 아니라 제출 게이트(formsComplete, 아래)로 막는다.
+  // 수령·반납 입력 정보 완전성(2026-10-02, Stephen 확정): 이름·전자메일·휴대번호·기본주소·상세주소를(요청 사항은 선택)
   // 수령·반납 양쪽 모두 빠짐없이 입력해야 예약신청이 가능하다(방문·무인보관함·퀵·택배 등 방식 무관).
   // 대여 라인이 대상이고, 판매전용 구매 라인은 단독 카트(주문설정)일 때만 대상이다(혼합 카트의 구매 라인은 폼을 받지 않는다).
   const formsComplete = $derived(
@@ -1069,25 +1095,10 @@
       if (it.deleted || !it.checked) return true
       const isRental = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
       if (!isRental && !readIsPurchaseOnly()) return true
-      return isCartFormComplete(it.rentalForm) && isCartFormComplete(it.returnForm)
+      const ef = effectiveForms(it)
+      return isCartFormComplete(ef.rental) && isCartFormComplete(ef.ret)
     })
   )
-  // 입력이 비어 있는 항목 안내(화면 표시·토스트용) — 수령/반납 구분하여 한글 라벨로
-  const missingFormSummary = $derived.by(() => {
-    const rental = new Set<string>()
-    const ret = new Set<string>()
-    for (const it of itemsState) {
-      if (it.deleted || !it.checked) continue
-      const isRental = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
-      if (!isRental && !readIsPurchaseOnly()) continue
-      missingCartFormFields(it.rentalForm).forEach(f => rental.add(f))
-      missingCartFormFields(it.returnForm).forEach(f => ret.add(f))
-    }
-    const parts: string[] = []
-    if (rental.size > 0) parts.push(`수령: ${[...rental].join('·')}`)
-    if (ret.size > 0) parts.push(`반납: ${[...ret].join('·')}`)
-    return parts.join(' / ')
-  })
 
   // 완료 버튼 문구 — 2026-08-18: 장바구니 접근이 회원 전용으로 고정되어 비회원 분기 제거
   // 판매전용 단독 카트는 곧바로 PG 결제로 이어지므로 '결제하기'(2026-10-01) — 대여 포함 카트는 기존 문구 유지
@@ -1132,7 +1143,7 @@
         // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
         // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
         if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
-          csToast.warning(missingFormSummary ? `입력하지 않은 항목이 있습니다 — ${missingFormSummary}` : '대여예약정보를 모두 확인해 주세요.')
+          csToast.warning('미입력 항목을 확인하세요')
         }
       },
       { threshold: 0, rootMargin: '150px 0px 150px 0px' }
@@ -2783,9 +2794,15 @@
         class="footer-cta"
         class:footer-cta-active={readyToSubmit && !isConfirming}
         class:footer-cta-disabled={!readyToSubmit || isConfirming}
-        disabled={!readyToSubmit || isConfirming}
+        aria-disabled={!readyToSubmit || isConfirming}
         onclick={async () => {
-          if (!readyToSubmit || isConfirming) return
+          if (isConfirming) return
+          // 비활성(조건 미충족) 상태에서 눌러도 이유를 알린다(2026-10-02, Stephen 지시) — disabled 속성은 클릭 이벤트 자체를
+          // 막아 안내가 불가능하므로 aria-disabled로 접근성 상태만 유지하고 여기서 차단한다.
+          if (!readyToSubmit) {
+            csToast.warning('미입력 항목을 확인하세요')
+            return
+          }
           isConfirming = true
           try {
             // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로
@@ -2828,7 +2845,7 @@
               if (directPay) {
                 const pm: DeliveryMethod = it.opts.rentalMethod ?? 'crazydelivery'
                 for (const reservationId of it.reservationIds) {
-                  const saved = await saveShipmentMethod(reservationId, pm, pm, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.rentalForm.pickupPointId)
+                  const saved = await saveShipmentMethod(reservationId, pm, pm, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).rental.pickupPointId)
                   if (!saved.success) {
                     csToast.error(saved.errorMessage ?? '수령 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -2994,7 +3011,7 @@
                   // TypeScript 제어흐름 분석이 ternary 이후의 narrowing을 추적하지 못해 필요하다.
                   const pickupMethodSafe: DeliveryMethod = pickupMethodCo ?? 'crazydelivery'
                   const returnMethodSafe: DeliveryMethod = returnMethodCo ?? 'crazydelivery'
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodSafe, returnMethodSafe, it.rentalTime, it.returnTime, it.rentalForm.addr, it.rentalForm.addrDetail, it.rentalForm.notes, it.returnForm.notes, it.rentalForm.pickupPointId, it.returnForm.pickupPointId)
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodSafe, returnMethodSafe, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).ret.pickupPointId)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -3782,7 +3799,7 @@
 {#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void; method?: DeliveryMethod | null })}
   <div class="form-section">
     <span class="form-section-label">요청 사항</span>
-    <input class="f-input" placeholder="알아보기 쉽게 입력 필수" value={p.form.notes} oninput={(e) => p.onFormChange({ ...p.form, notes: readInputValue(e) })}/>
+    <input class="f-input" placeholder="알아보기 쉽게 입력 (선택)" value={p.form.notes} oninput={(e) => p.onFormChange({ ...p.form, notes: readInputValue(e) })}/>
     {#if p.method !== 'visit'}
       <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
     {/if}
