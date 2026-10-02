@@ -1,6 +1,7 @@
 <script lang="ts">
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import { parseLoginBannerSettings } from '$lib/utils/loginBanner'
 
   // ── 타입 ─────────────────────────────────────────────────────────
   interface SourceBanner {
@@ -46,6 +47,15 @@
   let localMobile = $state<LocalBanner[]>([])
   let localPcMode     = $state<'random' | 'fixed'>('fixed')
   let localMobileMode = $state<'random' | 'fixed'>('fixed')
+  /** 모바일 로그인 화면 배너 영역 노출 여부 — false 면 영역 전체 숨김(cms_settings.login_banner_mode.mobile_visible) */
+  let localMobileVisible = $state(true)
+  /** 단일 콤보 선택값 — 숨김이 우선, 아니면 노출 방식 */
+  const mobileChoice = $derived<'fixed' | 'random' | 'hidden'>(localMobileVisible ? localMobileMode : 'hidden')
+  function chooseMobile(choice: 'fixed' | 'random' | 'hidden') {
+    if (choice === 'hidden') { localMobileVisible = false; return }
+    localMobileVisible = true
+    localMobileMode = choice
+  }
   let origPcIds     = $state<Set<string>>(new Set())
   let origMobileIds = $state<Set<string>>(new Set())
   let isSaving  = $state(false)
@@ -59,19 +69,19 @@
     isLoading = true
     const [pcRes, mobileRes, settingsRes] = await Promise.all([
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any).from('promotion_banners')
+      (supabase as any).from('banners')
         .select('id, title, sub_copy, image_url, link_url')
-        .eq('placement', 'login_pc')
+        .eq('slot_key', 'login_pc')
         .is('deleted_at', null)
         .order('sort_order', { ascending: true }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any).from('promotion_banners')
+      (supabase as any).from('banners')
         .select('id, title, sub_copy, image_url, link_url')
-        .eq('placement', 'login_mobile')
+        .eq('slot_key', 'login_mobile')
         .is('deleted_at', null)
         .order('sort_order', { ascending: true }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any).from('page_settings')
+      (supabase as any).from('cms_settings')
         .select('value')
         .eq('key', 'login_banner_mode')
         .maybeSingle(),
@@ -85,9 +95,11 @@
     origPcIds     = new Set(pcData.map((b) => b.id))
     origMobileIds = new Set(mobileData.map((b) => b.id))
 
-    const settings = settingsRes.data?.value as { pc_mode?: string; mobile_mode?: string } | null
-    localPcMode     = (settings?.pc_mode     === 'random' ? 'random' : 'fixed')
-    localMobileMode = (settings?.mobile_mode === 'random' ? 'random' : 'fixed')
+    // 읽기·쓰기가 같은 곳을 가리키도록 정정(2026-10-02): 예전엔 존재하지 않는 promotion_banners·page_settings를 읽어 열 때마다 비어 있었다
+    const settings = parseLoginBannerSettings(settingsRes.data?.value)
+    localPcMode       = settings.pcMode
+    localMobileMode   = settings.mobileMode
+    localMobileVisible = settings.mobileVisible
 
     isLoading = false
   }
@@ -206,28 +218,42 @@
     return null
   }
 
+  const SESSION_EXPIRED_MSG = '로그인이 만료되었어요. 다시 로그인한 뒤 저장해 주세요.'
+
+  /** DB 권한 오류(permission denied)·ACCESS_DENIED 는 로그인 세션이 없어 비로그인(anon)으로 호출됐다는 뜻 — 원문 대신 안내 문구로 */
+  function friendlyError(message: string): string {
+    return /permission denied|ACCESS_DENIED|JWT|not authenticated/i.test(message) ? SESSION_EXPIRED_MSG : message
+  }
+
   async function save() {
     isSaving = true
     saveError = null
     try {
+      // 저장 전에 로그인 세션이 살아 있는지 확인 — 세션이 풀린 채 열려 있던 화면에서 저장하면
+      // 비로그인(anon)으로 호출돼 "permission denied for function …" 원문 오류가 나온다
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (!sessionData?.session) { saveError = SESSION_EXPIRED_MSG; return }
+
       const pcErr = await saveBannerSlot('pc', localPc, origPcIds)
-      if (pcErr) { saveError = pcErr; return }
+      if (pcErr) { saveError = friendlyError(pcErr); return }
 
       const mobileErr = await saveBannerSlot('mobile', localMobile, origMobileIds)
-      if (mobileErr) { saveError = mobileErr; return }
+      if (mobileErr) { saveError = friendlyError(mobileErr); return }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: settingsErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
         p_key: 'login_banner_mode',
-        p_value: { pc_mode: localPcMode, mobile_mode: localMobileMode },
+        p_value: { pc_mode: localPcMode, mobile_mode: localMobileMode, mobile_visible: localMobileVisible },
       })
-      if (settingsErr) { saveError = `설정 저장 실패: ${settingsErr.message}`; return }
+      if (settingsErr) { saveError = `설정 저장 실패: ${friendlyError(settingsErr.message)}`; return }
 
       onclose()
     } catch (e) {
-      saveError = e instanceof Error ? e.message : '저장 실패'
+      saveError = e instanceof Error ? friendlyError(e.message) : '저장 실패'
+    } finally {
+      // 실패 분기의 return 에서도 저장 버튼이 영구 비활성으로 남지 않도록 항상 해제
+      isSaving = false
     }
-    isSaving = false
   }
 </script>
 
@@ -248,24 +274,22 @@
 
     <!-- ── PC 배너 섹션 ──────────────────────────────────────── -->
     <div class="section">
-      <p class="section-label">PC 배너 <span class="hint">로그인 화면 — PC 배경·콘텐츠 영역</span></p>
-      <div class="radio-group">
-        <label class="radio-opt">
-          <input
-            type="radio" name="pc-mode" value="fixed"
-            checked={localPcMode === 'fixed'}
-            onchange={() => (localPcMode = 'fixed')}
-          />
-          <span>순서대로 노출</span>
-        </label>
-        <label class="radio-opt">
-          <input
-            type="radio" name="pc-mode" value="random"
-            checked={localPcMode === 'random'}
-            onchange={() => (localPcMode = 'random')}
-          />
-          <span>랜덤 노출</span>
-        </label>
+      <p class="section-label">PC 배너</p>
+      <div class="combo-wrap" role="group" aria-label="PC 배너 노출 설정">
+        <button
+          type="button"
+          class="combo-btn"
+          class:combo-btn-active={localPcMode === 'fixed'}
+          aria-pressed={localPcMode === 'fixed'}
+          onclick={() => (localPcMode = 'fixed')}
+        ><span class="combo-label">순서대로 노출</span></button>
+        <button
+          type="button"
+          class="combo-btn"
+          class:combo-btn-active={localPcMode === 'random'}
+          aria-pressed={localPcMode === 'random'}
+          onclick={() => (localPcMode = 'random')}
+        ><span class="combo-label">랜덤 노출</span></button>
       </div>
     </div>
 
@@ -322,8 +346,6 @@
           {/snippet}
         </CmsDragList>
       </div>
-    {:else}
-      <p class="empty-msg">PC 배너를 추가하면 로그인 화면 PC 영역에 표시됩니다.</p>
     {/if}
 
     {#if localPc.length < MAX}
@@ -336,24 +358,30 @@
 
     <!-- ── 모바일 배너 섹션 ───────────────────────────────────── -->
     <div class="section">
-      <p class="section-label">모바일 배너 <span class="hint">로그인 화면 — 모바일 배경·콘텐츠 영역</span></p>
-      <div class="radio-group">
-        <label class="radio-opt">
-          <input
-            type="radio" name="mobile-mode" value="fixed"
-            checked={localMobileMode === 'fixed'}
-            onchange={() => (localMobileMode = 'fixed')}
-          />
-          <span>순서대로 노출</span>
-        </label>
-        <label class="radio-opt">
-          <input
-            type="radio" name="mobile-mode" value="random"
-            checked={localMobileMode === 'random'}
-            onchange={() => (localMobileMode = 'random')}
-          />
-          <span>랜덤 노출</span>
-        </label>
+      <p class="section-label">모바일 배너</p>
+      <!-- 노출 설정 단일 콤보(front-uiux §16 수평 단일 선택) — 숨김이면 모바일 로그인 화면에서 배너 영역 전체가 사라진다 -->
+      <div class="combo-wrap" role="group" aria-label="모바일 배너 노출 설정">
+        <button
+          type="button"
+          class="combo-btn"
+          class:combo-btn-active={mobileChoice === 'fixed'}
+          aria-pressed={mobileChoice === 'fixed'}
+          onclick={() => chooseMobile('fixed')}
+        ><span class="combo-label">순서대로 노출</span></button>
+        <button
+          type="button"
+          class="combo-btn"
+          class:combo-btn-active={mobileChoice === 'random'}
+          aria-pressed={mobileChoice === 'random'}
+          onclick={() => chooseMobile('random')}
+        ><span class="combo-label">랜덤 노출</span></button>
+        <button
+          type="button"
+          class="combo-btn"
+          class:combo-btn-active={mobileChoice === 'hidden'}
+          aria-pressed={mobileChoice === 'hidden'}
+          onclick={() => chooseMobile('hidden')}
+        ><span class="combo-label">숨김</span></button>
       </div>
     </div>
 
@@ -410,8 +438,6 @@
           {/snippet}
         </CmsDragList>
       </div>
-    {:else}
-      <p class="empty-msg">모바일 배너를 추가하면 로그인 화면 모바일 영역에 표시됩니다.</p>
     {/if}
 
     {#if localMobile.length < MAX}
@@ -522,14 +548,36 @@
     color: var(--cs-text-light);
   }
 
-  .radio-group { display: flex; gap: 16px; }
-  .radio-opt {
+  /* 설정 콤보 버튼 — front-uiux §16 (PC 기본 + 모바일 오버라이드, 보더 hover 변경 금지) */
+  .combo-wrap {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .combo-wrap::-webkit-scrollbar { display: none; }
+  .combo-btn {
     display: flex;
     align-items: center;
     gap: 6px;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
+    padding: 9px 16px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid #DCDCDC;
+    background: #fff;
     cursor: pointer;
+    transition: background 0.18s;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .combo-btn:hover { background: #F5F4FA; }
+  .combo-btn-active,
+  .combo-btn-active:hover { border-color: var(--cs-purple); background: var(--cs-purple); }
+  .combo-label { font-size: 13px; font-weight: 700; color: var(--cs-text); }
+  .combo-btn-active .combo-label { color: #fff; }
+  @media (max-width: 640px) {
+    .combo-btn { padding: 8px 12px; }
+    .combo-label { font-size: 12px; }
   }
 
   .banner-row {

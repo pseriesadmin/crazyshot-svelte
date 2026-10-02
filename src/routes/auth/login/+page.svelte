@@ -6,6 +6,7 @@
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
   import LoginBannerModal from '$lib/components/auth/LoginBannerModal.svelte'
+  import { safeBannerHref } from '$lib/utils/loginBanner'
   import LegacyMemberVerifyModal from '$lib/components/auth/LegacyMemberVerifyModal.svelte'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
@@ -48,6 +49,33 @@
     if (!browser) return
     const dismissed = localStorage.getItem(LEGACY_DISMISS_KEY)
     if (!dismissed) showLegacyVerifyModal = true
+  })
+
+  // ── 배너 회전 노출 — 여러 장이면 4초마다 다음 배너로(PC·모바일 각각), 1장이면 고정 ──
+  const BANNER_ROTATE_MS = 4000
+  let pcIdx = $state(0)
+  let mobileIdx = $state(0)
+  let pcBanner = $derived(data.pcBanners.length > 0 ? data.pcBanners[pcIdx % data.pcBanners.length] : null)
+  let mobileBanner = $derived(data.mobileBanners.length > 0 ? data.mobileBanners[mobileIdx % data.mobileBanners.length] : null)
+  // 서버 목록이 바뀌면(재조회) 처음 배너부터 다시 시작
+  $effect(() => {
+    void data.pcBanners
+    void data.mobileBanners
+    pcIdx = 0
+    mobileIdx = 0
+  })
+  $effect(() => {
+    if (!browser) return
+    // 움직임 줄이기 설정을 켠 사용자에게는 자동 전환을 하지 않는다
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const pcCount = data.pcBanners.length
+    const mobileCount = data.mobileBanners.length
+    if (pcCount < 2 && mobileCount < 2) return
+    const timer = setInterval(() => {
+      if (pcCount > 1) pcIdx = (pcIdx + 1) % pcCount
+      if (mobileCount > 1) mobileIdx = (mobileIdx + 1) % mobileCount
+    }, BANNER_ROTATE_MS)
+    return () => clearInterval(timer)
   })
 
   // 이메일+비밀번호 모두 입력 시 Sign In 모드, 아니면 Sign Up 모드
@@ -113,11 +141,19 @@
         <!-- 좌: Title 패널 -->
         <div class="d-title-panel">
           <div class="d-title-bg" aria-hidden="true">
-            <img src="/auth/welcome-title-bg.png" alt="" class="d-title-bg-img"/>
+            <!-- 관리 모달에서 등록한 PC 배너가 있으면 그 이미지, 없으면 기존 고정 이미지 -->
+            <img src={pcBanner?.image_url ?? '/auth/welcome-title-bg.png'} alt="" class="d-title-bg-img"/>
           </div>
-          <div class="d-title-content">
-            <p class="d-welcome-en">Welcome</p>
-            <p class="d-welcome-sub">let's start with us</p>
+          <div class="d-title-content" class:d-title-content--banner={!!pcBanner}>
+            {#if pcBanner}
+              {@const pcHref = safeBannerHref(pcBanner.link_url)}
+              {#if pcBanner.title}<p class="d-banner-title">{pcBanner.title}</p>{/if}
+              {#if pcBanner.sub_copy}<p class="d-banner-sub">{pcBanner.sub_copy}</p>{/if}
+              {#if pcHref}<a class="d-title-link" href={pcHref} aria-label={pcBanner.title || '프로모션 배너'}></a>{/if}
+            {:else}
+              <p class="d-welcome-en">Welcome</p>
+              <p class="d-welcome-sub">let's start with us</p>
+            {/if}
             {#if data.isCmsAdmin}
               <button
                 class="d-admin-edit-btn"
@@ -374,36 +410,60 @@
   <div class="m-body">
     <!-- ──────────────────────────────────────────────────────────────
          광고 배너 영역 (gnb-mobile-nav 아래 첫 번째 콘텐츠 블록)
-         관리 경로: CMS → 프로모션 → 광고 (promotion_banners / placement='login_mobile')
-         - bg_image_url, overlay_image_url, html_content, link_url 을 CMS에서 관리
-         - promotion_banners 테이블 미생성 시 +page.server.ts DEFAULT_BANNER fallback
-         - html_content: CMS 관리자 전용 입력 → {@html} 렌더링 (XSS 위험 없음)
+         관리 경로: 관리자 로그인 시 이 화면의 "배너 관리" 버튼(LoginBannerModal) —
+         banners(slot_key='login_mobile') + cms_settings.login_banner_mode(노출/숨김·순서/랜덤)
+         - 등록 배너가 없으면 +page.server.ts DEFAULT_BANNER(고정 배너, {@html}은 이 고정 상수에만 사용)
+         - 관리자 입력 텍스트(제목·서브카피)는 {@html} 없이 일반 텍스트로 렌더링
     ────────────────────────────────────────────────────────────── -->
-    <div class="m-welcome">
-      <!-- 배경 레이어: CMS bg_image_url + overlay_image_url -->
-      <div class="m-welcome-bg" aria-hidden="true">
-        <img src={data.banner.bg_image_url} alt="" class="m-welcome-img"/>
-        {#if data.banner.overlay_image_url}
-          <img src={data.banner.overlay_image_url} alt="" class="m-welcome-img m-welcome-overlay"/>
-        {/if}
-      </div>
+    <!-- 관리자 전용 — 모바일에서도 배너 관리 모달을 열 수 있어야 한다(노출 "숨김"이면 아래 배너 영역 자체가 없어지므로 영역 밖에 둔다) -->
+    {#if data.isCmsAdmin}
+      <button type="button" class="m-admin-edit-btn" onclick={() => showLoginBannerModal = true} aria-label="로그인 배너 관리">배너 관리</button>
+    {/if}
 
-      <!-- 텍스트 콘텐츠: CMS html_content {@html} 렌더링 -->
-      <!-- link_url 있으면 배너 전체를 클릭 가능한 링크로 감쌈 -->
-      {#if data.banner.link_url}
-        <a href={data.banner.link_url} class="m-welcome-content m-welcome-link" aria-label="프로모션 배너">
-          <div class="m-welcome-text">
-            {@html data.banner.html_content}
+    <!-- 관리 모달의 "모바일 배너 노출 설정"이 숨김이면 배너 영역 전체를 렌더링하지 않는다 -->
+    {#if data.mobileVisible}
+      {#if mobileBanner}
+        <!-- 관리 모달에서 등록한 모바일 배너(이미지+제목·서브카피·링크) -->
+        {@const mHref = safeBannerHref(mobileBanner.link_url)}
+        <div class="m-welcome">
+          <div class="m-welcome-bg" aria-hidden="true">
+            <img src={mobileBanner.image_url} alt="" class="m-welcome-img"/>
           </div>
-        </a>
+          {#if mHref}
+            <a href={mHref} class="m-welcome-content m-welcome-link m-banner-content" aria-label={mobileBanner.title || '프로모션 배너'}>
+              {#if mobileBanner.title || mobileBanner.sub_copy}
+                <div class="m-banner-text">
+                  {#if mobileBanner.title}<p class="m-banner-title">{mobileBanner.title}</p>{/if}
+                  {#if mobileBanner.sub_copy}<p class="m-banner-sub">{mobileBanner.sub_copy}</p>{/if}
+                </div>
+              {/if}
+            </a>
+          {:else if mobileBanner.title || mobileBanner.sub_copy}
+            <div class="m-welcome-content m-banner-content">
+              <div class="m-banner-text">
+                {#if mobileBanner.title}<p class="m-banner-title">{mobileBanner.title}</p>{/if}
+                {#if mobileBanner.sub_copy}<p class="m-banner-sub">{mobileBanner.sub_copy}</p>{/if}
+              </div>
+            </div>
+          {/if}
+        </div>
       {:else}
-        <div class="m-welcome-content">
-          <div class="m-welcome-text">
-            {@html data.banner.html_content}
+        <!-- 등록된 배너가 없으면 기존 고정 배너 -->
+        <div class="m-welcome">
+          <div class="m-welcome-bg" aria-hidden="true">
+            <img src={data.banner.bg_image_url} alt="" class="m-welcome-img"/>
+            {#if data.banner.overlay_image_url}
+              <img src={data.banner.overlay_image_url} alt="" class="m-welcome-img m-welcome-overlay"/>
+            {/if}
+          </div>
+          <div class="m-welcome-content">
+            <div class="m-welcome-text">
+              {@html data.banner.html_content}
+            </div>
           </div>
         </div>
       {/if}
-    </div>
+    {/if}
 
     <!-- 계정 폼 -->
     <div class="m-account">
@@ -775,6 +835,28 @@
     .d-welcome-sub { font-size: clamp(14px, 1.9vw, 20px); }
   }
 
+  /* 관리 모달에서 등록한 PC 배너 — 이미지 위에 하단 어둡게(front-uiux §6 이미지 오버레이) + 제목·서브카피 */
+  .d-title-content--banner {
+    background: linear-gradient(to bottom, rgba(16, 11, 50, 0) 40%, rgba(16, 11, 50, 0.65) 100%);
+    align-items: flex-start;
+    justify-content: flex-end;
+    padding: 30px clamp(20px, 4vw, 50px);
+  }
+  .d-banner-title {
+    font: var(--text-pc-ad-kr-35);
+    color: var(--cs-white);
+    margin: 0;
+    word-break: keep-all;
+  }
+  .d-banner-sub {
+    font: var(--text-pc-menu-kr-20);
+    color: var(--cs-purple-op10);
+    margin: 0;
+    word-break: keep-all;
+  }
+  /* 배너 전체 클릭 영역 — 관리자 버튼(z-index 10) 아래 */
+  .d-title-link { position: absolute; inset: 0; z-index: 2; }
+
   /* 관리자 전용 배너 관리 버튼 — 패널 우측 상단 고정 */
   .d-admin-edit-btn {
     position: absolute;
@@ -1049,9 +1131,7 @@
     min-height: 44px;
   }
   .m-topbar-title {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 16px;
+    font: var(--text-m-body-16B);
     color: var(--cs-dark);
     letter-spacing: -0.5px;
   }
@@ -1102,6 +1182,29 @@
     text-decoration: none;
     cursor: pointer;
   }
+  /* 관리 모달에서 등록한 모바일 배너 텍스트 — 이미지 하단 그라데이션 위 흰 글자 */
+  .m-banner-content {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 20px;
+    background: linear-gradient(to bottom, rgba(16, 11, 50, 0) 40%, rgba(16, 11, 50, 0.65) 100%);
+  }
+  .m-banner-text { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+  .m-banner-title { font: var(--text-m-title-18B); color: var(--cs-white); margin: 0; word-break: keep-all; }
+  .m-banner-sub { font: var(--text-m-script-14); color: var(--cs-purple-op10); margin: 0; word-break: keep-all; }
+  /* 관리자 전용 배너 관리 버튼(모바일) — 배너 영역 밖 */
+  .m-admin-edit-btn {
+    align-self: flex-end;
+    min-height: 44px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    color: var(--cs-white);
+    font: var(--text-m-script-14B);
+    cursor: pointer;
+  }
+  .m-admin-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
   .m-welcome-content {
     position: relative;
     z-index: 2;
@@ -1120,18 +1223,14 @@
     text-align: center;
   }
   :global(.m-welcome-kr) {
-    font-family: 'SB AggroOTF', var(--font-kr-heading);
-    font-size: 30px;
-    font-weight: 700;
-    line-height: 1.3;
+    font: var(--text-m-ad-kr-30); /* 700 30px/130% SB Aggro(--font-kr-heading) — 모바일 display-md */
     margin: 0;
   }
   :global(.m-w-purple)  { color: var(--cs-purple); }
   :global(.m-w-red)     { color: var(--cs-red-badge); }
   :global(.m-welcome-sub) {
-    font: var(--text-pc-title-16);
+    font: var(--text-m-body-16B);
     color: var(--cs-dark);
-    font-weight: 700;
     margin: 0;
     letter-spacing: -0.5px;
   }
@@ -1144,10 +1243,11 @@
     gap: 30px;
   }
   .m-form-heading {
-    font: var(--text-pc-title-16);
+    font: var(--text-m-body-16B);
     color: var(--cs-text-dark);
-    font-weight: 700;
     margin: 0;
+    padding-top: 20px; /* 배너와의 간격 확보(Stephen 지시 2026-10-02, 스페이싱 lg=20px) */
+    text-align: center; /* 가운데 정렬 */
     letter-spacing: -0.5px;
   }
 
@@ -1179,7 +1279,7 @@
     background: none;
     border: none;
     outline: none;
-    font: var(--text-pc-body-14);
+    font: var(--text-m-script-14B);
     color: var(--cs-text);
     flex: 1;
     min-width: 0;
@@ -1274,8 +1374,7 @@
     justify-content: center;
   }
   .m-divider-label {
-    font-family: var(--font-kr);
-    font-size: 12px;
+    font: var(--text-m-script-12);
     color: var(--cs-text-dark);
   }
   .m-social {
@@ -1324,7 +1423,7 @@
 
   /* 모바일 에러 */
   .m-error {
-    font: var(--text-pc-script-12);
+    font: var(--text-m-script-12);
     color: var(--cs-error);
     margin: 0;
     text-align: center;
@@ -1358,7 +1457,7 @@
     height: 56px;
     width: 100%;
     color: var(--cs-white);
-    font: var(--text-pc-title-16);
+    font: var(--text-m-body-16B);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1378,7 +1477,7 @@
     height: 56px;
     width: 100%;
     color: var(--cs-white);
-    font: var(--text-pc-title-16);
+    font: var(--text-m-body-16B);
     cursor: pointer;
     display: flex;
     align-items: center;
