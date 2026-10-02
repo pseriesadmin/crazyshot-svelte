@@ -11,6 +11,10 @@
       <span class="icon">✅</span>
       <h1 class="title">이미 서명이 완료된 계약서입니다.</h1>
       <p class="desc">본 계약서는 이미 서명 처리되었습니다.<br />문의사항이 있으시면 채팅으로 연락해 주세요.</p>
+      <div class="actions">
+        <a href="/" class="btn-home">홈으로 돌아가기</a>
+        <a href="/account/rental" class="btn-account">내 예약 보기</a>
+      </div>
     </div>
   </main>
 </div>
@@ -46,4 +50,34 @@
   .icon  { font-size: 48px; }
   .title { font-size: 18px; font-weight: 700; color: var(--cs-dark, #100B32); margin: 0; }
   .desc  { font-size: 14px; color: #666; line-height: 1.6; margin: 0; }
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    margin-top: 8px;
+  }
+  /* 주 CTA — front-uiux §5: red-badge / 50px(PC)·44px(Mobile) / radius 30px / hover red */
+  .btn-home,
+  .btn-account {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    padding: 0 30px;
+    border-radius: var(--radius-xl, 30px);
+    font: var(--text-pc-title-16);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .btn-home { background: var(--cs-red-badge, #FF3535); color: var(--cs-white, #fff); }
+  .btn-home:hover { background: var(--cs-red, #CF0000); }
+  /* 보조 버튼 — front-uiux §5: purple / 같은 규격 / hover purple-hover */
+  .btn-account { background: var(--cs-purple, #3B2F8A); color: var(--cs-white, #fff); }
+  .btn-account:hover { background: var(--cs-purple-hover, #2E2470); }
+  @media (max-width: 640px) {
+    .btn-home,
+    .btn-account { height: 44px; padding: 0 20px; font: var(--text-m-body-16B); }
+  }
 </style>

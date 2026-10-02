@@ -14,6 +14,10 @@
         계약서 서명 링크의 유효기간이 지났습니다.<br />
         업체 채팅으로 재발송을 요청해 주세요.
       </p>
+      <div class="actions">
+        <a href="/" class="btn-home">홈으로 돌아가기</a>
+        <a href="/account/rental" class="btn-account">내 예약 보기</a>
+      </div>
     </div>
   </main>
 </div>
@@ -49,4 +53,34 @@
   .icon  { font-size: 48px; }
   .title { font-size: 18px; font-weight: 700; color: var(--cs-dark, #100B32); margin: 0; }
   .desc  { font-size: 14px; color: #666; line-height: 1.6; margin: 0; }
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    margin-top: 8px;
+  }
+  /* 주 CTA — front-uiux §5: red-badge / 50px(PC)·44px(Mobile) / radius 30px / hover red */
+  .btn-home,
+  .btn-account {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    padding: 0 30px;
+    border-radius: var(--radius-xl, 30px);
+    font: var(--text-pc-title-16);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .btn-home { background: var(--cs-red-badge, #FF3535); color: var(--cs-white, #fff); }
+  .btn-home:hover { background: var(--cs-red, #CF0000); }
+  /* 보조 버튼 — front-uiux §5: purple / 같은 규격 / hover purple-hover */
+  .btn-account { background: var(--cs-purple, #3B2F8A); color: var(--cs-white, #fff); }
+  .btn-account:hover { background: var(--cs-purple-hover, #2E2470); }
+  @media (max-width: 640px) {
+    .btn-home,
+    .btn-account { height: 44px; padding: 0 20px; font: var(--text-m-body-16B); }
+  }
 </style>
