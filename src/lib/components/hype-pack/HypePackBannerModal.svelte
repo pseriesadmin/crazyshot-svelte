@@ -659,6 +659,9 @@
   /* 그룹(노출방식·배너상품) ↔ 모바일 키워드 칩 사이 여백 +100% (바디 기본 gap 20px → 40px) */
   .group-wrap + .section { margin-top: 20px; }
   .group-products { display: flex; flex-direction: column; gap: 16px; }
+  /* 선택된 상품 카드(CmsDragList) 목록 간 세로 여백 — 컴포넌트 스코프 CSS라 :global로 이 모달 범위에서만 지정.
+     하입팩 테마그룹 모달의 상품 목록과 같은 8px(밀도 높은 리스트 기준) */
+  .group-products :global(.drag-list) { gap: 8px; }
 
   .search-wrap { position: relative; }
 
