@@ -17,6 +17,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { sendPushToUser } from '$lib/server/push'
+import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -34,6 +35,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!userId) return json({ ok: false, error: '사용자 ID 필수' }, { status: 400 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  // 필수 서류 조합을 모두 갖춘 증명만 승인할 수 있다(docApproval.ts 정본, Stephen 2026-10-02) — 일부만 등록된 상태에서
+  // 화면 버튼을 우회한 직접 호출까지 막는 서버 최종 게이트. approve_customer_doc RPC는 service_role 전용이라 이 엔드포인트가 유일한 진입점.
+  const { data: docProfile } = await admin
+    .from('user_profiles')
+    .select('identity_type, foreign_type')
+    .eq('id', userId)
+    .maybeSingle()
+  if (!docProfile) return json({ ok: false, error: '사용자를 찾을 수 없습니다.' }, { status: 404 })
+  const types = docProfile as { identity_type: string[] | null; foreign_type: string[] | null }
+  const requiredOk = type === 'foreign' ? foreignRequiredMet(types.foreign_type) : identityRequiredMet(types.identity_type)
+  if (!requiredOk) {
+    return json({ ok: false, error: '필수 서류 조합이 모두 등록되지 않아 승인할 수 없습니다.' }, { status: 400 })
+  }
 
   const { data: rpcData, error: rpcError } = await admin.rpc('approve_customer_doc', {
     p_user_id: userId,

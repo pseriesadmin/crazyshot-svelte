@@ -6,6 +6,8 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidation'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
+import { sendPushToAdmins } from '$lib/server/push'
+import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB — CMS 표준 기술 지침(개별 파일 업로드 용량)과 동일
@@ -171,41 +173,64 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     if (removeError) console.error('[upload-doc] old file cleanup error:', removeError.message)
   }
 
-  // 관리자 검토요청 알림카드(admin_only) — 업로드 성공에는 영향 주지 않는 fail-soft 부가동작
+  // 관리자 검토요청 알림(카드 + 푸시) — "필수 파일 조합"을 모두 갖춘 등록 완료 시에만 발송한다
+  // (본인증명: 주민등록증|운전면허증 + 주민등록등본 / 외국인증명: 체류기간 콤보 4종 전부 — 필수 조합은 docApproval.ts 정본, Stephen 2026-10-02 확정). 일부만 등록한 중간 상태에서는 관리자가 승인할 수 없으므로 알리지 않는다.
+  // 카드(admin_only)·푸시 모두 업로드 성공에는 영향 주지 않는 fail-soft 부가동작이고, 서로 독립이다(한쪽 실패가 다른 쪽을 막지 않음).
   // (service-operations.md §11: 세션조회는 find_or_create_general_chat_session RPC만 사용)
-  try {
-    const { data: profileForName } = await admin
-      .from('user_profiles')
-      .select('full_name')
-      .eq('user_id', session.user.id)
-      .maybeSingle()
-    const displayName = (profileForName as { full_name?: string } | null)?.full_name || '고객'
+  // 외국인증명은 기존 규칙(Migration #495, Stephen 유지 확정)에 따라 체류기간 콤보 4종을 모두 등록해야 등록완료 시각
+  // (foreign_verified_at)이 기록되고 CMS "승인" 버튼이 나타난다 — 알림도 같은 시점(4종 완료)에 보내 "알림은 왔는데
+  // 승인 버튼이 없는" 어긋남을 막는다(필수 조합 자체가 체류유형별 4종 전부 — docApproval.ts foreignRequiredMet).
+  const requiredMet = type === 'identity'
+    ? identityRequiredMet(finalTypeValues)
+    : finalDocUrls.length >= MAX_FOREIGN_FILES && foreignRequiredMet(finalTypeValues)
 
-    const { data: chatSessionId, error: sessionRpcErr } = await admin.rpc(
-      'find_or_create_general_chat_session',
-      { p_user_id: session.user.id, p_reservation_id: null },
-    )
-    if (sessionRpcErr) {
-      console.error('[upload-doc] find_or_create_general_chat_session 실패(fail-soft):', sessionRpcErr.message)
-    } else if (chatSessionId) {
-      await admin.from('chat_messages').insert({
-        session_id:     chatSessionId,
-        sender_type:    'user',
-        message_type:   'action_card',
-        content:        `'${displayName}' 회원 본인증명정보 등록 확인 요청`,
-        admin_only:     true,
-        action_payload: {
-          type:          'identity_review_request',
-          doc_type:      type,
-          button_label:  '본인증명정보 등록',
-          action_url:    `/cms/customers?selected=${session.user.id}`,
-        },
-        is_read: false,
-      })
-      await admin.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', chatSessionId)
+  if (requiredMet) {
+    let displayName = '고객'
+    try {
+      const { data: profileForName } = await admin
+        .from('user_profiles')
+        .select('full_name')
+        .eq('user_id', session.user.id)
+        .maybeSingle()
+      displayName = (profileForName as { full_name?: string } | null)?.full_name || '고객'
+    } catch (e) {
+      console.error('[upload-doc] 고객명 조회 실패(fail-soft):', e instanceof Error ? e.message : e)
     }
-  } catch (e) {
-    console.error('[upload-doc] identity_review_request 카드 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
+
+    try {
+      const { data: chatSessionId, error: sessionRpcErr } = await admin.rpc(
+        'find_or_create_general_chat_session',
+        { p_user_id: session.user.id, p_reservation_id: null },
+      )
+      if (sessionRpcErr) {
+        console.error('[upload-doc] find_or_create_general_chat_session 실패(fail-soft):', sessionRpcErr.message)
+      } else if (chatSessionId) {
+        await admin.from('chat_messages').insert({
+          session_id:     chatSessionId,
+          sender_type:    'user',
+          message_type:   'action_card',
+          content:        `'${displayName}' 회원 본인증명정보 등록 확인 요청`,
+          admin_only:     true,
+          action_payload: {
+            type:          'identity_review_request',
+            doc_type:      type,
+            button_label:  '본인증명정보 등록',
+            action_url:    `/cms/customers?selected=${session.user.id}`,
+          },
+          is_read: false,
+        })
+        await admin.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', chatSessionId)
+      }
+    } catch (e) {
+      console.error('[upload-doc] identity_review_request 카드 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
+    }
+
+    // 관리자 푸시 — 알림 설정(admin_notify_identity_review)을 켠 관리자에게만. sendPushToAdmins는 내부에서 오류를 삼킨다.
+    await sendPushToAdmins('identity_review', {
+      title: '본인증명정보 승인 요청',
+      body:  `'${displayName}' 회원이 필수 본인증명정보를 등록했어요. 확인 후 승인해주세요.`,
+      link:  `/cms/customers?selected=${session.user.id}`,
+    })
   }
 
   return json({ ok: true, docUrls: finalDocUrls, verifiedAt: new Date().toISOString() })
