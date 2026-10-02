@@ -252,6 +252,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const { data: faqRaw } = await locals.supabase
     .from('canned_responses')
     .select('id, title, content, help_category')
+    .eq('pending_review', false) // 미검토 항목 제외 — CMS 관리자 세션은 RLS로 전체가 보이므로 앱에서도 필터
     .order('usage_count', { ascending: false })
     .order('title', { ascending: true })
     .limit(5)

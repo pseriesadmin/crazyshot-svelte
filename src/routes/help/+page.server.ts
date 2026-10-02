@@ -28,6 +28,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const { data: faqData } = await locals.supabase
 		.from('canned_responses')
 		.select('id, title, content, help_category')
+		// 미검토(CSV 일괄등록 등 pending_review=true) 항목은 고객 도움말에 노출 금지 — CMS 관리자 세션은
+		// RLS(cr_admin_all)로 전체가 조회되므로 RLS와 별개로 앱 쿼리에서도 반드시 제외한다.
+		.eq('pending_review', false)
 		.order('usage_count', { ascending: false })
 		.order('title', { ascending: true })
 
