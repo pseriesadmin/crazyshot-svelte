@@ -14,7 +14,10 @@
         전자 대여 계약서에 서명해 주셔서 감사합니다.<br />
         대여 준비가 완료되면 채팅으로 안내드리겠습니다.
       </p>
-      <a href="/" class="btn-home">홈으로 돌아가기</a>
+      <div class="actions">
+        <a href="/" class="btn-home">홈으로 돌아가기</a>
+        <a href="/account/rental" class="btn-account">내 예약 보기</a>
+      </div>
     </div>
   </main>
 </div>
@@ -56,19 +59,34 @@
     line-height: 1.4;
   }
   .desc  { font-size: 14px; color: #666; line-height: 1.6; margin: 0; }
-  .btn-home {
-    display: inline-block;
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
     margin-top: 8px;
-    padding: 0 32px;
+  }
+  /* 주 CTA — front-uiux §5: red-badge / 50px(PC)·44px(Mobile) / radius 30px / hover red */
+  .btn-home,
+  .btn-account {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     height: 50px;
-    line-height: 50px;
-    background: var(--cs-red-badge, #FF3535);
-    color: #fff;
-    border-radius: 30px;
-    font-size: 15px;
-    font-weight: 700;
+    padding: 0 30px;
+    border-radius: var(--radius-xl, 30px);
+    font: var(--text-pc-title-16);
     text-decoration: none;
+    white-space: nowrap;
     transition: background 0.15s;
   }
+  .btn-home { background: var(--cs-red-badge, #FF3535); color: var(--cs-white, #fff); }
   .btn-home:hover { background: var(--cs-red, #CF0000); }
+  /* 보조 버튼 — front-uiux §5: purple / 같은 규격 / hover purple-hover */
+  .btn-account { background: var(--cs-purple, #3B2F8A); color: var(--cs-white, #fff); }
+  .btn-account:hover { background: var(--cs-purple-hover, #2E2470); }
+  @media (max-width: 640px) {
+    .btn-home,
+    .btn-account { height: 44px; padding: 0 20px; font: var(--text-m-body-16B); }
+  }
 </style>
