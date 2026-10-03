@@ -342,6 +342,24 @@ export async function getCmsRoleForAction(locals: App.Locals): Promise<string | 
 
 ---
 
+## 서류·아바타 스토리지 정책 (2026-10-04 확정, 서류 비공개 전환 #637·#638)
+
+```
+user-documents (비공개, public=false) — 본인증명·외국인증명 서류 전용
+  · DB(identity_doc_url·foreign_doc_url·foreign_doc_urls)에는 공개 URL이 아니라 버킷 내부 경로(`{uid}/{identity|foreign}_{uuid}.{ext}`)만 저장한다.
+  · 열람·다운로드는 서버가 발급하는 짧은 만료(60초) 서명 URL로만: `/api/cms/customers/[id]/doc-url`(manager 이상 + 고객목록 메뉴 권한,
+    열람은 cms_admin_audit_log 'doc_view'로 기록). 고객 화면에는 서류 URL·경로를 내려보내지 않는다(건수·종류만 — maskDocUrlsForClient).
+  · storage.objects 정책은 만들지 않는다(서비스 롤만 접근). 경로 해석·서명은 src/lib/server/userDocs.ts 단일 정본(공개 URL·경로 양쪽 해석, 소유 폴더 가드).
+  · ⛔ getPublicUrl로 서류 URL을 만들거나 DB에 URL 전체를 저장하는 코드 금지. 서류를 공개 버킷에 두는 것도 금지.
+user-avatars (공개, public=true, 2MB, png/jpeg/webp) — 프로필 아바타 전용
+  · 아바타는 <img src>로 직접 노출되는 것이 본질이라 공개. 업로드 전 브라우저에서 256px 정사각 WebP로 리사이즈(resizeAvatar).
+  · 새 아바타 저장 성공 후 이전 아바타 파일 삭제(`{uid}/avatar_` 접두만 — userAvatars.ts toAvatarLocation).
+  · ⛔ 서류와 아바타를 같은 버킷에 두지 않는다(과거 한 버킷에 섞여 서류까지 공개된 사고 — 실서버 점검 H1).
+관리자 대리 등록(/api/cms/upload-doc)은 서류 종류 1건만 교체한다(다른 종류 보존, 외국인 제출완료는 4종 완성 시에만).
+```
+
+---
+
 ## 환경변수 분리 (절대 준수)
 
 ```typescript
