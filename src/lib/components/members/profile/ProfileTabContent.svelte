@@ -2,6 +2,7 @@
   import { tick, onDestroy } from 'svelte'
   import { browser } from '$app/environment'
   import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
+  import { resizeAvatar } from '$lib/utils/imageResize'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte'
@@ -417,8 +418,14 @@
   })
 
   // 화면 이탈(다른 섹션 전환·페이지 이동) 시 부분 등록 상태면 경고 — 이탈 자체는 막지 않는다
+  // 이번 방문에서 서류를 업로드·삭제한 적이 있을 때만 경고한다(2026-10-03) — 이미 저장된 부분 등록 상태를 조회만 한 방문에서
+  // 매번 경고가 반복되던 문제 제거. 일반 let(렌더 추적 불필요). 업로드·삭제 성공 지점에서 true로 설정한다.
+  let touchedDocs = false
+
   onDestroy(() => {
-    if (!browser) return
+    if (!browser || !touchedDocs) return
+    // 작업이 진행 중인 상태(업로드·삭제 요청 도중)에서는 화면 상태가 확정되지 않았으므로 경고하지 않는다
+    if (identityDocsBusy || foreignDocsBusy) return
     const identityPartial = identityType.length > 0 && !identityRequiredMet(identityType)
     const foreignPartial = foreignTypeList.length > 0 && !foreignRequiredMet(foreignTypeList)
     if (identityPartial || foreignPartial) csToast.warning('필수 파일을 등록하세요.')
@@ -551,6 +558,7 @@
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; error?: string }
       if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
+      touchedDocs = true
       csToast.success(wasSingleEdit ? '수정되었습니다.' : '추가 등록되었습니다.')
       if (identitySingleEditType === editTypeAtStart) cancelIdentityMergeEdit()
       showIdentityForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환(foreign과 동일 원칙)
@@ -630,6 +638,7 @@
       })
       const data = await res.json() as { ok: boolean; error?: string }
       if (!data.ok) { csToast.error(data.error ?? '삭제에 실패했습니다.'); return }
+      touchedDocs = true
       csToast.success('삭제되었습니다.')
       await invalidateAll()
       await tick()
@@ -866,6 +875,7 @@
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; error?: string }
       if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
+      touchedDocs = true
       csToast.success(wasSingleEdit ? '수정되었습니다.' : '등록되었습니다.')
       if (foreignSingleEditType === editTypeAtStart) cancelForeignMergeEdit()
       showForeignForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환
@@ -934,8 +944,20 @@
     if (!avatarFile) return
     isUploadingAvatar = true
     avatarError = ''
+    // 업로드 전 256px 정사각 WebP로 줄인다 — 원본(수 MB)이 GNB 49px 자리에 매 페이지 서빙되던 트래픽 제거.
+    // 변환 실패(브라우저가 디코딩 못 하는 형식 등)는 원본 업로드로 폴백하지 않고 안내만 한다.
+    let avatarBlob: Blob
+    try {
+      avatarBlob = await resizeAvatar(avatarFile)
+    } catch {
+      avatarError = '이미지를 변환할 수 없어요. JPG·PNG·WebP 파일로 다시 선택해 주세요.'
+      isUploadingAvatar = false
+      return
+    }
     const fd = new FormData()
-    fd.set('file', avatarFile)
+    // WebP 인코딩을 지원하지 않는 브라우저는 toBlob이 PNG로 폴백한다 — Blob의 실제 type과 확장자를 그대로 사용(서버는 png/webp 모두 허용)
+    const avatarExt = avatarBlob.type === 'image/png' ? 'png' : 'webp'
+    fd.set('file', new File([avatarBlob], `avatar.${avatarExt}`, { type: avatarBlob.type || 'image/webp' }))
     try {
       const res  = await fetch('/api/profile/upload-avatar', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; avatarUrl?: string; error?: string }

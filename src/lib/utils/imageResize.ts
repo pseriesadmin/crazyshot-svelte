@@ -70,3 +70,50 @@ async function resizeToBlob(
     img.src = objectUrl
   })
 }
+
+/**
+ * 프로필 아바타용 정사각 리사이즈 — 중앙 크롭 후 size×size WebP (기본 256px).
+ * GNB·마이페이지에서 수십 px로 표시되는 이미지를 원본(수 MB)으로 서빙하던 트래픽을 줄인다(2026-10-03).
+ * 원본이 size보다 작으면 업스케일하지 않고 짧은 변 기준 정사각으로만 자른다.
+ * 브라우저가 디코딩하지 못하는 형식(예: 일부 HEIC)은 reject — 호출부에서 안내 문구를 띄우고 원본 업로드로 폴백하지 않는다.
+ */
+export async function resizeAvatar(file: File, size = 256, quality = 0.85): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+
+      const side = Math.min(img.width, img.height)
+      const out = Math.min(size, side)
+      const sx = Math.round((img.width - side) / 2)
+      const sy = Math.round((img.height - side) / 2)
+
+      const canvas = document.createElement('canvas')
+      canvas.width = out
+      canvas.height = out
+
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { reject(new Error('Canvas context 생성 실패')); return }
+
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, out, out)
+
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob)
+          else reject(new Error('WebP 변환 실패'))
+        },
+        'image/webp',
+        quality,
+      )
+    }
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('이미지 로드 실패'))
+    }
+
+    img.src = objectUrl
+  })
+}

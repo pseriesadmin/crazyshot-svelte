@@ -51,7 +51,10 @@ export async function loadUserSession(
 ): Promise<{ session: ChatSession | null; error: string | null }> {
   // 관리자 RLS bypass(admin_select_all_sessions) 방어:
   // user_id를 명시적으로 필터링해야 타 사용자 세션이 반환되지 않음
-  const { data: { user } } = await supabase.auth.getUser()
+  // 로컬 세션(getSession)의 user.id를 쓴다 — getUser()는 호출마다 /auth/v1/user 왕복을 만든다. 같은 토큰의 id라 필터 의미는 동일하고,
+  // 타 사용자 세션 차단의 최종 방어선은 서버 RLS다.
+  const { data: { session: authSession } } = await supabase.auth.getSession()
+  const user = authSession?.user ?? null
   if (!user) return { session: null, error: null }
 
   // open/pending 우선, 없으면 closed도 포함 (재활성화 흐름)
