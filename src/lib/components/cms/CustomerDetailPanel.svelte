@@ -3,6 +3,8 @@
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
   import { supabase } from '$lib/services/supabase'
   import { validateUploadFile } from '$lib/utils/fileValidation'
@@ -817,6 +819,15 @@
   let foreignFileError     = $state('')
   let uploadingIdentity    = $state(false)
   let uploadingForeign     = $state(false)
+  // 관리자 대리 등록은 "서류 종류 1건"만 교체한다(2026-10-03) — 행의 [재등록]은 그 행의 종류로 미리 선택, 신규 등록은 직접 선택
+  let reuploadIdentitySlot = $state<string | null>(null)
+  let reuploadForeignSlot  = $state<string | null>(null)
+  const IDENTITY_SLOT_OPTIONS: SuggestPickerOption[] = ['student', 'resident', 'resident_copy', 'driver', 'other']
+    .map(id => ({ id, label: IDENTITY_TYPE_LABELS[id] ?? id }))
+  const FOREIGN_SLOT_OPTIONS: SuggestPickerOption[] = [
+    'passport_photo', 'accommodation_reservation', 'entry_eticket', 'exit_eticket',
+    'arc_front', 'arc_back', 'foreign_fact_cert',
+  ].map(id => ({ id, label: FOREIGN_TYPE_LABELS[id] ?? id }))
 
   $effect(() => {
     return () => {
@@ -861,7 +872,9 @@
 
   async function submitDocUpload(type: 'identity' | 'foreign') {
     const file = type === 'identity' ? identityFile : foreignFile
+    const slot = type === 'identity' ? reuploadIdentitySlot : reuploadForeignSlot
     if (!file) return
+    if (!slot) { csToast.warning('교체할 서류 종류를 선택해주세요.'); return }
 
     if (type === 'identity') uploadingIdentity = true
     else                     uploadingForeign  = true
@@ -871,7 +884,7 @@
       fd.append('user_id', row.user_id)
       fd.append('type', type)
       fd.append('file', file)
-      if (type === 'identity' && row.identity_type?.[0]) fd.append('identity_type', row.identity_type[0])
+      fd.append('slot_type', slot)
 
       const res  = await fetch('/api/cms/upload-doc', { method: 'POST', body: fd })
       const data = await res.json() as { ok: boolean; error?: string }
@@ -893,7 +906,7 @@
 
   // 본인증명·외국인증명 목록 "재등록": 승인된 상태라면 먼저 승인을 취소(고객 화면의 수정·삭제
   // 잠금 해제)한 뒤 관리자 업로드 상자를 연다. 미승인이면 승인 취소 호출 없이 상자만 연다.
-  async function toggleDocReupload(type: 'identity' | 'foreign') {
+  async function toggleDocReupload(type: 'identity' | 'foreign', slot: string | null = null) {
     const isOpen = type === 'identity' ? reuploadIdentityOpen : reuploadForeignOpen
     if (isOpen) { cancelDocUpload(type); return }
     const approvedAt = type === 'identity' ? row.identity_approved_at : row.foreign_approved_at
@@ -916,18 +929,23 @@
         return
       }
     }
-    if (type === 'identity') reuploadIdentityOpen = true
-    else                     reuploadForeignOpen  = true
+    // 행의 종류가 선택 가능한 목록에 없으면(레거시 값 등) 미리 선택하지 않고 직접 고르게 한다 — 빈 선택기로 확인이 활성화되는 어색함 방지
+    const options = type === 'identity' ? IDENTITY_SLOT_OPTIONS : FOREIGN_SLOT_OPTIONS
+    const safeSlot = slot && options.some(o => o.id === slot) ? slot : null
+    if (type === 'identity') { reuploadIdentitySlot = safeSlot; reuploadIdentityOpen = true }
+    else                     { reuploadForeignSlot  = safeSlot; reuploadForeignOpen  = true }
   }
 
   function cancelDocUpload(type: 'identity' | 'foreign') {
     if (type === 'identity') {
       reuploadIdentityOpen = false
+      reuploadIdentitySlot = null
       identityFile         = null
       identityFileError    = ''
       if (identityPreviewUrl) { URL.revokeObjectURL(identityPreviewUrl); identityPreviewUrl = null }
     } else {
       reuploadForeignOpen = false
+      reuploadForeignSlot = null
       foreignFile         = null
       foreignFileError    = ''
       if (foreignPreviewUrl)  { URL.revokeObjectURL(foreignPreviewUrl);  foreignPreviewUrl  = null }
@@ -1179,7 +1197,7 @@
                   type="button"
                   class="btn-reupload"
                   class:btn-reupload-cancel={reuploadIdentityOpen}
-                  onclick={() => toggleDocReupload('identity')}
+                  onclick={() => toggleDocReupload('identity', row.identity_type?.[i] ?? null)}
                 >{reuploadIdentityOpen ? '취소' : '재등록'}</button>
               </div>
             {/each}
@@ -1188,6 +1206,24 @@
         {#if reuploadIdentityOpen}
           <div class="reupload-box">
             <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
+            <label for="doc-slot-identity" class="reupload-slot-label">서류 종류 — 선택한 종류의 서류 1건만 교체되고 다른 서류는 유지돼요</label>
+            <SuggestPicker
+              id="doc-slot-identity"
+              bind:selectedId={reuploadIdentitySlot}
+              options={IDENTITY_SLOT_OPTIONS}
+              placeholder="서류 종류 선택"
+              listLabel="서류 종류"
+              variant="generic"
+              minChars={0}
+            >
+              {#snippet field(c)}
+                <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
+                  value={c.value} oninput={c.oninput} onkeydown={c.onkeydown}
+                  onfocus={c.onfocus} onblur={c.onblur}
+                  aria-autocomplete={c.ariaAutocomplete} aria-expanded={c.ariaExpanded}
+                  aria-controls={c.ariaControls} autocomplete="off" />
+              {/snippet}
+            </SuggestPicker>
             <label class="btn-file-pick">
               파일 선택
               <input
@@ -1216,7 +1252,7 @@
               <button
                 type="button"
                 class="btn-doc-confirm"
-                disabled={!identityFile || uploadingIdentity}
+                disabled={!identityFile || !reuploadIdentitySlot || uploadingIdentity}
                 onclick={() => submitDocUpload('identity')}
               >{uploadingIdentity ? '업로드 중...' : '등록 확인'}</button>
               <button type="button" class="btn-doc-cancel" onclick={() => cancelDocUpload('identity')}>취소</button>
@@ -1282,7 +1318,7 @@
                   type="button"
                   class="btn-reupload"
                   class:btn-reupload-cancel={reuploadForeignOpen}
-                  onclick={() => toggleDocReupload('foreign')}
+                  onclick={() => toggleDocReupload('foreign', row.foreign_type?.[i] ?? null)}
                 >{reuploadForeignOpen ? '취소' : '재등록'}</button>
               </div>
             {/each}
@@ -1291,6 +1327,24 @@
         {#if reuploadForeignOpen}
           <div class="reupload-box">
             <p class="reupload-hint">PNG · JPEG · WebP · HEIF · PDF (최대 10MB)</p>
+            <label for="doc-slot-foreign" class="reupload-slot-label">서류 종류 — 선택한 종류의 서류 1건만 교체되고 다른 서류는 유지돼요</label>
+            <SuggestPicker
+              id="doc-slot-foreign"
+              bind:selectedId={reuploadForeignSlot}
+              options={FOREIGN_SLOT_OPTIONS}
+              placeholder="서류 종류 선택"
+              listLabel="서류 종류"
+              variant="generic"
+              minChars={0}
+            >
+              {#snippet field(c)}
+                <input type="text" class="f-input" id={c.id} placeholder={c.placeholder}
+                  value={c.value} oninput={c.oninput} onkeydown={c.onkeydown}
+                  onfocus={c.onfocus} onblur={c.onblur}
+                  aria-autocomplete={c.ariaAutocomplete} aria-expanded={c.ariaExpanded}
+                  aria-controls={c.ariaControls} autocomplete="off" />
+              {/snippet}
+            </SuggestPicker>
             <label class="btn-file-pick">
               파일 선택
               <input
@@ -1319,7 +1373,7 @@
               <button
                 type="button"
                 class="btn-doc-confirm"
-                disabled={!foreignFile || uploadingForeign}
+                disabled={!foreignFile || !reuploadForeignSlot || uploadingForeign}
                 onclick={() => submitDocUpload('foreign')}
               >{uploadingForeign ? '업로드 중...' : '등록 확인'}</button>
               <button type="button" class="btn-doc-cancel" onclick={() => cancelDocUpload('foreign')}>취소</button>
@@ -2741,6 +2795,10 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  .reupload-slot-label {
+    font: var(--text-pc-descript-10);
+    color: var(--cs-text-mid);
   }
   .reupload-hint {
     font: var(--text-pc-descript-10);

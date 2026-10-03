@@ -84,79 +84,93 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   })()
 
   const uploadedPaths: string[] = []
-  const publicUrls: string[] = []
+  // 2026-10-03(서류 비공개 전환 B3a): DB에는 공개 URL이 아니라 버킷 내부 경로만 저장한다 — 열람은 CMS 서명 URL 엔드포인트로만.
+  const storedPaths: string[] = []
+  let finalDocUrls: string[] = []
+  let finalTypeValues: string[] | null = null
+  let oldUrlsToDelete: string[] = []
 
-  for (const file of files) {
-    const ext  = getMimeExtension(file.type)
-    const uuid = crypto.randomUUID()
-    const path = `${session.user.id}/${type}_${uuid}.${ext}`
+  // 업로드~DB 반영 구간에서 예상 밖 예외가 나도 이미 올린 파일이 스토리지에 고아로 남지 않도록 롤백한다(2026-10-03).
+  try {
+    for (const file of files) {
+      const ext  = getMimeExtension(file.type)
+      const uuid = crypto.randomUUID()
+      const path = `${session.user.id}/${type}_${uuid}.${ext}`
 
-    const { error: uploadError } = await admin.storage
-      .from(BUCKET)
-      .upload(path, file, { contentType: file.type, upsert: false })
+      const { error: uploadError } = await admin.storage
+        .from(BUCKET)
+        .upload(path, file, { contentType: file.type, upsert: false })
 
-    if (uploadError) {
-      console.error('[upload-doc] storage error:', uploadError.message)
-      // 이번 요청에서 이미 업로드된 파일들 롤백
-      if (uploadedPaths.length > 0) await admin.storage.from(BUCKET).remove(uploadedPaths)
-      return json({ ok: false, error: '파일 업로드에 실패했습니다.' }, { status: 500 })
+      if (uploadError) {
+        console.error('[upload-doc] storage error:', uploadError.message)
+        // 이번 요청에서 이미 업로드된 파일들 롤백
+        if (uploadedPaths.length > 0) await admin.storage.from(BUCKET).remove(uploadedPaths)
+        return json({ ok: false, error: '파일 업로드에 실패했습니다.' }, { status: 500 })
+      }
+
+      uploadedPaths.push(path)
+      storedPaths.push(path)
     }
 
-    uploadedPaths.push(path)
-    publicUrls.push(admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl)
-  }
+    // 병합 모드: 기존 (url,type) 짝 중 "이번에 제출된 유형"만 교체하고 나머지는 보존.
+    // 기본(비병합) 모드는 기존 그대로 — storedPaths/submittedTypes를 통째로 반영(재등록=전체 교체).
+    const submittedTypes = type === 'identity' ? identityTypes : foreignTypes
+    finalDocUrls    = storedPaths
+    finalTypeValues = submittedTypes.length > 0 ? submittedTypes : null
+    oldUrlsToDelete = existingUrls // 비병합: 기존 파일 전부가 교체 대상(기존 동작 그대로)
 
-  // 병합 모드: 기존 (url,type) 짝 중 "이번에 제출된 유형"만 교체하고 나머지는 보존.
-  // 기본(비병합) 모드는 기존 그대로 — publicUrls/submittedTypes를 통째로 반영(재등록=전체 교체).
-  const submittedTypes = type === 'identity' ? identityTypes : foreignTypes
-  let finalDocUrls    = publicUrls
-  let finalTypeValues = submittedTypes.length > 0 ? submittedTypes : null
-  let oldUrlsToDelete = existingUrls // 비병합: 기존 파일 전부가 교체 대상(기존 동작 그대로)
+    if (merge) {
+      // identity 전용 fallback('other')은 기존 동작 그대로 보존 — foreign은 'other'가 유효한
+      // enum 값이 아니므로(whitelist에 없음, CHECK 위반 위험) 정합성이 깨진(타입 정보 없는)
+      // 레거시 항목이면 보존하지 않고 건너뜀(방어적, 실사용 경로 아님 — url/type은 항상 함께 기록됨).
+      const fallbackType = type === 'identity' ? 'other' : null
+      const typesBeingReplaced = new Set(submittedTypes)
+      const keptPairs: Array<{ url: string; type: string }> = []
+      const replacedUrls: string[] = []
+      existingUrls.forEach((url, idx) => {
+        const t = existingTypeValues[idx] ?? fallbackType
+        if (!t) { replacedUrls.push(url); return } // 타입 없는 고아 항목 — DB엔 보존하지 않되
+                                                    // 최소한 스토리지에서라도 정리(영구 고아 파일 방지)
+        if (typesBeingReplaced.has(t)) replacedUrls.push(url)
+        else keptPairs.push({ url, type: t })
+      })
+      finalDocUrls    = [...keptPairs.map(p => p.url), ...storedPaths]
+      finalTypeValues = [...keptPairs.map(p => p.type), ...submittedTypes]
+      oldUrlsToDelete = replacedUrls
 
-  if (merge) {
-    // identity 전용 fallback('other')은 기존 동작 그대로 보존 — foreign은 'other'가 유효한
-    // enum 값이 아니므로(whitelist에 없음, CHECK 위반 위험) 정합성이 깨진(타입 정보 없는)
-    // 레거시 항목이면 보존하지 않고 건너뜀(방어적, 실사용 경로 아님 — url/type은 항상 함께 기록됨).
-    const fallbackType = type === 'identity' ? 'other' : null
-    const typesBeingReplaced = new Set(submittedTypes)
-    const keptPairs: Array<{ url: string; type: string }> = []
-    const replacedUrls: string[] = []
-    existingUrls.forEach((url, idx) => {
-      const t = existingTypeValues[idx] ?? fallbackType
-      if (!t) { replacedUrls.push(url); return } // 타입 없는 고아 항목 — DB엔 보존하지 않되
-                                                  // 최소한 스토리지에서라도 정리(영구 고아 파일 방지)
-      if (typesBeingReplaced.has(t)) replacedUrls.push(url)
-      else keptPairs.push({ url, type: t })
-    })
-    finalDocUrls    = [...keptPairs.map(p => p.url), ...publicUrls]
-    finalTypeValues = [...keptPairs.map(p => p.type), ...submittedTypes]
-    oldUrlsToDelete = replacedUrls
+      const maxFiles = type === 'identity' ? MAX_IDENTITY_FILES : MAX_FOREIGN_FILES
+      if (finalDocUrls.length > maxFiles) {
+        await admin.storage.from(BUCKET).remove(uploadedPaths)
+        return json({ ok: false, error: `최대 ${maxFiles}개까지 등록할 수 있어요.` }, { status: 400 })
+      }
+    }
 
-    const maxFiles = type === 'identity' ? MAX_IDENTITY_FILES : MAX_FOREIGN_FILES
-    if (finalDocUrls.length > maxFiles) {
+    // 사용자 세션으로 RPC 호출 (auth.uid() 기반 본인 데이터 업데이트)
+    const { data, error: rpcError } = await callTypedRpc<{ ok: boolean; error?: string }>(
+      locals.supabase,
+      'update_user_doc_url',
+      {
+        p_type: type,
+        p_doc_url: finalDocUrls,
+        p_identity_type: type === 'identity' ? finalTypeValues : null,
+        p_foreign_type: type === 'foreign' ? finalTypeValues : null,
+        p_foreign_stay_type: foreignStayType,
+      },
+    )
+
+    if (rpcError || !(data as { ok: boolean } | null)?.ok) {
+      console.error('[upload-doc] rpc error:', rpcError?.message)
+      // 업로드된 파일 전부 롤백
       await admin.storage.from(BUCKET).remove(uploadedPaths)
-      return json({ ok: false, error: `최대 ${maxFiles}개까지 등록할 수 있어요.` }, { status: 400 })
+      return json({ ok: false, error: 'DB 업데이트에 실패했습니다.' }, { status: 500 })
     }
-  }
-
-  // 사용자 세션으로 RPC 호출 (auth.uid() 기반 본인 데이터 업데이트)
-  const { data, error: rpcError } = await callTypedRpc<{ ok: boolean; error?: string }>(
-    locals.supabase,
-    'update_user_doc_url',
-    {
-      p_type: type,
-      p_doc_url: finalDocUrls,
-      p_identity_type: type === 'identity' ? finalTypeValues : null,
-      p_foreign_type: type === 'foreign' ? finalTypeValues : null,
-      p_foreign_stay_type: foreignStayType,
-    },
-  )
-
-  if (rpcError || !(data as { ok: boolean } | null)?.ok) {
-    console.error('[upload-doc] rpc error:', rpcError?.message)
-    // 업로드된 파일 전부 롤백
-    await admin.storage.from(BUCKET).remove(uploadedPaths)
-    return json({ ok: false, error: 'DB 업데이트에 실패했습니다.' }, { status: 500 })
+  } catch (e) {
+    console.error('[upload-doc] 업로드·반영 중 예외:', e instanceof Error ? e.message : e)
+    if (uploadedPaths.length > 0) {
+      const { error: cleanupError } = await admin.storage.from(BUCKET).remove(uploadedPaths)
+      if (cleanupError) console.error('[upload-doc] 예외 후 업로드 롤백 실패:', cleanupError.message)
+    }
+    return json({ ok: false, error: '업로드 중 오류가 발생했습니다.' }, { status: 500 })
   }
 
   // DB 반영이 끝난 뒤에만 옛 파일 삭제(반영 실패 시 옛 파일이 여전히 유효한 참조이므로 먼저 지우면 안 됨)
@@ -231,5 +245,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     })
   }
 
-  return json({ ok: true, docUrls: finalDocUrls, verifiedAt: new Date().toISOString() })
+  // 서류 경로·URL은 응답에 싣지 않는다(고객 브라우저에는 건수·종류만 필요, 열람은 CMS 서명 URL로만 — 2026-10-03)
+  return json({ ok: true, count: finalDocUrls.length, verifiedAt: new Date().toISOString() })
 }
