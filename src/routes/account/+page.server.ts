@@ -5,6 +5,7 @@ import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
 import { loadMyActivity } from '$lib/server/account/loadMyActivity'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
+import { maskDocUrlsForClient } from '$lib/server/userDocs'
 
 interface AccountProfile {
   id: string
@@ -149,7 +150,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
       name: profile?.full_name ?? '고객',
       email: session.user.email ?? '',
     },
-    profile,
+    profile: maskDocUrlsForClient(profile),
     myActivity,
     isCmsAdmin: !!(profile?.cms_role),
     authEmail: session.user.email ?? null,

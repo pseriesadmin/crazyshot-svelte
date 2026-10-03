@@ -3,6 +3,7 @@ import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
 import { loadMyActivity } from '$lib/server/account/loadMyActivity'
+import { maskDocUrlsForClient } from '$lib/server/userDocs'
 
 export interface UserProfile {
   id: string
@@ -100,7 +101,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
 
   return {
-    profile: (profileRes.data ?? null) as UserProfile | null,
+    profile: maskDocUrlsForClient((profileRes.data ?? null) as UserProfile | null),
     authEmail: session.user.email ?? null,
     addresses: (addressRes.data ?? []) as ShippingAddress[],
     coupons,

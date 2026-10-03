@@ -93,3 +93,43 @@ describe('signDocPath', () => {
     err.mockRestore()
   })
 })
+
+describe('maskDocUrlsForClient — 고객 화면으로 내려가는 프로필의 서류 URL 가리기', () => {
+  it('URL·경로를 같은 길이의 불투명 자리표시자로 바꾼다(건수·존재 여부 로직 유지)', async () => {
+    const { maskDocUrlsForClient } = await import('../../lib/server/userDocs')
+    const p = {
+      full_name: '홍길동',
+      identity_doc_url: [PUB_PROD, PATH],
+      foreign_doc_url: PUB_STAGE,
+      foreign_doc_urls: [PUB_STAGE, PATH, PATH],
+    }
+    const m = maskDocUrlsForClient(p)!
+    expect(m.identity_doc_url).toEqual(['doc:0', 'doc:1'])
+    expect(m.foreign_doc_urls).toEqual(['doc:0', 'doc:1', 'doc:2'])
+    expect(m.foreign_doc_url).toBe('doc:0')
+    expect(m.full_name).toBe('홍길동')
+    expect(JSON.stringify(m)).not.toContain('supabase.co')
+    expect(JSON.stringify(m)).not.toContain(UID)
+    expect(p.identity_doc_url[0]).toBe(PUB_PROD) // 원본 불변
+  })
+
+  it('null·미등록 값은 그대로(없음 판정 유지)', async () => {
+    const { maskDocUrlsForClient } = await import('../../lib/server/userDocs')
+    expect(maskDocUrlsForClient(null)).toBeNull()
+    expect(maskDocUrlsForClient({ identity_doc_url: null, foreign_doc_url: null, foreign_doc_urls: [] })).toEqual({
+      identity_doc_url: null, foreign_doc_url: null, foreign_doc_urls: [],
+    })
+  })
+
+  it('레거시(foreign_doc_urls 없음·스칼라만)·빈 문자열 스칼라·키 없는 객체도 안전', async () => {
+    const { maskDocUrlsForClient } = await import('../../lib/server/userDocs')
+    expect(maskDocUrlsForClient({ foreign_doc_url: PUB_PROD, foreign_doc_urls: null })).toMatchObject({
+      foreign_doc_url: 'doc:0', foreign_doc_urls: null,
+    })
+    expect(maskDocUrlsForClient({ foreign_doc_url: '', foreign_doc_urls: null })?.foreign_doc_url).toBe('')
+    const bare = maskDocUrlsForClient({ full_name: 'x' } as { full_name: string; identity_doc_url?: string[] | null })!
+    expect(bare.full_name).toBe('x')
+    expect(bare.identity_doc_url ?? null).toBeNull()
+  })
+})
+
