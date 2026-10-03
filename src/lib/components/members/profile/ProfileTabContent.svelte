@@ -898,7 +898,9 @@
   }
 
   /* ── 아바타(프로필 사진) 업로드 */
-  const AVATAR_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/heif', 'image/heic']
+  // 아바타는 브라우저 Canvas로 리사이즈하므로 디코딩 가능한 형식만 받는다(2026-10-03) — HEIC/HEIF는 제외.
+  // 파일 선택창(accept)에서 HEIC를 빼면 iOS Safari는 보통 사진을 JPEG로 변환해 넘겨주므로 iPhone 사용자도 선택할 수 있다(실기기 확인 필요 — 안 되면 아래 안내 문구로 우회).
+  const AVATAR_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
   let avatarUrl        = $state(profile?.avatar_url ?? null)
   let showAvatarModal  = $state(false)
@@ -933,7 +935,7 @@
     avatarPreview = null
     if (!file) return
     if (!AVATAR_ACCEPTED_TYPES.includes(file.type)) {
-      avatarError = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'
+      avatarError = 'PNG, JPEG, WebP 이미지 파일만 업로드할 수 있어요. (HEIC 사진은 JPG로 변환해 올려주세요)'
       return
     }
     avatarFile    = file
@@ -1008,7 +1010,7 @@
           <input
             type="file"
             class="sr-only"
-            accept="image/png,image/jpeg,image/webp,image/heif,image/heic"
+            accept="image/png,image/jpeg,image/webp"
             onchange={handleAvatarFileChange}
           />
           <span class="avatar-preview-circle">

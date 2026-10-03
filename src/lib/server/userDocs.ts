@@ -95,3 +95,22 @@ export async function signDocPath(
   }
   return { url: data.signedUrl, isPdf: isPdfPath(path), expiresIn }
 }
+
+/**
+ * 고객 본인 화면(서버 load → 브라우저)으로 내려보내는 프로필에서 서류 URL/경로를 가린다 (2026-10-03).
+ * 고객 화면은 서류를 "건수·종류"로만 표시하고(보기 버튼은 개인정보 노출 우려로 비활성), 파일을 직접 열지 않는다.
+ * 실제 URL·경로를 브라우저까지 보낼 이유가 없으므로 같은 길이의 불투명 자리표시자(`doc:0`, `doc:1`…)로 바꾼다 —
+ * 배열 길이·존재 여부에 의존하는 화면 로직과 `getDocGateStatus` 판정은 그대로 동작한다.
+ */
+export function maskDocUrlsForClient<
+  T extends { identity_doc_url?: string[] | null; foreign_doc_url?: string | null; foreign_doc_urls?: string[] | null },
+>(profile: T | null): T | null {
+  if (!profile) return profile
+  const mask = (list: string[] | null | undefined) => (list ? list.map((_, i) => `doc:${i}`) : list)
+  return {
+    ...profile,
+    identity_doc_url: mask(profile.identity_doc_url),
+    foreign_doc_urls: mask(profile.foreign_doc_urls),
+    foreign_doc_url: profile.foreign_doc_url ? 'doc:0' : profile.foreign_doc_url,
+  }
+}
