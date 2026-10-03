@@ -21,7 +21,11 @@
   // 네비게이션 로딩 상태 — beforeNavigate/afterNavigate 쌍으로 관리
   // ($app/state의 navigating은 redirect/에러 시 null 미복귀 버그 있음)
   let isNavigating = $state(false)
-  beforeNavigate(() => { isNavigating = true })
+  // 외부 출처 이동(파일 다운로드용 서명 URL 등)은 현재 페이지가 바뀌지 않아 afterNavigate가 오지 않으므로 오버레이를 켜지 않는다
+  beforeNavigate((nav) => {
+    if (nav.willUnload || (nav.to && nav.to.url.origin !== window.location.origin)) return
+    isNavigating = true
+  })
   afterNavigate(() => { isNavigating = false })
 
   // 소화면 접속 시 토스트 안내 (레이아웃 차단 없음)
