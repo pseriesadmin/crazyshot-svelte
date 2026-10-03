@@ -93,5 +93,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     if (removeError) console.error('[delete-doc-item] storage cleanup error:', removeError.message)
   }
 
-  return json({ ok: true, docUrls: remainingUrls })
+  // 남은 서류의 경로·URL은 응답에 싣지 않는다(건수만) — 2026-10-03
+  return json({ ok: true, count: remainingUrls.length })
 }
