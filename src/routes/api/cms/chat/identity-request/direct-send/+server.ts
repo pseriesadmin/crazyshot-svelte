@@ -11,11 +11,12 @@
 // doc_type은 카드 문구·라벨에 영향을 주지 않는다 — Stephen이 지정한 카드 문구는 본인증명/
 // 외국인증명 요청 모두 동일("본인증명 등록요청" / "개인정보 메뉴에서 본인증명정보를 등록
 // 부탁드립니다.") — 어느 쪽이 트리거했는지는 로그·향후 확장용으로만 받아둔다.
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { toDocPaths } from '$lib/server/userDocs'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
@@ -65,11 +66,8 @@ async function deleteExpiredDocs(
   }
 
   // DB 초기화가 끝난 뒤에만 스토리지 원본 삭제 — best-effort, 해당 고객 폴더 파일만
-  const prefix = `${getSupabaseUrl()}/storage/v1/object/public/${DOC_BUCKET}/`
-  const paths = urls
-    .filter((u) => u.startsWith(prefix))
-    .map((u) => u.slice(prefix.length))
-    .filter((p) => p.startsWith(`${userId}/`))
+  // 공개 URL(전환 전)·경로(전환 후) 두 형식을 모두 해석하는 공용 헬퍼 사용 — 해당 고객 폴더 파일만 남는다.
+  const paths = toDocPaths(urls, userId)
   if (paths.length > 0) {
     const { error: rmErr } = await admin.storage.from(DOC_BUCKET).remove(paths)
     if (rmErr) console.error('[identity-request/direct-send] 스토리지 원본 삭제 실패(fail-soft):', rmErr.message)
@@ -78,6 +76,8 @@ async function deleteExpiredDocs(
 }
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '관리자 권한이 필요합니다.' }, { status: 403 })
 

@@ -735,12 +735,44 @@
     return foreignDocList(r).length > 1 ? `파일 ${i + 1}` : '파일'
   }
 
+  // 서류 열람은 클릭 시점에 서버가 발급하는 짧은 만료 서명 URL로만 한다(2026-10-03, 서류 비공개 전환 B1) —
+  // DB의 서류 값(공개 URL/경로)을 브라우저가 직접 열지 않는다. 서버가 (고객, 종류, 순번)으로 대상 파일을 결정한다.
   let identityDocUrl   = $state<string | null>(null)
+  let docViewerIsPdf   = $state(false)
   let docViewerTitle    = $state('본인증명 문서')
+  let docSigning        = $state(false)
 
-  function openIdentityDoc(url: string, title = '본인증명 문서') {
-    identityDocUrl = url
+  async function requestSignedDocUrl(
+    type: 'identity' | 'foreign',
+    index: number,
+    downloadName?: string,
+  ): Promise<{ url: string; isPdf: boolean } | null> {
+    if (docSigning) return null
+    docSigning = true
+    try {
+      const qs = new URLSearchParams({ type, index: String(index) })
+      if (downloadName) qs.set('download', downloadName)
+      const res = await fetch(`/api/cms/customers/${row.user_id}/doc-url?${qs.toString()}`)
+      const data = await res.json().catch(() => null) as { ok?: boolean; url?: string; isPdf?: boolean; error?: string } | null
+      if (!res.ok || !data?.ok || !data.url) {
+        csToast.error(data?.error ?? '파일을 열 수 없습니다.')
+        return null
+      }
+      return { url: data.url, isPdf: !!data.isPdf }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+      return null
+    } finally {
+      docSigning = false
+    }
+  }
+
+  async function openIdentityDoc(type: 'identity' | 'foreign', index: number, title = '본인증명 문서') {
+    const signed = await requestSignedDocUrl(type, index)
+    if (!signed) return
     docViewerTitle = title
+    docViewerIsPdf = signed.isPdf
+    identityDocUrl = signed.url
   }
 
   function closeIdentityDoc() {
@@ -758,21 +790,15 @@
     return new Date(iso) < sixMonthsAgo
   }
 
-  const isPdf = $derived(identityDocUrl ? identityDocUrl.toLowerCase().includes('.pdf') : false)
 
-  // Supabase Storage 공개 URL에 ?download를 붙이면 스토리지 서버가 Content-Disposition:
-  // attachment로 응답한다(supabase-js getPublicUrl(path,{download:true})와 동일한 메커니즘) —
-  // fetch+blob 없이도 크로스오리진 강제다운로드가 가능해 대용량 PDF도 안전하게 처리된다.
-  function downloadDocFile(url: string, filename: string) {
-    const clean = url.split('?')[0].split('#')[0]
-    const seg    = clean.split('/').pop() ?? ''
-    const dotIdx = seg.lastIndexOf('.')
-    const ext    = dotIdx >= 0 ? seg.slice(dotIdx + 1) : 'jpg'
-    const sep    = url.includes('?') ? '&' : '?'
+  // 서명 URL 발급 시 서버가 download 옵션(파일명)을 서명에 포함해 Content-Disposition: attachment로 내려준다 —
+  // fetch+blob 없이도 크로스오리진 강제다운로드가 가능해 대용량 PDF도 안전하게 처리된다. 확장자는 서버가 저장 경로에서 붙인다.
+  async function downloadDocFile(type: 'identity' | 'foreign', index: number, filename: string) {
+    const signed = await requestSignedDocUrl(type, index, filename)
+    if (!signed) return
     const a = document.createElement('a')
-    a.href     = `${url}${sep}download=${encodeURIComponent(`${filename}.${ext}`)}`
-    a.download = `${filename}.${ext}`
-    a.rel      = 'noopener'
+    a.href = signed.url
+    a.rel  = 'noopener'
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -1139,11 +1165,11 @@
             {#each row.identity_doc_url as url, i (`${i}:${url}`)}
               <div class="doc-file-row">
                 <span class="doc-file-label">{identityFileLabelAt(row, i)}</span>
-                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '본인증명 문서')}>보기</button>
+                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc('identity', i, '본인증명 문서')}>보기</button>
                 <button
                   type="button"
                   class="btn-file-download"
-                  onclick={() => downloadDocFile(url, `${row.member_code ?? row.user_id}_identity_${i + 1}`)}
+                  onclick={() => downloadDocFile('identity', i, `${row.member_code ?? row.user_id}_identity_${i + 1}`)}
                   aria-label="본인증명 파일 다운로드"
                   title="다운로드"
                 >
@@ -1242,11 +1268,11 @@
             {#each foreignDocList(row) as url, i (`${i}:${url}`)}
               <div class="doc-file-row">
                 <span class="doc-file-label">{foreignFileLabelAt(row, i)}</span>
-                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc(url, '외국인증명 문서')}>보기</button>
+                <button type="button" class="btn-file-view" onclick={() => openIdentityDoc('foreign', i, '외국인증명 문서')}>보기</button>
                 <button
                   type="button"
                   class="btn-file-download"
-                  onclick={() => downloadDocFile(url, `${row.member_code ?? row.user_id}_foreign_${i + 1}`)}
+                  onclick={() => downloadDocFile('foreign', i, `${row.member_code ?? row.user_id}_foreign_${i + 1}`)}
                   aria-label="외국인증명 파일 다운로드"
                   title="다운로드"
                 >
@@ -2092,7 +2118,7 @@
         <button type="button" class="doc-viewer-close" onclick={closeIdentityDoc} aria-label="닫기">✕</button>
       </div>
       <div class="doc-viewer-body">
-        {#if isPdf}
+        {#if docViewerIsPdf}
           <iframe
             src={identityDocUrl}
             title={docViewerTitle}

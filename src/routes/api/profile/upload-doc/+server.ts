@@ -6,6 +6,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidation'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
+import { toDocPaths } from '$lib/server/userDocs'
 import { sendPushToAdmins } from '$lib/server/push'
 import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
 
@@ -162,12 +163,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 실패해도 응답 자체는 이미 성공 처리된 핵심 동작(재등록)에 영향 주지 않도록 best-effort로 처리
   // 병합 모드에서는 oldUrlsToDelete가 "이번에 실제로 교체된 것"만 담아, 보존된 기존 파일은
   // 절대 삭제하지 않는다(위에서 이미 replacedUrls로 좁혀둠).
-  const supabaseUrl = getSupabaseUrl()
-  const prefix = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/`
-  const oldPaths = oldUrlsToDelete
-    .filter(url => url.startsWith(prefix))
-    .map(url => url.slice(prefix.length))
-    .filter(path => path.startsWith(`${session.user.id}/`) && !uploadedPaths.includes(path))
+  // 공개 URL(전환 전)·경로(전환 후) 두 형식을 모두 해석하는 공용 헬퍼 사용 — 본인 폴더 밖 경로는 걸러진다.
+  const oldPaths = toDocPaths(oldUrlsToDelete, session.user.id)
+    .filter(path => !uploadedPaths.includes(path))
   if (oldPaths.length > 0) {
     const { error: removeError } = await admin.storage.from(BUCKET).remove(oldPaths)
     if (removeError) console.error('[upload-doc] old file cleanup error:', removeError.message)
