@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MoreDotsIconButton from '$lib/components/common/MoreDotsIconButton.svelte'
+
   // GSD-6: P2-1 고객 상세정보 패널 — get_chat_customer_detail RPC 응답 렌더링
   // 기존 5필드(이메일·회원코드·등급·크레이지스코어·블랙리스트) + 신규 필드(이름·전화·인증·구독·예약)
   //
@@ -113,7 +115,16 @@
       <div class="cdp-empty">정보를 불러올 수 없습니다.</div>
     {:else}
       <!-- 기본정보 -->
-      <div class="section-title">기본정보</div>
+      <div class="section-title section-title--row">
+        <span>기본정보</span>
+        {#if summary?.user_id}
+          <!-- 더보기 → 고객 관리 메뉴의 해당 고객 패널(기본정보 탭)로 새 탭 랜딩 -->
+          <MoreDotsIconButton
+            href={`/cms/customers?selected=${encodeURIComponent(summary.user_id)}&tab=info`}
+            label="고객 관리에서 기본정보 열기"
+          />
+        {/if}
+      </div>
       <div class="info-section">
         <div class="info-row">
           <span class="info-label">이름</span>
@@ -304,6 +315,12 @@
     font-weight: 700;
     color: var(--cs-text-mid);
     padding: 4px 0 2px;
+  }
+  /* 타이틀 우측에 더보기 아이콘 버튼을 두는 행 — 타이틀은 좌측, 버튼은 우측 끝 */
+  .section-title--row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   /* 정보 섹션 — RentalDetailPanel.svelte .info-section/.info-row 반영 */
