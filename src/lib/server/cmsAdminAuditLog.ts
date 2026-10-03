@@ -14,6 +14,7 @@ export type CmsAdminAuditActionType =
   | 'name_change'
   | 'password_recovery_issued'
   | 'password_recovery_completed'
+  | 'doc_view' // 고객 본인증명·외국인증명 서류 열람(서명 URL 발급) — DB CHECK 확장은 서류 비공개 전환 마이그레이션(B2)에서 함께 적용
 
 export interface CmsAdminAuditLogEntry {
   actorId: string | null
@@ -32,13 +33,15 @@ export async function insertCmsAdminAuditLog(
   entry: CmsAdminAuditLogEntry
 ): Promise<void> {
   try {
-    await admin.from('cms_admin_audit_log').insert({
+    // supabase-js의 insert는 예외를 던지지 않고 { error }를 반환한다 — 제약 위반 등 실패가 흔적 없이 사라지지 않도록 로그를 남긴다
+    const { error } = await admin.from('cms_admin_audit_log').insert({
       user_id: entry.actorId,
       action_type: entry.actionType,
       target_user_id: entry.targetUserId,
       before_value: entry.beforeValue ?? null,
       after_value: entry.afterValue ?? null,
     })
+    if (error) console.error(`[cmsAdminAuditLog] ${entry.actionType} 기록 실패:`, error.message)
   } catch {
     // 감사로그 실패는 무시 — 관리 액션 자체는 이미 성공한 상태를 되돌리지 않는다.
   }

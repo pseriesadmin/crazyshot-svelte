@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
+import { toDocPaths } from '$lib/server/userDocs'
 
 const BUCKET = 'user-documents'
 
@@ -54,12 +55,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // DB 초기화가 끝난 뒤에만 Storage 파일 삭제 — best-effort(실패해도 응답은 이미 성공 처리)
-  const supabaseUrl = getSupabaseUrl()
-  const prefix = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/`
-  const oldPaths = existingUrls
-    .filter(url => url.startsWith(prefix))
-    .map(url => url.slice(prefix.length))
-    .filter(path => path.startsWith(`${session.user.id}/`))
+  // 공개 URL(전환 전)·경로(전환 후) 두 형식을 모두 해석하는 공용 헬퍼 사용 — 본인 폴더 밖 경로는 걸러진다.
+  const oldPaths = toDocPaths(existingUrls, session.user.id)
   if (oldPaths.length > 0) {
     const { error: removeError } = await admin.storage.from(BUCKET).remove(oldPaths)
     if (removeError) console.error('[delete-doc] storage cleanup error:', removeError.message)

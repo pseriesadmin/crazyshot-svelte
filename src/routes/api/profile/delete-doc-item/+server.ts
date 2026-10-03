@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
+import { toDocPath } from '$lib/server/userDocs'
 
 const BUCKET = 'user-documents'
 
@@ -85,14 +86,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // DB 반영이 끝난 뒤에만 스토리지 파일 삭제 — best-effort(실패해도 응답은 이미 성공 처리)
-  const supabaseUrl = getSupabaseUrl()
-  const prefix = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/`
-  if (removedUrl && removedUrl.startsWith(prefix)) {
-    const path = removedUrl.slice(prefix.length)
-    if (path.startsWith(`${session.user.id}/`)) {
-      const { error: removeError } = await admin.storage.from(BUCKET).remove([path])
-      if (removeError) console.error('[delete-doc-item] storage cleanup error:', removeError.message)
-    }
+  // 공개 URL(전환 전)·경로(전환 후) 두 형식을 모두 해석하는 공용 헬퍼 사용 — 본인 폴더 밖 경로는 null로 걸러진다.
+  const removedPath = toDocPath(removedUrl, session.user.id)
+  if (removedPath) {
+    const { error: removeError } = await admin.storage.from(BUCKET).remove([removedPath])
+    if (removeError) console.error('[delete-doc-item] storage cleanup error:', removeError.message)
   }
 
   return json({ ok: true, docUrls: remainingUrls })

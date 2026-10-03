@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *    유효/미등록/등록일 없음이면 아무것도 삭제하지 않음
  * 2) revoke-doc-approval: manager+ 만, *_approved_at 만 NULL 처리
  */
+// 1b: consulting.chat 메뉴 권한 게이트는 qnaMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null) }))
 vi.mock('$env/dynamic/private', () => ({ env: { SUPABASE_SERVICE_ROLE_KEY: 'k' } }))
 vi.mock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'https://test.supabase.co' }))
 vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'https://test.supabase.co' }))
@@ -71,6 +73,17 @@ describe('direct-send — 만료 증명 자동 삭제', () => {
     expect(reset).toMatchObject({ identity_doc_url: null, identity_verified_at: null, identity_approved_at: null })
     expect(removed[0]).toEqual(['user-1/a.pdf', 'user-1/b.pdf']) // 다른 고객 폴더 파일은 제외
     expect(inserted.some((m) => m.message_type === 'action_card')).toBe(true)
+  })
+
+  it('경로로 저장된 값(비공개 전환 후)과 공개 URL이 섞여도 두 형식 모두 삭제 대상으로 해석', async () => {
+    Object.assign(profileRow, {
+      identity_doc_url: ['user-1/a.pdf', `${PREFIX}user-1/b.pdf`, 'other/c.pdf'],
+      identity_verified_at: monthsAgo(7),
+    })
+    const { POST } = await import('../../routes/api/cms/chat/identity-request/direct-send/+server')
+    const json = await (await POST({ request: req({ session_id: 's1', doc_type: 'identity' }), locals } as never)).json()
+    expect(json.deleted_count).toBe(3)
+    expect(removed[0]).toEqual(['user-1/a.pdf', 'user-1/b.pdf'])
   })
 
   it('외국인증명 만료 → foreign 컬럼 전체 초기화', async () => {
