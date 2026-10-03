@@ -189,7 +189,7 @@
         {#if $authState.user && !isGuestUser}
           <button class="gnb-avatar-initial" onclick={() => goto('/account')} aria-label="내 계정">
             {#if gnbAvatarUrl}
-              <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img" />
+              <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img" decoding="async" />
             {:else}
               {userInitial()}
             {/if}
@@ -214,7 +214,7 @@
         <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
           <canvas class="gnb-holo-canvas" width="120" height="120" aria-hidden="true" bind:this={holoCanvas}></canvas>
           {#if gnbAvatarUrl}
-            <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img gnb-avatar-img-mobile" />
+            <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img gnb-avatar-img-mobile" decoding="async" />
           {:else}
             <span class="gnb-avatar-initial-text">{userInitial()}</span>
           {/if}

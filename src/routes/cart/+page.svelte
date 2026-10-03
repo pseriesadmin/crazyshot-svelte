@@ -22,6 +22,7 @@
   import { calcShippingFee, calcShippingDiscountRate, applyShippingDiscount, isRoundTripShippingFee, isFreeDeliveryCouponBlocked, computeReturnVisibleTabs, type ShippingFeeItem, type DeliveryFeeDiscountTier, type DiscountConditionItem } from '$lib/utils/cartShippingFee';
   import { calcRentalDays, calcRentalFee, calcFirstDayFee, hasFullRentalDay, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
+  import { fireAndLog } from '$lib/utils/fireAndLog';
   import { deriveCartMode, getPurchaseReservationDates, isRentalLine } from '$lib/utils/cartPurchaseMode';
   import {
     resolveParentProductId,
@@ -293,11 +294,7 @@
       // 대여기간유형 저장 실패는 결제·재고 확정을 막을 정도로 치명적이지 않으므로 비차단 경고만
       csToast.error('대여기간유형 저장에 실패했습니다. CMS에 문의해주세요.')
     }
-    fetch('/api/checkout/notify-hold', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reservationId: row.reservation_id }),
-    }).catch(() => {})
+    fireAndLog('notify-hold', '/api/checkout/notify-hold', { reservationId: row.reservation_id })
     applyQtyOverride(line.canonicalReservationId, line.qty + 1, [...line.reservationIds, String(row.reservation_id)], consumeDelta)
     return true
   }
@@ -2912,11 +2909,7 @@
                 // (위 promote_draft_reservation 분기, notify-hold 호출 참고)과 동일하게
                 // "예약 신청 확인"(reservation_hold) 채팅 알림을 발송해야 한다 — 기존엔 구
                 // 예약을 취소만 하고 신규 예약에 대한 알림이 전혀 발송되지 않던 결함.
-                if (!directPay) fetch('/api/checkout/notify-hold', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ reservationId: reissueTyped.newReservationId }),
-                }).catch(() => {})
+                if (!directPay) fireAndLog('notify-hold', '/api/checkout/notify-hold', { reservationId: reissueTyped.newReservationId })
               }
               // itemsState의 해당 그룹 reservationIds를 신규 값으로 교체
               itemsState = itemsState.map(s =>
@@ -3033,11 +3026,7 @@
                   }
                   // 채팅 알림 발송 (draft 생성 시 미발송 → 승격 성공 시점에 최초 발송 — FE-2 STEP4 참고)
                   // 직접결제(판매전용 단독)는 결제 전 "예약신청 완료" 카드를 보내지 않는다 — 결제 후 승인 알림만 발송
-                  if (!directPay) fetch('/api/checkout/notify-hold', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ reservationId: Number(reservationId) }),
-                  }).catch(() => {})
+                  if (!directPay) fireAndLog('notify-hold', '/api/checkout/notify-hold', { reservationId: Number(reservationId) })
                 }
               }
             }
