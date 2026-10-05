@@ -2,6 +2,7 @@
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { supabase } from '$lib/services/supabase'
+  import { csToast } from '$lib/utils/toast'
   import type { SupabaseClient } from '@supabase/supabase-js'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
@@ -22,6 +23,29 @@
   let showDeleteConfirm = $state(false)
   let adminBusy = $state(false)
   let adminError = $state<string | null>(null)
+
+  // ── 작성자 '비공개' 콤보 버튼(2026-10-05): 켜짐=비공개(is_public=false) — 공개 목록·메인·검색에서 빠지고 본인·관리자만 봄.
+  // 서버 data를 덮어쓰지 않고 글 id별 변경값만 따로 들고 있다($state(prop) 초기화 금지 규칙).
+  let publicOverride = $state<Record<string, boolean>>({})
+  let privacyBusy = $state(false)
+  const isPublicNow = $derived(post ? (publicOverride[post.id] ?? post.isPublic) : true)
+
+  async function togglePrivacy() {
+    if (!post || privacyBusy) return
+    privacyBusy = true
+    const next = !isPublicNow
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.rpc as any)('set_post_public', { p_id: post.id, p_public: next })
+      if (error) throw new Error(error.message)
+      publicOverride = { ...publicOverride, [post.id]: next }
+      csToast.success(next ? '공개로 전환했습니다.' : '비공개로 전환했습니다.')
+    } catch (e) {
+      csToast.error(`처리하지 못했습니다.${e instanceof Error && e.message ? ` (${e.message})` : ''}`)
+    } finally {
+      privacyBusy = false
+    }
+  }
 
   function formatDate(iso: string): string {
     const d = new Date(iso)
@@ -379,7 +403,13 @@
 
       <!-- Writing() -->
       <div class="d-writing">
-        <p class="d-author">{post?.author ?? ''} • {post ? formatDate(post.createdAt) : ''}</p>
+        <div class="d-author-row">
+          <p class="d-author">{post?.author ?? ''} • {post ? formatDate(post.createdAt) : ''}</p>
+          {#if data.isOwner}
+            <button type="button" class="priv-btn" class:priv-btn-on={!isPublicNow} aria-pressed={!isPublicNow}
+              disabled={privacyBusy} onclick={togglePrivacy}>비공개</button>
+          {/if}
+        </div>
         <h1 class="d-title">{post?.title ?? ''}</h1>
 
         <div class="d-article">
@@ -389,7 +419,7 @@
               {@html block.html}
             {:else if block.type === 'image'}
               <div class="d-content-images d-content-images--{block.layout}">
-                {#each block.images.filter(img => !img.isHead) as img}
+                {#each block.images.filter(img => !img.isHead && img.url !== post?.heroFromBody) as img}
                   <img src={img.url} alt={img.alt} loading="lazy" class="d-content-img" />
                 {/each}
               </div>
@@ -528,6 +558,10 @@
           <div class="m-author">
             <span>{post?.author ?? ''} </span><span>• {post ? formatDate(post.createdAt) : ''}</span>
           </div>
+          {#if data.isOwner}
+            <button type="button" class="priv-btn priv-btn-m" class:priv-btn-on={!isPublicNow} aria-pressed={!isPublicNow}
+              disabled={privacyBusy} onclick={togglePrivacy}>비공개</button>
+          {/if}
           <button
             class="m-wish"
             onclick={() => liked = !liked}
@@ -560,7 +594,7 @@
               {@html block.html}
             {:else if block.type === 'image'}
               <div class="article-images article-images--{block.layout}">
-                {#each block.images.filter(img => !img.isHead) as img}
+                {#each block.images.filter(img => !img.isHead && img.url !== post?.heroFromBody) as img}
                   <img src={img.url} alt={img.alt} loading="lazy" class="m-article-img" />
                 {/each}
               </div>
@@ -859,6 +893,26 @@
   }
   /* 글꼴 토큰 PC↔모바일 짝 (2026-09-29, 기준 비율 ≈0.88 · 제목은 app.css 문서화된 짝 pc-ad-kr-35↔m-ad-kr-24):
        제목 35↔24 · 작성자·날짜 16↔14(700) · 본문 16↔14(500) · 태그 14↔11 · 댓글 작성자 14↔12 · 댓글 날짜 12↔11 · 댓글 내용 16↔14 */
+  /* 작성자 줄 + 비공개 콤보 버튼(우측 끝, 2026-10-05) — front-uiux §16 (비선택=lilac 면 / 선택=purple 채움, 터치 타겟 44px) */
+  .d-author-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .priv-btn {
+    padding: 9px 16px;
+    border: none;
+    border-radius: var(--radius-xl, 30px);
+    background: var(--cs-lilac);
+    color: var(--cs-text);
+    font-size: 13px;
+    font-weight: 700;
+    min-height: 44px;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .priv-btn:hover:not(:disabled) { background: var(--cs-purple-op10); }
+  .priv-btn-on { background: var(--cs-purple); color: #fff; }
+  .priv-btn-on:hover:not(:disabled) { background: var(--cs-purple-light, #553FE0); }
+  .priv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .priv-btn-m { padding: 8px 12px; font-size: 12px; margin-left: auto; margin-right: 12px; }
   .d-author {
     font: var(--text-pc-title-16);   /* 16px / 700 (모바일 --text-m-script-14B 짝) */
     color: var(--cs-text-mid);

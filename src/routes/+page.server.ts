@@ -3,6 +3,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
 import { pickBannerItems, type BannerPost } from '$lib/utils/crazylogBanner'
+import { plainTextPreview } from '$lib/utils/crazylogText'
 
 export type BannerSlot = {
   id: string
@@ -225,7 +226,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     for (const block of blocks) {
       const b = block as Record<string, unknown>
       if (b.type === 'text' && typeof b.html === 'string') {
-        return b.html.replace(/<[^>]*>/g, '').trim().slice(0, 120)
+        return plainTextPreview(b.html)
       }
     }
     return ''

@@ -4,6 +4,11 @@
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
+  import { supabase } from '$lib/services/supabase'
+  import { invalidateAll } from '$app/navigation'
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -86,10 +91,57 @@
   let searchError   = $state(false)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
-  // 검색 중이면 서버 데이터 대신 검색 결과 표시
+  // ── 관리자 행 조작(2026-10-05): 비공개 토글·삭제 — 서버 재조회(invalidateAll) 전까지 즉시 반영용 로컬 상태
+  let publicOverride = $state<Record<string, boolean>>({})
+  let removedIds     = $state<Record<string, true>>({})
+  let privacyBusyId  = $state<string | null>(null)
+
+  type ListPost = (typeof data.posts)[number]
+
+  // 검색 중이면 서버 데이터 대신 검색 결과 표시 — 방금 삭제한 글은 제외, 방금 바꾼 공개 여부는 즉시 반영
   const displayPosts = $derived(
-    searchQuery.trim() ? searchResults : data.posts
+    (searchQuery.trim() ? searchResults : data.posts)
+      .filter((p) => !removedIds[p.id])
+      .map((p) => (p.id in publicOverride ? { ...p, isPublic: publicOverride[p.id] } : p))
   )
+
+  /** 비공개(is_public=false) 글은 작성자 본인·관리자에게만 보이며 50% 흐리게 표시한다 */
+  function isDimmed(post: ListPost): boolean {
+    return post.isPublic === false
+  }
+
+  async function togglePublic(post: ListPost) {
+    if (privacyBusyId) return
+    privacyBusyId = post.id
+    const next = !(post.isPublic !== false)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase.rpc as any)('set_post_public', { p_id: post.id, p_public: next })
+      if (error) throw new Error(error.message)
+      publicOverride = { ...publicOverride, [post.id]: next }
+      csToast.success(next ? '공개로 전환했습니다.' : '비공개로 전환했습니다.')
+      void invalidateAll()
+    } catch (e) {
+      csToast.error(`처리하지 못했습니다.${e instanceof Error && e.message ? ` (${e.message})` : ''}`)
+    } finally {
+      privacyBusyId = null
+    }
+  }
+
+  // 관리자 삭제 = 소프트 삭제(status='deleted', 복구 가능) — update_post_status는 is_cms_user() 전용. 2단계 확인은 삭제 안전 토스트 재사용
+  const deleteSafety = createDeleteSafetyToast({
+    successMessage: '로그가 삭제됐습니다.',
+    errorMessage: '로그 삭제에 실패했습니다.',
+  })
+
+  async function deletePost(post: ListPost): Promise<boolean> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.rpc as any)('update_post_status', { p_id: post.id, p_status: 'deleted' })
+    if (error) throw new Error(error.message)
+    removedIds = { ...removedIds, [post.id]: true }
+    void invalidateAll()
+    return true
+  }
 
   function onSearchInput(e: Event) {
     const val = (e.target as HTMLInputElement).value
@@ -123,6 +175,8 @@
         createdAt:    r.created_at,
         author:       r.author,
         thumbnailUrl: r.thumbnail_url ?? null,
+        isPublic:     true, // 검색 API는 공개 글만 반환
+        isMine:       false,
       }))
     } catch {
       searchError   = true
@@ -165,7 +219,9 @@
           </button>
         {/each}
       </div>
-      <!-- 검색 입력 (모바일 전용: tab-section 내, PC는 pc-search-wrap에서 별도 노출) -->
+      <!-- 검색 입력 (모바일 전용: tab-section 내, PC는 pc-search-wrap에서 별도 노출)
+           2026-10-05(Stephen 지시): 콘텐츠 검색은 통합 검색 화면에서 통합 제공 예정 — 통합 검색 구현 전까지 이 목록 화면의 검색창은 관리자 계정에만 노출 -->
+      {#if data.isAdmin}
       <div class="search-wrap">
         <div class="search-bar">
           <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -192,6 +248,7 @@
           <p class="search-status search-status-error">검색 중 오류가 발생했습니다.</p>
         {/if}
       </div>
+      {/if}
     </div>
 
     <!-- ③ 모바일 전용: WriteCtaCard ─────────────────────────── -->
@@ -218,18 +275,23 @@
           <p class="m-empty">{searchQuery ? '검색 결과가 없습니다.' : '아직 등록된 로그가 없습니다.'}</p>
         {:else}
           {#each displayPosts as post (post.id)}
-            <a href="/crazylog/view/{post.id}" class="m-post-card">
-              {#if post.thumbnailUrl}
-                <div class="m-post-thumb">
-                  <img src={post.thumbnailUrl} alt={post.title} loading="lazy" class="m-post-thumb-img" />
+            <div class="row-wrap" class:row-dim={isDimmed(post)}>
+              <a href="/crazylog/view/{post.id}" class="m-post-card">
+                {#if post.thumbnailUrl}
+                  <div class="m-post-thumb">
+                    <img src={post.thumbnailUrl} alt={post.title} loading="lazy" class="m-post-thumb-img" />
+                  </div>
+                {/if}
+                <div class="m-post-body" class:m-post-body-only={!post.thumbnailUrl}>
+                  <span class="m-post-log-type">{post.logType}</span>
+                  <p class="m-post-title">{post.title}</p>
+                  <div class="meta-row">
+                    <p class="m-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+                    {#if data.isAdmin}{@render RowActions(post)}{/if}
+                  </div>
                 </div>
-              {/if}
-              <div class="m-post-body" class:m-post-body-only={!post.thumbnailUrl}>
-                <span class="m-post-log-type">{post.logType}</span>
-                <p class="m-post-title">{post.title}</p>
-                <p class="m-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
-              </div>
-            </a>
+              </a>
+            </div>
           {/each}
         {/if}
       </div>
@@ -241,19 +303,8 @@
 
         <!-- PcIndexBar + PC 검색창 -->
         <div class="pc-top-bar">
-          <div class="pc-index-bar">
-            {#each PC_STAT_TABS as stat}
-              <button
-                class="pc-stat-pill"
-                class:pc-stat-pill-active={activeTab === stat.tab}
-                onclick={() => onTabClick(stat.tab)}
-              >
-                <span class="pc-stat-label">{stat.label}</span>
-                <span class="pc-stat-count-pill">{data.counts[stat.countKey]}</span>
-              </button>
-            {/each}
-          </div>
-          <!-- PC 전용 검색창 -->
+          <!-- PC 전용 검색창 — 탭 필 위 단독 행, 가로폭 100%(2026-10-05, Stephen 지시: 인덱스 바 우측 끝 → 상위 단독 행) -->
+          {#if data.isAdmin}
           <div class="pc-search-wrap">
             <div class="search-bar pc-search-bar">
               <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -280,6 +331,19 @@
               <p class="search-status search-status-error">검색 중 오류가 발생했습니다.</p>
             {/if}
           </div>
+          {/if}
+          <div class="pc-index-bar">
+            {#each PC_STAT_TABS as stat}
+              <button
+                class="pc-stat-pill"
+                class:pc-stat-pill-active={activeTab === stat.tab}
+                onclick={() => onTabClick(stat.tab)}
+              >
+                <span class="pc-stat-label">{stat.label}</span>
+                <span class="pc-stat-count-pill">{data.counts[stat.countKey]}</span>
+              </button>
+            {/each}
+          </div>
         </div>
 
         <!-- PC 포스트 목록 -->
@@ -288,22 +352,27 @@
             <p class="pc-empty">{searchQuery ? '검색 결과가 없습니다.' : '아직 등록된 로그가 없습니다.'}</p>
           {:else}
             {#each displayPosts as post (post.id)}
-              <a href="/crazylog/view/{post.id}" class="pc-post">
-                <div class="pc-bar" style="background: {barColor(post.logType)}"></div>
-                <div class="pc-text">
-                  <span class="pc-log-type">{post.logType}</span>
-                  <p class="pc-title">{post.title}</p>
-                  <p class="pc-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
-                </div>
-                <div class="pc-thumb">
-                  <img
-                    src={post.thumbnailUrl ?? '/crazylog/content-hero.png'}
-                    alt={post.title}
-                    loading="lazy"
-                    class="pc-thumb-img"
-                  />
-                </div>
-              </a>
+              <div class="row-wrap" class:row-dim={isDimmed(post)}>
+                <a href="/crazylog/view/{post.id}" class="pc-post">
+                  <div class="pc-bar" style="background: {barColor(post.logType)}"></div>
+                  <div class="pc-text">
+                    <span class="pc-log-type">{post.logType}</span>
+                    <p class="pc-title">{post.title}</p>
+                    <div class="meta-row">
+                      <p class="pc-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+                      {#if data.isAdmin}{@render RowActions(post)}{/if}
+                    </div>
+                  </div>
+                  <div class="pc-thumb">
+                    <img
+                      src={post.thumbnailUrl ?? '/crazylog/content-hero.png'}
+                      alt={post.title}
+                      loading="lazy"
+                      class="pc-thumb-img"
+                    />
+                  </div>
+                </a>
+              </div>
             {/each}
           {/if}
         </div>
@@ -314,6 +383,27 @@
   </div>
 </div>
 
+<!-- 관리자 행 우측 조작(2026-10-05): 비공개 콤보 버튼(켜짐=비공개) + 삭제 아이콘(front-uiux §16 콤보·§25 삭제 표준) -->
+{#snippet RowActions(post: ListPost)}
+  <!-- 카드 링크 안쪽(작성자·날짜 줄 우측)에 있으므로 조작 버튼 클릭이 상세 이동으로 이어지지 않게 이 래퍼에서 기본 동작(링크 이동)을 막는다 -->
+  <div class="row-actions" role="presentation" onclick={(e) => e.preventDefault()}>
+    <button
+      type="button"
+      class="priv-btn"
+      class:priv-btn-on={post.isPublic === false}
+      aria-pressed={post.isPublic === false}
+      disabled={privacyBusyId === post.id}
+      onclick={() => togglePublic(post)}
+    >비공개</button>
+    <DeleteIconButton
+      ariaLabel="로그 삭제"
+      confirming={deleteSafety.pendingKey === post.id}
+      disabled={deleteSafety.busyKey === post.id}
+      onclick={() => deleteSafety.handleAction(post.id, () => deletePost(post))}
+    />
+  </div>
+{/snippet}
+
 <CrazylogWriteCard
   currentUser={data.currentUser}
   isLoggedIn={data.isLoggedIn}
@@ -323,6 +413,35 @@
 <BottomTabBar />
 
 <style>
+  /* ── 관리자 행 조작 / 비공개 흐림(2026-10-05) ──────────────────── */
+  /* 비공개 글: 카드 내용만 50% 흐리게(조작 버튼은 정상 노출) — 조작 버튼이 카드 링크 안(작성자·날짜 줄 우측)에 있어 카드 전체 opacity를 쓰지 않는다 */
+  .row-dim :is(.pc-post, .m-post-card) { background: color-mix(in srgb, var(--cs-white) 50%, transparent); }
+  /* 썸네일 없는 모바일 카드는 본문 영역이 자체 흰 배경이라 카드 배경 50% 처리가 보이지 않는다 → 투명 처리 */
+  .row-dim .m-post-body-only { background: transparent; }
+  .row-dim :is(.pc-bar, .pc-thumb, .pc-log-type, .pc-title, .pc-meta, .m-post-thumb, .m-post-log-type, .m-post-title, .m-post-meta) { opacity: 0.5; }
+  /* 작성자·날짜 줄 + 우측 끝 관리자 조작 */
+  .meta-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  /* 비공개 콤보 버튼 — front-uiux §16 (PC 9px 16px / 모바일 8px 12px, 라벨 13px/12px Bold, 반경 30px). 비선택=lilac 면, 선택=purple 채움 */
+  .priv-btn {
+    padding: 9px 16px;
+    border: none;
+    border-radius: var(--radius-xl, 30px);
+    background: var(--cs-lilac);
+    color: var(--cs-text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .priv-btn:hover:not(:disabled) { background: var(--cs-purple-op10); }
+  .priv-btn-on { background: var(--cs-purple); color: #fff; }
+  .priv-btn-on:hover:not(:disabled) { background: var(--cs-purple-light, #553FE0); }
+  .priv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  @media (max-width: 640px) {
+    .priv-btn { padding: 8px 12px; font-size: 12px; }
+  }
+
   /* ── 루트 컨테이너 ─────────────────────────────────────────── */
   .list-root {
     background: var(--cs-lilac);
@@ -599,17 +718,18 @@
   }
 
   /* PC 상단 바 (인덱스 + 검색창) */
+  /* 검색창(위 단독 행, 100%) → 탭 필 줄 순서로 세로 배치(2026-10-05) */
   .pc-top-bar {
     display: flex;
-    align-items: flex-start;
+    flex-direction: column;
+    align-items: stretch;
     gap: 16px;
   }
   .pc-search-wrap {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    flex-shrink: 0;
-    width: 260px;
+    width: 100%;
   }
   .pc-search-bar {
     height: 44px;
@@ -619,6 +739,7 @@
   .pc-index-bar {
     flex: 1;
     display: flex;
+    align-items: flex-start;
     gap: 10px;
   }
   .pc-stat-pill {

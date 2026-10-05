@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
 import type { Database } from '$lib/types/database'
 import { pickBannerItems, deriveBadgeLabel, type BannerPost, type BannerSlotConfig } from '$lib/utils/crazylogBanner'
+import { plainTextPreview } from '$lib/utils/crazylogText'
 
 type PostRow = {
 	id: string
@@ -34,7 +35,7 @@ function extractFirstText(blocks: unknown): string {
 	for (const block of blocks) {
 		const b = block as Record<string, unknown>
 		if (b.type === 'text' && typeof b.html === 'string') {
-			return b.html.replace(/<[^>]*>/g, '').trim().slice(0, 120)
+			return plainTextPreview(b.html)
 		}
 	}
 	return ''

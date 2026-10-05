@@ -11,6 +11,7 @@ type PostRow = {
 	user_id: string
 	thumbnail_url: string | null
 	status: string
+	is_public: boolean | null
 }
 type ProfileRow = {
 	id: string
@@ -86,7 +87,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const { data: rawPost } = await locals.supabase
 		.from('user_posts')
-		.select('id, title, log_type, content_blocks, keywords, created_at, user_id, thumbnail_url, status')
+		.select('id, title, log_type, content_blocks, keywords, created_at, user_id, thumbnail_url, status, is_public')
 		.eq('id', params.slug)
 		.maybeSingle()
 
@@ -126,9 +127,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const youtubeVideoId = extractYoutubeVideoId(postData.content_blocks)
 
 	// thumbnail_url이 없으면: content_blocks 첫 이미지 → 유튜브 기본 썸네일 순으로 파생
+	// 히어로가 본문 첫 이미지로 대체된 경우에만 그 URL을 알려 본문에서 중복 표시를 막는다
+	const heroFromBody = postData.thumbnail_url ? null : extractFirstImageUrl(postData.content_blocks)
 	const derivedThumbnail =
 		postData.thumbnail_url ??
-		extractFirstImageUrl(postData.content_blocks) ??
+		heroFromBody ??
 		(youtubeVideoId ? `https://img.youtube.com/vi/${youtubeVideoId}/maxresdefault.jpg` : null) ??
 		null
 
@@ -141,8 +144,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		createdAt:     postData.created_at,
 		author:        authorName,
 		thumbnailUrl:  derivedThumbnail,
+		heroFromBody,
 		youtubeVideoId,
 		status:        postData.status,
+		isPublic:      postData.is_public !== false,
 		userId:        postData.user_id,
 	}
 
