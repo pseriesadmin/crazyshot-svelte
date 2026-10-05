@@ -5,11 +5,12 @@
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
+  import { firstCartSubmitBlocker } from '$lib/utils/cartSubmitBlocker';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
   import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
-  import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete } from '$lib/utils/cartFormCompleteness';
+  import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete, missingCartFormFields } from '$lib/utils/cartFormCompleteness';
   import { calcStackedCouponDiscount, canAddCoupon, type StackableCoupon } from '$lib/utils/couponStacking';
   import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
@@ -432,7 +433,10 @@
     if (!mql.matches) return
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting) bulkOpen = false
+        // 2026-10-05: 달력·시간 팝업이 열려 있는 동안에는 접지 않는다 — 날짜를 고르는 중에 이 관찰자가 발동하면 패널 전체(달력 포함)가
+        // 사라져 "수령일을 누르자마자 달력이 닫히는" 증상이 된다(모바일 폭 한정 로직이라 PC 넓은 화면에서는 나타나지 않았음). 주소창 접힘/펼침으로
+        // 뷰포트 높이가 바뀌거나 선택 직후 높이가 변해 Order Total이 위쪽 20% 영역에 걸리면 교차 상태가 바뀌어 발동한다.
+        if (entries[0]?.isIntersecting && openCalId === null && openTimeId === null) bulkOpen = false
       },
       { rootMargin: '0px 0px -80% 0px' }
     )
@@ -530,15 +534,30 @@
   // 그 클릭 이벤트가 document까지 버블링되며 즉시 재닫힘을 유발하지 않도록, 리스너
   // 등록을 다음 tick(setTimeout 0)으로 미룬다(흔한 click-outside 구현 패턴).
   function measureCalLayer(node: HTMLElement, calId: string) {
+    // 2026-10-05(모바일 폭에서 달력 클릭 즉시 닫힘의 실제 원인): 이 화면은 같은 RentalForm(calId='bulk-rental')을 PC용 .detail-pane과
+    // 모바일용 .bulk-panel 양쪽에 렌더링하고, 한쪽은 CSS(display:none)로만 숨긴다. 폭 ≤640px에서 모바일 패널을 열면 숨겨진 PC 쪽 인스턴스도
+    // openCalId가 같아 달력이 함께 렌더링되고, 그 숨은 인스턴스의 바깥 클릭 리스너가 "보이는 달력 안쪽 클릭"을 자기 영역 밖 클릭으로 보고
+    // 공유 상태(openCalId)를 null로 닫았다. 화면에 보이지 않는(레이아웃 박스가 없는) 인스턴스는 닫기·높이 측정 어느 쪽에도 관여하지 않는다.
+    const isRendered = () => node.getClientRects().length > 0
     const ro = new ResizeObserver(() => {
+      if (!isRendered()) return
       calLayerHeights[calId] = node.offsetHeight
     })
     ro.observe(node)
-    calLayerHeights[calId] = node.offsetHeight
+    if (isRendered()) calLayerHeights[calId] = node.offsetHeight
 
     const handleOutsideClick = (e: MouseEvent) => {
       if (openCalId !== calId) return
-      if (node.contains(e.target as Node)) return
+      if (!isRendered()) return // 숨겨진(display:none) 중복 인스턴스는 닫지 않는다 — 위 주석 참고
+      // 2026-10-05(터치 기기에서 달력이 바로 닫히던 문제): 클릭 대상(e.target)이 이미 DOM에서 제거돼 있으면(월·연 선택 목록 항목,
+      // 날짜 선택 직후 다시 그려지는 칸 등) node.contains(target)이 거짓이 되어 "달력 바깥 클릭"으로 오판했다. 이벤트 경로(composedPath)는
+      // 클릭이 시작될 때 확정되므로 중간에 요소가 사라져도 달력 안쪽 클릭으로 정확히 판정된다. 경로를 못 얻거나 대상이 이미 분리된
+      // 경우(target.isConnected=false)는 바깥 클릭이 아니라고 본다 — 달력을 닫는 건 실제로 바깥 요소를 눌렀을 때만.
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : []
+      if (path.includes(node)) return
+      const target = e.target as Node | null
+      if (target && !target.isConnected) return
+      if (node.contains(target)) return
       openCalId = null
     }
     const registerTimer = setTimeout(() => {
@@ -1141,7 +1160,7 @@
         // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
         // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
         if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
-          csToast.warning('미입력 항목을 확인하세요')
+          csToast.warning(describeSubmitBlocker())
         }
       },
       { threshold: 0, rootMargin: '150px 0px 150px 0px' }
@@ -1750,6 +1769,41 @@
     itemsState.some(it => !it.deleted && it.checked && itemPriceUnset(groupsById.get(it.id)))
   )
   const readyToSubmit = $derived(canProceed && formsComplete && methodSelectionValid && !priceUnsetBlocked)
+
+  // 제출이 막힌 이유를 구체적으로 안내(2026-10-05) — "미입력 항목을 확인하세요" 한 문구 대신 화면 위→아래 순서로 첫 번째 빠진 항목을 알린다.
+  // 판정은 readyToSubmit 구성요소(datesSet·pickupPointsSet·formsComplete·methodSelectionValid·deadlineOk·priceUnsetBlocked·agreed)와 같은 기준.
+  function describeSubmitBlocker(): string {
+    const active = itemsState.filter(it => !it.deleted && it.checked)
+    let rentalDateMissing = false, rentalTimeMissing = false, returnDateMissing = false, returnTimeMissing = false
+    let rentalPointMissing = false, returnPointMissing = false
+    let rentalFormMissing: string[] = [], returnFormMissing: string[] = []
+    for (const it of active) {
+      const isRental = isRentalLine(groupsById.get(it.id)?.durationType ?? null)
+      if (isRental) {
+        const pickupTimeNeeded = !isDeliveryLocked(it.opts.rentalMethod) && !isCourierDependent(it.opts.rentalMethod)
+        const returnTimeNeeded = !isDeliveryLocked(it.opts.returnMethod) && !isCourierDependent(it.opts.returnMethod)
+        if (it.rentalDate === '') rentalDateMissing = true
+        if (pickupTimeNeeded && it.rentalTime === '') rentalTimeMissing = true
+        if (it.returnDate === '') returnDateMissing = true
+        if (returnTimeNeeded && it.returnTime === '') returnTimeMissing = true
+      }
+      const ef = effectiveForms(it)
+      const pickupPointNeeded = (it.opts.rentalMethod === 'visit' || it.opts.rentalMethod === 'locker') && visitPickupPoints.length > 0
+      const returnPointNeeded = (it.opts.returnMethod === 'visit' || it.opts.returnMethod === 'locker') && visitPickupPoints.length > 0
+      if (pickupPointNeeded && ef.rental.pickupPointId === '') rentalPointMissing = true
+      if (returnPointNeeded && ef.ret.pickupPointId === '') returnPointMissing = true
+      if (isRental || readIsPurchaseOnly()) {
+        if (rentalFormMissing.length === 0) rentalFormMissing = missingCartFormFields(ef.rental)
+        if (returnFormMissing.length === 0) returnFormMissing = missingCartFormFields(ef.ret)
+      }
+    }
+    return firstCartSubmitBlocker({
+      hasItems, methodInvalid: !methodSelectionValid,
+      rentalDateMissing, rentalTimeMissing, returnDateMissing, returnTimeMissing,
+      rentalPointMissing, returnPointMissing, rentalFormMissing, returnFormMissing,
+      deadlineOk, priceUnset: priceUnsetBlocked, agreed,
+    }) ?? '미입력 항목을 확인하세요'
+  }
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
   // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
@@ -2798,7 +2852,7 @@
           // 비활성(조건 미충족) 상태에서 눌러도 이유를 알린다(2026-10-02, Stephen 지시) — disabled 속성은 클릭 이벤트 자체를
           // 막아 안내가 불가능하므로 aria-disabled로 접근성 상태만 유지하고 여기서 차단한다.
           if (!readyToSubmit) {
-            csToast.warning('미입력 항목을 확인하세요')
+            csToast.warning(describeSubmitBlocker())
             return
           }
           // 본인증명정보 미등록·승인 대기 중에는 예약신청 차단(2026-10-02) — 상품상세 게이트와 동일 기준

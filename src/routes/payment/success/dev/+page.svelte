@@ -234,13 +234,7 @@
 
     <!-- 확인 버튼 -->
     <button class="confirm-btn" onclick={handleConfirm}>
-      <svg width="15" height="10" viewBox="0 0 15 10" fill="none" aria-hidden="true">
-        <path d="M14 5H1M1 5L5.5 1M1 5L5.5 9" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
       <span>확인</span>
-      <svg width="15" height="10" viewBox="0 0 15 10" fill="none" aria-hidden="true">
-        <path d="M1 5H14M14 5L9.5 1M14 5L9.5 9" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
     </button>
 
   </div>
