@@ -1,9 +1,17 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
   import { browser } from '$app/environment'
-  import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
+  import {
+    identityRequiredMet,
+    foreignRequiredMet,
+    missingIdentityDocs,
+    missingForeignDocs,
+    buildMissingDocsMessage,
+  } from '$lib/utils/docApproval'
+  import { requestDocInquiry } from '$lib/utils/docGateToast'
+  import { safeReturnPath } from '$lib/utils/safeReturnPath'
   import { resizeAvatar } from '$lib/utils/imageResize'
-  import { invalidateAll } from '$app/navigation'
+  import { invalidateAll, goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte'
   import NotificationTabContent from './NotificationTabContent.svelte'
@@ -423,13 +431,49 @@
   let touchedDocs = false
 
   onDestroy(() => {
+    if (returnTimer) { clearTimeout(returnTimer); returnTimer = null } // 화면을 떠나면 예약된 자동 이동 취소
     if (!browser || !touchedDocs) return
     // 작업이 진행 중인 상태(업로드·삭제 요청 도중)에서는 화면 상태가 확정되지 않았으므로 경고하지 않는다
     if (identityDocsBusy || foreignDocsBusy) return
     const identityPartial = identityType.length > 0 && !identityRequiredMet(identityType)
     const foreignPartial = foreignTypeList.length > 0 && !foreignRequiredMet(foreignTypeList)
-    if (identityPartial || foreignPartial) csToast.warning('필수 파일을 등록하세요.')
+    // 2026-10-05: 막연한 "필수 파일을 등록하세요." 대신 빠진 서류 이름을 구체적으로 안내
+    if (identityPartial) csToast.warning(buildMissingDocsMessage(missingIdentityDocs(identityType)))
+    else if (foreignPartial) csToast.warning(buildMissingDocsMessage(missingForeignDocs(foreignTypeList, foreignStayType)))
   })
+
+  /* ── 서류 등록 직후 안내 (2026-10-05)
+     서버가 DB 반영 결과 기준으로 다시 계산한 missing(빠진 필수 서류 이름)을 그대로 안내한다 — 화면 상태로 재계산하지 않으므로
+     예약 차단 판정(docApproval.ts)과 항상 같은 기준이다. missing이 비면 필수 조합 완비 → 승인 요청 안내 + [문의] 액션. */
+  function announceDocResult(missing: string[] | undefined, fallbackMessage: string, wasComplete: boolean): void {
+    if (!missing) { csToast.success(fallbackMessage); return }
+    if (missing.length > 0) {
+      csToast.warning(buildMissingDocsMessage(missing), { duration: 6000 })
+      return
+    }
+    csToast.success('정보등록이 완료되어 관리자 승인을 요청했어요.', {
+      actionLabel: '문의',
+      duration: 8000,
+      onClick: () => { void requestDocInquiry() },
+    })
+    // 이번 등록으로 필수 조합이 "처음 완성"된 경우에만 원래 가려던 화면으로 자동 복귀(이미 완비 상태에서 서류만 교체한 경우는 제외)
+    if (!wasComplete) scheduleReturnAfterDocsComplete()
+  }
+
+  /* 등록 완료 후 자동 랜딩(2026-10-05, Stephen 지시): 예약 차단 토스트 [확인]이 붙여 보낸 returnTo(이전 상품상세 경로)가 있으면 그곳으로,
+     없으면 홈으로 이동한다. 완료 토스트를 읽을 시간(2초)을 준 뒤 이동하며, 그 사이 사용자가 다른 화면으로 이동했다면 가로채지 않는다.
+     open redirect 방지: safeReturnPath(같은 사이트 내부 경로만 허용). */
+  function scheduleReturnAfterDocsComplete(): void {
+    if (!browser) return
+    const target = safeReturnPath(new URL(window.location.href).searchParams.get('returnTo')) ?? '/'
+    if (returnTimer) clearTimeout(returnTimer) // 연속 완성 시 이동 예약이 겹치지 않게 마지막 것만 유지
+    returnTimer = setTimeout(() => {
+      returnTimer = null
+      if (!window.location.pathname.startsWith('/account/profile')) return
+      void goto(target)
+    }, 2000)
+  }
+  let returnTimer: ReturnType<typeof setTimeout> | null = null
 
   /* ── 본인증명 업로드 */
   const IDENTITY_TYPES = [
@@ -549,6 +593,7 @@
     // 방어적으로) 그 사이 새로 연 패널을 이 요청이 실수로 닫아버리지 않도록 시작 시점 스냅샷
     const editTypeAtStart = identitySingleEditType
     const wasSingleEdit    = Boolean(editTypeAtStart)
+    const wasComplete      = identityRequiredMet(identityType)
     const fd = new FormData()
     fd.set('type', 'identity')
     fd.set('merge', 'true')
@@ -556,10 +601,10 @@
     fd.append('identity_type', typeValue)
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
-      const data = await res.json() as { ok: boolean; error?: string }
+      const data = await res.json() as { ok: boolean; error?: string; missing?: string[] }
       if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
       touchedDocs = true
-      csToast.success(wasSingleEdit ? '수정되었습니다.' : '추가 등록되었습니다.')
+      announceDocResult(data.missing, wasSingleEdit ? '수정되었습니다.' : '추가 등록되었습니다.', wasComplete)
       if (identitySingleEditType === editTypeAtStart) cancelIdentityMergeEdit()
       showIdentityForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환(foreign과 동일 원칙)
       await invalidateAll()
@@ -711,6 +756,9 @@
   let isDeletingForeign  = $state(false)
 
   const currentForeignTypes = $derived(foreignStayType === 'short' ? FOREIGN_SHORT_TYPES : FOREIGN_LONG_TYPES)
+  // 서류 탭 상단 "아직 필요한 서류" 안내(2026-10-05) — 서버 판정과 같은 헬퍼 사용
+  const identityMissing = $derived(missingIdentityDocs(identityType))
+  const foreignMissing  = $derived(missingForeignDocs(foreignTypeList, foreignStayType))
 
   $effect(() => {
     foreignDocUrls    = profile?.foreign_doc_urls ?? (profile?.foreign_doc_url ? [profile.foreign_doc_url] : [])
@@ -861,6 +909,7 @@
     // 그 사이 새로 연 패널을 이 요청이 실수로 닫아버리지 않도록 시작 시점 스냅샷
     const editTypeAtStart = foreignSingleEditType
     const wasSingleEdit    = Boolean(editTypeAtStart)
+    const wasComplete      = foreignRequiredMet(foreignTypeList)
     const fd = new FormData()
     fd.set('type', 'foreign')
     fd.set('merge', 'true')
@@ -873,10 +922,10 @@
     fd.set('foreign_stay_type', foreignStayType)
     try {
       const res  = await fetch('/api/profile/upload-doc', { method: 'POST', body: fd })
-      const data = await res.json() as { ok: boolean; error?: string }
+      const data = await res.json() as { ok: boolean; error?: string; missing?: string[] }
       if (!data.ok) { csToast.error(data.error ?? '업로드 실패'); return }
       touchedDocs = true
-      csToast.success(wasSingleEdit ? '수정되었습니다.' : '등록되었습니다.')
+      announceDocResult(data.missing, wasSingleEdit ? '수정되었습니다.' : '등록되었습니다.', wasComplete)
       if (foreignSingleEditType === editTypeAtStart) cancelForeignMergeEdit()
       showForeignForm = false // 최초등록/재등록 슬롯에서 호출된 경우 등록완료 화면으로 전환
       await invalidateAll()
@@ -1308,12 +1357,23 @@
       {#if activeDocTab === 'identity'}
         <div class="doc-section-head">
           <div class="doc-section-head-text">
-            <p class="doc-subtitle">주민등록증(운전면허증), 주민등록등본 필수 등록</p>
+            <div class="doc-subtitle">
+              <p class="doc-subtitle-text">주민등록증(또는 운전면허증) + 주민등록등본을 등록해주세요.</p>
+              {#if identityDocUrls.length > 0 || identityType.length > 0}
+                <p class="doc-status-line" class:done={identityMissing.length === 0}>
+                  {#if identityMissing.length > 0}
+                    아직 필요한 서류: {identityMissing.join(', ')}
+                  {:else if identityApproved}
+                    승인이 완료되었어요.
+                  {:else}
+                    필수 서류 등록 완료 · 관리자 승인 대기 중
+                    <button type="button" class="doc-inquiry-link" onclick={() => { void requestDocInquiry() }}>문의하기</button>
+                  {/if}
+                </p>
+              {/if}
+            </div>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
-          {#if identityDocUrls.length > 0 && !showIdentityForm && !identityApproved}
-            <button class="btn-doc-re" onclick={requestIdentityReRegister}>재등록</button>
-          {/if}
         </div>
 
         {#if identityDocUrls.length > 0 && !showIdentityForm}
@@ -1454,12 +1514,23 @@
       {:else}
         <div class="doc-section-head">
           <div class="doc-section-head-text">
-            <p class="doc-subtitle">체류 유형별 증명서 4종 필수 등록</p>
+            <div class="doc-subtitle">
+              <p class="doc-subtitle-text">체류 유형별 증명서 4종을 모두 등록해주세요.</p>
+              {#if foreignDocUrls.length > 0 || foreignTypeList.length > 0}
+                <p class="doc-status-line" class:done={foreignMissing.length === 0}>
+                  {#if foreignMissing.length > 0}
+                    아직 필요한 서류: {foreignMissing.join(', ')}
+                  {:else if foreignApproved}
+                    승인이 완료되었어요.
+                  {:else}
+                    필수 서류 등록 완료 · 관리자 승인 대기 중
+                    <button type="button" class="doc-inquiry-link" onclick={() => { void requestDocInquiry() }}>문의하기</button>
+                  {/if}
+                </p>
+              {/if}
+            </div>
             <p class="doc-file-hint">PNG · JPEG · WebP · HEIF · PDF · 개별 10MB 이하</p>
           </div>
-          {#if foreignDocUrls.length > 0 && !showForeignForm && !foreignApproved}
-            <button class="btn-doc-re" onclick={requestForeignReRegister}>재등록</button>
-          {/if}
         </div>
 
         {#if foreignDocUrls.length > 0 && !showForeignForm}
@@ -2297,14 +2368,42 @@
     flex-direction: column;
     gap: 4px;
   }
+  /* 필수 서류 안내(2026-10-05) — 연한 면 배경 + 진한 본문색으로 강조(보더·그림자 없음, 면 우선 원칙) */
   .doc-subtitle {
     font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 400;
-    font-size: 12px;
-    color: #aaa;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--cs-text);
+    background: var(--cs-lilac);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
     letter-spacing: -0.3px;
-    line-height: 1.6;
+    line-height: 1.5;
     margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .doc-subtitle-text { margin: 0; }
+  .doc-status-line {
+    font-family: 'Noto Sans KR', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--cs-red-badge);
+    letter-spacing: -0.3px;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .doc-status-line.done { color: var(--cs-purple); }
+  /* 승인 대기 중 상시 문의 진입(2026-10-05) — 토스트가 사라진 뒤에도 문의할 수 있게 하는 글자 링크(배경·보더 없음, 밑줄만) */
+  .doc-inquiry-link {
+    background: none;
+    border: none;
+    padding: 0 0 0 6px;
+    font: inherit;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   /* 본인증명·외국인증명 탭 내비 (이번 세션 신규) — 열림: 기존 doc-title 컬러톤(#444) / 미열림: 옅은 그레이 */

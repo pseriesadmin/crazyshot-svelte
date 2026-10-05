@@ -9,7 +9,7 @@ import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coup
 import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
-import { getDocGateStatus, type DocGateRow } from '$lib/utils/docApproval'
+import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/docApproval'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -672,7 +672,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     membershipGrade: (profileResult.data as ProfileRow | null)?.membership_grade ?? null,
     crazyScore:      (profileResult.data as ProfileRow | null)?.credit_score     ?? null,
     userPoints:      (profileResult.data as ProfileRow | null)?.points           ?? 0,
-    docGate:         getDocGateStatus(profileResult.data as ProfileRow | null),
+    docGate:        getDocGateStatus(profileResult.data as ProfileRow | null),
+    docLanding:     docLandingKind(profileResult.data as ProfileRow | null),
     userCoupons:     filteredCoupons as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
     hasUserAddress,

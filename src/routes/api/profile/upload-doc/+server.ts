@@ -8,7 +8,13 @@ import { callTypedRpc } from '$lib/utils/rpc'
 import { isIdentityApproved, IDENTITY_APPROVED_LOCK_MESSAGE } from '$lib/server/identityApproval'
 import { toDocPaths } from '$lib/server/userDocs'
 import { sendPushToAdmins } from '$lib/server/push'
-import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
+import {
+  identityRequiredMet,
+  foreignRequiredMet,
+  missingIdentityDocs,
+  missingForeignDocs,
+} from '$lib/utils/docApproval'
+import { postDocPendingChat } from '$lib/server/docInquiryChat'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB — CMS 표준 기술 지침(개별 파일 업로드 용량)과 동일
@@ -237,6 +243,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       console.error('[upload-doc] identity_review_request 카드 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
     }
 
+    // 고객 본인에게 승인 대기 자동 안내(2026-10-05) — "이제 무엇을 기다리는지"를 상담 채팅에 남긴다. 같은 문구는 60분 내 재발송하지 않는다.
+    try {
+      await postDocPendingChat(admin, session.user.id, { withUserMessage: false })
+    } catch (e) {
+      console.error('[upload-doc] 승인 대기 자동 안내 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
+    }
+
     // 관리자 푸시 — 알림 설정(admin_notify_identity_review)을 켠 관리자에게만. sendPushToAdmins는 내부에서 오류를 삼킨다.
     await sendPushToAdmins('identity_review', {
       title: '본인증명정보 승인 요청',
@@ -246,5 +259,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   // 서류 경로·URL은 응답에 싣지 않는다(고객 브라우저에는 건수·종류만 필요, 열람은 CMS 서명 URL로만 — 2026-10-03)
-  return json({ ok: true, count: finalDocUrls.length, verifiedAt: new Date().toISOString() })
+  // missing: DB에 반영된 최종 서류 구성 기준으로 서버가 다시 계산한 "아직 빠진 필수 서류" 이름(2026-10-05) — 화면은 이 값을 그대로
+  // 안내하므로 예약 차단 판정(docApproval.ts)과 항상 같은 기준이다. 비어 있으면 필수 조합 충족.
+  const missing = type === 'identity'
+    ? missingIdentityDocs(finalTypeValues)
+    : missingForeignDocs(finalTypeValues, foreignStayType)
+  return json({ ok: true, count: finalDocUrls.length, verifiedAt: new Date().toISOString(), missing })
 }
