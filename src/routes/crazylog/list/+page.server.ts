@@ -10,6 +10,7 @@ type PostRow = {
 	created_at: string
 	user_id: string
 	thumbnail_url: string | null
+	is_public: boolean | null
 }
 
 function extractFirstImageUrl(blocks: unknown): string | null {
@@ -33,15 +34,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const { session } = await locals.safeGetSession()
 	let isLoggedIn = !!session
+	let isAdmin = false
 	let currentUser: { displayName: string; avatarUrl: string | null; membershipGrade: string | null; level: string } | null = null
 
 	if (session) {
 		const { data: profile } = await locals.supabase
 			.from('user_profiles')
-			.select('full_name, membership_grade, credit_score')
+			.select('full_name, membership_grade, credit_score, cms_role')
 			.eq('id', session.user.id)
 			.maybeSingle()
-		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null } | null
+		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null; cms_role: string | null } | null
+		isAdmin = !!p?.cms_role
 		const score = p?.credit_score ?? 0
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
@@ -60,13 +63,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const userId = session?.user.id
 	let query = locals.supabase
 		.from('user_posts')
-		.select('id, title, log_type, content_blocks, created_at, user_id, thumbnail_url')
+		.select('id, title, log_type, content_blocks, created_at, user_id, thumbnail_url, is_public')
 		.eq('status', 'published')
-		.or(userId
-			? `is_public.eq.true,user_id.eq.${userId}`
-			: 'is_public.eq.true')
 		.order('created_at', { ascending: false })
 		.limit(50)
+
+	// 공개 글은 누구나, 비공개(is_public=false) 글은 작성자 본인과 관리자만(2026-10-05 — 관리자는 비공개 글도 흐리게 표시된 채 목록에 남는다)
+	if (!isAdmin) {
+		query = query.or(userId ? `is_public.eq.true,user_id.eq.${userId}` : 'is_public.eq.true')
+	}
 
 	if (tab === '상품리뷰' || tab === '일상공유' || tab === '채널홍보') {
 		query = query.eq('log_type', tab)
@@ -97,6 +102,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		createdAt:    p.created_at,
 		author:       authorMap[p.user_id] ?? '익명',
 		thumbnailUrl: p.thumbnail_url ?? extractFirstImageUrl(p.content_blocks) ?? null,
+		isPublic:     p.is_public !== false,
+		// 작성자 user_id는 클라이언트로 내리지 않는다 — 본인 글 여부만 전달
+		isMine:       !!userId && p.user_id === userId,
 	}))
 
 	const [reviewCount, shareCount, promoCount] = await Promise.all([
@@ -129,6 +137,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		},
 		activeTab: tab,
 		isLoggedIn,
+		isAdmin,
 		currentUser,
 	}
 }
