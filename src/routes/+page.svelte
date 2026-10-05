@@ -82,6 +82,13 @@
 
   // M_PRODUCTS 하드코딩 제거 — Phase 4에서 activeCatProds(DB)으로 교체됨
 
+  // /crazylog 헤더 카드 슬롯별 헤더색·빈 슬롯 대체 문구(/crazylog/+page.svelte와 동일 값)
+  const CL_FALLBACKS = [
+    { color: '#201857', img: '/crazylog/hero-shotlog1.png', title: 'From Portraits to Panoramas-One Lens to Rule Them All', sub: '올어라운드 렌즈의 끝판왕' },
+    { color: '#cf0000', img: '/crazylog/hero-shotlog.png',  title: '경복궁 한복 체험', sub: 'K-트레일 나들이 완벽 가이드' },
+    { color: '#3b2f8a', img: '/crazylog/hero-shotlog2.png', title: 'DJI Mini2se Aerial Drone', sub: '드론시장에서 품질은 없다.' },
+  ]
+
   // BLOG_M 제거 — data.crazylogPosts(DB 동기화)로 교체됨 (Phase 1-A)
 
   // ARTICLES 하드코딩 제거 — data.recentLogPosts(DB 동기화, /crazylog/list와 동일 소스)로 교체됨
@@ -507,59 +514,28 @@
       <a href="/crazylog" class="cms-section-link cms-section-link--edge" aria-label="크레이지로그 설정 페이지로 이동">✦ 크레이지로그 설정</a>
     {/if}
 
-    {#if data.crazylogPosts.length >= 1}
-      <div class="blog-grid">
-        <div class="blog-main-card">
-          {#if data.crazylogPosts[0].img}
-            <img src={data.crazylogPosts[0].img} alt={data.crazylogPosts[0].title} class="blog-img"/>
-          {/if}
-          <div class="blog-main-header" style="background:{data.crazylogPosts[0].catBg}">
-            <span class="blog-cat-label">{data.crazylogPosts[0].cat}</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <!-- /crazylog 헤더 카드 3장과 동일 구조·동일 데이터(data.bannerSlots, 같은 로더) — 카드 전체가 상세 링크(<a>) -->
+    <div class="blog-grid">
+      {#each data.bannerSlots as slot, si}
+        {@const lead = slot.items[0]}
+        {@const fb = CL_FALLBACKS[si]}
+        <a href={lead ? `/crazylog/view/${lead.id}` : '/crazylog'} class="cl-card cl-card--{si}">
+          <div class="cl-card-bg">
+            <img src={lead?.img ?? fb.img} alt="" class="cl-card-bg-img" />
           </div>
-          <div class="blog-main-footer">
-            <p class="blog-main-caption">{data.crazylogPosts[0].title}</p>
-            {#if data.crazylogPosts[0].desc}
-              <p class="blog-main-sub">{data.crazylogPosts[0].desc}</p>
-            {/if}
+          <div class="cl-card-header" style="background:{fb.color}">
+            <span class="cl-card-label">{slot.badgeLabel}</span>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="transform: scaleY(-1)" aria-hidden="true">
+              <path d="M2 5L8 11L14 5" stroke="white" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
+            </svg>
           </div>
-        </div>
-        {#if data.crazylogPosts.length >= 2}
-          <div class="blog-sub-card top">
-            {#if data.crazylogPosts[1].img}
-              <img src={data.crazylogPosts[1].img} alt={data.crazylogPosts[1].title} class="blog-img"/>
-            {/if}
-            <div class="blog-sub-header" style="background:{data.crazylogPosts[1].catBg}">
-              <span class="blog-cat-label">{data.crazylogPosts[1].cat}</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </div>
-            <div class="blog-sub-footer">
-              <p class="blog-main-caption blog-sub-caption">{data.crazylogPosts[1].title}</p>
-              {#if data.crazylogPosts[1].desc}
-                <p class="blog-main-sub">{data.crazylogPosts[1].desc}</p>
-              {/if}
-            </div>
+          <div class="cl-card-writing">
+            <p class="cl-card-title">{lead?.title ?? fb.title}</p>
+            <p class="cl-card-sub">{lead ? (lead.desc ?? '') : fb.sub}</p>
           </div>
-        {/if}
-        {#if data.crazylogPosts.length >= 3}
-          <div class="blog-sub-card bottom">
-            {#if data.crazylogPosts[2].img}
-              <img src={data.crazylogPosts[2].img} alt={data.crazylogPosts[2].title} class="blog-img"/>
-            {/if}
-            <div class="blog-sub-header" style="background:{data.crazylogPosts[2].catBg}">
-              <span class="blog-cat-label">{data.crazylogPosts[2].cat}</span>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 18l6-6-6-6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </div>
-            <div class="blog-sub-footer">
-              <p class="blog-main-caption blog-sub-caption">{data.crazylogPosts[2].title}</p>
-              {#if data.crazylogPosts[2].desc}
-                <p class="blog-main-sub">{data.crazylogPosts[2].desc}</p>
-              {/if}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
+        </a>
+      {/each}
+    </div>
   </div>
 
   <!-- ⑥ FAQ -->
@@ -1655,50 +1631,40 @@
     height: 540px;
     width: 100%;
   }
-  .blog-main-card {
+  /* /crazylog 헤더 카드(.d-shotlog/1/2)와 동일 구조: 분류 헤더 바 + 바로 아래 제목·부제 그라디언트 */
+  .cl-card {
     position: relative;
     overflow: hidden;
-    cursor: pointer;
-    border-radius: 50px;
-    grid-row: 1 / 3;
-    transition: transform 0.2s;
-  }
-  .blog-main-card:hover { transform: scale(1.01); }
-  .blog-sub-card {
-    position: relative;
-    overflow: hidden;
-    cursor: pointer;
-    border-radius: 50px;
-    transition: transform 0.2s;
-  }
-  .blog-sub-card:hover { transform: scale(1.01); }
-  .blog-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .blog-main-header, .blog-sub-header {
-    position: relative;
-    z-index: 10;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    border-radius: 50px;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+  }
+  .cl-card--0 { grid-row: 1 / 3; }
+  .cl-card-bg { position: absolute; inset: 0; pointer-events: none; }
+  .cl-card-bg-img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    transition: transform 0.4s ease;
+  }
+  .cl-card:hover .cl-card-bg-img { transform: scale(1.05); }
+  .cl-card-header {
+    position: relative; z-index: 1; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 50px;
+  }
+  .cl-card-label { font-family: 'Tilt Warp', sans-serif; font-size: 20px; color: white; letter-spacing: -0.5px; }
+  .cl-card-writing {
+    position: relative; z-index: 1; flex: 1; min-height: 0;
+    display: flex; flex-direction: column; gap: 5px;
     padding: 20px 40px;
+    background: linear-gradient(to top, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40%, #100b32 100%);
   }
-  .blog-cat-label { font-family: var(--font-en-display); font-size: 20px; color: white; }
-  .blog-main-footer {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 40px;
-    background: linear-gradient(to top, rgba(16,11,50,0.8) 0%, transparent 100%);
-  }
-  /* 우측 카드(2·3): /crazylog 헤더 카드2·3과 동일하게 분류 헤더 + 하단 제목·부제 — 카드 높이가 작아 여백·제목 크기를 줄임 */
-  .blog-sub-footer {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 24px 40px;
-    background: linear-gradient(to top, rgba(16,11,50,0.8) 0%, transparent 100%);
-  }
-  .blog-sub-caption { font-size: 18px; }
-  .blog-main-caption { font-family: var(--font-kr); font-size: 22px; font-weight: 900; color: white; line-height: 1.5; }
-  /* /crazylog 헤더 카드의 부제(d-shotlog-writing-sub)와 동일 톤 — 본문 첫 문단 요약 */
-  .blog-main-sub { margin: 4px 0 0; font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: white; line-height: 1.5; letter-spacing: -0.5px; }
+  .cl-card-title { margin: 0; font-family: var(--font-kr); font-size: 25px; font-weight: 900; color: white; line-height: 2; }
+  .cl-card--1 .cl-card-title, .cl-card--2 .cl-card-title { font-size: 20px; line-height: 1.6; }
+  .cl-card-sub { margin: 0; font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: white; line-height: 1.6; letter-spacing: -0.5px; }
+  .cl-card--1 .cl-card-sub, .cl-card--2 .cl-card-sub { display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 
   /* ── FAQ ── */
   .d-faq-section {

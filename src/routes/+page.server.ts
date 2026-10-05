@@ -2,7 +2,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
-import { pickBannerItems, type BannerPost } from '$lib/utils/crazylogBanner'
+import { loadBannerSlots } from '$lib/server/crazylogBannerSlots'
 import { plainTextPreview } from '$lib/utils/crazylogText'
 
 export type BannerSlot = {
@@ -120,14 +120,6 @@ export const load: PageServerLoad = async ({ locals }) => {
   // ── 1-A. 크레이지로그 미리보기 동기화 ─────────────────────────────
   // get_crazylog_banner_settings: anon GRANT 있음 (migration 210 + 262)
   // get_crazylog_posts_by_ids: anon GRANT 있음 (migration 210 + 262)
-  type CrazylogPostRow = {
-    id: string
-    title: string
-    log_type: string | null
-    thumbnail_url: string | null
-    first_text: string | null
-  }
-
   const SLOT_FALLBACK_COLORS: Record<string, string> = {
     crazylog_banner_slot1: '#201857',
     crazylog_banner_slot2: '#cf0000',
@@ -139,60 +131,23 @@ export const load: PageServerLoad = async ({ locals }) => {
     '채널홍보': '#3b2f8a',
   }
 
-  let crazylogPosts: Array<{ id: string; img: string; cat: string; catBg: string; title: string; desc: string | null }> = []
+  const crazylogPosts: Array<{ id: string; img: string; cat: string; catBg: string; title: string; desc: string | null }> = []
 
-  {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: clSettingsData, error: clSettingsError } = await (db.rpc as any)('get_crazylog_banner_settings')
-    if (clSettingsError) console.error('[home] get_crazylog_banner_settings 실패 — 크레이지로그 섹션 비움:', clSettingsError.message)
-    const clSettings = (clSettingsData ?? {}) as Record<string, { posts: Array<{ id: string }>; mode: string } | undefined>
+  // /crazylog 헤더 카드 3장과 동일한 로더(슬롯 설정·고정/랜덤·분류 라벨 일치) — PC 카드는 bannerSlots를 그대로 렌더링
+  const bannerSlots = await loadBannerSlots(locals.supabase, 'home')
 
-    // /crazylog 헤더 배너와 동일 규칙: 슬롯(1·2·3)마다 pickBannerItems(고정=순서, 랜덤=셔플)로 대표 1건을 뽑아
-    // 슬롯 순서대로 카드 0·1·2에 배치 — 홈 미리보기는 /crazylog 헤더의 슬롯별 대표글을 그대로 반영한다.
-    const SLOT_KEYS = ['crazylog_banner_slot1', 'crazylog_banner_slot2', 'crazylog_banner_slot3'] as const
-    const allIds = new Set<string>()
-    for (const key of SLOT_KEYS) {
-      for (const p of clSettings[key]?.posts ?? []) allIds.add(p.id)
-    }
-
-    if (allIds.size > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: postsData, error: postsError } = await (db.rpc as any)('get_crazylog_posts_by_ids', { p_ids: [...allIds] })
-      if (postsError) console.error('[home] get_crazylog_posts_by_ids 실패 — 크레이지로그 섹션 비움:', postsError.message)
-
-      const postById = new Map<string, CrazylogPostRow>()
-      for (const row of (postsData ?? []) as CrazylogPostRow[]) {
-        postById.set(row.id, row)
-      }
-
-      const shuffle = <T,>(arr: T[]): T[] => {
-        const a = [...arr]
-        for (let i = a.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1))
-          ;[a[i], a[j]] = [a[j], a[i]]
-        }
-        return a
-      }
-
-      for (const key of SLOT_KEYS) {
-        const cfg = clSettings[key]
-        if (!cfg) continue
-        const pool: BannerPost[] = cfg.posts
-          .map((sp) => postById.get(sp.id))
-          .filter((row): row is CrazylogPostRow => !!row)
-          .map((row) => ({ id: row.id, title: row.title, logType: row.log_type, img: row.thumbnail_url, desc: row.first_text || null }))
-        const [lead] = pickBannerItems(pool, { posts: cfg.posts as { id: string; order: number }[], mode: cfg.mode === 'fixed' ? 'fixed' : 'random' }, 1, shuffle)
-        if (!lead) continue
-        crazylogPosts.push({
-          id:    lead.id,
-          img:   lead.img ?? '',
-          cat:   lead.logType ?? 'Flash Deals',
-          catBg: LOG_TYPE_COLORS[lead.logType ?? ''] ?? SLOT_FALLBACK_COLORS[key] ?? '#201857',
-          title: lead.title,
-          desc:  lead.desc,
-        })
-      }
-    }
+  // 모바일 슬라이드용: 슬롯별 대표 1건(비어 있는 슬롯은 건너뜀)
+  for (const slot of bannerSlots) {
+    const lead = slot.items[0]
+    if (!lead) continue
+    crazylogPosts.push({
+      id:    lead.id,
+      img:   lead.img ?? '',
+      cat:   lead.logType ?? 'Flash Deals',
+      catBg: LOG_TYPE_COLORS[lead.logType ?? ''] ?? SLOT_FALLBACK_COLORS[slot.slotKey] ?? '#201857',
+      title: lead.title,
+      desc:  lead.desc,
+    })
   }
 
   // ── 1-A-2. 모바일 "더 다양한 로그 둘러보기" — 실제 크레이지로그 최신글 연동 ──────────
@@ -463,7 +418,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   mdProducts = mdProducts.map(withDualPrice)
 
   return {
-    bannerMap, isCms, categories, crazylogPosts, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
+    bannerMap, isCms, categories, crazylogPosts, bannerSlots, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts,

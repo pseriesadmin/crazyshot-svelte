@@ -1,7 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
-import type { Database } from '$lib/types/database'
-import { pickBannerItems, deriveBadgeLabel, type BannerPost, type BannerSlotConfig } from '$lib/utils/crazylogBanner'
+import { loadBannerSlots } from '$lib/server/crazylogBannerSlots'
 import { plainTextPreview } from '$lib/utils/crazylogText'
 
 type PostRow = {
@@ -54,80 +52,6 @@ const BAR_COLORS: Record<string, string> = {
 	'상품리뷰': '#ff3535',
 	'일상공유': '#553fe0',
 	'채널홍보': '#3b2f8a',
-}
-
-type BannerSettingsRow = Record<string, BannerSlotConfig | undefined>
-
-type BannerPostRow = {
-	id: string
-	title: string
-	log_type: string | null
-	thumbnail_url: string | null
-	view_count: number
-	status: string
-	is_public: boolean
-	first_text: string | null
-}
-
-const BANNER_SLOTS = [
-	{ key: 'crazylog_banner_slot1', fallbackLabel: 'Flash Deals' },
-	{ key: 'crazylog_banner_slot2', fallbackLabel: '채널홍보' },
-	{ key: 'crazylog_banner_slot3', fallbackLabel: 'Release' },
-] as const
-
-const MAX_BANNER_ITEMS = 3
-
-export interface BannerSlotResult {
-	slotKey: string
-	badgeLabel: string
-	items: BannerPost[]
-	settings: BannerSlotConfig
-}
-
-async function loadBannerSlots(
-	supabase: SupabaseClient<Database>
-): Promise<BannerSlotResult[]> {
-	// database.ts는 마이그레이션 210 신규 RPC를 아직 반영하지 않음 — rpc 호출부만 국소 캐스트
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { data: settingsData, error: settingsError } = await (supabase.rpc as any)('get_crazylog_banner_settings')
-	if (settingsError) console.error('[crazylog] get_crazylog_banner_settings 실패 — 배너 비움:', settingsError.message)
-	const settings = (settingsData ?? {}) as BannerSettingsRow
-
-	const allIds = new Set<string>()
-	for (const slot of BANNER_SLOTS) {
-		const cfg = settings[slot.key]
-		if (cfg) for (const p of cfg.posts) allIds.add(p.id)
-	}
-
-	let postMap = new Map<string, BannerPost>()
-	if (allIds.size > 0) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { data: postsData, error: postsError } = await (supabase.rpc as any)('get_crazylog_posts_by_ids', {
-			p_ids: [...allIds],
-		})
-		if (postsError) console.error('[crazylog] get_crazylog_posts_by_ids 실패 — 배너 비움:', postsError.message)
-		for (const row of (postsData ?? []) as BannerPostRow[]) {
-			postMap.set(row.id, {
-				id: row.id,
-				title: row.title,
-				logType: row.log_type,
-				img: row.thumbnail_url,
-				desc: row.first_text || null,   // 본문 첫 텍스트 요약(#583) — 헤더 부제에 실제 내용 표시
-			})
-		}
-	}
-
-	return BANNER_SLOTS.map((slot) => {
-		const cfg = settings[slot.key] ?? { posts: [], mode: 'random' as const }
-		const pool = cfg.posts.map((p) => postMap.get(p.id)).filter((p): p is BannerPost => !!p)
-		const items = pickBannerItems(pool, cfg, MAX_BANNER_ITEMS, shuffleArray)
-		return {
-			slotKey: slot.key,
-			badgeLabel: deriveBadgeLabel(items, slot.fallbackLabel),
-			items,
-			settings: cfg,
-		}
-	})
 }
 
 export const load: PageServerLoad = async ({ locals }) => {
