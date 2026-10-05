@@ -109,12 +109,15 @@
 	     버튼에 가려 보이거나 매우 좁게만 보이는 시각적 결함이었음(실브라우저 스크롤 —
 	     rootMargin 샘플링 이슈와 별개의 원인). /cart에서만 offset을 푸터 높이보다 크게
 	     올려 겹침 해소 — 다른 화면의 토스트 위치는 변경 없음. -->
+	<!-- 2026-10-05: /cart의 하단 위치를 경로로 고정(140/170px 상시)하던 방식 → CSS 변수로 전환. 기본은 라이브러리 기본값(24px/모바일 16px)과 같은 하단 가장자리이고,
+	     /cart의 고정 CTA 푸터가 실제로 올라와 있는 동안에만 cart 페이지가 --cs-toast-bottom[-m]을 설정해 그만큼 띄운다(푸터가 없을 때 토스트가
+	     화면 중간에 떠서 UI를 가리던 문제 해소). -->
 	<Toaster
 		position="bottom-center"
 		richColors
 		closeButton
-		offset={page.url.pathname.startsWith('/cart') ? { bottom: 140 } : undefined}
-		mobileOffset={page.url.pathname.startsWith('/cart') ? { bottom: 170 } : undefined}
+		offset={{ bottom: 'var(--cs-toast-bottom, 24px)' }}
+		mobileOffset={{ bottom: 'var(--cs-toast-bottom-m, 16px)' }}
 	/>
 {/if}
 

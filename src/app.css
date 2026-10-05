@@ -380,6 +380,10 @@ body {
 }
 
 /* ══ svelte-sonner 토스트 오버라이드 ══ */
+/* 토스트 하단 위치(--cs-toast-bottom 등)가 바뀔 때(장바구니 고정 푸터가 올라오는 순간) 튀지 않고 푸터와 같은 속도로 움직이게 함(2026-10-05) */
+[data-sonner-toaster][data-y-position='bottom'] {
+  transition: transform 400ms ease, bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
 [data-sonner-toast] {
   outline: none !important;
   border: none !important;
