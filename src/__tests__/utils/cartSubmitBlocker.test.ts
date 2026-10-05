@@ -60,7 +60,7 @@ describe('장바구니 배선 (2026-10-05)', () => {
   const cart = readFileSync('src/routes/cart/+page.svelte', 'utf-8')
 
   it('두 경고 지점 모두 구체적 안내(describeSubmitBlocker)를 쓰고, 막연한 고정 문구만 쓰지 않는다', () => {
-    expect(cart.match(/csToast\.warning\(describeSubmitBlocker\(\)\)/g)?.length).toBe(2)
+    expect(cart.match(/csToast\.warning\(describeSubmitBlocker\(\), \{ id: 'cart-submit-blocker' \}\)/g)?.length).toBe(2)
     expect(cart).not.toContain("csToast.warning('미입력 항목을 확인하세요')")
   })
 
@@ -78,5 +78,20 @@ describe('장바구니 배선 (2026-10-05)', () => {
     expect(cart).toContain('const isRendered = () => node.getClientRects().length > 0')
     expect(cart).toContain('if (!isRendered()) return // 숨겨진(display:none) 중복 인스턴스는 닫지 않는다')
     expect(cart.match(/if \(!isRendered\(\)\) return/g)?.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('토스트는 기본 하단 가장자리, /cart 고정 푸터가 보일 때만 CSS 변수로 위로 띄운다', () => {
+    const layout = readFileSync('src/routes/+layout.svelte', 'utf-8')
+    expect(layout).toContain("var(--cs-toast-bottom, 24px)")
+    expect(layout).toContain("var(--cs-toast-bottom-m, 16px)")
+    expect(layout).not.toContain("startsWith('/cart') ? { bottom")
+    expect(cart).toContain('liftToastAboveFooter(entry.isIntersecting)')
+    expect(cart).toContain('liftToastAboveFooter(false)')
+  })
+
+  it('토스트 중복 방지 id·푸터 실측 높이·하단 이동 transition', () => {
+    expect(readFileSync('src/lib/utils/toast.ts', 'utf-8')).toContain('options.id')
+    expect(cart).toContain(".cart-footer')?.offsetHeight")
+    expect(readFileSync('src/app.css', 'utf-8')).toContain("[data-sonner-toaster][data-y-position='bottom']")
   })
 })

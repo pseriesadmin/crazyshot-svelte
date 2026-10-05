@@ -31,6 +31,8 @@ export interface CsToastOptions {
   onClick?: () => void
   /** 액션 버튼 레이블 (기본: '보기') */
   actionLabel?: string
+  /** 같은 id의 토스트는 새로 쌓이지 않고 교체된다 — 스크롤 등으로 같은 경고가 반복 발화하는 곳에서 중복 스택 방지 */
+  id?: string
   /** 표시 시간(ms) — 미지정이면 메서드별 기본값(success/info 3초, warning/error 5초). 액션 버튼을 눌러야 하는 안내에 사용 */
   duration?: number
 }
@@ -40,6 +42,7 @@ function buildOptions(duration: number, options?: CsToastOptions) {
     position: 'bottom-center' as const,
     duration: options?.duration ?? duration,
     style: `${BASE} ${BG_DEFAULT}`,
+    ...(options?.id ? { id: options.id } : {}),
   }
   if (!options?.onClick) return base
   return {

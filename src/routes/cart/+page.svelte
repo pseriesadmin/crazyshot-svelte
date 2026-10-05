@@ -1127,12 +1127,33 @@
     const sentinel = footerSentinel
     if (!sentinel) return
     const observer = new IntersectionObserver(
-      ([entry]) => { footerVisible = entry.isIntersecting },
+      ([entry]) => {
+        footerVisible = entry.isIntersecting
+        liftToastAboveFooter(entry.isIntersecting)
+      },
       { threshold: 0 }
     )
     observer.observe(sentinel)
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); liftToastAboveFooter(false) }
   })
+
+  // 토스트 하단 위치(2026-10-05): 고정 CTA 푸터(.cart-footer)는 페이지 최하단 근처에서만 올라온다(footerVisible). 토스트 위치를 항상 푸터 높이만큼
+  // 띄워 두면(이전: 140/170px 상시) 푸터가 없는 구간에서 토스트가 화면 중간에 떠서 달력·입력 UI를 가렸다. 기본은 다른 화면과 같은 하단 가장자리,
+  // 푸터가 실제로 보이는 동안에만 푸터 높이만큼 올린다 — 값은 layout의 <Toaster> offset이 읽는 CSS 변수(--cs-toast-bottom[-m])로 전달.
+  function liftToastAboveFooter(on: boolean) {
+    const style = document.documentElement.style
+    if (on) {
+      // 푸터 실측 높이 + 여백(601~640px는 푸터가 세로 스택인데 토스트 라이브러리는 PC 변수를 쓰므로 두 변수에 같은 값을 넣는다).
+      // 측정 실패 시 고정 폴백(PC 140 / 모바일 170).
+      const h = document.querySelector<HTMLElement>('.cart-footer')?.offsetHeight ?? 0
+      const lift = h > 0 ? `${h + 16}px` : null
+      style.setProperty('--cs-toast-bottom', lift ?? '140px')
+      style.setProperty('--cs-toast-bottom-m', lift ?? '170px')
+    } else {
+      style.removeProperty('--cs-toast-bottom')
+      style.removeProperty('--cs-toast-bottom-m')
+    }
+  }
 
   // 금액(약정 요금) 레이아웃 진입 감지 — 대여설정(수령·반납 날짜·시간)이 미완성인 채로
   // 금액 영역까지 스크롤하면 경고 토스트로 안내(footerSentinel과 동일 IntersectionObserver 패턴)
@@ -1160,7 +1181,7 @@
         // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
         // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
         if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
-          csToast.warning(describeSubmitBlocker())
+          csToast.warning(describeSubmitBlocker(), { id: 'cart-submit-blocker' })
         }
       },
       { threshold: 0, rootMargin: '150px 0px 150px 0px' }
@@ -2852,7 +2873,7 @@
           // 비활성(조건 미충족) 상태에서 눌러도 이유를 알린다(2026-10-02, Stephen 지시) — disabled 속성은 클릭 이벤트 자체를
           // 막아 안내가 불가능하므로 aria-disabled로 접근성 상태만 유지하고 여기서 차단한다.
           if (!readyToSubmit) {
-            csToast.warning(describeSubmitBlocker())
+            csToast.warning(describeSubmitBlocker(), { id: 'cart-submit-blocker' })
             return
           }
           // 본인증명정보 미등록·승인 대기 중에는 예약신청 차단(2026-10-02) — 상품상세 게이트와 동일 기준
@@ -5168,7 +5189,9 @@
     gap: 10px;
     width: 100%;
     box-sizing: border-box;
-    padding: 6px 16px;
+    /* 2026-10-05(Stephen 지시): 상하 패딩이 너무 좁아 6px → 10px(모바일)로 확대한 뒤 20% 추가 확대 → 12px. PC는 표준 콤보 모바일/PC 상하 비율
+       (8:9 ≈ 89%)을 역으로 적용한 11.2px에 같은 20%를 더해 13.4px(아래 @media). 좌우 패딩은 변경 없음. */
+    padding: 12px 16px;
     border-radius: var(--radius-xl, 30px);
     border: none;
     background: var(--cs-lilac, #ECEBF4);
@@ -5197,7 +5220,7 @@
   .pickup-point-btn-active .pickup-point-name { color: #fff; }
   .pickup-point-btn-active .pickup-point-addr { color: rgba(255, 255, 255, 0.8); }
   @media (min-width: 641px) {
-    .pickup-point-btn { padding: 8.2px 20.8px; }
+    .pickup-point-btn { padding: 13.4px 20.8px; }
     .pickup-point-name { font: var(--text-pc-body-14); }
   }
   .copy-label {
