@@ -15,7 +15,7 @@
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
   import { csToast } from '$lib/utils/toast';
-  import { DOC_GATE_MESSAGES } from '$lib/utils/docApproval'
+  import { showDocGateToast } from '$lib/utils/docGateToast'
   import { browser } from '$app/environment';
   import { env as publicEnv } from '$env/dynamic/public';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
@@ -2802,10 +2802,8 @@
             return
           }
           // 본인증명정보 미등록·승인 대기 중에는 예약신청 차단(2026-10-02) — 상품상세 게이트와 동일 기준
-          if (data.docGate !== 'approved') {
-            csToast.warning(data.docGate === 'pending' ? DOC_GATE_MESSAGES.pending : DOC_GATE_MESSAGES.none)
-            return
-          }
+          // 2026-10-05: 상품상세와 같은 안내(미등록=[확인]→서류 탭, 승인 대기=[문의]→상담톡)를 공용 헬퍼로 표시
+          if (showDocGateToast(data.docGate, data.docLanding)) return
           isConfirming = true
           try {
             // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로

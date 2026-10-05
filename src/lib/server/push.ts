@@ -450,6 +450,48 @@ export async function sendNewChatSessionAdminPush(
 }
 
 /**
+ * 고객 상담 메시지 도착 관리자 푸시 (2026-10-05) — new_session(새 상담 시작)·urgent(긴급)는 각각 "세션 생성"·"긴급 분류"일 때만
+ * 나가서, 이미 열려 있는 세션에 고객이 새로 쓴 문의는 푸시가 없었다. 같은 세션에 최근 10분 이내 메시지(고객·관리자·자동응답 무관)가
+ * 하나라도 있으면 "진행 중인 대화"로 보고 보내지 않는다(연타·관리자 응대 중 중복 알림 방지). 기존 new_session 수신 설정을
+ * 그대로 재사용한다(별도 마이그레이션 없음). 실패해도 절대 throw하지 않는다(메시지 저장은 이미 성공한 상태).
+ */
+export async function sendCustomerMessageAdminPush(
+  admin: SupabaseClient,
+  sessionId: string,
+  userId: string,
+  messageId: string,
+  content: string,
+): Promise<void> {
+  try {
+    const since = new Date(Date.now() - 10 * 60_000).toISOString()
+    const { data: recent } = await admin
+      .from('chat_messages')
+      .select('id')
+      .eq('session_id', sessionId)
+      .neq('id', messageId)
+      .gte('created_at', since)
+      .limit(1)
+    if ((recent?.length ?? 0) > 0) return
+
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle()
+    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
+    const preview = content.replace(/\s+/g, ' ').trim().slice(0, 40)
+
+    await sendPushToAdmins('new_session', {
+      title: '고객 문의가 도착했어요',
+      body: `${customerName}님: ${preview}`,
+      link: `/cms/chat?session=${sessionId}`,
+    })
+  } catch {
+    // 조회 실패 등 — 채팅 메시지 저장은 이미 완료된 상태이므로 전파하지 않음
+  }
+}
+
+/**
  * 긴급상담(CS_ESCALATE) 관리자 푸시 — /api/chat/message에서 AI 의도분류 결과가
  * CS_ESCALATE일 때 (캔드매칭 SENSITIVE_CANNED_CATEGORIES 포함) 호출한다.
  * 중복방지(2단계, sp3-qa-agent GATE E 검수로 발견된 공백 보완 — 2026-09-10):

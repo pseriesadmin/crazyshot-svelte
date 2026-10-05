@@ -31,12 +31,14 @@ export interface CsToastOptions {
   onClick?: () => void
   /** 액션 버튼 레이블 (기본: '보기') */
   actionLabel?: string
+  /** 표시 시간(ms) — 미지정이면 메서드별 기본값(success/info 3초, warning/error 5초). 액션 버튼을 눌러야 하는 안내에 사용 */
+  duration?: number
 }
 
 function buildOptions(duration: number, options?: CsToastOptions) {
   const base = {
     position: 'bottom-center' as const,
-    duration,
+    duration: options?.duration ?? duration,
     style: `${BASE} ${BG_DEFAULT}`,
   }
   if (!options?.onClick) return base

@@ -21,7 +21,7 @@ import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
-import { sendPushToUser, sendUrgentChatAdminPush } from '$lib/server/push'
+import { sendPushToUser, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 
 const ANTHROPIC_ENABLED = false
@@ -122,6 +122,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   if (insertError || !userMessage) {
     return json({ error: insertError?.message ?? '메시지 저장 실패' }, { status: 500 })
+  }
+
+  // 관리자 푸시 — 최근 10분 내 대화가 없던 세션에 고객이 새로 문의를 보낸 경우(2026-10-05, 요청: 문의 알림이 묻혀 놓침)
+  if (admin) {
+    await sendCustomerMessageAdminPush(admin, body.session_id, session.user.id, (userMessage as { id: string }).id, body.content)
   }
 
   // §C-3: 고객 메시지 이중언어 병기 패턴 학습 훅 (fire-and-forget)

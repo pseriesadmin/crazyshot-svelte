@@ -21,7 +21,8 @@
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
-  import { getDocGateStatus, DOC_GATE_MESSAGES, type DocGateRow } from '$lib/utils/docApproval';
+  import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/docApproval';
+  import { showDocGateToast } from '$lib/utils/docGateToast';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
   import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
@@ -484,20 +485,8 @@
     // 2026-10-02: 서류를 등록했어도 관리자가 CMS 고객정보에서 '승인'하기 전에는 예약 차단.
     // (기존 판정은 identity_doc_url이 빈 배열[]이어도 truthy라 미등록 상태도 통과하던 결함이 있었다)
     const docGate = getDocGateStatus(verifyRow as DocGateRow | null);
-    if (docGate === 'pending') {
-      csToast.warning(DOC_GATE_MESSAGES.pending);
-      return;
-    }
-    if (docGate === 'none') {
-      csToast.warning(DOC_GATE_MESSAGES.none, {
-        actionLabel: '확인',
-        onClick: () => {
-          const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
-          goto(`/account/profile?tab=profile&doc=identity&returnTo=${returnTo}`);
-        },
-      });
-      return;
-    }
+    // 2026-10-05: 미등록=[확인]→서류 탭(고객 유형별 identity|foreign), 승인 대기=[문의]→상담톡 — 장바구니와 공용 헬퍼
+    if (showDocGateToast(docGate, docLandingKind(verifyRow as DocGateRow | null))) return;
 
     isReserving = true;
     trackCartAdd(data.productId);

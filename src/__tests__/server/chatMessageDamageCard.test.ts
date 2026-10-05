@@ -51,6 +51,8 @@ vi.mock('$lib/server/crossLingualSynonymScan', () => ({
 const mockSendPushToUser = vi.fn().mockResolvedValue(undefined)
 vi.mock('$lib/server/push', () => ({
   sendPushToUser: (...args: unknown[]) => mockSendPushToUser(...args),
+  sendUrgentChatAdminPush: vi.fn().mockResolvedValue(undefined),
+  sendCustomerMessageAdminPush: vi.fn().mockResolvedValue(undefined), // 2026-10-05: 고객 문의 도착 관리자 푸시
 }))
 
 type TableResult = { data: unknown; error?: unknown }

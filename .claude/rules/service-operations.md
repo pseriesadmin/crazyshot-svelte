@@ -785,6 +785,24 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
+## 26. 서류 등록 UX — 등록 직후 빠진 서류 안내·승인 대기 [문의]·관리자 상담 알림 (2026-10-05)
+
+```
+· 서류 1건 등록(upload-doc)이 성공할 때마다 서버가 DB 반영 결과로 필수 조합을 다시 계산해 응답에 `missing`(빠진 서류 이름)을 싣는다
+  (docApproval.ts missingIdentityDocs/missingForeignDocs — 예약 차단 판정 identityRequiredMet/foreignRequiredMet와 같은 기준). 화면은 이 값을 그대로 토스트로
+  안내한다("OOO를 추가 등록해주세요."). 비어 있으면 필수 조합 완비 → "정보등록이 완료되어 관리자 승인을 요청했어요." + [문의].
+· 예약 차단은 none/pending 두 단계만(partial 없음). pending 문구 "본인증명정보를 승인 중입니다. 조금만 기다려 주세요." + [문의], none은 [확인]→서류 탭
+  (외국인증명만 등록한 고객은 doc=foreign). 상품상세·장바구니는 공용 헬퍼 docGateToast.ts(showDocGateToast)를 쓴다 — 문구·버튼을 한 곳에서만 고친다.
+· [문의]: POST /api/profile/doc-inquiry(pending일 때만) — 상담 세션은 find_or_create_general_chat_session 경유(§11), 고객 문의 메시지 + 승인 대기 자동 안내
+  (docInquiryChat.ts, 같은 문구 60분 중복 차단) + 관리자 푸시(identity_review 플래그 재사용). 필수 서류 완비 직후(upload-doc)에도 자동 안내가 같은 헬퍼로 1회 남는다.
+· 관리자 상담 알림: 고객이 기존 세션에 새 문의를 쓰면(최근 10분 내 대화가 없을 때만) sendCustomerMessageAdminPush가 new_session 수신 설정으로 푸시한다
+  (이전엔 세션 생성·긴급 분류일 때만 나가 열린 세션의 추가 문의가 푸시 없이 묻혔다). 결제완료 푸시(payment_completed)는 기존 그대로.
+· 별건(미구현): 카카오 알림톡(카카오채널 연동·템플릿 심사 선행), 관리자 SMS 병행.
+```
+→ 상세: `src/lib/utils/docApproval.ts` · `src/lib/utils/docGateToast.ts` · `src/lib/server/docInquiryChat.ts` · `src/routes/api/profile/doc-inquiry/+server.ts` · `src/lib/server/push.ts`(sendCustomerMessageAdminPush)
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
