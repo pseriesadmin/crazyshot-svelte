@@ -12,8 +12,10 @@
     visible?: boolean
     /** 뷰 페이지에서만 사용: 현재 포스트 ID */
     postId?: string | null
-    /** 뷰 페이지에서만 사용: 본인 글 여부 */
-    isOwner?: boolean
+    /** 뷰 페이지에서만 사용: 수정 가능 여부(작성자 본인 또는 모든 관리자) */
+    canEdit?: boolean
+    /** 뷰 페이지에서만 사용: 삭제 가능 여부(작성자 · 관리자 글은 모든 관리자 · 사용자 글은 매니저 이상) */
+    canDelete?: boolean
     /** 삭제 버튼 비활성화 (처리 중) */
     deleteBusy?: boolean
     /** 삭제 버튼 클릭 콜백 */
@@ -25,7 +27,8 @@
     isLoggedIn,
     visible = true,
     postId = null,
-    isOwner = false,
+    canEdit = false,
+    canDelete = false,
     deleteBusy = false,
     onDelete,
   }: Props = $props()
@@ -58,8 +61,10 @@
     </div>
     <div class="wc-actions">
       <a href="/crazylog/new" class="wc-write-btn" aria-label="로그 작성하기">쓰기</a>
-      {#if isOwner && postId}
+      {#if canEdit && postId}
         <a href="/crazylog/{postId}" class="wc-edit-btn" aria-label="이 로그 수정">수정</a>
+      {/if}
+      {#if canDelete && postId}
         <button
           class="wc-delete-btn"
           disabled={deleteBusy}

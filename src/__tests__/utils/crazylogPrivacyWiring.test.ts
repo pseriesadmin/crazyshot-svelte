@@ -34,8 +34,8 @@ describe('크레이지로그 목록 — 관리자 비공개·삭제', () => {
 
 describe('크레이지로그 상세 — 작성자 비공개 콤보 버튼', () => {
   const view = read('src/routes/crazylog/view/[slug]/+page.svelte')
-  it('PC·모바일 작성자 줄 우측에 작성자(isOwner)에게만 노출', () => {
-    expect(view.match(/\{#if data\.isOwner\}\s*<button type="button" class="priv-btn/g)?.length).toBe(2)
+  it('PC·모바일 작성자 줄 우측에 작성자 또는 관리자(canManage)에게만 노출(2026-10-05 확대)', () => {
+    expect(view.match(/\{#if data\.canManage\}\s*<button type="button" class="priv-btn/g)?.length).toBe(2)
     expect(view).toContain("'set_post_public'")
   })
 })
