@@ -9,6 +9,7 @@
   import { invalidateAll } from '$app/navigation'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import { csToast } from '$lib/utils/toast'
+  import { describePostActionError } from '$lib/utils/crazylogPostPermissions'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -128,7 +129,7 @@
     }
   }
 
-  // 관리자 삭제 = 소프트 삭제(status='deleted', 복구 가능) — update_post_status는 is_cms_user() 전용. 2단계 확인은 삭제 안전 토스트 재사용
+  // 관리자 삭제 = 소프트 삭제(status='deleted', 복구 가능) — update_post_status는 관리자 전용이며 사용자 글 삭제는 매니저 이상(Migration #647). 2단계 확인은 삭제 안전 토스트 재사용
   const deleteSafety = createDeleteSafetyToast({
     successMessage: '로그가 삭제됐습니다.',
     errorMessage: '로그 삭제에 실패했습니다.',
@@ -137,7 +138,7 @@
   async function deletePost(post: ListPost): Promise<boolean> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await (supabase.rpc as any)('update_post_status', { p_id: post.id, p_status: 'deleted' })
-    if (error) throw new Error(error.message)
+    if (error) throw new Error(describePostActionError(error.message))
     removedIds = { ...removedIds, [post.id]: true }
     void invalidateAll()
     return true
@@ -177,6 +178,8 @@
         thumbnailUrl: r.thumbnail_url ?? null,
         isPublic:     true, // 검색 API는 공개 글만 반환
         isMine:       false,
+        // 검색 응답엔 작성자 역할 정보가 없다 — 목록에 같은 글이 있으면 그 판정을 쓰고, 없으면 매니저 이상만 삭제 아이콘 노출(최종 집행은 DB)
+        canDelete:    data.posts.find((p) => p.id === r.id)?.canDelete ?? data.isManager,
       }))
     } catch {
       searchError   = true
@@ -395,12 +398,14 @@
       disabled={privacyBusyId === post.id}
       onclick={() => togglePublic(post)}
     >비공개</button>
-    <DeleteIconButton
-      ariaLabel="로그 삭제"
-      confirming={deleteSafety.pendingKey === post.id}
-      disabled={deleteSafety.busyKey === post.id}
-      onclick={() => deleteSafety.handleAction(post.id, () => deletePost(post))}
-    />
+    {#if post.canDelete}
+      <DeleteIconButton
+        ariaLabel="로그 삭제"
+        confirming={deleteSafety.pendingKey === post.id}
+        disabled={deleteSafety.busyKey === post.id}
+        onclick={() => deleteSafety.handleAction(post.id, () => deletePost(post))}
+      />
+    {/if}
   </div>
 {/snippet}
 

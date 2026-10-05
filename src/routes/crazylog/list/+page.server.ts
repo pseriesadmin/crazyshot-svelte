@@ -1,5 +1,7 @@
 import type { PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
+import { canDeletePost } from '$lib/utils/crazylogPostPermissions'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 // user_posts는 migration #117에서 추가 — supabase gen types 재생성 전까지 로컬 타입 선언
 type PostRow = {
@@ -27,6 +29,7 @@ function extractFirstImageUrl(blocks: unknown): string | null {
 type ProfileRow = {
 	id: string
 	full_name: string | null
+	cms_role: string | null
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -35,6 +38,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const { session } = await locals.safeGetSession()
 	let isLoggedIn = !!session
 	let isAdmin = false
+	let viewerRole: string | null = null
 	let currentUser: { displayName: string; avatarUrl: string | null; membershipGrade: string | null; level: string } | null = null
 
 	if (session) {
@@ -45,6 +49,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.maybeSingle()
 		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null; cms_role: string | null } | null
 		isAdmin = !!p?.cms_role
+		viewerRole = p?.cms_role ?? null
 		const score = p?.credit_score ?? 0
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
@@ -84,14 +89,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// 작성자 이름 별도 조회 (user_profiles.id == user_posts.user_id)
 	const userIds = [...new Set(rawPosts.map(p => p.user_id).filter(Boolean))]
 	const authorMap: Record<string, string> = {}
+	const authorIsAdminMap: Record<string, boolean> = {}
 
 	if (userIds.length > 0) {
 		const { data: profilesAny } = await locals.supabase
 			.from('user_profiles')
-			.select('id, full_name')
+			.select('id, full_name, cms_role')
 			.in('id', userIds)
 		for (const profile of (profilesAny ?? []) as ProfileRow[]) {
-			if (profile.id) authorMap[profile.id] = profile.full_name ?? '익명'
+			if (profile.id) {
+				authorMap[profile.id] = profile.full_name ?? '익명'
+				authorIsAdminMap[profile.id] = !!profile.cms_role
+			}
 		}
 	}
 
@@ -105,6 +114,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		isPublic:     p.is_public !== false,
 		// 작성자 user_id는 클라이언트로 내리지 않는다 — 본인 글 여부만 전달
 		isMine:       !!userId && p.user_id === userId,
+		// 삭제 아이콘 노출 여부(2026-10-05) — 관리자 글은 모든 관리자, 사용자 글은 매니저 이상(DB can_delete_user_post와 동일 규칙). 작성자 역할값·user_id는 내리지 않는다
+		canDelete:    isAdmin && canDeletePost({
+			isOwner:       !!userId && p.user_id === userId,
+			viewerRole,
+			authorIsAdmin: authorIsAdminMap[p.user_id] ?? false,
+		}),
 	}))
 
 	const [reviewCount, shareCount, promoCount] = await Promise.all([
@@ -138,6 +153,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		activeTab: tab,
 		isLoggedIn,
 		isAdmin,
+		// 검색 결과(작성자 정보 없음)의 삭제 아이콘 노출 기준 — 매니저 이상만 모든 글 삭제 가능
+		isManager: !!viewerRole && hasSettingsAccess(viewerRole),
 		currentUser,
 	}
 }

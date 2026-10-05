@@ -1,5 +1,6 @@
 import type { PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
+import { canManagePost, canDeletePost } from '$lib/utils/crazylogPostPermissions'
 
 type PostRow = {
 	id: string
@@ -16,6 +17,7 @@ type PostRow = {
 type ProfileRow = {
 	id: string
 	full_name: string | null
+	cms_role: string | null
 }
 type CommentRow = {
 	id: string
@@ -53,6 +55,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const { session } = await locals.safeGetSession()
 
 	let isAdmin = false
+	let viewerRole: string | null = null
 	let isLoggedIn = !!session
 	let currentUser: { displayName: string; avatarUrl: string | null; membershipGrade: string | null; level: string } | null = null
 
@@ -69,6 +72,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			credit_score: number | null
 		} | null
 		isAdmin = !!profileData?.cms_role
+		viewerRole = profileData?.cms_role ?? null
 
 		const score = profileData?.credit_score ?? 0
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
@@ -100,7 +104,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const [profileResult, commentsResult] = await Promise.all([
 		locals.supabase
 			.from('user_profiles')
-			.select('id, full_name')
+			.select('id, full_name, cms_role')
 			.eq('id', postData.user_id)
 			.maybeSingle(),
 		locals.supabase
@@ -154,5 +158,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const currentUserId = session?.user.id ?? null
 	const isOwner = !!currentUserId && currentUserId === postData.user_id
 
-	return { isAdmin, isLoggedIn, isOwner, currentUser, postId: params.slug, postStatus: postData.status, post, comments }
+	// 글 관리 권한(2026-10-05): 수정·비공개 = 작성자 또는 모든 관리자 / 삭제 = 작성자 · 관리자 글은 모든 관리자 · 사용자 글은 매니저 이상.
+	// 작성자 계정의 관리자 여부·역할값은 클라이언트로 내리지 않고 결과 플래그만 전달한다. 집행은 DB(RPC·트리거 #647).
+	const permInput = { isOwner, viewerRole, authorIsAdmin: !!profileData?.cms_role }
+	const canManage = canManagePost(permInput)
+	const canDelete = canDeletePost(permInput)
+
+	return { isAdmin, isLoggedIn, isOwner, canManage, canDelete, currentUser, postId: params.slug, postStatus: postData.status, post, comments }
 }

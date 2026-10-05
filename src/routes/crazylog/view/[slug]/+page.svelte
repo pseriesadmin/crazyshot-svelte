@@ -8,6 +8,7 @@
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import { describePostActionError } from '$lib/utils/crazylogPostPermissions'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -105,7 +106,7 @@
       showDeleteConfirm = false
       history.back()
     } catch (e) {
-      adminError = e instanceof Error ? e.message : '처리 중 오류가 발생했습니다.'
+      adminError = describePostActionError(e instanceof Error ? e.message : undefined)
     } finally {
       adminBusy = false
     }
@@ -405,7 +406,7 @@
       <div class="d-writing">
         <div class="d-author-row">
           <p class="d-author">{post?.author ?? ''} • {post ? formatDate(post.createdAt) : ''}</p>
-          {#if data.isOwner}
+          {#if data.canManage}
             <button type="button" class="priv-btn" class:priv-btn-on={!isPublicNow} aria-pressed={!isPublicNow}
               disabled={privacyBusy} onclick={togglePrivacy}>비공개</button>
           {/if}
@@ -558,7 +559,7 @@
           <div class="m-author">
             <span>{post?.author ?? ''} </span><span>• {post ? formatDate(post.createdAt) : ''}</span>
           </div>
-          {#if data.isOwner}
+          {#if data.canManage}
             <button type="button" class="priv-btn priv-btn-m" class:priv-btn-on={!isPublicNow} aria-pressed={!isPublicNow}
               disabled={privacyBusy} onclick={togglePrivacy}>비공개</button>
           {/if}
@@ -736,7 +737,8 @@
   isLoggedIn={data.isLoggedIn}
   visible={writeCardVisible}
   postId={data.postId}
-  isOwner={data.isOwner ?? false}
+  canEdit={data.canManage ?? false}
+  canDelete={data.canDelete ?? false}
   deleteBusy={adminBusy}
   onDelete={() => showDeleteConfirm = true}
 />
