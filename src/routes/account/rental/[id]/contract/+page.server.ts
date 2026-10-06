@@ -7,6 +7,8 @@ import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
+import { findCurrentFinalDocument } from '$lib/server/contractArchive/loadArchivedPdf'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
@@ -16,7 +18,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // user_id 불일치 시 조회 자체가 안 됨(존재 여부조차 노출하지 않음)
   const { data: reservation, error: reservationErr } = await locals.supabase
     .from('rental_reservations')
-    .select('id, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, product_id, products!rental_reservations_product_id_fkey(name, category, product_code)')
+    .select('id, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, product_id, products!rental_reservations_product_id_fkey(name, category, product_code, parent_product_id)')
     .eq('id', params.id)
     .eq('user_id', session.user.id)
     .maybeSingle()
@@ -42,6 +44,9 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 이후 조회는 admin(service_role) — contracts/contract_signings는 소유권 확인이 끝난
   // 뒤부터는 /contract/[token] 서명화면과 동일하게 admin 클라이언트로 조회(RLS 우회)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  // 자식 재고의 이름·분류는 부모 값을 따른다(품번 product_code는 자식 고유값이라 그대로)
+  await applyParentFieldsToRowProducts([res], ['name', 'category'], admin)
 
   // 2026-08-31(CRITICAL 수정): init-contract API가 "같은 주문에 이미 계약이 있으면 재사용"
   // 으로 바뀌어(예약=주문 단위 통일), 계약은 이제 주문당 1건만 존재하고 대표 예약에만
@@ -133,6 +138,9 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     ipAddress:  null,
   })
 
+  // 최종본 PDF(약관 사본 포함) 보관 여부 — 현재 유효한 서명의 보관본만 센다(서명 직후엔 크론이 만들기 전, 재서명 대기 중이면 아직 없음 → 화면은 "준비 중" 안내)
+  const finalDoc = await findCurrentFinalDocument(admin, [contract.id])
+
   const { data: profile } = await admin
     .from('user_profiles')
     .select('full_name, phone, email')
@@ -202,5 +210,6 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     shippingAddress,
     orderData,
     serviceInfo,
+    finalPdfReady: !!finalDoc,
   }
 }

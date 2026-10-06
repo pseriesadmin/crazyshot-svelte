@@ -12,6 +12,7 @@
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
+  import { csToast } from '$lib/utils/toast'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -122,6 +123,15 @@
     '임대인사업자번호': data.serviceInfo?.biz_reg_no ?? '',
     '임대인사업장주소': data.serviceInfo?.biz_address ?? '',
   })
+
+  // 계약서 사본(PDF, 서명 당시 약관 사본 포함) 내려받기 — 서명 직후엔 아직 만드는 중일 수 있다
+  function handleDownloadPdf(): void {
+    if (!data.finalPdfReady) {
+      csToast.info('계약서 사본(PDF)을 준비 중입니다. 잠시 후 다시 시도해 주세요.')
+      return
+    }
+    window.location.href = `/api/account/rental/${reservation.id}/contract-pdf`
+  }
 
   function handlePrint(): void {
     if (browser) window.print()
@@ -239,7 +249,10 @@
       </defs>
     </svg>
     {#if contract}
-      <button type="button" class="print-btn" onclick={handlePrint}>인쇄하기</button>
+      <div class="header-actions">
+        <button type="button" class="print-btn" onclick={handleDownloadPdf}>사본(PDF) 받기</button>
+        <button type="button" class="print-btn" onclick={handlePrint}>인쇄하기</button>
+      </div>
     {/if}
   </header>
 
@@ -470,6 +483,8 @@
   .logo-svg {
     display: block;
   }
+
+  .header-actions { display: flex; gap: 8px; }
 
   .print-btn {
     height: 36px;
