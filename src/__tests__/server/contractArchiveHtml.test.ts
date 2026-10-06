@@ -90,3 +90,24 @@ describe('buildArchiveHtml', () => {
     expect(html.match(/등록된 내용이 없습니다/g)?.length).toBe(2)
   })
 })
+
+describe('buildArchiveHtml — 한글 폰트 임베드 옵션', () => {
+  const FONT_CSS = "@font-face{font-family:'Archive KR';font-weight:400;src:url(data:font/woff2;base64,AAAA) format('woff2')}"
+
+  it('fontCss를 주면 head에 넣고, 계약서·부록 모두 Archive KR을 !important로 강제한다(맑은 고딕은 서버 Chromium에 없음)', () => {
+    const html = buildArchiveHtml({ contractHtml: CONTRACT_HTML, evidence: EVIDENCE, terms: TERMS, fontCss: FONT_CSS })
+    expect(html).toContain(FONT_CSS)
+    expect(html).toMatch(/\.contract-wrap[^{]*\{[^}]*font-family:\s*'Archive KR'[^}]*!important/)
+    expect(html.indexOf(FONT_CSS)).toBeLessThan(html.indexOf(CONTRACT_HTML))
+  })
+
+  it('fontCss가 없으면 폰트 강제 규칙을 넣지 않는다(기존 동작 유지)', () => {
+    const html = buildArchiveHtml({ contractHtml: CONTRACT_HTML, evidence: EVIDENCE, terms: TERMS })
+    expect(html).not.toContain('Archive KR')
+  })
+
+  it('페이지 상하 여백을 둔다(둘째 쪽부터 글자가 용지 끝에 붙지 않도록)', () => {
+    const html = buildArchiveHtml({ contractHtml: CONTRACT_HTML, evidence: EVIDENCE, terms: TERMS })
+    expect(html).toMatch(/@page\s*\{[^}]*margin:\s*12mm 0/)
+  })
+})
