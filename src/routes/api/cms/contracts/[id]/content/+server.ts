@@ -9,6 +9,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
+import { applyCustomerSignatureMarker } from '$lib/utils/contract-substitution'
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
@@ -28,7 +29,7 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
   //
   const { data: signing } = await admin
     .from('contract_signings')
-    .select('signed_at, signed_content_snapshot')
+    .select('signed_at, signed_content_snapshot, signature_data')
     .eq('contract_id', contractId)
     .not('signed_at', 'is', null)
     .order('signed_at', { ascending: false })
@@ -56,7 +57,25 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
   // 변경사항을 조용히 덮어쓸 위험이 있어 의도적으로 옵트인으로 분리했다.
   if (url.searchParams.get('preferSignedSnapshot') === '1') {
     const snapshot = signing?.signed_content_snapshot as typeof data | null | undefined
-    if (snapshot) return json(snapshot)
+    if (snapshot) {
+      // 2026-10-06: 스냅샷은 서명 제출 "직전" 내용을 얼린 것(sign API가 해시 대상으로 보존)이라 html 계약서의
+      // <!--CUSTOMER_SIGNATURE--> 마커가 이미지로 치환되기 전 상태다 — 그대로 반환하면 대여현황 "보기"에서
+      // 서명이 빠져 보인다. DB의 스냅샷·해시는 건드리지 않고, 읽을 때만 저장된 서명 데이터로 마커를 채운다
+      // (마커가 없거나 서명 데이터가 없으면 원본 그대로).
+      const snapHtml = snapshot.html_document
+      if (
+        snapshot.authoring_mode === 'html' &&
+        typeof snapHtml === 'string' &&
+        snapHtml.includes('<!--CUSTOMER_SIGNATURE-->') &&
+        signing?.signature_data
+      ) {
+        return json({
+          ...snapshot,
+          html_document: applyCustomerSignatureMarker(snapHtml, signing.signature_data as string),
+        })
+      }
+      return json(snapshot)
+    }
   }
 
   return json(data)
