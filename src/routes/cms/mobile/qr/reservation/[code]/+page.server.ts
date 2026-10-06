@@ -22,6 +22,10 @@ export const load: PageServerLoad = async ({ params, parent }) => {
     .from('rental_reservations')
     .select('id, product_id')
     .ilike('reservation_code', escapeLikePattern(code))
+    // 예약코드는 주문 단위로 공유 — 같은 코드의 행이 여러 개여도 가장 먼저 만들어진 예약으로 결정론적으로 착지
+    // (maybeSingle만 쓰면 2행 이상에서 PGRST116 오류 → 500)
+    .order('id', { ascending: true })
+    .limit(1)
     .maybeSingle()
 
   if (rErr) throw error(500, '예약 조회 중 오류가 발생했습니다.')

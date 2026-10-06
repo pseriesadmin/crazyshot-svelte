@@ -36,6 +36,7 @@ export function extractMemberCode(raw: string): string | null {
  * QR 스캔 결과에서 예약코드(reservation_code) 추출.
  * 실제 DB 형식 분석(Migration #316) 기반:
  *   - `CS{YYMM}{seq}` (예: CS2609001) — CS 직후 숫자만 이어짐 (상품코드는 알파벳 카테고리 포함)
+ *   - `CSRSV{YYMM}{seq4}` (예: CSRSV26090001) — 2026-09-14부터의 현재 형식(cat_code 'RSV')
  *   - `CZ-{id}` (예: CZ-00001)       — 폴백 fallback ID
  * Stage 0 불일치: 플랜 제안 regex(`/^CZ-\d{8}-\d{5}$/i`)는 실제 형식과 맞지 않아 사용 안 함.
  */
@@ -43,8 +44,10 @@ export function extractReservationCode(raw: string): string | null {
   const text = raw.trim()
   // CZ- 접두어 폴백 (CZ-{id 1~20자})
   if (/^CZ-.{1,20}$/i.test(text)) return text
-  // CS + 숫자만 이어지는 예약코드 (CS{YYMM}{seq}) — 상품코드는 CS 직후 알파벳 카테고리가 반드시 섞임
-  if (/^CS\d{4,}$/i.test(text)) return text
+  // CS + 숫자만 이어지는 예약코드 (CS{YYMM}{seq}, 2026-09-13까지 형식) 또는 CS + RSV + 숫자(CS{RSV}{YYMM}{seq}, 2026-09-14부터 형식).
+  // 상품코드는 CS 직후 카테고리 알파벳(LIT·LEN 등)과 연월(all)·순번이 섞이므로 구분된다.
+  // ⚠️ 중간 'RSV'는 cms_settings.reservation_code_format.cat_code 값 — 그 설정을 바꾸면 이 규칙도 함께 바꿔야 한다.
+  if (/^CS(?:RSV)?\d{4,}$/i.test(text)) return text
   return null
 }
 
