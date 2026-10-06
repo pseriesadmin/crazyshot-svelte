@@ -164,7 +164,13 @@
     '임대인사업장주소': data.serviceInfo?.biz_address ?? '',
   })
 
-  let agreed    = $state(false)
+  // 2026-10-06(법적 증빙 강화): 단일 동의 체크박스 → 필수 동의 3종(서버가 sign API에서 다시 검증·기록)
+  let agreeContract = $state(false)
+  let agreePrivacy  = $state(false)
+  let agreeTerms    = $state(false)
+  const allAgreed   = $derived(agreeContract && agreePrivacy && agreeTerms)
+  let policyOpen    = $state(false)
+  const policyTexts = $derived(data.policyTexts ?? { terms: '', refund: '', privacy: '' })
   let sigValid  = $state(false)
   let sigData   = $state<SignatureData | null>(null)
   let signing_  = $state(false)
@@ -267,7 +273,7 @@
   }
 
   async function submitSign() {
-    if (!agreed)   { signError = '약관에 동의해야 서명할 수 있습니다.'; return }
+    if (!allAgreed) { signError = '필수 동의 항목을 모두 체크해야 서명할 수 있습니다.'; return }
     if (!sigValid) { signError = '서명을 완성해 주세요.';    return }
     signError = ''
     signing_  = true
@@ -278,6 +284,11 @@
         body:    JSON.stringify({
           signature_data: sigData?.pngBase64 ?? null,
           stroke_count:   sigData?.strokeCount ?? 0,
+          consents: [
+            { key: 'contract',   checked: agreeContract },
+            { key: 'privacy',    checked: agreePrivacy },
+            { key: 'terms_copy', checked: agreeTerms },
+          ],
         }),
       })
       if (res.ok) {
@@ -630,17 +641,63 @@
     <!-- 서명 폼 -->
     {#if !done}
       <div class="sign-section">
-        <!-- 동의 체크박스 -->
-        <label class="agree-label">
-          <input
-            type="checkbox"
-            class="agree-check"
-            bind:checked={agreed}
-          />
-          <span>
-            위 계약서 내용을 모두 확인하였으며, 본 전자계약에 동의합니다.
-          </span>
-        </label>
+        <!-- 필수 동의 3종 (§17 체크아이콘 버튼 · §27 아코디언 화살표) -->
+        <div class="consent-list">
+          <button type="button" class="consent-btn" role="checkbox" aria-checked={agreeContract}
+                  onclick={() => (agreeContract = !agreeContract)}>
+            <span class="checkbox-btn checkbox-btn-terms" class:checked={agreeContract}>
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="consent-text"><em>[필수]</em> 위 계약서 내용을 모두 확인하였으며, 본 전자계약에 동의합니다.</span>
+          </button>
+
+          <button type="button" class="consent-btn" role="checkbox" aria-checked={agreePrivacy}
+                  onclick={() => (agreePrivacy = !agreePrivacy)}>
+            <span class="checkbox-btn checkbox-btn-terms" class:checked={agreePrivacy}>
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="consent-text"><em>[필수]</em> 개인정보 수집·이용 및 고유식별정보 처리에 동의합니다. (계약서 하단 '개인정보동의' 내용)</span>
+          </button>
+
+          <button type="button" class="consent-btn" role="checkbox" aria-checked={agreeTerms}
+                  onclick={() => (agreeTerms = !agreeTerms)}>
+            <span class="checkbox-btn checkbox-btn-terms" class:checked={agreeTerms}>
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="consent-text"><em>[필수]</em> 서비스이용정책·환불규정·개인정보처리방침 사본을 수령하였으며 내용을 확인하였습니다.</span>
+          </button>
+
+          <!-- 약관 사본 열람 — 서명 시 서버가 같은 원문을 스냅샷(SHA-256)으로 기록한다 -->
+          <button type="button" class="policy-toggle" aria-expanded={policyOpen}
+                  aria-controls="policy-copy-body" onclick={() => (policyOpen = !policyOpen)}>
+            <span>서비스이용정책·환불규정·개인정보처리방침 전문 보기</span>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"
+                 style="transform:{policyOpen ? 'scaleY(-1)' : 'none'}">
+              <path d="M2 4.5L6.5 9L11 4.5" stroke="#3b2f8a" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          {#if policyOpen}
+            <div id="policy-copy-body" class="policy-body">
+              {#each [
+                { title: '서비스이용정책', text: policyTexts.terms },
+                { title: '환불규정', text: policyTexts.refund },
+                { title: '개인정보처리방침', text: policyTexts.privacy },
+              ] as doc (doc.title)}
+                <section class="policy-doc">
+                  <h3 class="policy-doc-title">{doc.title}</h3>
+                  <p class="policy-doc-text">{doc.text.trim() ? doc.text : '등록된 내용이 없습니다.'}</p>
+                </section>
+              {/each}
+            </div>
+          {/if}
+        </div>
 
         <!-- 전자 서명 캔버스 (flow 모드 전용 — canvas 모드는 위 페이지 내 인라인 서명) -->
         {#if !isCanvasMode}
@@ -662,7 +719,7 @@
         <button
           class="btn-sign"
           onclick={submitSign}
-          disabled={signing_ || !agreed || !sigValid}
+          disabled={signing_ || !allAgreed || !sigValid}
         >
           {signing_ ? '서명 처리 중...' : '서명하기'}
         </button>
@@ -1028,22 +1085,72 @@
     flex-direction: column;
     gap: 16px;
   }
-  .agree-label {
+  /* 필수 동의 3종 — front-uiux.md §17(체크아이콘 버튼)·§27(아코디언 화살표) */
+  .consent-list { display: flex; flex-direction: column; gap: 4px; }
+  .consent-btn {
     display: flex;
     align-items: flex-start;
     gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 8px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-md, 15px);
+    text-align: left;
     cursor: pointer;
+    font: inherit;
     font-size: 14px;
     color: var(--cs-dark, #100B32);
     line-height: 1.5;
   }
-  .agree-check {
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-    margin-top: 2px;
-    accent-color: var(--cs-red-badge, #FF3535);
+  .consent-btn:hover { background: var(--cs-surface-gray, #f6f6f6); }
+  .consent-text em { font-style: normal; font-weight: 700; color: var(--cs-red-badge, #FF3535); }
+  .checkbox-btn { display: inline-flex; flex-shrink: 0; }
+  .checkbox-btn-terms { color: var(--cs-purple-op10, rgba(59, 47, 138, 0.1)); }
+  .checkbox-btn-terms.checked { color: var(--cs-purple, #3B2F8A); }
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) {
+    .checkbox-btn-terms svg { width: 18px; height: 12px; }
+  }
+  /* §17 수직정렬 광학보정 — 이 화면 버튼 클래스로만 스코프(전역 .checkbox-btn-terms 직접 수정 금지) */
+  .consent-btn .checkbox-btn-terms { transform: translateY(2px); }
+  .policy-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 8px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-md, 15px);
     cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--cs-purple, #3B2F8A);
+  }
+  .policy-toggle:hover { background: var(--cs-surface-gray, #f6f6f6); }
+  .policy-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-radius: var(--radius-md, 15px);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .policy-doc-title { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--cs-dark, #100B32); }
+  .policy-doc-text {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--cs-text-dark, #444444);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   /* 서명 캔버스 영역 */
