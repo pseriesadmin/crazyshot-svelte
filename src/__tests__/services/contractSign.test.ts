@@ -109,7 +109,16 @@ async function callSign(token: string): Promise<{ status: number; body: Record<s
   const request = new Request(`http://localhost/api/contracts/${token}/sign`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ signature_data: 'data:image/png;base64,AAAA', stroke_count: 3 }),
+    // 2026-10-06: 서명 API가 필수 동의 3종을 서버에서 검증한다(Migration #650 증적 강화)
+    body: JSON.stringify({
+      signature_data: 'data:image/png;base64,AAAA',
+      stroke_count: 3,
+      consents: [
+        { key: 'contract', checked: true },
+        { key: 'privacy', checked: true },
+        { key: 'terms_copy', checked: true },
+      ],
+    }),
   });
 
   const res = await signContract({

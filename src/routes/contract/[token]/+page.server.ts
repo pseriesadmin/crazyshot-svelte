@@ -384,9 +384,27 @@ export const load: PageServerLoad = async ({ params }) => {
   // 있어 일관되게 함께 내려준다(실패해도 fail-soft로 빈 값).
   const serviceInfo = await getServiceInfoSettings(admin)
 
+  // 2026-10-06(법적 증빙 강화): 서명 화면에서 고객이 열람·수령 확인하는 서비스이용정책·환불규정·
+  // 개인정보처리방침 원문. 서명 시 서버가 같은 테이블을 다시 읽어 스냅샷·해시를 남기므로(sign API)
+  // 화면 표시용일 뿐 증빙의 근거는 서버 값이다. 이미 서명된 건은 필요 없어 조회하지 않는다.
+  let policyTexts: { terms: string; refund: string; privacy: string } = { terms: '', refund: '', privacy: '' }
+  if (!signing.signed_at) {
+    const { data: policyRow } = await admin
+      .from('rental_policy_settings')
+      .select('terms_text, refund_text, privacy_text')
+      .limit(1)
+      .maybeSingle()
+    policyTexts = {
+      terms:   (policyRow?.terms_text as string | null)   ?? '',
+      refund:  (policyRow?.refund_text as string | null)  ?? '',
+      privacy: (policyRow?.privacy_text as string | null) ?? '',
+    }
+  }
+
   return {
     signing,
     customer,
+    policyTexts,
     issuerSignatures,
     shippingAddress,
     orderData,

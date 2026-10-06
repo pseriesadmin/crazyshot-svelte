@@ -11,9 +11,16 @@
  *   ('cancelled' = 2026-09-07 Migration #457 추가 — 전자계약 발행취소(서명완료건 포함,
  *    cancel_issued_contract RPC) 기록용. 서명 데이터를 비가역적으로 완전 삭제하는 액션이라
  *    "누가·언제 취소했는가"를 남길 유일한 증빙 지점이다.)
+ *   + 2026-10-06 Migration #651: 'consented' | 'evidence_saved' | 'evidence_failed' |
+ *     'archive_created' | 'copy_sent' | 'copy_downloaded' (서명 증적·PDF 보관·사본 교부)
+ *   ⚠️ DB에 event_type CHECK 제약이 있어 목록에 없는 값은 silent fail로 조용히 거부된다 —
+ *      새 이벤트를 추가할 때는 마이그레이션으로 CHECK를 먼저 넓힐 것.
+ * - metadata: 2026-10-06 Migration #650 — 해시·건수 등 부가정보(선택). 개인정보 원문은 넣지 않는다.
  */
 
-export type AuditEventType = 'viewed' | 'signed' | 'sent' | 'issuer_signed' | 'cancelled'
+export type AuditEventType =
+  | 'viewed' | 'signed' | 'sent' | 'issuer_signed' | 'cancelled'
+  | 'consented' | 'evidence_saved' | 'evidence_failed' | 'archive_created' | 'copy_sent' | 'copy_downloaded'
 export type AuditActorType = 'customer' | 'admin' | 'system'
 
 export interface AuditLogParams {
@@ -22,6 +29,7 @@ export interface AuditLogParams {
   actorType: AuditActorType
   actorId: string | null
   ipAddress: string | null
+  metadata?: Record<string, unknown> | null
 }
 
 // Supabase admin client 타입을 최소한으로 정의 (제네릭 충돌 방지 — core-rules.md 패턴 준수)
@@ -49,6 +57,7 @@ export async function recordAuditLog(
       actor_type:  params.actorType,
       actor_id:    params.actorId,
       ip_address:  params.ipAddress,
+      ...(params.metadata ? { metadata: params.metadata } : {}),
     })
   } catch {
     // silent fail — 감사로그 실패가 주 트랜잭션을 막으면 안 됨

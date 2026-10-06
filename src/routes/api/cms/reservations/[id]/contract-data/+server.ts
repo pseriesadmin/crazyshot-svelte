@@ -10,6 +10,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
 import type { ReservationForLineItems, BundleLink } from '$lib/utils/contractLineItems'
 import { calcVatForCart } from '$lib/utils/cartCouponPoints'
+import { formatKstDateDot } from '$lib/utils/kstDate'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
@@ -608,7 +609,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     // 구조적 버그였다(재발송 등 이미 계약이 존재하는 극히 일부 경로에서만 정상 날짜가
     // 보였음). "발행일"의 의미상 원하는 값은 어차피 "지금(발행 시점)"이므로, DB 조회 없이
     // 현재 시각을 바로 사용하도록 변경 — 최초 발행 시에도 항상 정상적으로 오늘 날짜가 채워짐.
-    계약서발행일: formatDateDot(new Date().toISOString()),
+    // 2026-10-06: UTC 날짜를 그대로 쓰면 한국시간 00:00~08:59 발행분이 하루 전 날짜로 찍혔다 — KST 기준으로 표기
+    계약서발행일: formatKstDateDot(new Date()),
     지점옵션:     branchName ?? '-',
     '총 정상 대여가': formatAmount(orderData?.total_amount),
     // 2026-09-08 신규 — "구분" 섹션 수령방법/반납방법 값(방식+지점 통합 표기)

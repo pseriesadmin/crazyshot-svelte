@@ -5,6 +5,7 @@ import { json } from '@sveltejs/kit'
 import { sendCardSms, sendPushToAdmins, sendPushToUser } from '$lib/server/push'
 import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { applyCustomerSignatureMarker } from '$lib/utils/contract-substitution'
+import { parseConsents, buildEvidenceRow, normalizePolicies } from '$lib/contract-signature/signatureEvidence'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
@@ -76,6 +77,14 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     strokeCount   = typeof body.stroke_count   === 'number' ? body.stroke_count   : null
   }
 
+  // 2026-10-06(법적 증빙 강화, Migration #650): 필수 동의 3종(계약 내용·개인정보·약관 사본 수령)을
+  // 서버에서 검증한다. 클라이언트 체크박스 상태만 믿던 이전과 달리, 3종이 모두 true로 오지 않으면
+  // 서명을 접수하지 않는다(구버전 화면에서 온 요청 포함). 해시 대상 텍스트는 서버가 DB에서 읽는다.
+  const consentCheck = parseConsents(body?.consents)
+  if (!consentCheck.ok) {
+    return json({ error: consentCheck.error }, { status: 400 })
+  }
+
   // 클라이언트(SignatureCanvas)와 동일 기준 — 1회라도 그렸으면 유효, 다회 스트로크 요구 없음
   if (strokeCount !== null && strokeCount < 1) {
     return json({ error: '서명이 등록되지 않았습니다. 다시 서명해 주세요.' }, { status: 400 })
@@ -92,25 +101,31 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   // 얼려야 하므로 절대 이 되굽기 결과로 덮어쓰지 않는다(별도 UPDATE로 contracts.html_document만 갱신).
   let contractAuthoringMode: string | null = null
   let contractHtmlDocument: string | null   = null
+  let contractPrivacyText: string | null    = null
   if (signing.contract_id) {
     const { data: contractContent } = await admin
       .from('contracts')
-      .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document, html_document')
+      .select('title, authoring_mode, content_blocks, specifications, canvas_document, spreadsheet_document, html_document, privacy_terms_text')
       .eq('id', signing.contract_id)
       .maybeSingle()
     if (contractContent) {
-      signedContentSnapshot = contractContent
-      contentHash = await computeContentHash(contractContent)
+      // 스냅샷·해시의 형태는 기존과 동일하게 유지한다(privacy_terms_text는 증적 행에만 쓰므로 분리)
+      const { privacy_terms_text: privacyTermsText, ...snapshotContent } = contractContent as typeof contractContent & { privacy_terms_text?: string | null }
+      contractPrivacyText = (privacyTermsText as string | null) ?? null
+      signedContentSnapshot = snapshotContent
+      contentHash = await computeContentHash(snapshotContent)
       contractAuthoringMode = (contractContent.authoring_mode as string | null) ?? null
       contractHtmlDocument  = (contractContent.html_document as string | null) ?? null
     }
   }
 
   const clientIp = getClientAddress()
-  const { error: updateErr } = await admin
+  // 서명 이벤트 식별자(signing_id, signed_at)의 일부 — 증적 행에도 같은 값을 쓴다
+  const signedAtIso = new Date().toISOString()
+  const { data: updatedRows, error: updateErr } = await admin
     .from('contract_signings')
     .update({
-      signed_at:               new Date().toISOString(),
+      signed_at:               signedAtIso,
       ip_address:              clientIp,
       signature_data:          signatureData,
       stroke_count:            strokeCount,
@@ -119,9 +134,16 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     })
     .eq('id', signing.id)
     .is('signed_at', null)
+    .select('id')
 
   if (updateErr) {
     return json({ error: '서명 처리에 실패했습니다.' }, { status: 500 })
+  }
+  // 2026-10-06(sp3 검수 MAJOR-2): `.is('signed_at', null)` 가드에 막혀 0행이 갱신된 경우(같은 토큰의 동시 제출에서
+  // 늦은 쪽) 서명이 접수된 것이 아니다 — 증적·후처리·알림을 진행하면 실제 signed_at과 다른 시각의 증적 행이
+  // 추가 전용 테이블에 영구히 남고 알림도 중복된다. 여기서 중단한다.
+  if (!updatedRows || updatedRows.length === 0) {
+    return json({ error: '이미 서명된 계약서입니다.' }, { status: 409 })
   }
 
   // 2026-09-08: 고객 서명 이미지를 html_document에 되굽기 — html 모드에서만 의미 있음
@@ -129,6 +151,9 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
   // 반환한다). fail-soft — 실패해도 서명 자체(signed_at)는 이미 위에서 정상 저장됐으므로
   // 여기서 에러를 반환하지 않는다(재조회 시 서명 이미지 없이 텍스트만 보이는 것으로 조용히
   // 대체될 뿐, 서명 처리 자체를 막지 않는다).
+  // 되굽기 결과(서명 이미지가 합성된 최종 HTML) — 증적 해시용. 합성 실패 시 null로 남겨 그 사실이 증적에 드러난다.
+  let finalHtml: string | null = null
+  let bakeFailure: string | null = null
   if (
     signing.contract_id &&
     signatureData &&
@@ -138,16 +163,94 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
     try {
       const bakedHtml = applyCustomerSignatureMarker(contractHtmlDocument, signatureData)
       if (bakedHtml !== contractHtmlDocument) {
-        await admin
+        const { error: bakeErr } = await admin
           .from('contracts')
           .update({ html_document: bakedHtml })
           .eq('id', signing.contract_id)
+        if (bakeErr) {
+          // 2026-10-06: 이전엔 이 UPDATE의 오류를 확인하지 않아 실패해도 흔적이 없었다
+          bakeFailure = bakeErr.message
+          console.error('[contracts/sign] 서명 이미지 되굽기 UPDATE 실패(fail-soft):', bakeErr.message)
+        } else {
+          finalHtml = bakedHtml
+        }
+      } else {
+        // 마커가 없는 양식 — 합성할 것이 없으므로 현재 본문이 최종본
+        finalHtml = contractHtmlDocument
       }
     } catch (e) {
+      bakeFailure = e instanceof Error ? e.message : String(e)
       console.error(
         '[contracts/sign] applyCustomerSignatureMarker 되굽기 실패(fail-soft):',
-        e instanceof Error ? e.message : e,
+        bakeFailure,
       )
+    }
+  }
+
+  // 서명 증적 저장(Migration #650) — fail-soft: 서명 자체(signed_at)는 이미 저장됐으므로 증적 저장 실패가
+  // 서명을 되돌리거나 오류를 반환하지 않는다. 대신 감사로그에 evidence_failed로 사후 조치 근거를 남긴다.
+  if (signing.contract_id) {
+    const auditAdmin = admin as Parameters<typeof recordAuditLog>[0]
+    try {
+      const { data: policyRow, error: policyErr } = await admin
+        .from('rental_policy_settings')
+        .select('terms_text, refund_text, privacy_text')
+        .limit(1)
+        .maybeSingle()
+      // 조회 실패·약관 미등록이면 null — 빈 문자열의 해시로 증적을 남기지 않는다(증적은 추가 전용이라 고칠 수 없음)
+      const policies = normalizePolicies(
+        policyRow as { terms_text?: string | null; refund_text?: string | null; privacy_text?: string | null } | null,
+        !!policyErr,
+      )
+      const evidenceRow = await buildEvidenceRow({
+        contractId:          signing.contract_id,
+        signingId:           signing.id,
+        reservationId:       signReservationId,
+        signedAt:            signedAtIso,
+        ipAddress:           clientIp,
+        userAgent:           request.headers.get('user-agent'),
+        contentHash,
+        contractPrivacyText,
+        policies,
+        signatureData,
+        finalHtml,
+      })
+      const { error: evidenceErr } = await admin.from('contract_signature_evidence').insert(evidenceRow)
+      if (evidenceErr) throw new Error(evidenceErr.message)
+
+      await recordAuditLog(auditAdmin, {
+        contractId: signing.contract_id,
+        eventType:  'consented',
+        actorType:  'customer',
+        actorId:    signing.user_id ?? null,
+        ipAddress:  clientIp,
+        metadata:   { keys: ['contract', 'privacy', 'terms_copy'] },
+      })
+      await recordAuditLog(auditAdmin, {
+        contractId: signing.contract_id,
+        eventType:  'evidence_saved',
+        actorType:  'system',
+        actorId:    null,
+        ipAddress:  null,
+        metadata: {
+          final_html_sha256: evidenceRow.final_html_sha256,
+          terms_sha256:      evidenceRow.terms_sha256,
+          policy_read_ok:    !policyErr,
+          policy_available:  policies !== null,
+          bake_failure:      bakeFailure,
+        },
+      })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      console.error('[contracts/sign] 서명 증적 저장 실패(fail-soft):', message)
+      await recordAuditLog(auditAdmin, {
+        contractId: signing.contract_id,
+        eventType:  'evidence_failed',
+        actorType:  'system',
+        actorId:    null,
+        ipAddress:  null,
+        metadata:   { error: message.slice(0, 300), bake_failure: bakeFailure },
+      })
     }
   }
 
