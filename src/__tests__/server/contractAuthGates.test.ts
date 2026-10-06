@@ -455,6 +455,56 @@ describe('[P7-4] API — contracts/[id]/content GET/PATCH 403 for partner', () =
     expect(res.data).toEqual({ title: '라이브 콘텐츠' });
   });
 
+  // 2026-10-06: 스냅샷은 서명 이미지 합성 전 내용이라 html 계약서의 고객 서명 마커가 남아 있다 —
+  // 읽을 때 저장된 서명 데이터로 마커를 채워 반환한다(DB 스냅샷·해시는 불변).
+  const SIG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const snapshotWithMarker = {
+    title: '서명 당시',
+    authoring_mode: 'html',
+    html_document: '<td class="sig-host-cell">박상진 (인)<!--CUSTOMER_SIGNATURE--></td>',
+  };
+
+  it('GREEN: preferSignedSnapshot=1 + html 스냅샷에 서명 마커가 남아 있으면 서명 이미지로 채워 반환한다', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('manager');
+    nextMaybeSingleByTable = {
+      contract_signings: {
+        data: { signed_at: '2026-10-02T00:00:00Z', signed_content_snapshot: snapshotWithMarker, signature_data: SIG_DATA_URL },
+        error: null,
+      },
+      contracts: { data: { title: '라이브' }, error: null },
+    };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('manager'),
+      request: makeRequest(),
+      url: new URL('http://localhost/api/cms/contracts/contract-id-1/content?preferSignedSnapshot=1'),
+    };
+    const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { data: { html_document: string; title: string } };
+    expect(res.data.title).toBe('서명 당시');
+    expect(res.data.html_document).not.toContain('<!--CUSTOMER_SIGNATURE-->');
+    expect(res.data.html_document).toContain('alt="예약자 서명"');
+    expect(res.data.html_document).toContain(SIG_DATA_URL);
+  });
+
+  it('GREEN: 서명 데이터가 없으면 스냅샷을 그대로 반환한다 (마커 유지)', async () => {
+    mockGetCmsRoleForAction.mockResolvedValue('manager');
+    nextMaybeSingleByTable = {
+      contract_signings: {
+        data: { signed_at: '2026-10-02T00:00:00Z', signed_content_snapshot: snapshotWithMarker, signature_data: null },
+        error: null,
+      },
+      contracts: { data: { title: '라이브' }, error: null },
+    };
+    const event = {
+      params: { id: 'contract-id-1' },
+      locals: makeLocals('manager'),
+      request: makeRequest(),
+      url: new URL('http://localhost/api/cms/contracts/contract-id-1/content?preferSignedSnapshot=1'),
+    };
+    const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { data: unknown };
+    expect(res.data).toEqual(snapshotWithMarker);
+  });
+
   it('GREEN: manager로 PATCH → 403 아닌 응답', async () => {
     mockGetCmsRoleForAction.mockResolvedValue('manager');
     const event = {
