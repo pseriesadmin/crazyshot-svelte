@@ -44,7 +44,7 @@ function esc(value: string | null | undefined): string {
 }
 
 const ARCHIVE_CSS = `
-  @page { size: A4; margin: 0; }
+  @page { size: A4; margin: 12mm 0; }
   html, body { margin: 0; padding: 0; }
   body { font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; color: #111; }
   .archive-appendix { box-sizing: border-box; width: 210mm; padding: 18mm 16mm; font-size: 11px; line-height: 1.7; page-break-before: always; }
@@ -55,6 +55,16 @@ const ARCHIVE_CSS = `
   .archive-evidence th, .archive-evidence td { border: 1px solid #333; padding: 5px 8px; text-align: left; vertical-align: top; word-break: break-all; }
   .archive-evidence th { width: 30%; background: #f3f3f3; }
   .archive-policy { margin: 0; white-space: pre-wrap; word-break: break-word; }
+  tr { page-break-inside: avoid; }
+`
+
+/**
+ * 한글 폰트 강제 규칙 — 계약서 양식 CSS는 '맑은 고딕'(윈도우 폰트)만 지정하는데, 서버(Vercel)의 Chromium에는
+ * 한글 폰트가 없어 그대로 두면 글자가 깨진다. fontCss(임베드한 @font-face)와 함께 쓰며, 계약서 양식의
+ * font-family(같은 구체성, 뒤에 나오는 규칙이 이김)를 !important로 덮어 PDF에서는 항상 같은 폰트로 찍는다.
+ */
+const FONT_FORCE_CSS = `
+  body, .archive-appendix, .contract-wrap, .contract-wrap * { font-family: 'Archive KR', sans-serif !important; }
 `
 
 function row(label: string, value: string | null | undefined): string {
@@ -71,8 +81,10 @@ export function buildArchiveHtml(args: {
   contractHtml: string
   evidence: ArchiveEvidenceSummary
   terms: ArchiveTerms | null
+  /** 임베드할 @font-face CSS(font-family 'Archive KR'). 있으면 모든 글자를 이 폰트로 강제한다. */
+  fontCss?: string
 }): string {
-  const { contractHtml, evidence: ev, terms } = args
+  const { contractHtml, evidence: ev, terms, fontCss } = args
   const regenerated = ev.source === 'regenerated'
 
   const notice = regenerated
@@ -114,7 +126,7 @@ export function buildArchiveHtml(args: {
 <head>
 <meta charset="utf-8">
 <title>전자계약서 최종본</title>
-<style>${ARCHIVE_CSS}</style>
+<style>${fontCss ?? ''}${ARCHIVE_CSS}${fontCss ? FONT_FORCE_CSS : ''}</style>
 </head>
 <body>
 ${contractHtml}
