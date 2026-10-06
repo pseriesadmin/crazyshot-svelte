@@ -44,17 +44,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (session) {
 		const { data: profile } = await locals.supabase
 			.from('user_profiles')
-			.select('full_name, membership_grade, credit_score, cms_role')
+			.select('full_name, membership_grade, credit_score, cms_role, avatar_url')
 			.eq('id', session.user.id)
 			.maybeSingle()
-		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null; cms_role: string | null } | null
+		const p = profile as { full_name: string | null; membership_grade: string | null; credit_score: number | null; cms_role: string | null; avatar_url: string | null } | null
 		isAdmin = !!p?.cms_role
 		viewerRole = p?.cms_role ?? null
 		const score = p?.credit_score ?? 0
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
 			displayName:     p?.full_name ?? '익명',
-			avatarUrl:       null,
+			avatarUrl:       p?.avatar_url ?? null, // 개인정보 화면 프로필 사진과 연동
 			membershipGrade: resolveGrade(p?.membership_grade),
 			level,
 		}

@@ -1,0 +1,131 @@
+/*
+ * rich-content.css — 콘텐츠 에디터(편집 캔버스)와 상세 화면 본문이 함께 쓰는 공용 스타일 (2026-10-05)
+ * "쓴 대로 보인다"(WYSIWYG)를 위해 에디터 캔버스와 크레이지로그 상세 본문 모두 `.rc-content`를 쓴다.
+ * 문단·글자색·글자크기·정렬은 인라인 style로 저장되므로 여기서는 제목·인용·목록·표·구분선·링크·이미지 묶음·동영상만 다룬다.
+ * 값은 front-uiux 토큰만 사용(하드코딩 색 금지).
+ */
+.rc-content h1,
+.rc-content h2,
+.rc-content h3 {
+  margin: 0;
+  color: var(--cs-text);
+  font-weight: 900;
+  line-height: 1.4;
+  letter-spacing: -0.5px;
+}
+.rc-content h1 { font-size: 25px; }
+.rc-content h2 { font-size: 22px; }
+.rc-content h3 { font-size: 18px; }
+
+.rc-content blockquote {
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--cs-surface-gray);
+  border-radius: var(--radius-sm);
+  color: var(--cs-text-dark);
+}
+.rc-content blockquote p { margin: 0; }
+
+.rc-content ul,
+.rc-content ol {
+  margin: 0;
+  padding-left: 21px;
+}
+.rc-content ul { list-style: disc; }
+.rc-content ol { list-style: decimal; }
+.rc-content li p { margin: 0; }
+
+.rc-content hr {
+  width: 100%;
+  height: 1px;
+  margin: 8px 0;
+  border: none;
+  background: var(--cs-lilac);
+}
+
+.rc-content a {
+  color: var(--cs-purple);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.rc-content table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.rc-content th,
+.rc-content td {
+  padding: 8px 10px;
+  border: 1px solid var(--cs-lilac);
+  vertical-align: top;
+  word-break: break-word;
+}
+.rc-content th {
+  background: var(--cs-surface-gray);
+  font-weight: 700;
+  text-align: left;
+}
+.rc-content td p,
+.rc-content th p { margin: 0; }
+
+/* ── 이미지 묶음 (에디터 노드 .rc-images / 상세 화면 공용) ── */
+.rc-content .rc-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+}
+.rc-content .rc-fig {
+  position: relative;
+  margin: 0;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.rc-content .rc-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+.rc-content .rc-images--collage .rc-fig { flex: 1 1 45%; }
+.rc-content .rc-images--collage .rc-img { height: 100%; max-height: 400px; object-fit: cover; }
+.rc-content .rc-images--slide {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: flex-start;
+  scroll-snap-type: x mandatory;
+}
+.rc-content .rc-images--slide .rc-fig { flex: 0 0 85%; scroll-snap-align: center; }
+
+/* ── 동영상 ── */
+.rc-content .rc-youtube {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--cs-dark);
+}
+.rc-content .rc-youtube .rc-yt-thumb,
+.rc-content .rc-youtube iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: cover;
+}
+.rc-content .rc-yt-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--cs-dark);
+  color: var(--cs-white);
+  font-size: 12px;
+  font-weight: 700;
+}

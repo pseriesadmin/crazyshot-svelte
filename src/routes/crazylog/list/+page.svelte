@@ -2,7 +2,6 @@
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { supabase } from '$lib/services/supabase'
@@ -279,17 +278,18 @@
         {:else}
           {#each displayPosts as post (post.id)}
             <div class="row-wrap" class:row-dim={isDimmed(post)}>
-              <a href="/crazylog/view/{post.id}" class="m-post-card">
+              <a href="/crazylog/view/{post.id}" class="m-post-card" aria-label={data.isAdmin ? undefined : post.title}>
                 {#if post.thumbnailUrl}
-                  <div class="m-post-thumb">
-                    <img src={post.thumbnailUrl} alt={post.title} loading="lazy" class="m-post-thumb-img" />
-                  </div>
+                  <img src={post.thumbnailUrl} alt="" loading="lazy" class="m-post-bg" aria-hidden="true" />
+                {:else}
+                  <div class="m-post-bg m-post-bg-empty" aria-hidden="true"></div>
                 {/if}
-                <div class="m-post-body" class:m-post-body-only={!post.thumbnailUrl}>
-                  <span class="m-post-log-type">{post.logType}</span>
+                <div class="m-post-overlay" aria-hidden="true"></div>
+                <div class="m-post-content">
+                  <span class="m-post-date">{post.logType} · {relativeTime(post.createdAt)}</span>
                   <p class="m-post-title">{post.title}</p>
                   <div class="meta-row">
-                    <p class="m-post-meta">{relativeTime(post.createdAt)}·by {post.author}</p>
+                    <p class="m-post-meta">by {post.author}</p>
                     {#if data.isAdmin}{@render RowActions(post)}{/if}
                   </div>
                 </div>
@@ -415,15 +415,13 @@
   visible={writeCardVisible}
 />
 
-<BottomTabBar />
-
 <style>
   /* ── 관리자 행 조작 / 비공개 흐림(2026-10-05) ──────────────────── */
   /* 비공개 글: 카드 내용만 50% 흐리게(조작 버튼은 정상 노출) — 조작 버튼이 카드 링크 안(작성자·날짜 줄 우측)에 있어 카드 전체 opacity를 쓰지 않는다 */
-  .row-dim :is(.pc-post, .m-post-card) { background: color-mix(in srgb, var(--cs-white) 50%, transparent); }
-  /* 썸네일 없는 모바일 카드는 본문 영역이 자체 흰 배경이라 카드 배경 50% 처리가 보이지 않는다 → 투명 처리 */
-  .row-dim .m-post-body-only { background: transparent; }
-  .row-dim :is(.pc-bar, .pc-thumb, .pc-log-type, .pc-title, .pc-meta, .m-post-thumb, .m-post-log-type, .m-post-title, .m-post-meta) { opacity: 0.5; }
+  .row-dim .pc-post { background: color-mix(in srgb, var(--cs-white) 50%, transparent); }
+  /* 모바일 이미지 카드: 어두운 카드 바탕 위에서 사진·글자만 흐리게(조작 버튼은 정상 노출) */
+  .row-dim :is(.m-post-bg, .m-post-date, .m-post-title, .m-post-meta) { opacity: 0.5; }
+  .row-dim :is(.pc-bar, .pc-thumb, .pc-log-type, .pc-title, .pc-meta) { opacity: 0.5; }
   /* 작성자·날짜 줄 + 우측 끝 관리자 조작 */
   .meta-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -628,7 +626,7 @@
   .m-content {
     width: 100%;
     border-radius: 0 50px 0 50px;
-    padding: 70px 25px 100px;
+    padding: 70px 25px 100px; /* 하단 100px = 화면 하단 고정 글쓰기 카드(bottom 24px + 높이)가 마지막 카드를 가리지 않게 확보 */
     background: linear-gradient(
       to bottom,
       rgba(225, 222, 243, 0.95) 0%,
@@ -642,43 +640,50 @@
     gap: 50px;
     width: 100%;
   }
+  /* 모바일 콘텐츠 카드 — 크레이지로그 홈(.m-article-card)과 같은 BG 이미지 + 오버레이 + 흰 텍스트 */
   .m-post-card {
-    background: var(--cs-white);
-    border-radius: var(--radius-md);  /* card.mobile = 15px (front design system) */
+    position: relative;
+    display: block;
     width: 100%;
+    height: 264px;
+    border-radius: 30px;
     overflow: hidden;
-  }
-  .m-post-card {
+    background: var(--cs-dark);
     text-decoration: none;
     color: inherit;
   }
-  .m-post-thumb {
-    width: 100%;
-    height: 200px;
-    overflow: hidden;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-  }
-  .m-post-thumb-img {
+  .m-post-bg {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
-    display: block;
+    pointer-events: none;
   }
-  .m-post-body {
+  .m-post-bg-empty { background: var(--cs-dark); }
+  .m-post-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to top,
+      rgba(16, 11, 50, 0.82) 0%,
+      rgba(16, 11, 50, 0.30) 60%,
+      rgba(16, 11, 50, 0.05) 100%
+    );
+  }
+  .m-post-content {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 20px 30px;
+    justify-content: flex-end;
+    padding: 18px 22px 20px;
+    gap: 4px;
   }
-  .m-post-body-only {
-    background: var(--cs-white);
-    border-radius: var(--radius-md);
-  }
-  .m-post-log-type {
-    font: var(--text-m-tag-11);
-    color: var(--cs-purple);
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
+  .m-post-date {
+    font: var(--text-m-script-12);
+    color: rgba(255, 255, 255, 0.65);
+    letter-spacing: 0.2px;
   }
   .m-empty {
     text-align: center;
@@ -689,16 +694,23 @@
     margin: 0;
   }
   .m-post-title {
-    font: var(--text-m-title-18B);
-    color: var(--cs-text-dark);
-    white-space: pre-wrap;
+    font: var(--text-m-ad-kr-18);
+    color: var(--cs-white);
     margin: 0;
+    line-height: 1.4;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .m-post-meta {
-    font: var(--text-m-script-12);
-    color: var(--cs-text-mid);
-    letter-spacing: -0.5px;
+    font: var(--text-m-script-14B);
+    color: rgba(255, 255, 255, 0.70);
+    letter-spacing: -0.3px;
     margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* ── PcContentList (PC 전용) ──────────────────────────────── */
