@@ -16,6 +16,8 @@
 
   // ── 검색 상태 ──────────────────────────────────────────────
   let searchQuery      = $state($page.url.searchParams.get('q') ?? '')
+  /** 입력창에 보이는 문구 — 키워드 칩 클릭·?q= 진입 때도 검색어를 채워 보여주기 위해 SuggestPicker 내부 값 대신 직접 관리 */
+  let inputText        = $state($page.url.searchParams.get('q') ?? '')
   let isSearching      = $state(false)
   let pickerSelectedId = $state<string | null>(null)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -23,6 +25,8 @@
   /** 자동완성 드롭다운 호출 최소 글자수·디바운스 — 트래픽 절감용 */
   const SUGGEST_MIN_CHARS = 2
   const SUGGEST_DEBOUNCE_MS = 400
+  /** 크레이지로그 결과 조회 건수 — 꽉 찼을 때만 "더보기" 링크 노출 */
+  const CRAZYLOG_LIMIT = 6
   /** 마지막으로 실제 제출(Enter·검색 아이콘)된 검색어 — 결과 그리드 기준 */
   let submittedQuery   = $state('')
   /** G-3: 현재 검색 세션의 log ID — recordSearchClick에 전달 */
@@ -107,6 +111,7 @@
   /** 입력 중에는 결과 그리드를 건드리지 않고 자동완성 드롭다운만 (디바운스·2자 이상) 갱신 */
   function onPickerInput(val: string) {
     searchQuery = val
+    inputText = val
     if (debounceTimer) clearTimeout(debounceTimer)
     suggestAbort?.abort()
     const q = val.trim()
@@ -119,7 +124,8 @@
     const ctrl = new AbortController()
     suggestAbort = ctrl
     try {
-      const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=8`, { signal: ctrl.signal })
+      // 자동완성은 search_logs에 기록되지 않는 경량 API 사용 — 관심집중 키워드 랭킹에 입력 중간 단계가 섞이지 않게(2026-10-06)
+      const resp = await fetch(`/api/search/suggest?q=${encodeURIComponent(q)}&limit=8`, { signal: ctrl.signal })
       if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
       const payload = await resp.json() as { results: Record<string, unknown>[] }
       suggestResults = (payload.results ?? []).map(mapSearchApiRow)
@@ -155,7 +161,7 @@
   }
 
   async function fetchCrazylogResults(q: string): Promise<{ results: Record<string, unknown>[] }> {
-    const resp = await fetch(`/api/search/crazylog?q=${encodeURIComponent(q)}&limit=6`)
+    const resp = await fetch(`/api/search/crazylog?q=${encodeURIComponent(q)}&limit=${CRAZYLOG_LIMIT}`)
     if (!resp.ok) throw new Error(`크레이지로그 검색 API 오류: ${resp.status}`)
     return await resp.json()
   }
@@ -235,7 +241,7 @@
                 class="search-input"
                 id={c.id}
                 placeholder={c.placeholder}
-                value={c.value}
+                value={inputText}
                 oninput={c.oninput}
                 onkeydown={(e) => onSearchKeydown(e, c.onkeydown)}
                 onfocus={c.onfocus}
@@ -264,7 +270,7 @@
   <!-- ── 관심집중 키워드 ── -->
   <SearchKeywordBar
     keywords={data.interestKeywords}
-    onkeywordclick={(kw) => { searchQuery = kw; doSearch(kw) }}
+    onkeywordclick={(kw) => { searchQuery = kw; inputText = kw; doSearch(kw) }}
   />
 
   <!-- ── 검색 결과 그리드 ── -->
@@ -279,7 +285,11 @@
 
   <!-- ── 크레이지로그 검색 결과 (검색 실행 후·결과 1건 이상일 때만, 최대 6건) ── -->
   {#if submittedQuery}
-    <SearchCrazylogSection posts={crazylogResults} topRound={searchResults.length === 0} />
+    <SearchCrazylogSection
+      posts={crazylogResults}
+      topRound={searchResults.length === 0}
+      moreHref={crazylogResults.length >= CRAZYLOG_LIMIT ? `/crazylog/list?q=${encodeURIComponent(submittedQuery)}` : undefined}
+    />
   {/if}
 
 </div>
