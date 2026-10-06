@@ -39,10 +39,8 @@
 import type { ContractLineItem } from '$lib/types/contract-module'
 import { normalizeKeyValueList, formatKeyValueText } from '$lib/utils/keyValueList'
 
-const COMPONENTS_TEXT_MAX = 50
-
 // products.components(key-value JSONB, ProductDetailPanel.svelte "구성품" 탭 — products.md
-// §4-1) → "key: value, key: value" 텍스트로 합친 뒤 50자(전체 문자 기준) 초과 시 말줄임.
+// §4-1) → "key: value, key: value" 텍스트로 합친다(전문 표기, 말줄임 없음).
 // products/[id]/+page.svelte의 productComponents 파생(Object.entries + 빈 키 제외)과 동일한
 // 필터링 규칙 재사용. 2026-09-08 — contract-data/+server.ts의 스칼라 {{구성품}} 전용
 // 헬퍼였던 것을 이 파일로 이관 + export: "대여 장비내역" 반복영역의 {{비고}}에도 동일
@@ -50,10 +48,8 @@ const COMPONENTS_TEXT_MAX = 50
 export function formatComponentsText(raw: unknown): string {
   const list = normalizeKeyValueList(raw)
   if (list.length === 0) return '-'
-  const joined = formatKeyValueText(list)
-  return joined.length > COMPONENTS_TEXT_MAX
-    ? joined.slice(0, COMPONENTS_TEXT_MAX) + '...'
-    : joined
+  // 2026-10-06: 계약서는 법적 문서라 구성품을 말줄임(50자 초과 시 '...') 없이 전문 표기한다.
+  return formatKeyValueText(list)
 }
 
 /**
