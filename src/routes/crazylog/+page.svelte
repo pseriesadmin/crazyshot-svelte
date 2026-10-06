@@ -4,6 +4,7 @@
   import CrazylogKeywordModal from '$lib/components/crazylog/admin/CrazylogKeywordModal.svelte'
   import type { PageData } from './$types'
   import { revealOnScroll } from '$lib/actions/revealOnScroll'
+  import { goto } from '$app/navigation'
   interface Props { data: PageData }
   let { data }: Props = $props()
 
@@ -37,6 +38,19 @@
     '상품리뷰': '상품리뷰',
     '일상공유': '일상공유',
     '채널홍보': '채널홍보',
+  }
+
+  /** 카드 분류명 → 콘텐츠 목록. 로그 타입(상품리뷰·일상공유·채널홍보)과 같은 이름이면 그 탭, 아니면 전체 목록 */
+  function categoryListHref(category: string): string {
+    const tab = TAB_MAP[category.trim()]
+    return tab ? `/crazylog/list?tab=${encodeURIComponent(tab)}` : '/crazylog/list'
+  }
+
+  /** + 버튼은 카드 링크(<a>) 안에 있어 기본 이동(상세)을 막고 분류 목록으로 보낸다 */
+  function openCategoryList(e: MouseEvent, category: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    void goto(categoryListHref(category))
   }
 
   const M_KEYWORDS = $derived(data.headKeywords)
@@ -317,7 +331,7 @@
             <!-- Figma: shrink-0 header bar -->
             <div class="m-card-header" style="background:{card.headerBg}">
               <span class="m-card-category">{card.category}</span>
-              <button class="m-card-more" aria-label="더보기">
+              <button type="button" class="m-card-more" aria-label="{card.category} 콘텐츠 목록 보기" onclick={(e) => openCategoryList(e, card.category)}>
                 <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
                   <rect width="22" height="22" rx="7" fill="rgba(225,222,243,0.9)"/>
                   <path d="M6 11h10M11 6v10" stroke="#553FE0" stroke-width="2.5" stroke-linecap="round"/>

@@ -1,6 +1,7 @@
 import type { PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
 import { canManagePost, canDeletePost } from '$lib/utils/crazylogPostPermissions'
+import { sanitizeCrazylogBlocks } from '$lib/server/sanitizeCrazylogHtml'
 
 type PostRow = {
 	id: string
@@ -13,6 +14,10 @@ type PostRow = {
 	thumbnail_url: string | null
 	status: string
 	is_public: boolean | null
+	allow_comments: boolean | null
+	allow_scrap: boolean | null
+	auto_source: boolean | null
+	ccl: string | null
 }
 type ProfileRow = {
 	id: string
@@ -62,7 +67,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (session) {
 		const { data: profile } = await locals.supabase
 			.from('user_profiles')
-			.select('cms_role, full_name, membership_grade, credit_score')
+			.select('cms_role, full_name, membership_grade, credit_score, avatar_url')
 			.eq('id', session.user.id)
 			.maybeSingle()
 		const profileData = profile as {
@@ -70,6 +75,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			full_name: string | null
 			membership_grade: string | null
 			credit_score: number | null
+			avatar_url: string | null
 		} | null
 		isAdmin = !!profileData?.cms_role
 		viewerRole = profileData?.cms_role ?? null
@@ -78,7 +84,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		const level = score >= 85 ? 'LV.5' : score >= 70 ? 'LV.4' : score >= 50 ? 'LV.3' : score >= 30 ? 'LV.2' : 'LV.1'
 		currentUser = {
 			displayName: profileData?.full_name ?? '익명',
-			avatarUrl:   null,
+			avatarUrl:   profileData?.avatar_url ?? null, // 개인정보 화면 프로필 사진과 연동
 			membershipGrade: resolveGrade(profileData?.membership_grade),
 			level,
 		}
@@ -91,7 +97,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const { data: rawPost } = await locals.supabase
 		.from('user_posts')
-		.select('id, title, log_type, content_blocks, keywords, created_at, user_id, thumbnail_url, status, is_public')
+		.select('id, title, log_type, content_blocks, keywords, created_at, user_id, thumbnail_url, status, is_public, allow_comments, allow_scrap, auto_source, ccl')
 		.eq('id', params.slug)
 		.maybeSingle()
 
@@ -143,7 +149,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		id:            postData.id,
 		title:         postData.title,
 		logType:       postData.log_type ?? '',
-		contentBlocks: postData.content_blocks as unknown[],
+		// 본문 HTML은 {@html}로 출력되므로 허용 목록 기준으로 정화해서 내려보낸다(저장형 XSS 방지, 저장값은 그대로)
+		contentBlocks: sanitizeCrazylogBlocks(postData.content_blocks) as unknown[],
 		keywords:      (postData.keywords ?? []) as string[],
 		createdAt:     postData.created_at,
 		author:        authorName,
@@ -152,6 +159,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		youtubeVideoId,
 		status:        postData.status,
 		isPublic:      postData.is_public !== false,
+		// 작성자 옵션(2026-10-06): 스크랩 허용(꺼지면 본문 복사 방지)·자동출처(복사 시 출처 첨부+하단 출처 표시)·CCL(CC BY 표기)
+		allowScrap:    postData.allow_scrap !== false,
+		autoSource:    postData.auto_source === true,
+		ccl:           postData.ccl ?? null,
 		userId:        postData.user_id,
 	}
 
@@ -164,5 +175,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const canManage = canManagePost(permInput)
 	const canDelete = canDeletePost(permInput)
 
-	return { isAdmin, isLoggedIn, isOwner, canManage, canDelete, currentUser, postId: params.slug, postStatus: postData.status, post, comments }
+	// 작성자가 댓글을 막은 글(allow_comments=false)이면 새 댓글 입력을 막는다(기존 댓글은 그대로 표시) — 집행은 DB 트리거 #648
+	const allowComments = postData.allow_comments !== false
+
+	return { isAdmin, isLoggedIn, isOwner, canManage, canDelete, allowComments, currentUser, postId: params.slug, postStatus: postData.status, post, comments }
 }

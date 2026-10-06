@@ -9,6 +9,8 @@
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import { describePostActionError } from '$lib/utils/crazylogPostPermissions'
+  import '$lib/styles/rich-content.css'
+  import { imageBlockStyle } from '$lib/types/content-editor'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -18,6 +20,25 @@
   // 않고 data만 갱신될 수 있다. $derived로 매번 최신 data.post를 반영한다.
   const post = $derived(data.post)
   const YOUTUBE_VIDEO_ID = $derived(post?.youtubeVideoId ?? null)
+
+  // ── 작성자 옵션 연결(2026-10-06) ───────────────────────────────────────────
+  // 스크랩 허용 꺼짐 → 본문 복사·잘라내기·드래그 선택·우클릭(이미지 저장)을 막는다. 작성자·관리자(canManage)는 예외.
+  //   ※ 화면 차원의 억제 장치라 소스 보기 등으로는 우회할 수 있다(본문은 공개 글이라 서버가 숨길 수 없음).
+  // 자동출처 켜짐 → 본문을 복사하면 "출처: 작성자 · 글 주소"를 끝에 붙이고, 본문 아래에 출처 문구를 표시한다.
+  const copyBlocked = $derived(!!post && post.allowScrap === false && !data.canManage)
+
+  function blockWhenCopyDisabled(e: Event) {
+    if (copyBlocked) e.preventDefault()
+  }
+
+  function onArticleCopy(e: ClipboardEvent) {
+    if (copyBlocked) { e.preventDefault(); return }
+    if (!post?.autoSource) return
+    const text = window.getSelection()?.toString() ?? ''
+    if (!text.trim()) return
+    e.clipboardData?.setData('text/plain', `${text}\n\n출처: ${post.author} · ${window.location.href}`)
+    e.preventDefault()
+  }
 
   let showModal = $state(false)
   let liked    = $state(false)
@@ -75,8 +96,15 @@
 
   type TextBlock  = { type: 'text';  html: string }
   type ImageItem  = { url: string;   alt: string; isHead?: boolean }
-  type ImageBlock = { type: 'image'; layout: string; images: ImageItem[] }
-  type Block = TextBlock | ImageBlock
+  type ImageBlock = { type: 'image'; layout: string; images: ImageItem[]; width?: number; align?: string }
+  type YoutubeBlock = { type: 'youtube'; videoId: string; url?: string }
+  type DividerBlock = { type: 'divider' }
+  type Block = TextBlock | ImageBlock | YoutubeBlock | DividerBlock
+
+  /** 유튜브 영상 ID는 11자 영숫자·-·_ 만 허용(DB 값이 임의 문자열이어도 iframe 주소가 바뀌지 않게). */
+  function safeYoutubeId(id: unknown): string | null {
+    return typeof id === 'string' && /^[\w-]{11}$/.test(id) ? id : null
+  }
 
   function getBlocks(): Block[] {
     if (!post?.contentBlocks) return []
@@ -160,9 +188,12 @@
     })
   }
 
+  // 작성자가 댓글을 막은 글이면 입력·등록을 비활성화(2026-10-05) — 데이터가 없는 경우(글 없음 등)는 기존처럼 열림으로 취급
+  const commentsOpen = $derived(data.allowComments !== false)
+
   async function handleCommentSubmit() {
     const content = commentText.trim()
-    if (!content || commentBusy) return
+    if (!content || commentBusy || !commentsOpen) return
     if (!data.isLoggedIn) { commentError = '댓글은 로그인 후 작성할 수 있습니다.'; return }
     commentBusy = true
     commentError = null
@@ -413,17 +444,24 @@
         </div>
         <h1 class="d-title">{post?.title ?? ''}</h1>
 
-        <div class="d-article">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="d-article rc-content" class:no-copy={copyBlocked} oncopy={onArticleCopy} oncut={blockWhenCopyDisabled} oncontextmenu={blockWhenCopyDisabled} ondragstart={blockWhenCopyDisabled}>
           {#each getBlocks() as block}
             {#if block.type === 'text'}
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html block.html}
             {:else if block.type === 'image'}
-              <div class="d-content-images d-content-images--{block.layout}">
+              <div class="d-content-images d-content-images--{block.layout}" style={imageBlockStyle(block.width, block.align)}>
                 {#each block.images.filter(img => !img.isHead && img.url !== post?.heroFromBody) as img}
                   <img src={img.url} alt={img.alt} loading="lazy" class="d-content-img" />
                 {/each}
               </div>
+            {:else if block.type === 'youtube' && safeYoutubeId(block.videoId)}
+              <div class="rc-youtube">
+                <iframe src="https://www.youtube.com/embed/{safeYoutubeId(block.videoId)}?rel=0" title="유튜브 동영상" loading="lazy" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
+              </div>
+            {:else if block.type === 'divider'}
+              <hr />
             {/if}
           {/each}
           {#if !post}
@@ -436,6 +474,17 @@
             {#each post.keywords as kw}
               <span class="d-tag">#{kw}</span>
             {/each}
+          </div>
+        {/if}
+
+        {#if post?.autoSource || post?.ccl}
+          <div class="d-license">
+            {#if post.autoSource}
+              <p>출처: {post.author} · 크레이지샷 크레이지로그</p>
+            {/if}
+            {#if post.ccl}
+              <p>CC BY(저작자표시) — 출처를 밝히면 자유롭게 이용할 수 있어요. <a href="https://creativecommons.org/licenses/by/4.0/deed.ko" target="_blank" rel="noopener noreferrer">라이선스 보기</a></p>
+            {/if}
           </div>
         {/if}
       </div>
@@ -479,16 +528,16 @@
         <input
           class="d-comment-input"
           type="text"
-          placeholder={data.isLoggedIn ? '후기 입력...' : '로그인 후 댓글을 작성할 수 있습니다.'}
+          placeholder={!commentsOpen ? '작성자가 댓글을 허용하지 않은 글입니다.' : data.isLoggedIn ? '후기 입력...' : '로그인 후 댓글을 작성할 수 있습니다.'}
           aria-label="후기 입력"
           value={commentText}
           oninput={(e) => { commentText = (e.target as HTMLInputElement).value }}
           onkeydown={onCommentKeydown}
-          disabled={commentBusy || !data.isLoggedIn}
+          disabled={commentBusy || !data.isLoggedIn || !commentsOpen}
         />
         <button class="d-comment-send" aria-label="등록"
           onclick={handleCommentSubmit}
-          disabled={commentBusy || !data.isLoggedIn}>
+          disabled={commentBusy || !data.isLoggedIn || !commentsOpen}>
           <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
             <path d="M16 6.00001H1M5.61549 1.00001L1 6.00001L5.61549 11" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -589,16 +638,23 @@
         <h1 class="m-title">{post?.title ?? ''}</h1>
 
         <!-- Body -->
-        <div class="m-article">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="m-article rc-content" class:no-copy={copyBlocked} oncopy={onArticleCopy} oncut={blockWhenCopyDisabled} oncontextmenu={blockWhenCopyDisabled} ondragstart={blockWhenCopyDisabled}>
           {#each getBlocks() as block}
             {#if block.type === 'text'}
               {@html block.html}
             {:else if block.type === 'image'}
-              <div class="article-images article-images--{block.layout}">
+              <div class="article-images article-images--{block.layout}" style={imageBlockStyle(block.width, block.align)}>
                 {#each block.images.filter(img => !img.isHead && img.url !== post?.heroFromBody) as img}
                   <img src={img.url} alt={img.alt} loading="lazy" class="m-article-img" />
                 {/each}
               </div>
+            {:else if block.type === 'youtube' && safeYoutubeId(block.videoId)}
+              <div class="rc-youtube">
+                <iframe src="https://www.youtube.com/embed/{safeYoutubeId(block.videoId)}?rel=0" title="유튜브 동영상" loading="lazy" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
+              </div>
+            {:else if block.type === 'divider'}
+              <hr />
             {/if}
           {/each}
         </div>
@@ -608,6 +664,17 @@
             {#each post.keywords as kw}
               <span class="m-tag">#{kw}</span>
             {/each}
+          </div>
+        {/if}
+
+        {#if post?.autoSource || post?.ccl}
+          <div class="m-license">
+            {#if post.autoSource}
+              <p>출처: {post.author} · 크레이지샷 크레이지로그</p>
+            {/if}
+            {#if post.ccl}
+              <p>CC BY(저작자표시) — 출처를 밝히면 자유롭게 이용할 수 있어요. <a href="https://creativecommons.org/licenses/by/4.0/deed.ko" target="_blank" rel="noopener noreferrer">라이선스 보기</a></p>
+            {/if}
           </div>
         {/if}
 
@@ -653,16 +720,16 @@
         <input
           class="m-comment-input"
           type="text"
-          placeholder="후기를 등록해 주세요."
+          placeholder={commentsOpen ? '후기를 등록해 주세요.' : '작성자가 댓글을 허용하지 않은 글입니다.'}
           aria-label="후기 입력"
           value={commentText}
           oninput={(e) => { commentText = (e.target as HTMLInputElement).value }}
           onkeydown={onCommentKeydown}
-          disabled={commentBusy || !data.isLoggedIn}
+          disabled={commentBusy || !data.isLoggedIn || !commentsOpen}
         />
         <button class="m-send-btn" aria-label="등록"
           onclick={handleCommentSubmit}
-          disabled={commentBusy || !data.isLoggedIn}>
+          disabled={commentBusy || !data.isLoggedIn || !commentsOpen}>
           <div style="transform: rotate(90deg); display:flex; align-items:center; justify-content:center; width:15px; height:10px;">
             <svg width="17" height="12" viewBox="0 0 17 12" fill="none" style="width:17px;height:12px;">
               <path d={MOB_SVG.back} stroke="#100B32" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -975,6 +1042,18 @@
     object-fit: cover;
     max-height: 400px;
   }
+  /* 슬라이드: 편집 화면(.rc-images--slide)과 같은 가로 스크롤 스트립 */
+  .d-content-images--slide {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scroll-snap-type: x mandatory;
+  }
+  .d-content-images--slide .d-content-img {
+    flex: 0 0 85%;
+    width: 85%;
+    scroll-snap-align: center;
+  }
 
   /* 태그 */
   .d-tags {
@@ -991,6 +1070,15 @@
     padding: 4px 12px;
     border-radius: var(--radius-full);
   }
+
+  /* 출처·CCL 표기 */
+  .d-license { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; }
+  .d-license p { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .d-license a { color: var(--cs-purple); text-decoration: underline; }
+
+  /* 스크랩 허용 꺼짐 — 본문 선택·복사·이미지 저장 억제(작성자·관리자는 적용 안 됨) */
+  .no-copy { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .no-copy :global(img) { -webkit-user-drag: none; user-drag: none; }
 
   /* 3. Comments */
   .d-comments {
@@ -1341,6 +1429,29 @@
     display: block;
     object-fit: contain;
   }
+  /* 콜라주·슬라이드: 편집 화면(.rc-images--collage/--slide)과 같은 배치(WYSIWYG) */
+  .article-images--collage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .article-images--collage .m-article-img {
+    flex: 1 1 45%;
+    width: auto;
+    max-height: 240px;
+    object-fit: cover;
+  }
+  .article-images--slide {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+  }
+  .article-images--slide .m-article-img {
+    flex: 0 0 85%;
+    width: 85%;
+    scroll-snap-align: center;
+  }
 
   .m-tags {
     display: flex;
@@ -1355,6 +1466,11 @@
     padding: 4px 12px;
     border-radius: var(--radius-full);
   }
+
+  /* 출처·CCL 표기 */
+  .m-license { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; }
+  .m-license p { margin: 0; font: var(--text-m-script-12); color: var(--cs-text-mid); }
+  .m-license a { color: var(--cs-purple); text-decoration: underline; }
 
   /* 후기 div: px-[25px] pb-[100px] on #ecebf4 bg */
   .m-huri {

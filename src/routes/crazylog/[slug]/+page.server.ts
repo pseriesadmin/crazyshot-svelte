@@ -1,6 +1,7 @@
 import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
+import { sanitizeCrazylogBlocks } from '$lib/server/sanitizeCrazylogHtml'
 
 function calcLevel(creditScore: number | null): string {
 	const score = creditScore ?? 0
@@ -22,7 +23,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	// 사용자 프로필 조회
 	const { data: profileRaw } = await locals.supabase
 		.from('user_profiles')
-		.select('full_name, membership_grade, credit_score, cms_role')
+		.select('full_name, membership_grade, credit_score, cms_role, avatar_url')
 		.eq('id', userId)
 		.maybeSingle()
 
@@ -31,6 +32,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		membership_grade: string | null
 		credit_score: number | null
 		cms_role: string | null
+		avatar_url: string | null
 	} | null
 
 	// 콘텐츠 통계 조회 (Migration #117 신규 RPC — 타입 미등록, as any 캐스트)
@@ -67,7 +69,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			throw error(403, '수정 권한이 없습니다.')
 		}
 
-		existingPost = postData
+		// 에디터가 본문을 innerHTML로 불러오므로 수정 모드에서도 정화한 본문을 내려보낸다(저장된 악성 스크립트가 작성 화면에서 실행되는 것 방지)
+		existingPost = { ...postData, content_blocks: sanitizeCrazylogBlocks(postData.content_blocks) }
 	}
 
 	const postViewCount = existingPost
@@ -80,7 +83,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			displayName,
 			membershipGrade,
 			level,
-			avatarUrl: null,
+			// 개인정보 화면에서 올린 프로필 사진(user_profiles.avatar_url)과 연동 — 없으면 화면이 이니셜로 표시
+			avatarUrl: profile?.avatar_url ?? null,
 		},
 		stats: {
 			postCount: Number(stats.post_count ?? 0),

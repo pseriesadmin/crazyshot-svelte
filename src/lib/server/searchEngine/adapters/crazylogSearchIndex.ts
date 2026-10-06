@@ -5,7 +5,7 @@
  * MiniSearch 인덱스를 생성한다.
  *
  * 특징:
- * - 공개 게시물만 대상 (status='published' AND is_public=true) — RLS와 동일 조건
+ * - 공개 게시물만 대상 (status='published' AND is_public=true) — RLS와 동일 조건, 작성자가 'AI·자동 저장'을 끈 글(allow_ai_save=false)은 제외
  * - 모듈 스코프 캐시 (TTL 60초) — Vercel Serverless 콜드스타트 시 즉시 재구축
  * - title / keywords(TEXT[]) / tags(TEXT[]) / content_blocks(JSONB → 텍스트 추출) / log_type 포함
  * - content_blocks 추출은 productSearchIndex.ts의 extractContentBlocksText() 재사용 (중복 구현 금지)
@@ -97,6 +97,8 @@ export async function getCrazylogSearchIndex(): Promise<NaturalSearchProvider<Cr
     .select('id, title, log_type, content_blocks, keywords, tags, thumbnail_url, created_at, user_id')
     .eq('status', 'published')
     .eq('is_public', true)
+    // 작성자가 'AI·자동 저장'을 끈 글은 검색 인덱스(자동 수집 대상)에서 제외 — 글 화면에는 영향 없음(2026-10-06)
+    .eq('allow_ai_save', true)
 
   if (error || !rawPosts) {
     console.error('[crazylogSearchIndex] user_posts 조회 실패:', error?.message)

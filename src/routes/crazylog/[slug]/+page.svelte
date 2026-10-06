@@ -4,18 +4,11 @@
 	import { goto } from '$app/navigation'
 	import { supabase } from '$lib/services/supabase'
 	import type { PageData } from './$types'
-	import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+	import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
 	import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
 	import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
-	import {
-		makeEmptyTextBlock,
-		makeEmptyImageBlock,
-		makeEmptyYoutubeBlock,
-		makeEmptyDividerBlock,
-		makeEmptyLinkEntryBlock,
-		type ContentBlock,
-	} from '$lib/types/content-editor'
-	import { resizeProductImage } from '$lib/utils/imageResize'
+	import { makeEmptyTextBlock, type ContentBlock } from '$lib/types/content-editor'
+	import { csToast } from '$lib/utils/toast'
 
 	const LOG_TYPES = [
 		'상품리뷰',
@@ -32,9 +25,112 @@
 	const ep = data.existingPost
 	const isEdit = !!ep
 
+	// 에디터는 보이는 레이아웃(모바일/PC) 한쪽에만 마운트한다 — 문서 에디터 2개가 같은 blocks를 동시에 편집하지 않게
+	let isMobile = $state<boolean | null>(null)
+	let editorRef = $state<RichContentEditor | undefined>()
+
+	// 임시저장(로컬) — 작성 중 탭 전환·새로고침으로 글이 사라지는 것을 막는다. 제출 성공 시 삭제.
+	const draftKey = `crazylog-draft:${ep?.id ?? 'new'}`
+	interface Draft {
+		logType: string
+		title: string
+		blocks: ContentBlock[]
+		keywords: string[]
+		savedAt: number
+	}
+	let draft = $state<Draft | null>(null)
+	let touched = $state(false)
+	let submitted = false
+	let draftTimer: ReturnType<typeof setTimeout> | undefined
+
+	function markTouched() {
+		touched = true
+	}
+
+	const initialKeywords = JSON.stringify((ep?.keywords as string[]) ?? [])
+	$effect(() => {
+		if (JSON.stringify(keywords) !== initialKeywords) touched = true
+	})
+
+	function readDraft(): Draft | null {
+		try {
+			const raw = localStorage.getItem(draftKey)
+			if (!raw) return null
+			const d = JSON.parse(raw) as Draft
+			return d && Array.isArray(d.blocks) ? d : null
+		} catch {
+			return null
+		}
+	}
+
+	function clearDraft() {
+		try {
+			localStorage.removeItem(draftKey)
+		} catch { /* 저장소 접근 불가 — 무시 */ }
+	}
+
+	function restoreDraft() {
+		if (!draft) return
+		// 에디터가 아직 준비되지 않았으면 복원하지 않고 안내만 유지(제목만 복원되고 본문이 덮어써지는 것 방지)
+		if (!editorRef?.setBlocks(draft.blocks)) {
+			csToast.info('에디터를 불러오는 중이에요. 잠시 후 다시 눌러주세요.')
+			return
+		}
+		logType = draft.logType
+		title = draft.title
+		keywords = [...draft.keywords]
+		touched = true
+		draft = null
+	}
+
+	function discardDraft() {
+		clearDraft()
+		draft = null
+	}
+
+	function formatSavedAt(ts: number): string {
+		return new Date(ts).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+	}
+
+	$effect(() => {
+		// 변경을 감지할 값들(제목·타입·키워드·본문)
+		const snapshot: Draft = { logType, title, blocks: $state.snapshot(blocks) as ContentBlock[], keywords: [...keywords], savedAt: Date.now() }
+		if (!touched || submitted) return
+		clearTimeout(draftTimer)
+		draftTimer = setTimeout(() => {
+			if (submitted) return
+			try {
+				localStorage.setItem(draftKey, JSON.stringify({ ...snapshot, savedAt: Date.now() }))
+			} catch { /* 용량 초과·차단 — 임시저장 생략 */ }
+		}, 800)
+		return () => clearTimeout(draftTimer)
+	})
+
 	onMount(() => {
 		document.body.classList.add('crazylog-write')
-		return () => document.body.classList.remove('crazylog-write')
+
+		const mq = window.matchMedia('(max-width: 767px)')
+		isMobile = mq.matches
+		const onMq = (e: MediaQueryListEvent) => (isMobile = e.matches)
+		mq.addEventListener('change', onMq)
+
+		const d = readDraft()
+		if (d && (d.title || d.blocks.length > 0)) draft = d
+
+		const onBeforeUnload = (e: BeforeUnloadEvent) => {
+			if (touched && !submitted) {
+				e.preventDefault()
+				e.returnValue = ''
+			}
+		}
+		window.addEventListener('beforeunload', onBeforeUnload)
+
+		return () => {
+			document.body.classList.remove('crazylog-write')
+			mq.removeEventListener('change', onMq)
+			window.removeEventListener('beforeunload', onBeforeUnload)
+			clearTimeout(draftTimer)
+		}
 	})
 
 	// 폼 상태 (수정 모드 초기값 적용)
@@ -62,61 +158,20 @@
 	// 유저 정보
 	const avatarChar = data.profile.displayName[0] ?? '?'
 	const avatarUrl = data.profile.avatarUrl
+	// 프로필 사진 로드 실패(파일 삭제·일시 장애) 시 이니셜로 되돌린다
+	let avatarFailed = $state(false)
 	const membershipGrade = data.profile.membershipGrade
 	const level = data.profile.level
 
-	// 이모지 피커
-	const EMOJI_LIST = [
-		'😀','😂','🥰','😎','🤔','😭','😡','🥳',
-		'👍','👎','👏','🙏','💪','🤝','✌️','👋',
-		'❤️','💔','💯','🔥','⭐','✨','🎉','🎊',
-		'📷','🎬','🎵','🎮','📚','✏️','💡','🔑',
-		'🌸','🌊','⛅','🌙','🌈','🍕','☕','🍀',
-	]
-	let showEmojiPicker = $state(false)
-	let showLinkDialog = $state(false)
-
-	function insertEmoji(emoji: string) {
-		blocks = [...blocks, { type: 'text' as const, html: `<p>${emoji}</p>` }]
-		showEmojiPicker = false
-	}
-
-	// 파일 첨부 업로드
-	let attachFileInput: HTMLInputElement
-	const attachUploadPrefix = typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID
+	// 에디터 이미지 업로드 prefix — 일반 사용자는 'log/…' 경로만 업로드 가능(/api/cms/upload)
+	const uploadPrefix = typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID
 		? 'log/' + globalThis.crypto.randomUUID()
 		: 'log/tmp'
-	let isAttachUploading = $state(false)
-
-	async function handleAttachFiles(files: FileList | null) {
-		if (!files || files.length === 0) return
-		isAttachUploading = true
-		for (const file of Array.from(files)) {
-			try {
-				const { thumb, large } = await resizeProductImage(file)
-				const fd = new FormData()
-				fd.append('product_id', attachUploadPrefix)
-				fd.append('thumb', new File([thumb], 'thumb.webp', { type: 'image/webp' }))
-				fd.append('large', new File([large], 'large.webp', { type: 'image/webp' }))
-				const res = await fetch('/api/cms/upload', { method: 'POST', body: fd })
-				if (res.ok) {
-					const json = await res.json() as { largeUrl: string }
-					blocks = [...blocks, { type: 'image', layout: 'individual', images: [{ url: json.largeUrl, alt: file.name }] }]
-				}
-			} catch { /* ignore */ }
-		}
-		isAttachUploading = false
-		if (attachFileInput) attachFileInput.value = ''
-	}
-
-	function insertLinkEntryBlock() {
-		blocks = [...blocks, makeEmptyLinkEntryBlock()]
-		showEmojiPicker = false
-	}
 
 	function selectType(t: string) {
 		logType = t
 		typeOpen = false
+		markTouched()
 	}
 
 	async function handleSubmit() {
@@ -124,10 +179,16 @@
 		if (!logType) { errorMsg = '로그 타입을 선택해주세요.'; return }
 		if (!title.trim()) { errorMsg = '제목을 입력해주세요.'; return }
 
+		// 대기 중인 편집 내용을 반영하고 누락 여부를 점검 — 변경이 없으면 원본 블록을 그대로 쓴다(무변경 저장)
+		const flushed = editorRef?.flush()
+		if (flushed && !flushed.ok) {
+			errorMsg = '본문을 저장 형식으로 변환하는 중 내용이 달라져 저장을 멈췄어요. 새로고침 후 다시 시도해주세요.'
+			return
+		}
 		// link-entry 블록은 저장 대상에서 제외 (미완성 입력폼)
-		blocks = blocks.filter(b => b.type !== 'link-entry')
+		const submitBlocks = (flushed?.blocks ?? blocks).filter(b => b.type !== 'link-entry')
 
-		const hasImage = blocks.some(
+		const hasImage = submitBlocks.some(
 			b => b.type === 'image' && Array.isArray((b as { images?: { url: string }[] }).images) &&
 				(b as { images: { url: string }[] }).images.some(img => img.url)
 		)
@@ -140,7 +201,7 @@
 		type ImageItem = { url: string; alt: string; isHead?: boolean }
 		type ImageBlockType = { type: 'image'; images: ImageItem[] }
 		let headImageUrl: string | null = null
-		for (const b of blocks) {
+		for (const b of submitBlocks) {
 			if (b.type !== 'image') continue
 			const imgBlock = b as ImageBlockType
 			const head = imgBlock.images.find(img => img.isHead && img.url)
@@ -148,6 +209,7 @@
 		}
 
 		isSubmitting = true
+		submitted = true // 제출 중 임시저장 타이머가 되살아나지 않게
 
 		try {
 			if (isEdit) {
@@ -156,7 +218,7 @@
 					p_id: ep!.id,
 					p_log_type: logType,
 					p_title: title.trim(),
-					p_content_blocks: blocks,
+					p_content_blocks: submitBlocks,
 					p_keywords: keywords,
 					p_tags: keywords,
 					p_is_public: isPublic,
@@ -173,7 +235,7 @@
 				const { error } = await (supabase.rpc as any)('create_user_post', {
 					p_log_type: logType,
 					p_title: title.trim(),
-					p_content_blocks: blocks,
+					p_content_blocks: submitBlocks,
 					p_keywords: keywords,
 					p_tags: keywords,
 					p_is_public: isPublic,
@@ -187,8 +249,11 @@
 				if (error) throw new Error((error as { message: string }).message)
 			}
 
+			submitted = true
+			clearDraft()
 			await goto('/crazylog/list')
 		} catch (e) {
+			submitted = false
 			errorMsg = e instanceof Error ? e.message : '등록 중 오류가 발생했습니다.'
 		} finally {
 			isSubmitting = false
@@ -203,22 +268,26 @@
       body.crazylog-write .gnb-desktop-wrap { display: none !important; }
       body.crazylog-write .fab-bar           { display: none !important; }
       body.crazylog-write .site-footer       { display: none !important; }
+      body.crazylog-write .tab-bar           { display: none !important; } /* 키보드 위 도킹 툴바와 겹침 방지 */
     }
   </style>
 </svelte:head>
 
+{#snippet draftBanner()}
+	{#if draft}
+		<div class="draft-banner" role="status">
+			<span class="draft-text">임시 저장된 글이 있어요 ({formatSavedAt(draft.savedAt)})</span>
+			<span class="draft-actions">
+				<button type="button" class="draft-btn draft-btn-on" onclick={restoreDraft}>복원</button>
+				<button type="button" class="draft-btn" onclick={discardDraft}>삭제</button>
+			</span>
+		</div>
+	{/if}
+{/snippet}
+
 <!-- ============================================================
      MOBILE LAYOUT
      ============================================================ -->
-<input
-	type="file"
-	accept="image/*"
-	multiple
-	style="display:none"
-	bind:this={attachFileInput}
-	onchange={(e) => handleAttachFiles((e.target as HTMLInputElement).files)}
-/>
-
 <div class="m-page">
 	<!-- Mobile GNB (custom — replaces common GNB on mobile) -->
 	<header class="m-gnb-wrap">
@@ -259,8 +328,8 @@
 		<!-- User info card (compact) -->
 		<div class="m-user-card">
 			<div class="m-avatar">
-				{#if avatarUrl}
-					<img src={avatarUrl} alt={data.profile.displayName} class="m-avatar-img" />
+				{#if avatarUrl && !avatarFailed}
+					<img src={avatarUrl} alt={data.profile.displayName} class="m-avatar-img" onerror={() => (avatarFailed = true)} />
 				{:else}
 					{avatarChar}
 				{/if}
@@ -278,6 +347,10 @@
 				</div>
 			</div>
 		</div>
+
+		{#if draft}
+			{@render draftBanner()}
+		{/if}
 
 		<!-- Log type select -->
 		<div class="m-field-wrap">
@@ -310,120 +383,13 @@
 		</div>
 
 		<!-- Title input -->
-		<input class="m-input" type="text" placeholder="로그 제목" bind:value={title} />
+		<input class="m-input" type="text" placeholder="로그 제목" bind:value={title} oninput={markTouched} />
 
-		<!-- Content editor (toolbar + CmsContentEditor) -->
+		<!-- Content editor (워드프로세서형 단일 문서 에디터) -->
 		<div class="m-editor-box">
-			<div class="m-toolbar">
-				<button class="m-tb-btn" aria-label="이미지"
-					onclick={() => { blocks = [...blocks, makeEmptyImageBlock()] }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<rect x="2" y="4" width="16" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
-						<circle cx="7" cy="8.5" r="1.5" fill="#444444" />
-						<path
-							d="M2 14l4-4 3 3 3-3 4 4"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="동영상"
-					onclick={() => { blocks = [...blocks, makeEmptyYoutubeBlock()] }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<rect x="2" y="4" width="11" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
-						<path
-							d="M13 8l5-3v10l-5-3V8Z"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linejoin="round"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="텍스트"
-					onclick={() => { blocks = [...blocks, makeEmptyTextBlock()] }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<path
-							d="M4 5h12M10 5v11M8 16h4"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="이모지" aria-expanded={showEmojiPicker}
-					onclick={() => { showEmojiPicker = !showEmojiPicker; showLinkDialog = false }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<circle cx="10" cy="10" r="7" stroke="#444444" stroke-width="1.5" />
-						<circle cx="7.5" cy="8.5" r="1" fill="#444444" />
-						<circle cx="12.5" cy="8.5" r="1" fill="#444444" />
-						<path
-							d="M7 13c.8 1.2 5.2 1.2 6 0"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="인용"
-					onclick={() => { blocks = [...blocks, { type: 'text', html: '<blockquote>인용문을 입력하세요.</blockquote>' }]; showEmojiPicker = false; showLinkDialog = false }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<rect x="4" y="7" width="3" height="6" rx="1" fill="#444444" />
-						<rect x="10" y="7" width="3" height="6" rx="1" fill="#444444" />
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="구분선"
-					onclick={() => { blocks = [...blocks, makeEmptyDividerBlock()]; showEmojiPicker = false; showLinkDialog = false }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<path
-							d="M3 10h14"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-							stroke-dasharray="2 2"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="링크"
-					onclick={insertLinkEntryBlock}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<path
-							d="M8 12a4 4 0 0 0 5.66 0l2-2a4 4 0 0 0-5.66-5.66L9 5.34"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						/>
-						<path
-							d="M12 8a4 4 0 0 0-5.66 0l-2 2a4 4 0 0 0 5.66 5.66L11 14.66"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-						/>
-					</svg>
-				</button>
-				<button class="m-tb-btn" aria-label="첨부파일" disabled={isAttachUploading}
-					onclick={() => { showEmojiPicker = false; attachFileInput.click() }}>
-					<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-						<path
-							d="M16 8l-7 7a4 4 0 0 1-5.66-5.66l7-7A2.5 2.5 0 0 1 14 5.87L7 12.87A1 1 0 0 1 5.59 11.5L12 5"
-							stroke="#444444"
-							stroke-width="1.5"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						/>
-					</svg>
-				</button>
-			</div>
-			{#if showEmojiPicker}
-				<div class="emoji-panel">
-					{#each EMOJI_LIST as emoji}
-						<button class="emoji-btn" onclick={() => insertEmoji(emoji)} aria-label={emoji}>{emoji}</button>
-					{/each}
-				</div>
+			{#if isMobile === true}
+				<RichContentEditor bind:this={editorRef} bind:blocks bind:keywords {uploadPrefix} variant="user" placeholder="내용을 입력하세요" onchange={markTouched} />
 			{/if}
-			<div class="m-editor-inner">
-				<CmsContentEditor bind:blocks bind:keywords hideMediaToolbar={true} />
-			</div>
 		</div>
 
 		<!-- Content options -->
@@ -557,6 +523,10 @@
 		<div class="d-columns">
 			<!-- LEFT: Editor card -->
 			<div class="d-editor-card">
+				{#if draft}
+					{@render draftBanner()}
+				{/if}
+
 				<!-- Type select -->
 				<div class="d-field-wrap">
 					<button
@@ -588,78 +558,13 @@
 				</div>
 
 				<!-- Title input -->
-				<input class="d-input" type="text" placeholder="로그 제목" bind:value={title} />
+				<input class="d-input" type="text" placeholder="로그 제목" bind:value={title} oninput={markTouched} />
 
-				<!-- Content editor (toolbar + CmsContentEditor) -->
+				<!-- Content editor (워드프로세서형 단일 문서 에디터) -->
 				<div class="d-editor-box">
-					<div class="d-toolbar">
-						<button class="d-tb-btn" aria-label="이미지"
-							onclick={() => { blocks = [...blocks, makeEmptyImageBlock()] }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<rect x="2" y="4" width="16" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
-								<circle cx="7" cy="8.5" r="1.5" fill="#444444" />
-								<path d="M2 14l4-4 3 3 3-3 4 4" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="동영상"
-							onclick={() => { blocks = [...blocks, makeEmptyYoutubeBlock()] }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<rect x="2" y="4" width="11" height="13" rx="2" stroke="#444444" stroke-width="1.5" />
-								<path d="M13 8l5-3v10l-5-3V8Z" stroke="#444444" stroke-width="1.5" stroke-linejoin="round" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="텍스트"
-							onclick={() => { blocks = [...blocks, makeEmptyTextBlock()] }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path d="M4 5h12M10 5v11M8 16h4" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="이모지" aria-expanded={showEmojiPicker}
-							onclick={() => { showEmojiPicker = !showEmojiPicker; showLinkDialog = false }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<circle cx="10" cy="10" r="7" stroke="#444444" stroke-width="1.5" />
-								<circle cx="7.5" cy="8.5" r="1" fill="#444444" />
-								<circle cx="12.5" cy="8.5" r="1" fill="#444444" />
-								<path d="M7 13c.8 1.2 5.2 1.2 6 0" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="인용"
-							onclick={() => { blocks = [...blocks, { type: 'text', html: '<blockquote>인용문을 입력하세요.</blockquote>' }]; showEmojiPicker = false; showLinkDialog = false }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<rect x="4" y="7" width="3" height="6" rx="1" fill="#444444" />
-								<rect x="10" y="7" width="3" height="6" rx="1" fill="#444444" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="구분선"
-							onclick={() => { blocks = [...blocks, makeEmptyDividerBlock()]; showEmojiPicker = false }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path d="M3 10h14" stroke="#444444" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 2" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="링크"
-							onclick={insertLinkEntryBlock}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path d="M8 12a4 4 0 0 0 5.66 0l2-2a4 4 0 0 0-5.66-5.66L9 5.34" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
-								<path d="M12 8a4 4 0 0 0-5.66 0l-2 2a4 4 0 0 0 5.66 5.66L11 14.66" stroke="#444444" stroke-width="1.5" stroke-linecap="round" />
-							</svg>
-						</button>
-						<button class="d-tb-btn" aria-label="첨부파일" disabled={isAttachUploading}
-							onclick={() => { showEmojiPicker = false; attachFileInput.click() }}>
-							<svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-								<path d="M16 8l-7 7a4 4 0 0 1-5.66-5.66l7-7A2.5 2.5 0 0 1 14 5.87L7 12.87A1 1 0 0 1 5.59 11.5L12 5" stroke="#444444" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-							</svg>
-						</button>
-					</div>
-					{#if showEmojiPicker}
-						<div class="emoji-panel">
-							{#each EMOJI_LIST as emoji}
-								<button class="emoji-btn" onclick={() => insertEmoji(emoji)} aria-label={emoji}>{emoji}</button>
-							{/each}
-						</div>
+					{#if isMobile === false}
+						<RichContentEditor bind:this={editorRef} bind:blocks bind:keywords {uploadPrefix} variant="user" placeholder="내용을 입력하세요" onchange={markTouched} />
 					{/if}
-					<div class="d-editor-inner">
-						<CmsContentEditor bind:blocks bind:keywords hideMediaToolbar={true} />
-					</div>
 				</div>
 
 				<!-- Submit -->
@@ -676,8 +581,8 @@
 				<!-- User info card -->
 				<div class="d-user-card">
 					<div class="d-avatar">
-						{#if avatarUrl}
-							<img src={avatarUrl} alt={data.profile.displayName} class="d-avatar-img" />
+						{#if avatarUrl && !avatarFailed}
+							<img src={avatarUrl} alt={data.profile.displayName} class="d-avatar-img" onerror={() => (avatarFailed = true)} />
 						{:else}
 							{avatarChar}
 						{/if}
@@ -1093,97 +998,45 @@
 	}
 
 	/* Editor box */
+
+	/* 임시저장 복원 안내 */
+	.draft-banner {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 10px 14px;
+		border-radius: var(--radius-md);
+		background: var(--cs-purple-op10);
+	}
+	.draft-text {
+		font: var(--text-pc-body-14);
+		font-weight: 700;
+		color: var(--cs-purple);
+	}
+	.draft-actions { display: flex; gap: 6px; flex-shrink: 0; }
+	.draft-btn {
+		min-height: 44px;
+		min-width: 44px;
+		padding: 0 14px;
+		border: none;
+		border-radius: var(--radius-full);
+		background: var(--cs-white);
+		color: var(--cs-text);
+		font: var(--text-pc-script-12);
+		font-weight: 700;
+		cursor: pointer;
+		transition: background 0.12s;
+	}
+	.draft-btn:hover { background: var(--cs-lilac); }
+	.draft-btn-on { background: var(--cs-purple); color: var(--cs-white); }
+	.draft-btn-on:hover { background: var(--cs-purple-hover); }
+
 	.m-editor-box {
 		display: flex;
 		flex-direction: column;
 		border-radius: var(--radius-md);
-		overflow: hidden;
-	}
-
-	.m-toolbar {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		flex-wrap: wrap;
-		background: var(--cs-surface-gray);
-		padding: 8px 12px;
-		border-bottom: 1px solid var(--cs-border);
-	}
-
-	.m-tb-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 32px;
-		height: 32px;
-		background: none;
-		border: none;
-		border-radius: 8px;
-		cursor: pointer;
-		padding: 0;
-		flex-shrink: 0;
-	}
-
-	.m-tb-btn:hover {
-		background: rgba(59, 47, 138, 0.08);
-	}
-
-	.m-editor-inner {
-		background: var(--cs-surface-gray);
-		min-height: 280px;
-	}
-
-	/* 이모지 피커 패널 */
-	.emoji-panel {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 2px;
-		padding: 10px 12px;
-		background: var(--cs-white);
-		border-bottom: 1px solid var(--cs-border);
-	}
-
-	.emoji-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 36px;
-		font-size: 20px;
-		background: none;
-		border: none;
-		border-radius: 8px;
-		cursor: pointer;
-		line-height: 1;
-		padding: 0;
-		transition: background 0.12s;
-	}
-
-	.emoji-btn:hover {
-		background: rgba(59, 47, 138, 0.08);
-	}
-
-	/* 링크 다이얼로그 패널 */
-	/* CmsContentEditor 내부 스타일 override — 사용자 화면 적응 */
-	.m-editor-inner :global(.cms-editor) {
-		background: transparent;
-		border: none;
-		padding: 0;
-	}
-	.m-editor-inner :global(.fmt-toolbar) {
-		background: var(--cs-surface-gray);
-		border-bottom: 1px solid var(--cs-border);
-		position: sticky;
-		top: 0;
-		z-index: 5;
-	}
-	.m-editor-inner :global(.ce-block-wrap) {
-		padding: 12px 16px;
-	}
-	.m-editor-inner :global(.empty-hint) {
-		padding: 16px 20px;
-		font: var(--text-m-body-16L);
-		color: var(--cs-text-placeholder);
+		overflow: clip; /* hidden은 내부 sticky 툴바를 무력화 */
 	}
 
 	/* Toggle options */
@@ -1487,61 +1340,7 @@
 		display: flex;
 		flex-direction: column;
 		border-radius: var(--radius-md);
-		overflow: hidden;
-	}
-
-	.d-toolbar {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		background: var(--cs-surface-gray);
-		padding: 8px 12px;
-		border-bottom: 1px solid var(--cs-border);
-	}
-
-	.d-tb-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 32px;
-		height: 32px;
-		background: none;
-		border: none;
-		border-radius: 8px;
-		cursor: pointer;
-		padding: 0;
-		flex-shrink: 0;
-	}
-
-	.d-tb-btn:hover {
-		background: rgba(59, 47, 138, 0.08);
-	}
-
-	.d-editor-inner {
-		background: var(--cs-surface-gray);
-		min-height: 280px;
-	}
-
-	/* CmsContentEditor 내부 스타일 override — 사용자 화면 PC */
-	.d-editor-inner :global(.cms-editor) {
-		background: transparent;
-		border: none;
-		padding: 0;
-	}
-	.d-editor-inner :global(.fmt-toolbar) {
-		background: var(--cs-surface-gray);
-		border-bottom: 1px solid var(--cs-border);
-		position: sticky;
-		top: 0;
-		z-index: 5;
-	}
-	.d-editor-inner :global(.ce-block-wrap) {
-		padding: 12px 20px;
-	}
-	.d-editor-inner :global(.empty-hint) {
-		padding: 16px 20px;
-		font: var(--text-pc-body-14);
-		color: var(--cs-text-placeholder);
+		overflow: clip; /* hidden은 내부 sticky 툴바를 무력화 */
 	}
 
 	/* Submit */

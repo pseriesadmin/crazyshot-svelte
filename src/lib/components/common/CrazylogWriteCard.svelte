@@ -32,6 +32,9 @@
     deleteBusy = false,
     onDelete,
   }: Props = $props()
+
+  // 프로필 사진 로드 실패(파일 삭제·일시 장애) 시 이니셜로 되돌린다 — 실패한 URL만 기억해 URL이 바뀌면 다시 시도
+  let failedAvatarUrl = $state<string | null>(null)
 </script>
 
 <div
@@ -43,8 +46,8 @@
   {#if isLoggedIn && currentUser}
     <div class="wc-user">
       <div class="wc-avatar">
-        {#if currentUser.avatarUrl}
-          <img src={currentUser.avatarUrl} alt={currentUser.displayName} class="wc-avatar-img" />
+        {#if currentUser.avatarUrl && failedAvatarUrl !== currentUser.avatarUrl}
+          <img src={currentUser.avatarUrl} alt={currentUser.displayName} class="wc-avatar-img" onerror={() => (failedAvatarUrl = currentUser?.avatarUrl ?? null)} />
         {:else}
           {currentUser.displayName[0] ?? '?'}
         {/if}
