@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { page } from '$app/stores'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
@@ -84,7 +85,8 @@
     created_at: string
   }
 
-  let searchQuery   = $state('')
+  // 검색 화면(/products/search)의 "더보기" 링크로 ?q= 가 오면 입력창을 채우고 한 번 검색한다(2026-10-06)
+  let searchQuery   = $state($page.url.searchParams.get('q')?.trim() ?? '')
   let isSearching   = $state(false)
   // data.posts와 동일 타입으로 정규화된 검색 결과 저장
   let searchResults = $state<typeof data.posts>([])
@@ -187,6 +189,14 @@
       isSearching = false
     }
   }
+
+  let initialSearchDone = false
+  $effect(() => {
+    if (initialSearchDone) return
+    initialSearchDone = true
+    const q = searchQuery.trim()
+    if (q) triggerSearch(q, activeTab)
+  })
 
   function clearSearch() {
     searchQuery   = ''

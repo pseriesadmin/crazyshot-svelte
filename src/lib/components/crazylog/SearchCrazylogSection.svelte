@@ -11,14 +11,17 @@
 
 <script lang="ts">
   import { formatRelativeTimeKo } from '$lib/utils/relativeTimeKo'
+  import Arrow02Icon from '$lib/components/common/Arrow02Icon.svelte'
 
   interface Props {
     posts?: SearchCrazylogPost[]
     /** 위에 상품 결과 섹션이 없을 때(첫 섹션) 우상단 라운드·상단 패딩 적용 */
     topRound?: boolean
+    /** 있으면 목록 아래에 "더보기" 링크 노출(결과가 조회 한도를 채웠을 때만 전달) */
+    moreHref?: string
   }
 
-  let { posts = [], topRound = false }: Props = $props()
+  let { posts = [], topRound = false, moreHref }: Props = $props()
 
   const FALLBACK_IMG = '/crazylog/content-hero.png'
 </script>
@@ -46,6 +49,15 @@
         </a>
       {/each}
     </div>
+
+    {#if moreHref}
+      <div class="log-more-wrap">
+        <a class="log-more" href={moreHref}>
+          <span>더보기</span>
+          <Arrow02Icon size={14} />
+        </a>
+      </div>
+    {/if}
   </div>
 </section>
 {/if}
@@ -90,6 +102,25 @@
     letter-spacing: -0.5px;
     color: var(--cs-text-dark, #444444);
     font-family: 'Noto Sans KR', sans-serif;
+  }
+
+  /* 더보기 — 우측 정렬 텍스트 링크(터치 44px) */
+  .log-more-wrap {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+  }
+  .log-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    text-decoration: none;
+    font: var(--text-m-script-14B);
+    color: var(--cs-purple);
+  }
+  .log-more:hover {
+    color: var(--cs-purple-hover);
   }
 
   /* 모바일 2열 — 상품 그리드(.product-grid)와 동일 간격 */
@@ -195,5 +226,6 @@
     .log-type { font: var(--text-pc-script-12); font-weight: 700; line-height: 1; }
     .log-name { font: var(--text-pc-body-14); line-height: 1.4; }
     .log-meta { font: var(--text-pc-script-12); line-height: 1; }
+    .log-more { font: var(--text-pc-body-14); }
   }
 </style>
