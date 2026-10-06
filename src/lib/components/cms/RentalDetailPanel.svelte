@@ -1670,9 +1670,15 @@
               {/if}
             </span>
           </div>
+          <div class="info-row">
+            <span class="info-label">카테고리</span>
+            <span class="info-value">{group.representative.category ?? '-'}</span>
+          </div>
           <!-- 상품 코드 — 유닛(=실물 재고) 하나당 한 행. "수량"은 이 행의 개수로 시각적으로
                일치한다(+/- 스텝퍼 대신 행 자체를 추가·삭제하는 방식 — 2026-09-03 UX 재수정). -->
           {#each group.units as unit, i (unit.key)}
+            <!-- 상품 코드 행 + 재배정 줄을 하나의 그룹(.unit-block)으로 묶는다(2026-10-06) — 재배정이 열린 동안 한 덩어리 면으로 보임 -->
+            <div class="unit-block" class:unit-block--open={canReassignUnit(unit) && reassignTargetId === unit.reservationId}>
             <div class="info-row">
               <span class="info-label">상품 코드{#if group.units.length > 1} #{i + 1}{/if}</span>
               <span class="info-value mono">
@@ -1755,6 +1761,7 @@
                 {/if}
               </div>
             {/if}
+            </div>
           {/each}
           {#if canEditProducts && group.representative.parentProductId}
             <div class="info-row">
@@ -1766,10 +1773,6 @@
               >+ 재고 추가</button>
             </div>
           {/if}
-          <div class="info-row">
-            <span class="info-label">카테고리</span>
-            <span class="info-value">{group.representative.category ?? '-'}</span>
-          </div>
         </div>
       {/each}
       {#if rentalSiblingsLoading}
@@ -2902,6 +2905,20 @@
     color: var(--cs-white);
   }
 
+  /* 상품 코드 행 + 재배정 줄을 하나의 그룹으로 — 그룹 안은 구분선 없이 이어지고 아래 구분선은 그룹 전체에 1줄(2026-10-06) */
+  .unit-block {
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .unit-block .info-row {
+    border-bottom: none;
+  }
+  .unit-block:last-child {
+    border-bottom: none;
+  }
+  /* 재배정이 열린 동안 그룹 전체를 한 면으로 표시(.highlight-row와 같은 옅은 보라 면 — 재배정 버튼 배경(--cs-surface-gray)과 구분되도록) */
+  .unit-block--open {
+    background: rgba(59,47,138,0.04);
+  }
   .reassign-row {
     padding: 6px 14px 10px;
   }
