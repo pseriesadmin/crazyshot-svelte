@@ -2,6 +2,7 @@
 // 고객이 취소한 예약("취소중")에 대한 관리자 취소확인 — CMS 패널 헤더의 [예약취소] 버튼이 호출한다.
 // 확인되면 마이페이지에서 "취소" 배지와 함께 대여 목록 → 취소 목록으로 이동한다(고객 카드 재정렬).
 // 예약 상태·결제는 바꾸지 않는다(이미 고객 취소 시점에 취소·환불 처리됨) — 확인 표식만 남긴다.
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -11,6 +12,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '인증 필요' }, { status: 401 })
   const cmsRole = await getCmsRoleForAction(locals)

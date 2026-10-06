@@ -3,6 +3,7 @@
 // DELETE /api/chat/sessions/[id]/cs-record — 세션의 CS 상담기록 전체 삭제
 // 기존 패턴 참조: /api/chat/sessions/[id]/close/+server.ts (service_role + cms_role 확인)
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -19,6 +20,8 @@ function getAdminClient() {
 
 // ── GET: 세션의 가장 최신 CS 기록 조회 ──────────────────────────
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -50,6 +53,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 // ── POST: CS 기록 upsert (summary + status) ──────────────────────
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -129,6 +134,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 // ── DELETE: 세션의 CS 기록 전체 삭제 ──────────────────────────────
 export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

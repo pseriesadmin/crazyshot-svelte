@@ -10,6 +10,7 @@
  *       나가므로 reservation_id가 아니라 고객 기준으로 조회한다.
  * 접근: CMS 관리자(cms_role 보유자)만. 조회는 service_role.
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -21,6 +22,8 @@ import type { RequestHandler } from './$types'
 const WINDOW_MS = 5 * 60 * 1000
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '로그인이 필요합니다.')
   const cmsRole = await getCmsRoleForAction(locals)

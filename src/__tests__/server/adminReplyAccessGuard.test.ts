@@ -10,6 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * 이 올바른 동작을 고정해 향후 실수로 좁혀지는 회귀를 잡기 위해 추가한다.
  */
 
+// 1b: consulting.chat 메뉴 권한 게이트는 chatMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null) }))
 vi.mock('@sveltejs/kit', () => ({
   json: (data: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, data }),
 }))

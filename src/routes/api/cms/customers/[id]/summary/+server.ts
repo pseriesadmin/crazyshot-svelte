@@ -8,6 +8,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 export interface CustomerSummary {
   user_id: string
@@ -19,6 +20,8 @@ export interface CustomerSummary {
 }
 
 export const GET: RequestHandler = async ({ locals, params }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
   // 크레이지스코어·블랙리스트 등 민감정보 포함 — 파트너는 조회 불가(매니저 이상만)

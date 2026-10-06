@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessAction: async () => null })) // 메뉴 권한 게이트 통과(게이트는 productsMenuGuard.test.ts가 별도 검증)
 
 /**
  * TDD-COMBO-MERGE — 조합코드 분류코드 합산 채번 버그 수정 (RED → GREEN)

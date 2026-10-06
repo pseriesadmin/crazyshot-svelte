@@ -5,10 +5,13 @@ import { createClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /cms/customers/profile-settings?userId=<user_profiles.id>
 // CMS 관리자 전용(manager 이상): 알림설정 + 개인정보 동의 일괄 조회 (service_role 사용)
 export const GET: RequestHandler = async ({ locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'customers.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 403 })
 

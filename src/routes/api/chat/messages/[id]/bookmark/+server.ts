@@ -4,6 +4,7 @@
 // L2 QA Fix: DELETE 핸들러가 POST와 동일한 toggle RPC를 호출하던 버그 수정
 //            DELETE는 명시적 삭제 (toggle이 아닌 직접 DELETE FROM)
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -12,6 +13,8 @@ import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export const POST = async ({ params, request, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -38,6 +41,8 @@ export const POST = async ({ params, request, locals }: RequestEvent<{ id: strin
 }
 
 export const DELETE = async ({ params, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   // L2 QA Fix: 명시적 DELETE — toggle이 아닌 직접 삭제 (H-01 예외: 단순 삭제 DML)
   // chat_message_bookmarks는 단순 보조 데이터 (예약·결제 같은 핵심 도메인 아님)
   const { session } = await locals.safeGetSession()

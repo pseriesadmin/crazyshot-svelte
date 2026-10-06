@@ -1,3 +1,4 @@
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -690,6 +691,8 @@ export const actions: Actions = {
   // 영구히 품번 없이 남은 자식(재고) 상품을 위한 자가복구 액션. 이미 품번이 있으면 아무 것도 하지
   // 않음(§2-2 영구불변 — 재발급 아님, 미완료 채번을 완료시키는 것뿐).
   retryProductCode: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -750,6 +753,8 @@ export const actions: Actions = {
   // 영구히 비어있는 대표 상품을 위한 자가복구 액션. code_series가 이미 있으면 아무 것도 하지
   // 않음(generate_product_code 자체에도 동일 가드가 있어 이중 안전).
   retryCodeSeries: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -787,6 +792,8 @@ export const actions: Actions = {
   // has_existing_inventory 가드로 이중 방어). 코드 체계 자체를 바꾸는 액션이라 /cms/codes
   // 액션들과 동일하게 manager 이상 권한 필요(security-auth.md QR-CASE-2 선례).
   reassignCodeSeries: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -846,6 +853,8 @@ export const actions: Actions = {
   },
 
   toggleStatus: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -894,6 +903,8 @@ export const actions: Actions = {
   },
 
   updateSection: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -1268,6 +1279,8 @@ export const actions: Actions = {
   },
 
   deleteProduct: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -1330,6 +1343,8 @@ export const actions: Actions = {
   // deleteProduct의 자식 삭제 분기(부모 남은 재고 0이면 부모 노출 자동 OFF)와 동일 정책을
   // 여러 건에 적용한다.
   deleteSelectedInventory: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 
@@ -1376,6 +1391,8 @@ export const actions: Actions = {
   },
 
   cloneProduct: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 

@@ -2,6 +2,7 @@
 // GET  : 전체 CMS 사용자 가능 (파트너 포함)
 // PATCH: 매니저 이상만 (hasSettingsAccess)
 
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -15,6 +16,8 @@ function getAdminClient() {
 }
 
 export const GET: RequestHandler = async ({ locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['consulting.chat', 'consulting.qna'])
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 
@@ -32,6 +35,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 }
 
 export const PATCH: RequestHandler = async ({ locals, request }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['consulting.chat', 'consulting.qna'])
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 

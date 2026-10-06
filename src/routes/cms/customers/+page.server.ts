@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasMenuAccess } from '$lib/constants/cmsMenus'
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import type { Actions, PageServerLoad } from './$types'
 
 export interface CustomerRow {
@@ -113,6 +114,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
 export const actions: Actions = {
   toggleBlacklist: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -143,6 +146,8 @@ export const actions: Actions = {
   },
 
   cancelSubscription: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -172,6 +177,8 @@ export const actions: Actions = {
   },
 
   updateCustomerInfo: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -212,6 +219,8 @@ export const actions: Actions = {
   },
 
   adjustScore: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -251,6 +260,8 @@ export const actions: Actions = {
   // 액션과 동일하게 locals.supabase 사용, 이 파일의 adjustScore/deleteCustomer가 쓰는
   // service_role 패턴과는 다름 — RPC마다 내부 인가방식이 다르니 혼동 금지).
   grantCustomerPoints: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -280,6 +291,8 @@ export const actions: Actions = {
   },
 
   deleteCustomer: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(403, { ok: false, error: '권한 없음' })
 

@@ -22,6 +22,7 @@
  * - manager 이상 전용 (getCmsRoleForAction + hasSettingsAccess)
  * - service_role admin 클라이언트 사용 (관리자가 어느 예약이든 조회 가능해야 함)
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -32,6 +33,8 @@ import { sortUnitsByCode } from '$lib/utils/availableUnitOrder'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })

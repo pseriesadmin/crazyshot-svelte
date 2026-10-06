@@ -5,6 +5,7 @@
  * - 취소/사고/분실완료 상태는 반품 불가 (두발히어로 API가 에러 반환)
  * - RPC로 dhero_return_book_id 갱신
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -15,6 +16,8 @@ import { registerReturn, DHERO_STATUS_LABEL, DheroApiError } from '$lib/server/d
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // RSV-B-B6: 두발히어로 반품 등록은 manager 이상 전용
   if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })

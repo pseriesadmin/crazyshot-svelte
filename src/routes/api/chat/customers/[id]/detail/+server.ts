@@ -1,6 +1,7 @@
 // GET /api/chat/customers/[id]/detail — 채팅 상담창 고객 상세정보 조회
 // GSD-5: P2-1 통합 조회 RPC 호출 + 모든 CMS 역할 공통 열람 권한 (파트너 포함)
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -9,6 +10,8 @@ import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export const GET = async ({ params, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '관리자 권한이 필요합니다.' }, { status: 401 })
 

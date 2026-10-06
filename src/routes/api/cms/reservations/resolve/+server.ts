@@ -9,6 +9,7 @@
 // 하나만 있는 경우가 있고, 상태값 자체는 아예 없어 클라이언트에서 바로 판단할 수 없으므로 이
 // 단건 조회로 최신 status를 확인한다. RPC/마이그레이션 변경 없음 — 단순 조회 2단계.
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -17,6 +18,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 

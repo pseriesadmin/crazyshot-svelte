@@ -6,6 +6,7 @@
 // 없어(고객 1명당 세션 1개, chat_sessions/chat_messages 어디에도 audience 구분 컬럼 없음)
 // 그 카드가 고객 화면에도 그대로 노출되는 구조적 결함이었다(Migration 425로 제거). 이
 // 엔드포인트는 그 대체 경로 — chat_messages와 완전히 무관한, CMS 전용 UI 데이터다.
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -21,6 +22,8 @@ export interface PendingInquiryCard {
 }
 
 export const GET: RequestHandler = async ({ locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
   // /cms/customers/inquiry 페이지 자체와 동일한 게이트(manager 이상) — security-auth.md

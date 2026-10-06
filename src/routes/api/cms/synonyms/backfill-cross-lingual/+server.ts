@@ -3,6 +3,7 @@
 // extractBilingualPairs로 후보를 찾아 synonym_group_members에 등록합니다.
 // fire-and-forget이 아닌 동기 처리 — 결과 통계를 응답에 포함합니다.
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -49,6 +50,8 @@ async function registerPairsFromText(text: string): Promise<number> {
 }
 
 export const POST: RequestHandler = async ({ locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   // manager 이상 게이트 (getCmsRoleForAction + hasSettingsAccess — security-auth.md)
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 401 })

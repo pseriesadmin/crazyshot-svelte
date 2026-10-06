@@ -140,6 +140,17 @@ export function findCmsMenuByKey(menuKey: string): CmsMenuLookup | undefined {
 }
 
 /**
+ * GNB(CMS_MENUS)에 항목은 없지만 특정 메뉴의 권한을 따라야 하는 화면 경로의 별칭 매핑 (2026-10-03, 1단계 1c).
+ * 예: 대여현황(/cms/rentals)은 "예약대여현황" 권한을 따른다 — 이전에는 매핑이 없어 예약대여현황 OFF여도 접근됐다.
+ * 이 목록은 findCmsMenuKeyForPath(레이아웃 접근 판정)에서만 쓰이며 GNB 메뉴 목록에는 영향이 없다.
+ */
+export const CMS_MENU_PATH_ALIASES: readonly { href: string; menu_key: string }[] = [
+  { href: '/cms/rentals', menu_key: 'rental.reservation' },
+  // 1g(2026-10-05, Stephen 확정): CMS 모바일(홈·대여목록·상품상세·QR 착지 전체)은 예약대여현황 권한을 따른다
+  { href: '/cms/mobile', menu_key: 'rental.reservation' },
+]
+
+/**
  * 현재 URL(pathname)이 CMS_MENUS의 어느 메뉴에 해당하는지 역매핑한다(없으면 null).
  *
  * 가장 긴(가장 구체적인) href가 일치하는 항목을 우선한다 — 예: '/cms/products/abc-uuid'는
@@ -169,6 +180,15 @@ export function findCmsMenuKeyForPath(pathname: string): string | null {
         bestLen = href.length
         bestKey = candidate.menu_key
       }
+    }
+  }
+
+  // 별칭(GNB에 없는 화면) — 기존 메뉴 href보다 길 때만 우선(기존 매핑은 절대 바뀌지 않음)
+  for (const alias of CMS_MENU_PATH_ALIASES) {
+    const matches = pathname === alias.href || pathname.startsWith(`${alias.href}/`)
+    if (matches && alias.href.length > bestLen) {
+      bestLen = alias.href.length
+      bestKey = alias.menu_key
     }
   }
 

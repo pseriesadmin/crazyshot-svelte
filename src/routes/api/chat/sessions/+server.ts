@@ -1,4 +1,5 @@
 // GET /api/chat/sessions — 관리자 전체 세션 목록
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -7,6 +8,8 @@ import type { RequestHandler } from './$types'
 import { sendPushToUser } from '$lib/server/push'
 
 export const GET: RequestHandler = async ({ url, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

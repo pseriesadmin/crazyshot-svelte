@@ -12,6 +12,7 @@
 // 검색하므로, 이 플래그 없이는 미검토 CSV 원문이 생성 즉시 실시간 고객채팅 자동매칭
 // 후보가 될 수 있다(api/chat/message/+server.ts가 pending_review=false만 후보로 조회).
 // 관리자가 CannedResponsePanel에서 저장(PATCH)하는 순간 false로 전환된다.
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -27,6 +28,8 @@ interface BulkImportItem {
 const MAX_ITEMS = 1000
 
 export const POST: RequestHandler = async ({ locals, request }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 401 })

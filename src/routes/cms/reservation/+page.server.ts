@@ -1,3 +1,4 @@
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -183,6 +184,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
 export const actions: Actions = {
   approveReservation: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { message: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -257,6 +260,8 @@ export const actions: Actions = {
   // 플랜 §3: 예약변경 — Toss 결제 취소 → revert_reservation_order_to_hold
   // manager+ 게이트, fail-soft 알림 포함
   changeReservation: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { message: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -389,6 +394,8 @@ export const actions: Actions = {
   },
 
   updateStatus: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { message: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -739,6 +746,8 @@ export const actions: Actions = {
   },
 
   clearIssuedContract: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -757,6 +766,8 @@ export const actions: Actions = {
   // Stage 5 (EC-6): 발송된 미서명 계약서 폐기 — 서명 링크 즉시 만료 + 콘텐츠 초기화 (GATE B Q7)
   // manager 이상 전용 (send-chat 엔드포인트와 동일 권한 기준 — security-auth.md 접근 매트릭스 참조)
   discardSentContract: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -775,6 +786,8 @@ export const actions: Actions = {
   // 전자계약 발행 취소 — 고객 서명 완료건 포함 (2026-09-07 Stephen 확정)
   // manager 이상 전용 — discardSentContract와 동일 권한 기준(security-auth.md 접근 매트릭스 참조)
   cancelIssuedContract: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -11,6 +12,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // 필드 요구량·캐시 조건이 달라 별도 엔드포인트로 분리(상품명만 필요한 결제정보 탭과 섞으면
 // 유지보수가 꼬임). order_items가 없으면(단일 상품 예약) 빈 배열.
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

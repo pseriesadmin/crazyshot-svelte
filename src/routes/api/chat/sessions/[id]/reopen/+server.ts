@@ -2,6 +2,7 @@
 // GSD-1: P1-3 상태 직접변경 버튼 — reopen
 // M2 QA Fix: H-01 준수 — 직접 UPDATE 제거, set_chat_session_status RPC 경유
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -9,6 +10,8 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 
 export const POST = async ({ params, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

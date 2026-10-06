@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessAction: async () => null })) // 메뉴 권한 게이트 통과(게이트는 productsMenuGuard.test.ts가 별도 검증)
 
 /**
  * ④ toggleStatus — 판매 자동 비활성 재고 켜기 거부 + 수동 토글 시 마커 정리 (대여·판매 공통)

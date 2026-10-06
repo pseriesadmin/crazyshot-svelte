@@ -14,6 +14,7 @@ import { UPLOAD_ACCEPTED_TYPES, getMimeExtension } from '$lib/utils/fileValidati
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { toDocPaths } from '$lib/server/userDocs'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 const BUCKET = 'user-documents'
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
@@ -29,6 +30,8 @@ const FOREIGN_SLOT_TYPES = [
 ] as const
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'customers.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '로그인 필요' }, { status: 403 })
   const cmsRole = await getCmsRoleForAction(locals)

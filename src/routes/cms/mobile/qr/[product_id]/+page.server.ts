@@ -1,3 +1,4 @@
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -87,6 +88,8 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
 export const actions: Actions = {
   processQrAction: async ({ request, locals, params }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { ok: false as const, message: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)

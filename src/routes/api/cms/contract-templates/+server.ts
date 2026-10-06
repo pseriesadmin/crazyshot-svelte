@@ -5,8 +5,11 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { DEFAULT_RENTAL_CONTRACT_HTML } from '$lib/components/cms/contract-editor/templates/defaultRentalContractHtml'
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 export const GET: RequestHandler = async ({ locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['rental.reservation', 'consulting.chat', 'rental.contracts'])
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 401 })

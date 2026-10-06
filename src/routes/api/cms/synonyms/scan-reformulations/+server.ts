@@ -3,6 +3,7 @@
 // synonym_group_members에 query_reformulation 출처로 등록합니다.
 // 새 테이블·새 컬럼 없음 (search_logs를 SELECT 전용 재활용).
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
@@ -10,6 +11,8 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { scanReformulationCandidates } from '$lib/server/searchReformulationScan'
 
 export const POST: RequestHandler = async ({ locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   // manager 이상 게이트 (§D-1 backfill-cross-lingual과 동일 패턴)
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 401 })

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -13,6 +14,8 @@ import { buildCouponBreakdown, type OrderCouponInput } from '$lib/utils/orderCou
 //   - 구(舊) 단일쿠폰 주문: orders.selected_coupon_id 기준(order_coupons 행이 없을 때만)
 // order_id가 없으면(단일 상품·주문 미연결 예약) 빈 목록.
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

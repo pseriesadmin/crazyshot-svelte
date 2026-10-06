@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -9,6 +10,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // RentalDetailPanel(/cms/rentals·/cms/reservation 공유) 결제정보 탭에서 "이 예약과 함께
 // 한 번에 결제된 다른 상품"을 보여주기 위함. order_items가 없으면(단일 상품 예약) 빈 배열.
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

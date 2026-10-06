@@ -1,4 +1,5 @@
 // POST /api/chat/sessions/[id]/close — 관리자: 채팅 세션 종료
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -6,6 +7,8 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

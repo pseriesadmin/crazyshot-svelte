@@ -9,6 +9,7 @@
  * PATCH: locals.supabase(관리자 실세션)으로 update_reservation_locker_password RPC 호출
  *        — RPC 내부의 is_cms_user() 검증이 auth.uid() 기반이라 service_role 호출 시 거부됨
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -18,6 +19,8 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
@@ -40,6 +43,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 }
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '로그인이 필요합니다.')
 

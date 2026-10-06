@@ -4,6 +4,7 @@
  * 별도 확인 탭 없이 즉시 상태전이(반출/반납) RPC를 실행한다.
  * 로직은 /cms/mobile/qr/[product_id]의 processQrAction과 $lib/server/rentalQrTransition.ts를 공유.
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -13,6 +14,8 @@ import { processRentalQrTransition } from '$lib/server/rentalQrTransition'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
   const cmsRole = await getCmsRoleForAction(locals)

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -9,6 +10,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // RentalDetailPanel "대여정보" 탭의 "결합상품" 섹션이 options API와 동일한 lazy-fetch 패턴으로 사용.
 // 조회 전용(권한은 options GET과 동일 — CMS 세션 역할만 확인). 배정 기록이 없으면 빈 배열.
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

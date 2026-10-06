@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * 막아야할것: 거절·RPC 실패 시 푸시 없음 / 푸시 조회·발송 예외가 승인 응답(ok:true)을 깨지 않음.
  */
 
+// 1b: consulting.chat 메뉴 권한 게이트는 qnaMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null) }))
 vi.mock('@sveltejs/kit', () => ({
   json: (data: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, data }),
 }))

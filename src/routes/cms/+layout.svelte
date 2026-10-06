@@ -61,8 +61,10 @@
   // 중복 알림을 피하기 위해 그 경로에서는 토스트를 띄우지 않는다. sender_type='user'만
   // 필터 — 관리자 본인 답장·시스템 자동응답(캔드매칭·RPC 알림카드 등)은 sender_type='admin'
   // 이라 이 토스트 대상이 아니다(관리자 스스로의 발신을 자기 알림으로 다시 받지 않도록).
+  // 1h(2026-10-05): 상담 권한(consulting.chat)이 꺼진 계정은 새 채팅 토스트를 구독하지 않는다
+  const canReceiveChatToast = $derived(hasMenuAccess(data.cmsRole ?? '', data.menuPermissionOverrides, 'consulting.chat'))
   $effect(() => {
-    if (!data.cmsRole) return
+    if (!data.cmsRole || !canReceiveChatToast) return
     const unsub = subscribeToAllMessages((message: ChatMessage) => {
       if (message.sender_type !== 'user') return
       if (page.url.pathname.startsWith('/cms/chat')) return

@@ -8,6 +8,12 @@
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+
+  // 메뉴 권한 게이트(403)가 내려준 안내문은 그대로 보여주고, 그 외 실패는 일반 문구 유지
+  function actionErrorMessage(result: { type: string; status?: number; data?: Record<string, unknown> }): string {
+    const msg = result.type === 'failure' && result.status === 403 ? result.data?.error : null
+    return typeof msg === 'string' && msg ? msg : '처리 중 오류가 발생했습니다.'
+  }
   import { isLockerHour } from '$lib/utils/lockerTimeRange'
   import { DHERO_STATUS_LABEL } from '$lib/utils/dheroLabels'
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
@@ -1437,7 +1443,7 @@
               isSubmitting = false
               changePending = false
               if (result.type === 'success') csToast.success('예약이 신청대기로 변경됐습니다. 고객에게 안내가 발송됩니다.')
-              else csToast.error('처리 중 오류가 발생했습니다.')
+              else csToast.error(actionErrorMessage(result))
               await update()
               if (result.type === 'success') onstatuschange?.()
             }
@@ -1478,7 +1484,7 @@
                   csToast.warning('배송사 측 취소에 실패했습니다. 실물 배송을 별도로 확인하세요.')
                 }
               } else {
-                csToast.error('처리 중 오류가 발생했습니다.')
+                csToast.error(actionErrorMessage(result))
               }
               await update()
               if (result.type === 'success') onstatuschange?.()
@@ -2124,7 +2130,7 @@
               return async ({ result, update }) => {
                 isSubmitting = false
                 if (result.type === 'success') csToast.success('예약이 승인되었습니다.')
-                else csToast.error('처리 중 오류가 발생했습니다.')
+                else csToast.error(actionErrorMessage(result))
                 // RSV-NAV-1(2026-09-08): update()(내부적으로 invalidateAll 수행)가 완전히
                 // 끝난 뒤에만 onstatuschange?.()(closePanel의 goto())를 실행 — 예전엔 이 둘이
                 // 동시에(순서 보장 없이) 발화해 CMS 레이아웃의 전체화면 로딩 오버레이
@@ -2148,7 +2154,7 @@
               return async ({ result, update }) => {
                 isSubmitting = false
                 if (result.type === 'success') csToast.success('예약이 거부되었습니다.')
-                else csToast.error('처리 중 오류가 발생했습니다.')
+                else csToast.error(actionErrorMessage(result))
                 // RSV-NAV-1 — 위 승인하기와 동일 수정(순서 보장 + onrefresh 중복 제거)
                 await update()
                 if (result.type === 'success') onstatuschange?.()
@@ -2187,7 +2193,7 @@
                           rentalSiblingsFetchedForId = null
                           onrefresh()
                         }
-                        else csToast.error('처리 중 오류가 발생했습니다.')
+                        else csToast.error(actionErrorMessage(result))
                         await update()
                       }
                     }}
@@ -2214,7 +2220,7 @@
               return async ({ result, update }) => {
                 isSubmitting = false
                 if (result.type === 'success') { csToast.success('상태가 변경되었습니다.'); onrefresh() }
-                else csToast.error('처리 중 오류가 발생했습니다.')
+                else csToast.error(actionErrorMessage(result))
                 await update()
               }
             }}
@@ -2243,7 +2249,7 @@
                 if (result.type === 'success') {
                   csToast.success('파손 신고 접수로 처리되었습니다.')
                 } else {
-                  csToast.error('처리 중 오류가 발생했습니다.')
+                  csToast.error(actionErrorMessage(result))
                 }
                 // RSV-NAV-1(2026-09-08) — update() 완료 후에만 onstatuschange?.() 실행(순서
                 // 보장) + 중복이던 onrefresh() 제거. 위 승인하기/거부/예약취소 버튼과 동일 수정 사유.

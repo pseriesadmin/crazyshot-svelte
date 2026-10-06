@@ -8,6 +8,7 @@ vi.mock('$env/dynamic/private', () => ({ env: { SUPABASE_SERVICE_ROLE_KEY: 'k' }
 vi.mock('$env/static/private', () => ({ SUPABASE_SERVICE_ROLE_KEY: 'k' }))
 vi.mock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'https://test.supabase.co' }))
 vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'https://test.supabase.co' }))
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: async () => null, requireAnyMenuAccessApi: async () => null })) // 1g 메뉴권한 게이트 통과(게이트 자체는 mobileMenuGuard.test.ts에서 검증)
 
 const adminFrom = vi.fn()
 const adminUpload = vi.fn().mockResolvedValue({ error: null })

@@ -23,6 +23,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { UserCouponCard } from '$lib/server/account/loadUserCoupons'
 import { isUserCouponExhausted } from '$lib/utils/couponUsage'
 import type { RequestHandler } from './$types'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 interface RawCoupon {
   code: string | null
@@ -46,6 +47,8 @@ interface RawUserCouponRow {
 }
 
 export const GET: RequestHandler = async ({ locals, params }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 

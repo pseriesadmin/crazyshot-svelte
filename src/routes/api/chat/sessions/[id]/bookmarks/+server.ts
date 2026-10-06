@@ -1,6 +1,7 @@
 // GET /api/chat/sessions/[id]/bookmarks — 세션별 북마크 목록 조회
 // GSD-14: P3-2 — get_session_bookmarks RPC 호출
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -9,6 +10,8 @@ import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export const GET = async ({ params, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

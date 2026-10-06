@@ -211,7 +211,8 @@
         csToast.success(`자동답변 ${autoReply ? 'ON' : 'OFF'}`)
         await invalidateAll()
       } else if (res.status === 403) {
-        csToast.error('매니저 이상만 자동답변 스위치를 변경할 수 있습니다.')
+        const d403 = await res.json().catch(() => ({})) as { error?: string }
+        csToast.error(d403.error ?? '매니저 이상만 자동답변 스위치를 변경할 수 있습니다.')
       } else if (res.status === 404) {
         csToast.error('자동답변 설정 테이블이 아직 준비되지 않았습니다. (마이그레이션 적용 필요)')
       } else {

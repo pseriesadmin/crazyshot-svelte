@@ -1,4 +1,5 @@
 // /api/cms/canned-responses/[id] — 단건 수정 / 삭제
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { isValidCtaUrl } from '$lib/utils/ctaUrl'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -12,6 +13,8 @@ import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
 
 // PATCH /api/cms/canned-responses/[id] — 수정
 export const PATCH: RequestHandler = async ({ locals, request, params }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 
@@ -81,6 +84,8 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
 
 // DELETE /api/cms/canned-responses/[id] — 삭제
 export const DELETE: RequestHandler = async ({ locals, params }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -13,6 +14,8 @@ import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contr
 import { buildQrDataUrl } from '$lib/utils/qrIssue'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // P7-5: manager 이상만 계약서 발행·발송 허용
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {

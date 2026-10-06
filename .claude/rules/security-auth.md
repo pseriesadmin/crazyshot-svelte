@@ -127,6 +127,9 @@ hasSettingsAccess(role) → getRoleLevel(role) >= 50
 | 중복 로그인 허용 토글 | `/cms/accounts/list` → `toggleConcurrent` | ❌ | ✅ | ✅ |
 | 세션 제한 토글 | `/cms/accounts/list` → `toggleSession` | ❌ | ✅ | ✅ |
 | 접속로그 조회 | `/api/cms/accounts/[id]/login-logs` — 본인 계정 또는 manager+ | ❌(타인 조회) | ✅(본인·타인 모두) | ✅ |
+| 크레이지로그 글 수정·비공개(2026-10-05) | `/crazylog/[slug]` 수정, `set_post_public`·`update_user_post` RPC — 콘텐츠 등록관리는 최하등급 기능이라 관리자(cms_role 보유) 누구나 모든 글(작성자가 일반 사용자여도) 가능 | ✅ | ✅ | ✅ |
+| 크레이지로그 글 삭제 — 관리자가 쓴 글(2026-10-05) | `update_post_status(…,'deleted')`(Migration #647 `can_delete_user_post`) — 작성자가 cms_role 보유 계정인 글 | ✅ | ✅ | ✅ |
+| 크레이지로그 글 삭제 — 일반 사용자가 쓴 글(2026-10-05) | 동일 RPC + `user_posts` UPDATE 트리거 `trg_user_posts_guard_delete`(직접 UPDATE 우회 차단) — 작성자 본인 삭제(`delete_own_post`)는 별개로 항상 허용, service_role(auth.uid() NULL)은 영향 없음 | ❌ | ✅ | ✅ |
 
 > ℹ️ **최소 보장(2026-09-25)**: 표의 액션에 개별 역할 확인이 없더라도 hooks 중앙 게이트가 /cms/** 변경 요청의 CMS 직원 여부(어떤 cms_role이든)를 보장한다. 등급별(manager 이상 등) 제한은 여전히 액션별 게이트 소관.
 
@@ -255,6 +258,25 @@ API:
 감사 연동:
   PUT 성공 시 cms_admin_audit_log에 menu_permission_change 이벤트를 자동 기록.
 ```
+
+#### 서버 집행 현황과 조회 실패 정책 (2026-10-06, 메뉴권한 서버 집행 1단계·2단계)
+
+```
+화면 진입(레이아웃)만 막던 오버레이를 서버 진입점(폼 액션·API·SSR 로더)까지 확대했다.
+공용 가드: src/lib/server/requireMenuAccess.ts (requireMenuAccessApi / requireAnyMenuAccessApi / requireMenuAccessAction)
+매핑표(단일 출처): src/lib/server/menuAccessMap.ts — 소스 스캔 테스트가 정방향·역방향(menuAccessMapReverse)으로 누락을 감시.
+고객용 chat API는 금지 목록(MENU_GUARD_FORBIDDEN_ENDPOINT_DIRS)에 있어 게이트 금지.
+```
+
+| 지점 | 오버라이드 조회 실패 시 | 이유 |
+|---|---|---|
+| 레이아웃(화면 진입) | 전부 허용 | 로그인·CMS 전체가 막히는 전면 장애 방지 |
+| 가드(API·액션) | 차단(403) | 데이터·동작 보호 |
+| 관리자 푸시 필터(adminPushMenuFilter) | 전원 유지(발송) | 발송 누락이 과다 발송보다 위험 |
+
+> DB 장애 중에는 화면은 열리지만 API·액션은 403이 날 수 있다(안전한 방향의 의도된 불일치).
+> 새 CMS 엔드포인트·액션을 추가할 때는 해당 화면의 메뉴 키 게이트를 진입부 첫 문장에 넣고 menuAccessMap에 등록한다.
+> 고객과 같은 엔드포인트를 쓰는 경우(`/api/cms/upload`의 크레이지로그 첨부)는 고객 경로를 무게이트로 두고 나머지에만 any-of를 건다(`uploadMenuKeys.ts`).
 
 ### CMS 관리자 감사로그 및 접속로그 (2026-08-26 확정)
 

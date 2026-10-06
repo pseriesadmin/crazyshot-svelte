@@ -6,6 +6,7 @@
  * - 두발히어로 API 호출은 fail-soft: 실패해도 400/500이 아닌 json with dhero_error
  * - 배송접수 시 print:'r' EC-4 중복방지 자동 적용
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -36,6 +37,8 @@ function parseId(raw: string): number | null {
 // ── GET: 배송상태 조회 ─────────────────────────────────────────────────────────
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // RSV-B-B6: 두발히어로 배송 API는 manager 이상 전용 (partner 조회만 허용, 조작 불가)
   if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
@@ -123,6 +126,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 // ── POST: 배송접수 / 재시도 ────────────────────────────────────────────────────
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 

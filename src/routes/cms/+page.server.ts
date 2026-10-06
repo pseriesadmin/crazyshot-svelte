@@ -4,6 +4,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { PageServerLoad } from './$types'
 import type { ChatSession } from '$lib/types/chat'
+import { checkMenuAccess } from '$lib/server/requireMenuAccess'
 
 /**
  * 오늘(로컬 기준) +n일 오프셋을 'YYYY-MM-DD' 문자열로 반환.
@@ -77,15 +78,20 @@ export const load: PageServerLoad = async ({ parent, fetch, locals }) => {
   const ganttFrom = todayOffset(-3)
   const ganttTo   = todayOffset(10)
 
-  const { data: ganttRows, error: ganttError } = await admin.rpc('get_rental_list', {
-    p_status:           null,
-    p_search:           null,
-    p_date_from:        ganttFrom,
-    p_date_to:          ganttTo,
-    p_page:             1,
-    p_per_page:         200,
-    p_exclude_statuses: ['cancelled', 'draft'],
-  })
+  // 예약대여현황 메뉴 권한(1c 후속, 2026-10-04) — gantt-window API뿐 아니라 이 SSR 초기 조회(service-role 직접 호출)도
+  // 같은 기준으로 차단한다. OFF·조회 실패(fail-closed) 계정은 조회 자체를 하지 않고 빈 간트를 받는다(날짜 창은 유지).
+  const ganttAccess = await checkMenuAccess(locals, 'rental.reservation')
+  const { data: ganttRows, error: ganttError } = ganttAccess.ok
+    ? await admin.rpc('get_rental_list', {
+        p_status:           null,
+        p_search:           null,
+        p_date_from:        ganttFrom,
+        p_date_to:          ganttTo,
+        p_page:             1,
+        p_per_page:         200,
+        p_exclude_statuses: ['cancelled', 'draft'],
+      })
+    : { data: null, error: null }
   if (ganttError) {
     console.error('[dashboard] gantt get_rental_list 오류:', ganttError.message)
   }

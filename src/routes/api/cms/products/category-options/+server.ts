@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /api/cms/products/category-options
 //
@@ -25,6 +26,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // 상품에 쓰이는 값과 항상 일치하지 않는다 — 그 값을 그대로 검색 필터에 넘기면 결과가 0건으로
 // 조용히 깨진다. 그래서 "실제 등록된 상품이 쓰고 있는 값"만 기준으로 삼는다.
 export const GET: RequestHandler = async ({ locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

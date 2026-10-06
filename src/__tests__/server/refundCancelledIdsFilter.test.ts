@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+// 1c: rental.reservation 메뉴 권한 게이트는 rentalMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null), requireAnyMenuAccessApi: vi.fn(async () => null), requireMenuAccessAction: vi.fn(async () => null) }))
 
 /**
  * Stage 2 TDD: RSV-B-C2 — cancel_reservation_payment v_cancelled_ids 필터링

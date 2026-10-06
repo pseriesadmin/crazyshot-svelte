@@ -7,6 +7,7 @@
 // 목록 화면 전체가 아니라 이 컴포넌트만 모달에 직접 마운트해 보여준다(AdminChatPanel.svelte
 // 참고) — 그 컴포넌트가 필요로 하는 row 데이터를 여기서 채운다.
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -16,6 +17,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 

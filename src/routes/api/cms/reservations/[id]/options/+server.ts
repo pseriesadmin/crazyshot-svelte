@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -10,6 +11,8 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 // 영역이라 RentalDetailPanel(/cms/rentals·/cms/reservation 공유)이 메인상품 외에 이 옵션도
 // 함께 노출한다. option_product_id가 있는 항목만 상품코드를 조회(부모 상품이면 정책상 NULL).
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -59,6 +62,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 // ── POST: 옵션상품 추가 ────────────────────────────────────────────────────────
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
@@ -100,6 +105,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 // ── PATCH: 옵션상품 수량 수정 ──────────────────────────────────────────────────
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
@@ -136,6 +143,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 // ── DELETE: 옵션상품 삭제 ──────────────────────────────────────────────────────
 
 export const DELETE: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -10,6 +11,8 @@ import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 
 export const GET: RequestHandler = async ({ params, locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 403 })
@@ -60,6 +63,8 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 }
 
 export const PATCH: RequestHandler = async ({ params, locals, request }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // P7-4: manager 이상만 허용
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {
@@ -240,6 +245,8 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
  * cancelIssuedContract 전용 영역 — 여기서 우회하지 않음).
  */
 export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {
     return json({ error: '권한 없음' }, { status: 403 })
