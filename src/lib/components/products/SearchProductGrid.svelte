@@ -21,6 +21,10 @@
     onProductClick?: (productId: string) => void
     /** 없으면 하트 미노출(비로그인) */
     onWishToggle?: (productId: string) => void
+    /** 상품 0건일 때 "검색 결과가 없습니다" 안내를 숨김 — 아래에 다른 결과 섹션(크레이지로그)이 이어질 때 */
+    hideEmpty?: boolean
+    /** 아래에 결과 섹션이 이어 붙을 때 하단 패딩을 줄여 섹션 사이 간격이 이중으로 벌어지지 않게 */
+    attached?: boolean
   }
 
   let {
@@ -28,12 +32,14 @@
     products = [],
     onProductClick,
     onWishToggle,
+    hideEmpty = false,
+    attached = false,
   }: Props = $props()
 
 </script>
 
 {#if products.length > 0}
-<section class="results-section">
+<section class="results-section" class:results-section--attached={attached}>
   <div class="results-inner">
     <div class="results-header">
       <h2 class="results-title">{title}</h2>
@@ -63,10 +69,12 @@
       </div>
   </div>
 </section>
-{:else}
+{:else if !hideEmpty}
 <section class="results-section results-section--empty">
   <div class="results-inner">
-    <p class="empty-msg">검색 결과가 없습니다.<br>다른 키워드로 검색해보세요.</p>
+    <!-- "검색 결과가 없습니다." 문구를 줄이고 안내 문구 위에 SVG 배치(2026-10-06, PC·모바일 동일 구성 — 모바일은 PC×0.60 비율) -->
+    <img class="empty-svg" src="/images/search-empty.svg" alt="" width="134" height="134" aria-hidden="true" />
+    <p class="empty-msg"><span class="empty-title">검색 결과가 없습니다.</span><br class="empty-br"><span class="empty-hint">다른 키워드로 검색해보세요.</span></p>
   </div>
 </section>
 {/if}
@@ -78,20 +86,49 @@
     background: var(--cs-bg-primary, #ffffff);
     border-radius: 0 50px 0 0;
   }
+  .results-section--attached {
+    padding-bottom: 20px;
+  }
+  /* 흰 섹션이 검색바~푸터 사이 남는 세로 공간을 채우고 아이콘+문구는 그 영역 세로 중앙에 둔다(PC·모바일 공통)
+     — 부모 main이 flex 컬럼일 때 동작(search/+page.svelte의 :has() 규칙 참고) */
   .results-section--empty {
-    padding: 60px 25px;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 25px;         /* PC 80px × 0.60 */
     text-align: center;
   }
+  .results-section--empty .results-inner {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;                  /* PC 24px × 0.60 */
+  }
   .empty-msg {
-    font-size: 15px;
+    font: var(--text-m-script-14);   /* 모바일: 한 단계 작은 토큰(14px Medium) — 글자는 0.60 배율 대신 토큰 단계 적용 */
     color: var(--cs-text-mid, #666666);
     line-height: 1.7;
+  }
+  .empty-svg {
+    display: block;
+    width: 80px;                /* PC 134px × 0.60 */
+    height: 80px;
+  }
+  .empty-title,
+  .empty-br {
+    display: none;
   }
   @media (min-width: 1024px) {
     .results-section {
       padding: 0 100px 80px;
     }
+    .results-section--attached {
+      padding-bottom: 20px;
+    }
   }
+
   .results-inner {
     max-width: 1600px;
     margin: 0 auto;
@@ -101,20 +138,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 30px 0;
+    /* 모바일: 상단만 18px → 23.4px(+30%, 요청 2026-10-06) — 흰 섹션 라운드 모서리와 제목이 붙어 보이던 문제.
+       섹션 자체 padding-top 대신 헤더 padding-top을 늘린 이유: 이 섹션은 빈 상태·이어붙는 섹션(attached)과 padding을 공유해
+       섹션 쪽을 건드리면 다른 상태의 간격까지 함께 바뀌고, 하단(그리드와의 간격)은 그대로 둘 수 있어서 */
+    padding: 23.4px 0 18px;
   }
   .results-title {
     margin: 0;
-    font-size: 18px;
-    font-weight: 500;
+    font: var(--text-m-body-16L);    /* 모바일: 한 단계 작은 토큰(16px Medium) */
     line-height: 1.6;
     letter-spacing: -0.3px;
     color: var(--cs-text-dark, #444444);
     font-family: 'Noto Sans KR', sans-serif;
   }
   .results-count {
-    font-size: 16px;
-    font-weight: 500;
+    font: var(--text-m-script-14);   /* 모바일: 한 단계 작은 토큰(14px Medium) */
     line-height: 1.6;
     letter-spacing: -0.5px;
     color: var(--cs-text-dark, #444444);
@@ -146,6 +184,16 @@
   }
 
   @media (min-width: 768px) {
+    /* PC — 결과 헤더 원래 크기 복원 */
+    .results-header {
+      padding: 30px 0;
+    }
+    .results-title {
+      font-size: 18px;
+    }
+    .results-count {
+      font-size: 16px;
+    }
     .product-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -153,6 +201,23 @@
     }
     .product-grid-item {
       width: auto;
+    }
+  }
+
+  /* PC — 검색 결과 없음: 모바일(×0.60) 값을 원래 크기로 복원 */
+  @media (min-width: 768px) {
+    .results-section--empty {
+      padding: 80px 25px;
+    }
+    .results-section--empty .results-inner {
+      gap: 24px;
+    }
+    .empty-svg {
+      width: 134px;
+      height: 134px;
+    }
+    .empty-msg {
+      font-size: 15px;            /* PC 기존 값 유지 */
     }
   }
 </style>

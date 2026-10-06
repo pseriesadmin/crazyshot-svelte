@@ -4,6 +4,7 @@
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import SearchKeywordBar from '$lib/components/products/SearchKeywordBar.svelte'
   import SearchProductGrid from '$lib/components/products/SearchProductGrid.svelte'
+  import SearchCrazylogSection, { type SearchCrazylogPost } from '$lib/components/crazylog/SearchCrazylogSection.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { recordSearchClick } from '$lib/services/searchService'
   import { toggleWish } from '$lib/utils/wishlist'
@@ -41,6 +42,10 @@
     wished?: boolean
   }
   let searchResults      = $state<SearchProduct[]>([])
+  /** 크레이지로그 검색 결과 — 검색 실행(Enter·아이콘·키워드 칩) 때만 조회, 자동완성·추천에서는 호출하지 않음 */
+  let crazylogResults    = $state<SearchCrazylogPost[]>([])
+  /** 마지막 검색 요청 번호 — 늦게 도착한 이전 검색 응답이 최신 결과를 덮지 않게 */
+  let searchSeq = 0
   /** 자동완성 드롭다운 전용 — 결과 그리드(searchResults)와 분리 */
   let suggestResults     = $state<SearchProduct[]>([])
   let recommendedProducts = $state<SearchProduct[]>([])
@@ -63,6 +68,18 @@
         ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
       href:     slug ? `/products/${slug}` : undefined,
       wished:   Boolean(r['wished']),
+    }
+  }
+
+  /** 크레이지로그 API 응답 → 결과 카드 (MiniSearch 점수순 유지) */
+  function mapCrazylogRow(r: Record<string, unknown>): SearchCrazylogPost {
+    return {
+      id:           String(r['id'] ?? ''),
+      title:        String(r['title'] ?? ''),
+      logType:      String(r['category'] ?? ''),
+      author:       String(r['author'] ?? '익명'),
+      thumbnailUrl: r['thumbnail_url'] ? String(r['thumbnail_url']) : null,
+      createdAt:    String(r['created_at'] ?? ''),
     }
   }
 
@@ -117,7 +134,7 @@
     if (debounceTimer) clearTimeout(debounceTimer)
     suggestAbort?.abort()
     suggestResults = []
-    if (!q) { submittedQuery = ''; searchResults = []; return }
+    if (!q) { searchSeq++; isSearching = false; submittedQuery = ''; searchResults = []; crazylogResults = []; return }
     doSearch(q)
   }
 
@@ -129,24 +146,38 @@
     }
   }
 
+  async function fetchProductResults(q: string): Promise<{ results: Record<string, unknown>[]; search_log_id?: string | null }> {
+    // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
+    // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
+    const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=12`)
+    if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
+    return await resp.json()
+  }
+
+  async function fetchCrazylogResults(q: string): Promise<{ results: Record<string, unknown>[] }> {
+    const resp = await fetch(`/api/search/crazylog?q=${encodeURIComponent(q)}&limit=6`)
+    if (!resp.ok) throw new Error(`크레이지로그 검색 API 오류: ${resp.status}`)
+    return await resp.json()
+  }
+
   async function doSearch(q: string) {
+    const seq = ++searchSeq
     isSearching = true
     searchLogId = null  // 새 검색 시 이전 log ID 초기화
     submittedQuery = q
-    try {
-      // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
-      // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
-      const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=12`)
-      if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
-      const payload = await resp.json() as { results: Record<string, unknown>[]; search_log_id?: string | null }
+    crazylogResults = []
+    // 상품·크레이지로그를 병렬 조회 — 한쪽 실패가 다른 쪽 결과를 비우지 않는다
+    const [productsRes, logsRes] = await Promise.allSettled([fetchProductResults(q), fetchCrazylogResults(q)])
+    if (seq !== searchSeq) return  // 더 최신 검색이 시작됨 — 이 응답은 버린다
+    if (productsRes.status === 'fulfilled') {
       // G-3: search_log_id 캡처 (migration 203 이후 RPC가 반환)
-      searchLogId = payload.search_log_id ?? null
-      searchResults = (payload.results ?? []).map(mapSearchApiRow)
-    } catch {
+      searchLogId = productsRes.value.search_log_id ?? null
+      searchResults = (productsRes.value.results ?? []).map(mapSearchApiRow)
+    } else {
       searchResults = []
-    } finally {
-      isSearching = false
     }
+    crazylogResults = logsRes.status === 'fulfilled' ? (logsRes.value.results ?? []).map(mapCrazylogRow) : []
+    isSearching = false
   }
 
   /** G-3: 상품 클릭 시 CTR 기록 — fire-and-forget (UX 차단 없음) */
@@ -178,7 +209,7 @@
   <title>상품 검색 — CRAZYSHOT</title>
 </svelte:head>
 
-<div class="page-root">
+<div class="page-root search-page-root">
 
   <!-- ── Sub GNB (표준 front 디자인 시스템 GNB-NaviBar) ── -->
   <SubGnb title="검색" noGnbOffset />
@@ -242,7 +273,14 @@
     products={submittedQuery ? searchResults : recommendedProducts}
     onProductClick={submittedQuery ? handleProductClick : undefined}
     onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+    hideEmpty={!!submittedQuery && crazylogResults.length > 0}
+    attached={!!submittedQuery && crazylogResults.length > 0}
   />
+
+  <!-- ── 크레이지로그 검색 결과 (검색 실행 후·결과 1건 이상일 때만, 최대 6건) ── -->
+  {#if submittedQuery}
+    <SearchCrazylogSection posts={crazylogResults} topRound={searchResults.length === 0} />
+  {/if}
 
 </div>
 
@@ -251,10 +289,19 @@
 <style>
   /* ── 페이지 루트 ── */
   .page-root {
-    min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
+    /* 높이는 100vh/100dvh 고정 대신 main(flex 컬럼, 아래 :has 규칙)의 남는 공간을 채우는 방식 — 100vh 툴바 재계산 잔떨림 없음(front-uiux §19 취지 유지, 100vh로 되돌리지 말 것) */
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     background: var(--cs-lilac, #ecebf4);
+  }
+
+  /* 검색 결과 없음 화면의 상하폭을 푸터에 맞춤(PC·모바일 공통): main을 flex 컬럼으로 만들어 page-root가 남는 높이를 채우게 한다.
+     :has()로 이 페이지가 마운트된 동안만 적용(전역 스타일 누수 방지), 고정 높이 계산 없이 푸터 높이가 바뀌어도 자동 대응 */
+  :global(main:has(> .search-page-root)) {
+    display: flex;
+    flex-direction: column;
   }
 
   /* ── 검색 입력 섹션 ── */
