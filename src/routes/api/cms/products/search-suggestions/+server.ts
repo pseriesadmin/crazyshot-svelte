@@ -27,6 +27,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { productSearchOrFilter, resolveProductSearchMatchLabel, relevanceTier } from '$lib/utils/similarNameSuggest'
+import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
@@ -70,12 +71,24 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   let ilikeQ = admin
     .from('products')
     .select('id, name, brand, category, product_code, description, product_caption, image_urls, slug')
+  let codeMatchIds: string[] = []
 
   if (isChosung) {
     // H-2: 초성 생성컬럼 사용 (Migration 354에서 추가된 name_chosung·brand_chosung)
     ilikeQ = ilikeQ.or(`name_chosung.ilike.%${q}%,brand_chosung.ilike.%${q}%`)
   } else {
-    ilikeQ = ilikeQ.or(productSearchOrFilter(q))
+    // 품번 검색: 부모는 product_code가 없고 '기준 품번'은 code_series 표시값이라 4필드 ilike로는
+    // 못 찾는다 — 품번형 검색어(영숫자 5자+)일 때만 그 부모 id를 OR에 합친다(실패해도 기본 검색 유지).
+    try {
+      codeMatchIds = await findParentIdsByProductCode(admin, q)
+    } catch (e) {
+      console.error('[cms/products/search-suggestions] 품번 검색 오류:', e)
+    }
+    ilikeQ = ilikeQ.or(
+      codeMatchIds.length > 0
+        ? `${productSearchOrFilter(q)},id.in.(${codeMatchIds.join(',')})`
+        : productSearchOrFilter(q)
+    )
   }
 
   // 정렬을 DB가 아닌 relevanceTier로 다시 매기므로, 후보군은 limit보다 넉넉히 가져와야
@@ -136,7 +149,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     brand: row.brand,
     category: row.category,
     product_code: row.product_code,
-    match_label: isChosung ? matchLabelForChosung : resolveProductSearchMatchLabel(row, q),
+    match_label: isChosung
+      ? matchLabelForChosung
+      : codeMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
+        ? '품번'
+        : resolveProductSearchMatchLabel(row, q),
     // L1: Cloudinary public_id = image_urls[0], slug = URL에 사용될 슬러그
     image_url: (row.image_urls as string[] | null)?.[0] ?? null,
     slug: row.slug ?? null,
