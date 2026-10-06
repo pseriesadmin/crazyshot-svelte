@@ -15,8 +15,8 @@ import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent, ActionPayload } from '$lib/types/chat'
-import { matchCannedResponse } from '$lib/server/matchCannedResponse'
 import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
+import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, WAIT_SUPPRESS_MINUTES } from '$lib/server/cannedAutoReply'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
@@ -161,14 +161,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   //   않았으므로 chat_intent_logs에는 기록하지 않음(분류한 적이 없으므로).
   if (admin) {
     try {
-      const { data: arSettings } = await admin
+      const { data: arSettings, error: arSettingsError } = await admin
         .from('auto_reply_settings')
-        .select('enabled')
+        .select('enabled, observe_mode')
         .limit(1)
         .maybeSingle()
-      const arEnabled = (arSettings as { enabled: boolean } | null)?.enabled ?? false
+      // 컬럼 누락(마이그레이션 656 미적용) 등으로 조회가 실패하면 자동답변이 조용히 꺼진 것처럼 보이므로 원인을 남긴다
+      if (arSettingsError) console.error('[chat/message] auto_reply_settings 조회 실패(자동답변 꺼짐으로 처리):', arSettingsError.message)
+      const arEnabled = (arSettings as { enabled: boolean; observe_mode?: boolean } | null)?.enabled ?? false
+      // 관찰 모드(2026-10-06, Migration 656): 꺼져 있어도 판정을 평가·기록만 하고 고객에게는 발송하지 않는다
+      const arObserve = (arSettings as { enabled: boolean; observe_mode?: boolean } | null)?.observe_mode ?? false
 
-      if (arEnabled) {
+      if (arEnabled || arObserve) {
         // GSD-20: canned_responses에 image_url/cta_label/cta_url 컬럼 추가로 조회 확장
         // Migration #617: pending_review=true(CSV 일괄등록 등 관리자 미검토) 항목은 제외 —
         // shortcut/match_keywords가 비어 있어도 title/content가 매칭 대상에 포함되므로
@@ -179,7 +183,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           .eq('pending_review', false)
         // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
         const synonymGroups = await loadSynonymGroups()
-        const match = matchCannedResponse(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
+        // 2026-10-06: 규칙 판정 + 확률 모델(학습 가중치). 판정 불가·낮은 확률이면 match=null → 아래 "대기 안내" 경로로 이어진다
+        const decision = decideAutoReply(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
+        await recordObservation(admin, buildObservationRow((userMessage as { id: string }).id, arEnabled ? 'on' : 'observe', decision))
+        const match = arEnabled ? decision.answer : null
 
         if (match) {
           // GSD-20: 이미지/CTA(이미지·버튼 텍스트·링크 중 하나라도)가 있으면 action_card, 없으면 텍스트.
@@ -332,7 +339,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   let classified: AIClassifierResponse = {
     intent: 'CS_ESCALATE',
     confidence: 0,
-    reply: '담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요.',
+    reply: WAIT_REPLY,
     action_card: null,
   }
 
@@ -363,8 +370,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 4. confidence < 0.6 → CS_ESCALATE 강제
   if (classified.confidence < 0.6) {
     classified.intent = 'CS_ESCALATE'
-    classified.reply =
-      classified.reply || '담당자에게 연결해 드리겠습니다. 잠시만 기다려 주세요.'
+    classified.reply = classified.reply || WAIT_REPLY
   }
 
   // 5. 응답 메시지 INSERT (Claude 자유응답 — 1단계에서 매칭 실패했을 때만 여기 도달)
@@ -386,24 +392,49 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     )
   }
 
+  // 대기 안내 반복 억제(2026-10-06): 같은 세션에서 WAIT_SUPPRESS_MINUTES분 안에 이미 같은 안내를 보냈다면 다시 보내지 않는다
+  // (고객이 연달아 메시지를 보낼 때마다 같은 문구가 쌓이는 것을 막는다 — 인텐트 로그·관리자 긴급 푸시는 그대로 유지)
+  let suppressWait = false
+  if (classified.intent === 'CS_ESCALATE' && classified.reply === WAIT_REPLY && admin) {
+    try {
+      const since = new Date(Date.now() - WAIT_SUPPRESS_MINUTES * 60_000).toISOString()
+      const { data: recentWait } = await admin
+        .from('chat_messages')
+        .select('id')
+        .eq('session_id', body.session_id)
+        .eq('sender_type', 'ai')
+        .eq('content', WAIT_REPLY)
+        .gte('created_at', since)
+        .limit(1)
+      suppressWait = ((recentWait as { id: string }[] | null)?.length ?? 0) > 0
+    } catch (err) {
+      // 조회 실패 시에는 억제하지 않고 안내를 보낸다(응답 누락보다 중복 안내가 낫다)
+      console.error('[chat/message] 대기 안내 중복 조회 실패(fail-soft):', err instanceof Error ? err.message : err)
+    }
+  }
+
   // sender_type='ai' INSERT: service_role(admin) 클라이언트로 삽입해야 RLS를 우회할 수 있음.
   // db(고객 세션 클라이언트)로 삽입하면 RLS(participant_insert_message)가 비-'user' sender_type을
   // 차단해 캔드매칭 실패 후 AI 폴백 응답도 DB에 저장되지 않는 무반응 상태가 됨.
-  const insertClient = admin ?? db
-  const { data: aiMessage, error: aiInsertError } = await insertClient
-    .from('chat_messages')
-    .insert({
-      session_id: body.session_id,
-      sender_type: 'ai',
-      content: classified.reply,
-      message_type: enrichedPayload ? 'action_card' : 'text',
-      action_payload: enrichedPayload,
-    })
-    .select()
-    .single()
+  let aiMessage: ChatMessage | null = null
+  if (!suppressWait) {
+    const insertClient = admin ?? db
+    const { data: insertedAi, error: aiInsertError } = await insertClient
+      .from('chat_messages')
+      .insert({
+        session_id: body.session_id,
+        sender_type: 'ai',
+        content: classified.reply,
+        message_type: enrichedPayload ? 'action_card' : 'text',
+        action_payload: enrichedPayload,
+      })
+      .select()
+      .single()
 
-  if (aiInsertError) {
-    return json({ error: aiInsertError.message }, { status: 500 })
+    if (aiInsertError) {
+      return json({ error: aiInsertError.message }, { status: 500 })
+    }
+    aiMessage = insertedAi as ChatMessage
   }
 
   // 6. chat_intent_logs INSERT
@@ -440,16 +471,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   // 고객 브라우저 푸시 — AI 자유응답도 캔드매칭·관리자 수동답장과 동일하게 발송
   // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
-  await sendPushToUser(session.user.id, 'ai_auto_reply', {
-    title: '답변이 도착했어요',
-    body: classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply,
-    link: '/',
-  })
+  if (!suppressWait) {
+    await sendPushToUser(session.user.id, 'ai_auto_reply', {
+      title: '답변이 도착했어요',
+      body: classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply,
+      link: '/',
+    })
+  }
 
   return json(
     {
       user_message: userMessage as ChatMessage,
-      ai_message: aiMessage as ChatMessage,
+      ai_message: aiMessage,
       intent_log: intentLog,
     },
     { status: 201 },

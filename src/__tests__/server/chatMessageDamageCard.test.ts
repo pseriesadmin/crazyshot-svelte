@@ -31,10 +31,12 @@ vi.mock('@anthropic-ai/sdk', () => ({
   },
 }))
 
-const mockMatchCannedResponse = vi.fn()
-vi.mock('$lib/server/matchCannedResponse', () => ({
-  matchCannedResponse: (...args: unknown[]) => mockMatchCannedResponse(...args),
-}))
+// 2026-10-06: 호출부가 판정을 cannedAutoReply(규칙+확률 모델)로 옮겼다 — 매칭 결과(answer)만 모킹하고 나머지는 실제 모듈 사용
+const mockDecideAutoReply = vi.fn()
+vi.mock('$lib/server/cannedAutoReply', async () => {
+  const actual = await vi.importActual<typeof import('$lib/server/cannedAutoReply')>('$lib/server/cannedAutoReply')
+  return { ...actual, decideAutoReply: (...args: unknown[]) => mockDecideAutoReply(...args) }
+})
 
 vi.mock('$lib/server/synonymLearning', () => ({
   loadSynonymGroups: vi.fn().mockResolvedValue([]),
@@ -59,7 +61,7 @@ type TableResult = { data: unknown; error?: unknown }
 
 function makeChain(result: TableResult) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'insert']) {
+  for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'insert', 'gte']) {
     chain[m] = vi.fn(() => chain)
   }
   chain.single = vi.fn().mockResolvedValue(result)
@@ -81,11 +83,15 @@ function setup(opts: {
   activeReservationId: number | null
 }) {
   rpcCalls = []
-  mockMatchCannedResponse.mockReturnValue(opts.cannedMatch)
+  mockDecideAutoReply.mockReturnValue({
+    evaluation: { decision: opts.cannedMatch ? 'answer' : 'no_match', best: opts.cannedMatch, top: [], reason: 'ok', tokenCount: 1 },
+    verdict: { decision: opts.cannedMatch ? 'answer' : 'wait', probability: 0.9, bestId: opts.cannedMatch?.id ?? null, reason: 'ok' },
+    answer: opts.cannedMatch,
+  })
 
   mockAdmin = {
     from: vi.fn((table: string) => {
-      if (table === 'auto_reply_settings') return makeChain({ data: { enabled: true } })
+      if (table === 'auto_reply_settings') return makeChain({ data: { enabled: true, observe_mode: false } })
       if (table === 'canned_responses') return makeChain({ data: [{ id: 'canned-1', category: 'damage' }] })
       if (table === 'rental_reservations') {
         return makeChain({
