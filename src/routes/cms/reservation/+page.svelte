@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
+  import { goto, invalidateAll, replaceState } from '$app/navigation'
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
@@ -113,12 +113,23 @@
     goto(`/cms/reservation?${params.toString()}`, { replaceState: true, noScroll: true })
   }
 
+  // 패널 선택/해제는 주소의 ?selected= 만 맞추면 되므로 데이터를 다시 불러오지 않는 replaceState를 쓴다.
+  // (goto는 실시간 새로고침 invalidateAll과 겹쳐 취소되면 CMS 로딩 막이 안 꺼지는 문제가 있었다 — 2026-10-06)
+  // 라우터가 아직 준비되기 전(첫 하이드레이션 중 effect)에는 replaceState가 예외를 던지므로 그때만 goto로 대체한다.
+  function syncSelectedUrl(url: string) {
+    try {
+      replaceState(url, {})
+    } catch {
+      void goto(url, { replaceState: true, noScroll: true })
+    }
+  }
+
   function selectRow(row: RentalListRow) {
     selectedId  = row.reservation_id
     selectedRow = row
     const params = new URLSearchParams(window.location.search)
     params.set('selected', String(row.reservation_id))
-    goto(`/cms/reservation?${params.toString()}`, { replaceState: true, noScroll: true })
+    syncSelectedUrl(`/cms/reservation?${params.toString()}`)
   }
 
   function closePanel() {
@@ -126,7 +137,7 @@
     selectedRow = null
     const params = new URLSearchParams(window.location.search)
     params.delete('selected')
-    goto(`/cms/reservation?${params.toString()}`, { replaceState: true, noScroll: true })
+    syncSelectedUrl(`/cms/reservation?${params.toString()}`)
   }
 
   function formatDate(dt: string | null): string {
