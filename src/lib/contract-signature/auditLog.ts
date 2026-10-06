@@ -51,7 +51,7 @@ export async function recordAuditLog(
   params: AuditLogParams,
 ): Promise<void> {
   try {
-    await admin.from('contract_audit_log').insert({
+    const { error } = await admin.from('contract_audit_log').insert({
       contract_id: params.contractId,
       event_type:  params.eventType,
       actor_type:  params.actorType,
@@ -59,6 +59,8 @@ export async function recordAuditLog(
       ip_address:  params.ipAddress,
       ...(params.metadata ? { metadata: params.metadata } : {}),
     })
+    // supabase-js는 DB 오류를 예외가 아니라 { error }로 돌려준다 — 흔적이라도 서버 로그에 남긴다(주 흐름은 계속)
+    if (error) console.error('[auditLog] contract_audit_log insert 실패(fail-soft):', params.eventType, (error as { message?: string }).message ?? error)
   } catch {
     // silent fail — 감사로그 실패가 주 트랜잭션을 막으면 안 됨
     // 서버 로그(Vercel Function Logs)에서 사후 확인 가능

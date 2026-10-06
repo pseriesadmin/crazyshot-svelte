@@ -19,7 +19,12 @@ export interface ArchiveEvidenceSummary {
   signedAtKst: string
   ipAddress: string | null
   userAgent: string | null
+  /** 서명 시점에 기록된 최종본 SHA-256(소급 증적은 없음) */
   finalHtmlSha256: string | null
+  /** 이 PDF의 원문(계약서 HTML) SHA-256 — 생성 시점에 계산한 값 */
+  archivedHtmlSha256?: string | null
+  /** 서명 시점 동의 기록(소급이면 빈 배열) */
+  consents?: { label: string; checked: boolean; textSha256: string | null }[]
   termsSha256: string | null
   refundSha256: string | null
   privacySha256: string | null
@@ -72,6 +77,12 @@ function row(label: string, value: string | null | undefined): string {
   return `<tr><th>${esc(label)}</th><td>${shown}</td></tr>`
 }
 
+function consentRows(consents: ArchiveEvidenceSummary['consents']): string {
+  if (consents === undefined) return ''
+  if (consents.length === 0) return row('서명 시 동의 기록', '기록 없음(서명 증적 도입 전 서명 건 — 소급 보관)')
+  return consents.map((c) => row(`동의: ${c.label || '항목'}`, `${c.checked ? '동의함' : '미동의'}${c.textSha256 ? ` (대상 문구 SHA-256 ${c.textSha256})` : ''}`)).join('\n    ')
+}
+
 function policySection(title: string, text: string | null): string {
   const body = text != null && text.trim().length > 0 ? esc(text) : '등록된 내용이 없습니다.'
   return `<h3>${esc(title)}</h3><p class="archive-policy">${body}</p>`
@@ -88,7 +99,7 @@ export function buildArchiveHtml(args: {
   const regenerated = ev.source === 'regenerated'
 
   const notice = regenerated
-    ? `<p class="archive-notice">재생성본 — ${esc(ev.generatedAtKst)}에 서명 당시 저장된 계약 내용(스냅샷)과 서명 이미지로 다시 만든 사본입니다. 서명 당시 약관 사본 기록이 없어 약관 부록은 포함하지 않습니다.</p>`
+    ? `<p class="archive-notice">재생성본 — ${esc(ev.generatedAtKst)}에 서명 당시 저장된 계약 내용(스냅샷)과 서명 이미지로 다시 만든 사본입니다.${terms ? '' : ' 서명 당시 약관 사본 기록이 없어 약관 부록은 포함하지 않습니다.'}</p>`
     : ''
 
   const evidenceTable = `<table class="archive-evidence">
@@ -98,7 +109,10 @@ export function buildArchiveHtml(args: {
     ${row('서명 일시(KST)', ev.signedAtKst)}
     ${row('서명 IP', ev.ipAddress)}
     ${row('서명 기기·브라우저', ev.userAgent)}
-    ${row('최종본 문서 SHA-256', ev.finalHtmlSha256)}
+    ${row('서명 시점 기록 최종본 SHA-256', ev.finalHtmlSha256 ?? '기록 없음(서명 증적 도입 전 서명 건)')}
+    ${ev.archivedHtmlSha256 !== undefined ? row('본 PDF 원문 SHA-256(생성 시점 계산)', ev.archivedHtmlSha256) : ''}
+    ${ev.archivedHtmlSha256 && ev.finalHtmlSha256 && ev.archivedHtmlSha256 !== ev.finalHtmlSha256 ? row('해시 대조', '서명 시점 기록과 본 PDF 원문이 다릅니다(서명 시점 스냅샷으로 재생성)') : ''}
+    ${consentRows(ev.consents)}
     ${row('서비스이용정책 SHA-256', ev.termsSha256)}
     ${row('환불규정 SHA-256', ev.refundSha256)}
     ${row('개인정보처리방침 SHA-256', ev.privacySha256)}
@@ -125,6 +139,7 @@ export function buildArchiveHtml(args: {
 <html lang="ko">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'none'">
 <title>전자계약서 최종본</title>
 <style>${fontCss ?? ''}${ARCHIVE_CSS}${fontCss ? FONT_FORCE_CSS : ''}</style>
 </head>
