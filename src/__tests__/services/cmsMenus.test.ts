@@ -115,7 +115,8 @@ describe('findCmsMenuKeyForPath — pathname → menu_key 역매핑 (Stage 3, +l
     expect(findCmsMenuKeyForPath('/cms')).toBe('dashboard');
     expect(findCmsMenuKeyForPath('/cms/accounts')).toBeNull();
     expect(findCmsMenuKeyForPath('/cms/accounts/list')).toBeNull();
-    expect(findCmsMenuKeyForPath('/cms/mobile')).toBeNull();
+    expect(findCmsMenuKeyForPath('/cms/mobile')).toBe('rental.reservation'); // 1g(2026-10-05) 별칭
+    expect(findCmsMenuKeyForPath('/cms/set/signature')).toBeNull();
   });
 
   it('CMS_MENUS에 등록되지 않은 경로는 null을 반환한다(기존 role 전용 가드만 적용됨을 보장)', () => {

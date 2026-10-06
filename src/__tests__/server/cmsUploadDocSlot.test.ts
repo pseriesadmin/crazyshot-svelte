@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: async () => null })) // 1e 메뉴권한 게이트 통과(게이트 자체는 customersMenuGuard.test.ts에서 검증)
 
 /**
  * POST /api/cms/upload-doc — 관리자 대리 등록은 서류 종류 1건(슬롯)만 교체 (2026-10-03, 서류 비공개 전환 B3a)

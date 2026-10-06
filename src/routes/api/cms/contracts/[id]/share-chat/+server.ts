@@ -11,6 +11,7 @@
  * (서명 요청 상태가 아니므로), sign/+server.ts가 서명 완료 시점에 자동 발송하는
  * contract_signed 카드와 동일한 payload를 재사용해 "전자계약완료" 카드를 다시 보낸다.
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -20,6 +21,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // send-chat과 동일 권한 기준(manager 이상) — security-auth.md 접근 매트릭스 참조
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {

@@ -4,8 +4,11 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['consulting.chat', 'customers.list'])
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

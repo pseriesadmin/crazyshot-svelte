@@ -6,6 +6,7 @@
  * NOTE: assets.id가 bigint인 Stage DB에서 RPC(p_asset_id uuid) 타입 불일치 발생
  *       admin client 직접 UPDATE 사용 (POST /api/cms/assets와 동일 패턴)
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -13,6 +14,8 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 

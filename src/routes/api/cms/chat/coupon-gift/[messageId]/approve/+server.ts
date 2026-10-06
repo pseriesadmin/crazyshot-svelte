@@ -4,6 +4,7 @@
 //
 // 핵심: distribute_coupon의 is_cms_user() 검증이 auth.uid() 기반이므로
 //       locals.supabase(관리자 실세션)으로 RPC 호출 — service_role 금지
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -19,6 +20,8 @@ import {
 } from '$lib/server/couponGiftDuplicate'
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

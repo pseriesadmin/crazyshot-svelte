@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessAction: async () => null })) // 메뉴 권한 게이트 통과(게이트는 productsMenuGuard.test.ts가 별도 검증)
 
 /**
  * TDD-SALEONLY-2 — updateSection pricing 분기: sale_only 상품 24시간 가격 필수 체크 버그

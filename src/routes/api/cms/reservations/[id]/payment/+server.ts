@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -12,6 +13,8 @@ import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 import { findOrderPaymentTransaction } from '$lib/server/findOrderPaymentTransaction'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -26,6 +29,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 // PUT — 환불 처리 (Toss 전액 취소 → cancel_reservation_payment RPC)
 // 권한: manager 이상 (security-auth.md CMS 역할 매트릭스 "환불 처리")
 export const PUT: RequestHandler = async ({ params, locals, request }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
+  // 2-E: 환불 처리(Toss 전액취소)는 예약변경·취소 권한(rental.change_cancel)도 필요 — 패널 [예약취소]·confirm-cancel과 같은 기준
+  const cancelDenied = await requireMenuAccessApi(locals, 'rental.change_cancel')
+  if (cancelDenied) return cancelDenied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 401 })
 

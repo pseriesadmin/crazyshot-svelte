@@ -2,6 +2,7 @@
 // GSD-8: P3-1 — 세션 담당 권한선 = 기존 세션 열람 권한과 동일 (manager 게이트 없음)
 // RPC: set_chat_session_manual_mode
 
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -10,6 +11,8 @@ import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 
 export const PATCH = async ({ params, request, locals }: RequestEvent<{ id: string }>) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '관리자 권한이 필요합니다.' }, { status: 401 })
 

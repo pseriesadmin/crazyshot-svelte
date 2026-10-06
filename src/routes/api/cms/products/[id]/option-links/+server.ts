@@ -4,6 +4,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /api/cms/products/[id]/option-links
 //
@@ -21,6 +22,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // 해석"의 유일한 정본 경로다(고객 상세페이지·CMS 상품 상세패널이 전부 이 RPC를 씀) — 여기서도
 // 동일 RPC를 그대로 재사용하고, product_option_links 테이블을 직접 조인하지 않는다.
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

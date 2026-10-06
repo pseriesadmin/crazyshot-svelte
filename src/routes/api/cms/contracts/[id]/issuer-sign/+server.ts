@@ -8,6 +8,7 @@
  *   asset_id?:        cms_signature_assets.id (자산 선택 시)
  *   signature_data?:  base64 PNG string (직접 서명 시)
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -19,6 +20,8 @@ import { computeContentHash } from '$lib/contract-signature/contentHash'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 
 export const POST: RequestHandler = async ({ params, locals, request, getClientAddress }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {
     return json({ error: '권한 없음' }, { status: 403 })

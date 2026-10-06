@@ -2,6 +2,7 @@
 // 결제정보 탭 "PG 결제 정보"의 취소 실행 상태 — Toss 결제 조회 API를 실시간으로 호출해 PG 쪽 실제 상태를 보여준다
 // (DB의 payment_transactions.status와 별개 — 관리자가 취소확인 전에 PG 취소가 실제로 실행됐는지 대조하는 용도).
 // 조회 전용·fail-soft: Toss 조회가 실패해도 오류 응답 대신 { ok:false, reason }을 돌려 화면이 "조회 불가"로 표시한다.
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -13,6 +14,8 @@ import { findOrderPaymentTransaction } from '$lib/server/findOrderPaymentTransac
 import { summarizeTossPayment, type TossPaymentLike } from '$lib/utils/pgCancelStatus'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
 

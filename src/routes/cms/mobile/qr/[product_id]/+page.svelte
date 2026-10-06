@@ -50,6 +50,8 @@
     <!-- 에러 배너 -->
     {#if form && !form.ok && 'message' in form && form.message}
       <div class="error-banner" role="alert">{form.message}</div>
+    {:else if form && 'error' in form && typeof form.error === 'string' && form.error}
+      <div class="error-banner" role="alert">{form.error}</div>
     {/if}
 
     <!-- 분기 1: 처리 성공 완료 화면 -->

@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -8,6 +9,8 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 // GET /api/cms/dashboard/gantt-window?from=YYYY-MM-DD&to=YYYY-MM-DD
 // cms_role 게이트 — 모든 CMS 등급 허용 (대시보드 접근 권한과 동일)
 export const GET: RequestHandler = async ({ url, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

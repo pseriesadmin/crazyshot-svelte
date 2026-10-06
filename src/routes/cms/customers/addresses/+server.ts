@@ -5,11 +5,14 @@ import { createClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /cms/customers/addresses?userId=<user_profiles.id>
 // CMS 관리자 전용(manager 이상): 특정 회원의 배송지 목록을 service_role로 조회
 // 브라우저 Supabase 클라이언트 대신 서버사이드에서 처리하여 auth.uid() NULL 문제 회피
 export const GET: RequestHandler = async ({ locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'customers.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 403 })
 

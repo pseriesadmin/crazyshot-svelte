@@ -9,6 +9,7 @@ import { getMessaging } from 'firebase-admin/messaging'
 import type { Database, NotificationToken, PushNotificationConfig } from '$lib/types/database'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { sendLifecycleSms } from './sms'
+import { filterAdminPushRecipientsByMenu } from '$lib/server/adminPushMenuFilter'
 
 export interface PushPayload {
   title: string
@@ -383,7 +384,10 @@ export async function sendPushToAdmins(eventKey: string, payload: PushPayload): 
       p_event_key: eventKey,
     })
     if (error || !recipientIds || recipientIds.length === 0) return
-    await dispatch(recipientIds, eventKey, payload)
+    // 1h: 상담 이벤트는 consulting.chat 메뉴 권한 OFF 계정 제외(조회 실패 시 전원 유지)
+    const targets = await filterAdminPushRecipientsByMenu(supabase, eventKey, recipientIds)
+    if (targets.length === 0) return
+    await dispatch(targets, eventKey, payload)
   } catch {
     // 발신 허브 오류는 호출부로 전파하지 않음
   }

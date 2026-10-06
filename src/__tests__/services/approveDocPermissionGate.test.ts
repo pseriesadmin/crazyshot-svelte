@@ -13,6 +13,7 @@ vi.mock('@sveltejs/kit', () => ({
   json: (data: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, data }),
 }))
 
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: async () => null })) // 1e 메뉴권한 게이트 통과(게이트 자체는 customersMenuGuard.test.ts에서 검증)
 const mockGetCmsRoleForAction = vi.fn()
 vi.mock('$lib/server/getCmsRoleForAction', () => ({
   getCmsRoleForAction: (...args: unknown[]) => mockGetCmsRoleForAction(...args),

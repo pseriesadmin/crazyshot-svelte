@@ -5,12 +5,15 @@ import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /cms/customers/subscription-payments?userSubscriptionId=<user_subscriptions.id>
 // CMS 관리자 전용(manager 이상): 특정 구독의 결제(청구) 이력 조회 — subscription_payment_logs는
 // 금액을 포함한 민감정보라 형제 엔드포인트(/cms/customers/subscriptions)보다 한 단계 강화된
 // 게이트를 사용한다(/cms/subscriptions 모듈 전체와 동일 기준).
 export const GET: RequestHandler = async ({ locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'customers.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '인증 필요' }, { status: 403 })
 

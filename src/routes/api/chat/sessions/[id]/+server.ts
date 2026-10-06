@@ -1,4 +1,5 @@
 // DELETE /api/chat/sessions/[id] — 세션 완전 삭제 (closed 전용, 관리자)
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -6,6 +7,8 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

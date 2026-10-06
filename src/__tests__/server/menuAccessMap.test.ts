@@ -8,6 +8,7 @@ import {
   MENU_GUARDED_ENDPOINTS,
   MENU_GUARDED_SHARED_ENDPOINTS,
   MENU_GUARDED_ACTION_FILES,
+  MENU_GUARDED_LOADER_FILES,
   isKnownMenuKey,
 } from '$lib/server/menuAccessMap'
 
@@ -91,6 +92,13 @@ describe('누락 감지 — 매핑표에 올라온 엔드포인트는 반드시 
   it('MENU_GUARDED_ACTION_FILES: 페이지 서버 파일이 requireMenuAccessAction을 호출', () => {
     for (const a of MENU_GUARDED_ACTION_FILES) {
       expect(readFileSync(join(ROOT, a.file), 'utf-8').includes(`requireMenuAccessAction(locals, '${a.menuKey}')`), a.file).toBe(true)
+    }
+  })
+
+  it('MENU_GUARDED_LOADER_FILES: SSR 로더 파일이 지정한 게이트 호출을 가진다', () => {
+    expect(MENU_GUARDED_LOADER_FILES.length).toBeGreaterThan(0)
+    for (const l of MENU_GUARDED_LOADER_FILES) {
+      expect(readFileSync(join(ROOT, l.file), 'utf-8').includes(l.marker), `${l.file} 에 ${l.marker} 없음`).toBe(true)
     }
   })
 

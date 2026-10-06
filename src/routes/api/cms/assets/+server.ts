@@ -8,6 +8,7 @@
  *       admin client 직접 INSERT 사용 (서버사이드 service_role — upload 엔드포인트와 동일 패턴)
  *       MCP 복구 후 create_asset_for_product RPC로 전환 예정
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -15,6 +16,8 @@ import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 

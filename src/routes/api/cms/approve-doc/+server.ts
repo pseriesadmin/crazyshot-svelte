@@ -18,8 +18,11 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { sendPushToUser } from '$lib/server/push'
 import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'customers.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '로그인 필요' }, { status: 403 })
   const cmsRole = await getCmsRoleForAction(locals)

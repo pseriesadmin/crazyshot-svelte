@@ -6,6 +6,7 @@
  *   실패 시 에러를 그대로 클라이언트에 전달한다(RentalDetailPanel이 경고 노출).
  * - 예약 status 자체는 변경하지 않음 (별도 updateStatus 액션으로만 변경).
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -16,6 +17,8 @@ import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
 import type { RequestHandler } from './$types'
 
 export const PUT: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // RSV-B-B6: 두발히어로 배송 취소는 manager 이상 전용
   if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })

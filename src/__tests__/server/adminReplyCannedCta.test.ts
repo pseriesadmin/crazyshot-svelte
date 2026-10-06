@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * admin-reply: 빠른답변을 선택해 보낼 때 그 답변의 CTA(이미지·버튼·링크)가 서버에서 canned_cta 카드로 붙는지
  * (2026-10-02 — 과거엔 content만 전송돼 CTA·링크가 빠졌다).
  */
+// 1b: consulting.chat 메뉴 권한 게이트는 chatMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null) }))
 vi.mock('$env/dynamic/private', () => ({ env: { SUPABASE_SERVICE_ROLE_KEY: 'k' } }))
 vi.mock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'https://test.supabase.co' }))
 vi.mock('$lib/server/synonymLearning', () => ({ recordSynonymLearning: vi.fn().mockResolvedValue(undefined) }))

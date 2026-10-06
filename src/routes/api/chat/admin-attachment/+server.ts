@@ -1,4 +1,5 @@
 // POST /api/chat/admin-attachment — 관리자 파일 첨부 메시지 저장
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -8,6 +9,8 @@ import type { ChatMessage } from '$lib/types/chat'
 import { sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

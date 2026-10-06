@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: async () => null })) // 1e 메뉴권한 게이트 통과(게이트 자체는 customersMenuGuard.test.ts에서 검증)
 
 /**
  * /api/cms/customers/[id]/coupons — relative_days/unlimited 쿠폰 누락 결함 회귀 테스트

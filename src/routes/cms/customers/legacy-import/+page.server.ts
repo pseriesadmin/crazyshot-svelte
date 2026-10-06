@@ -4,6 +4,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { parseCsv, groupByPhone, type CsvRow, type PhoneGroup } from '$lib/server/legacyCsvImport'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -55,6 +56,8 @@ export const load: PageServerLoad = async ({ parent }) => {
 export const actions: Actions = {
   // Step 1: CSV 텍스트를 파싱해 그룹 미리보기 반환
   preview: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)
@@ -83,6 +86,8 @@ export const actions: Actions = {
   // 2026-09-11 재설계 — 실 계정 생성은 본인이 OTP 인증을 완료하는 시점(complete 엔드포인트)
   // 으로 이동됨. 상세 배경: supabase/migrations/20260911100000_489_legacy_member_staging.sql)
   confirm: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)

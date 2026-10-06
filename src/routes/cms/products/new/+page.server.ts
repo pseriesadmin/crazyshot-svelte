@@ -1,3 +1,4 @@
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { redirect, fail } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -114,6 +115,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
   create: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'products.new')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
 

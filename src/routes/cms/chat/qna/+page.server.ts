@@ -1,4 +1,5 @@
 // /cms/chat/qna — 빠른답변(QnA) 관리 화면 서버
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -150,6 +151,8 @@ export const actions: Actions = {
   // manager 이상만 삭제 가능 — 같은 파일의 promoteCandidate/rejectCandidateMember와 역할
   // 경계 통일(CMS 전역 정밀검증 v3 STAGE 1 BOUNDARY-3, migration 331)
   delete: async ({ locals, request }) => {
+    const denied = await requireMenuAccessAction(locals, 'consulting.qna')
+    if (denied) return denied
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
@@ -173,6 +176,8 @@ export const actions: Actions = {
 
   // §D-2: 동의어 후보 → confirmed 승급 (manager 이상)
   promoteCandidate: async ({ locals, request }) => {
+    const denied = await requireMenuAccessAction(locals, 'consulting.qna')
+    if (denied) return denied
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
@@ -195,6 +200,8 @@ export const actions: Actions = {
   // 후보가 재관찰돼도 다시 candidate/confirmed로 돌아오지 않는다(기존 cms_delete_synonym_candidate
   // 하드삭제는 재학습 경로가 그 사실을 몰라 동일 후보가 계속 재등록되던 문제가 있었음).
   rejectCandidateMember: async ({ locals, request }) => {
+    const denied = await requireMenuAccessAction(locals, 'consulting.qna')
+    if (denied) return denied
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
@@ -214,6 +221,8 @@ export const actions: Actions = {
 
   // NLSearch A안(2026-09-02): 빠른답변 후보 승격 (manager 이상) — canned_responses 신규 생성
   approveReplyCandidate: async ({ locals, request }) => {
+    const denied = await requireMenuAccessAction(locals, 'consulting.qna')
+    if (denied) return denied
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })
@@ -252,6 +261,8 @@ export const actions: Actions = {
 
   // NLSearch A안(2026-09-02): 빠른답변 후보 거부 (manager 이상)
   rejectReplyCandidate: async ({ locals, request }) => {
+    const denied = await requireMenuAccessAction(locals, 'consulting.qna')
+    if (denied) return denied
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(401, { error: '인증 필요' })
     if (!hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음 (manager 이상 필요)' })

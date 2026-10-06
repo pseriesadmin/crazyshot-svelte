@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessAction: async () => null })) // 메뉴 권한 게이트 통과(게이트는 productsMenuGuard.test.ts가 별도 검증)
 
 /**
  * 버그 수정(2026-08-13) — 콤보가 있는 그룹인데 콤보를 선택하지 않고 상품을 등록하면

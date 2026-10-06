@@ -6,12 +6,15 @@
  * 실제 필터링(초성·품번 매칭)은 클라이언트의 chosungSearch가 그대로 담당하고,
  * 이 엔드포인트는 필터링된 결과의 "정렬 순서(관련도)"만 보강한다 — nlsearch.md §2 정본 재사용.
  */
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ url, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
   if (!(await getCmsRoleForAction(locals))) throw error(403, '접근 권한이 없습니다.')

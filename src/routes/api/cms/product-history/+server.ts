@@ -7,6 +7,7 @@
  * PUT  body           → upsert_product_history_record (수정)
  * DELETE ?id=         → delete_product_history_record (soft delete)
  */
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 
@@ -32,6 +33,8 @@ async function requireCmsRole(sb: AnyClient, userId: string): Promise<void> {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const GET: RequestHandler = async ({ url, locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['rental.history', 'rental.reservation'])
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
@@ -66,6 +69,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 }
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['rental.history', 'rental.reservation'])
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
@@ -99,6 +104,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 }
 
 export const PUT: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['rental.history', 'rental.reservation'])
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
@@ -132,6 +139,8 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
 }
 
 export const DELETE: RequestHandler = async ({ url, locals }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['rental.history', 'rental.reservation'])
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 

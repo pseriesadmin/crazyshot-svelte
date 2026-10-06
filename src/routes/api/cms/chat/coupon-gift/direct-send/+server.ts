@@ -4,6 +4,7 @@
 //
 // 흐름: 관리자 인증 → 세션 user_id 확인 → distribute_coupon(locals.supabase) →
 //       COUPON_GIFT_CARD 메시지 INSERT(service_role)
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -15,6 +16,8 @@ import { sendPushToUser } from '$lib/server/push'
 import { isCouponAlreadyOwned, insertDuplicateGiftWarning } from '$lib/server/couponGiftDuplicate'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 

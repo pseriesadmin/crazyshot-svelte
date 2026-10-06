@@ -1,3 +1,4 @@
+import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -46,6 +47,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
 export const actions: Actions = {
   clearIssuedContract: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
     const cmsRole = await getCmsRoleForAction(locals)

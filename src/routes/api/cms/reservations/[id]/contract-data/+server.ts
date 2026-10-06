@@ -1,3 +1,4 @@
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -85,6 +86,8 @@ function formatTotalUsageHours(
 // 조회의 coupon_discount_amount 컬럼).
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'rental.reservation')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   // P7-3: manager 이상만 허용
   if (!cmsRole || !hasSettingsAccess(cmsRole)) {

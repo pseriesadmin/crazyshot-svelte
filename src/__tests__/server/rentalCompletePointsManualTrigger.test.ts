@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+// 1c: rental.reservation 메뉴 권한 게이트는 rentalMenuGuard.test.ts에서 따로 검증 — 여기서는 통과로 고정하고 핸들러 자체 로직만 본다
+vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null), requireAnyMenuAccessApi: vi.fn(async () => null), requireMenuAccessAction: vi.fn(async () => null) }))
 
 /**
  * 대여완료(rental_complete) 포인트 자동적립 — 수동(CMS) 반납 경로 배선 검증

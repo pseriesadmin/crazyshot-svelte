@@ -11,8 +11,11 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { loadSelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
+  const denied = await requireMenuAccessApi(locals, 'products.list')
+  if (denied) return denied
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 

@@ -19,6 +19,8 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { RequestHandler } from './$types'
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
+import { UPLOAD_MENU_KEYS } from '$lib/server/uploadMenuKeys'
 
 const BUCKET = 'product-images'
 
@@ -38,6 +40,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     rawProductId.startsWith('log/') &&
     !/(^|\/)\.\.(\/|$)/.test(rawProductId) &&
     !/[?#%\\]/.test(rawProductId)
+  if (!isCustomerLogUpload) {
+    // 2-C: 상품·자산·콘텐츠 업로드는 업로드를 쓰는 화면의 메뉴 중 하나라도 허용인 계정만(고객 log/ 첨부는 무게이트)
+    const denied = await requireAnyMenuAccessApi(locals, UPLOAD_MENU_KEYS)
+    if (denied) return denied
+  }
   if (!isCustomerLogUpload && !(await getCmsRoleForAction(locals))) {
     throw error(403, '접근 권한이 없습니다.')
   }
@@ -167,6 +174,11 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
   // includes('/product-images/log/')는 'log/../<상품id>/…'·쿼리·프래그먼트로 우회 가능.
   const isCustomerLogPath =
     largePath.startsWith('log/') && !/(^|\/)\.\.(\/|$)/.test(largePath) && !/[?#%\\]/.test(largePath)
+  if (!isCustomerLogPath) {
+    // 2-C: POST와 동일 기준(고객 log/ 경로 제외)
+    const denied = await requireAnyMenuAccessApi(locals, UPLOAD_MENU_KEYS)
+    if (denied) return denied
+  }
   if (!isCustomerLogPath && !(await getCmsRoleForAction(locals))) {
     throw error(403, '접근 권한이 없습니다.')
   }

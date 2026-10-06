@@ -1,5 +1,7 @@
 // /api/cms/canned-responses — 캔드 리스폰스 목록 조회 / 신규 등록
 // 편집 권한: is_cms_user() (파트너 포함 모든 CMS 사용자)
+import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
+import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { isValidCtaUrl } from '$lib/utils/ctaUrl'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -30,6 +32,8 @@ export interface CannedResponse {
 
 // GET /api/cms/canned-responses?category=return
 export const GET: RequestHandler = async ({ locals, url }) => {
+  const denied = await requireAnyMenuAccessApi(locals, ['consulting.chat', 'consulting.qna'])
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 401 })
@@ -56,6 +60,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
 // POST /api/cms/canned-responses — 신규 등록
 export const POST: RequestHandler = async ({ locals, request }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.qna')
+  if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) {
     return json({ error: '권한 없음' }, { status: 401 })
