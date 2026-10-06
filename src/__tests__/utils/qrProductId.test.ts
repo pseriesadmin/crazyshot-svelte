@@ -41,6 +41,18 @@ describe('extractReservationCode', () => {
   it('빈 문자열은 null을 반환한다', () => {
     expect(extractReservationCode('')).toBeNull()
   })
+
+  // 2026-09-14부터 예약코드 형식이 CS{RSV}{YYMM}{seq4}(예: CSRSV26090001)로 바뀌었다 — 이 형식이 상품으로 오판되면 QR 스캔이 막힌다
+  it('현재 형식 CSRSV + 숫자 예약코드를 인식한다(대소문자 무관)', () => {
+    expect(extractReservationCode('CSRSV26090001')).toBe('CSRSV26090001')
+    expect(extractReservationCode('csrsv26100001')).toBe('csrsv26100001')
+  })
+
+  it('RSV 뒤가 숫자가 아니면(상품코드 형태) null', () => {
+    expect(extractReservationCode('CSRSVabc001')).toBeNull()
+    expect(extractReservationCode('CSRSV')).toBeNull()
+    expect(extractReservationCode('CSRSV123')).toBeNull() // 숫자 4자리 미만
+  })
 })
 
 describe('identifyQrPayload', () => {
@@ -60,6 +72,22 @@ describe('identifyQrPayload', () => {
     const result = identifyQrPayload('CS2609001')
     expect(result.type).toBe('reservation')
     expect(result.value).toBe('CS2609001')
+  })
+
+  it('현재 형식 예약코드(CSRSV…)를 reservation 타입으로 판별한다', () => {
+    const result = identifyQrPayload('CSRSV26090001')
+    expect(result.type).toBe('reservation')
+    expect(result.value).toBe('CSRSV26090001')
+  })
+
+  it('파이프 포함 신버전 상품 페이로드는 CSRSV 형태여도 product로 먼저 분기된다', () => {
+    expect(identifyQrPayload('CSRSV26090001|LENS').type).toBe('product')
+  })
+
+  it('실제 상품코드 형식은 여전히 product 타입이다', () => {
+    for (const code of ['CSLITall002', 'CSCRCCR0020025', 'CSLENall00001']) {
+      expect(identifyQrPayload(code).type, code).toBe('product')
+    }
   })
 
   it('순수 상품코드를 product 타입으로 판별한다', () => {

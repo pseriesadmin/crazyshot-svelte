@@ -285,9 +285,6 @@
                 </td>
                 <td class="col-hide">
                   <code class="rsv-code">{row.reservation_code ?? reservationNo(row.reservation_id)}</code>
-                  {#if row.order_key}
-                    <div class="order-key-tag" title="같은 주문으로 묶인 예약">주문 {row.order_key}</div>
-                  {/if}
                 </td>
                 <td><span class="customer-name">{row.customer_name ?? '-'}</span></td>
                 <td>
@@ -520,13 +517,6 @@
     padding: 2px 6px;
     border-radius: 4px;
     color: var(--cs-text);
-  }
-  .order-key-tag {
-    font: var(--text-pc-script-12);
-    font-size: 10px;
-    color: var(--cs-text-light);
-    margin-top: 2px;
-    white-space: nowrap;
   }
   .customer-name { font-weight: 700; color: var(--cs-text); }
   .product-name  { font-weight: 600; color: var(--cs-text); }
