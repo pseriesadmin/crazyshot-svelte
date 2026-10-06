@@ -66,8 +66,10 @@ describe('matchCannedResponse', () => {
 
   it('동점 시 usage_count 높은 순으로 tie-break', () => {
     const tied: CannedResponseForMatch[] = [
-      { id: 'a', title: '테스트키워드 안내', content: '내용', category: 'general', shortcut: null, match_keywords: [], usage_count: 2 },
-      { id: 'b', title: '테스트키워드 문의', content: '내용', category: 'general', shortcut: null, match_keywords: [], usage_count: 9 },
+      // 2026-10-06 정밀 판정: 근거가 강한(등록 키워드 3자 이상) 동점 후보만 사용횟수로 선택한다.
+      // 공통 단어 하나뿐인 약한 동점은 애매로 보고 매칭하지 않는다(matchCannedResponseStrict.test.ts)
+      { id: 'a', title: '테스트키워드 안내', content: '내용', category: 'general', shortcut: null, match_keywords: ['테스트키워드'], usage_count: 2 },
+      { id: 'b', title: '테스트키워드 문의', content: '내용', category: 'general', shortcut: null, match_keywords: ['테스트키워드'], usage_count: 9 },
     ];
     const result = matchCannedResponse('테스트키워드 관련해서 문의드려요', tied);
     expect(result?.id).toBe('b');

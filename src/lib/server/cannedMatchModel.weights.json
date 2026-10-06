@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "featureNames": [
+    "evidence",
+    "coverage",
+    "concepts",
+    "curatedConcepts",
+    "curatedHit",
+    "titleOnly",
+    "shortcutHit",
+    "maxTermLen",
+    "tokenCount",
+    "nonGenericRatio",
+    "contentBonus",
+    "unexplainedVerbalRatio",
+    "unexplainedContentTokens",
+    "gapToBest",
+    "evidenceXcoverage"
+  ],
+  "weights": [
+    0.20178042558581394,
+    2.954870551445309,
+    0.3737378705903211,
+    0.2675628657535144,
+    0.5613546750745204,
+    0.32981581984662206,
+    0.27843789790762297,
+    -0.6553097561175873,
+    0.47041239094283144,
+    -0.6466612016945509,
+    -0.7695207693249017,
+    -1.3973186602007732,
+    -1.1349946216377602,
+    2.325419956325277,
+    0.8457780239050661
+  ],
+  "bias": -2.1295578136526068,
+  "threshold": 0.8527824800026967,
+  "trainedAt": "2026-10-06T11:32:01.643Z",
+  "trainedSamples": 918
+}
