@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation'
   import { page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
@@ -22,11 +23,24 @@
   // ($app/state의 navigating은 redirect/에러 시 null 미복귀 버그 있음)
   let isNavigating = $state(false)
   // 외부 출처 이동(파일 다운로드용 서명 URL 등)은 현재 페이지가 바뀌지 않아 afterNavigate가 오지 않으므로 오버레이를 켜지 않는다
+  // 안전장치(2026-10-06): 이동이 다른 새로고침에 밀려 취소되면 SvelteKit이 afterNavigate를 보내지 않아 오버레이가 영구히 남는다 —
+  // 켜진 뒤 NAV_OVERLAY_MAX_MS가 지나면 스스로 끈다(정상 이동은 훨씬 먼저 끝나 afterNavigate가 타이머를 정리한다)
+  const NAV_OVERLAY_MAX_MS = 8000
+  let navTimer: ReturnType<typeof setTimeout> | null = null
+  function clearNavTimer(): void {
+    if (navTimer) { clearTimeout(navTimer); navTimer = null }
+  }
   beforeNavigate((nav) => {
     if (nav.willUnload || (nav.to && nav.to.url.origin !== window.location.origin)) return
     isNavigating = true
+    clearNavTimer()
+    navTimer = setTimeout(() => {
+      isNavigating = false
+      navTimer = null
+    }, NAV_OVERLAY_MAX_MS)
   })
-  afterNavigate(() => { isNavigating = false })
+  afterNavigate(() => { clearNavTimer(); isNavigating = false })
+  onDestroy(clearNavTimer) // 레이아웃이 사라질 때(예: 로그인 화면 이동) 남은 타이머 정리
 
   // 소화면 접속 시 토스트 안내 (레이아웃 차단 없음)
   let mobileToastShown = false
