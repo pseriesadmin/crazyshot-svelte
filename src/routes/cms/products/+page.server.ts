@@ -19,6 +19,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
 import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
+import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -400,19 +401,39 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // ── 하이브리드 NLSearch 폴백: ilike 결과 약할 때 자연어 검색으로 보강 (K-3) ─────
   // (nlsearch.md §2 동일 패턴 — ilike 우선, NLSearch는 보강만)
   let totalCount = ilikeCount ?? 0
-  let nlsearchFallbackIds: string[] = []
-
-  if (q && (ilikeCount ?? 0) <= WEAK_MATCH_THRESHOLD) {
+  // 품번 검색: 부모 상품은 product_code가 없어 기본 ilike(name·brand 등)로는 '기준 품번'·자식 품번을 못 찾는다 —
+  // 품번처럼 보이는 검색어일 때만 해당 부모 id를 모아 필터에 합친다(실패해도 기본 검색은 그대로).
+  let codeMatchIds: string[] = []
+  if (q) {
     try {
-      const index = await getProductSearchIndex()
-      const naturalResults = index.search(q, {
-        fuzzy: 0.2,
-        prefix: true,
-        limit: 50, // PAGE_SIZE(20)보다 충분히 큰 값 — dedupe 여유 확보
-      })
+      codeMatchIds = await findParentIdsByProductCode(admin, q)
+    } catch (e) {
+      console.error('[cms/products] 품번 검색 오류:', e)
+    }
+  }
+  let nlsearchFallbackIds: string[] = [...codeMatchIds]
 
-      if (naturalResults.length > 0) {
-        nlsearchFallbackIds = naturalResults.map((r) => r.document.id)
+  if (q && ((ilikeCount ?? 0) <= WEAK_MATCH_THRESHOLD || codeMatchIds.length > 0)) {
+    // NLSearch 자연어 검색은 실패해도 품번 매칭 결과(codeMatchIds)로 건수 재계산까지 이어가도록 별도 try로 분리
+    let naturalIds: string[] = []
+    if ((ilikeCount ?? 0) <= WEAK_MATCH_THRESHOLD) {
+      try {
+        const index = await getProductSearchIndex()
+        const naturalResults = index.search(q, {
+          fuzzy: 0.2,
+          prefix: true,
+          limit: 50, // PAGE_SIZE(20)보다 충분히 큰 값 — dedupe 여유 확보
+        })
+        naturalIds = naturalResults.map((r) => r.document.id)
+      } catch (e) {
+        console.error('[cms/products] NLSearch 폴백 오류:', e)
+      }
+    }
+    try {
+      const mergedIds = Array.from(new Set([...codeMatchIds, ...naturalIds]))
+
+      if (mergedIds.length > 0) {
+        nlsearchFallbackIds = mergedIds
 
         // 확장 OR 필터: ilike + NLSearch 폴백 IDs 합집합
         const expandedOrFilter = `${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`
@@ -429,7 +450,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         totalCount = expandedCount ?? totalCount
       }
     } catch (e) {
-      console.error('[cms/products] NLSearch 폴백 오류:', e)
+      console.error('[cms/products] 검색 건수 재계산 오류:', e)
       // 폴백 실패 시 ilike 카운트로 계속 진행 (서비스 중단 방지)
     }
   }
