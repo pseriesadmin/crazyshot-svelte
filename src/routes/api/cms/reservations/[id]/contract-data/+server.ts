@@ -9,6 +9,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
 import type { ReservationForLineItems, BundleLink } from '$lib/utils/contractLineItems'
+import { calcVatForCart } from '$lib/utils/cartCouponPoints'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
@@ -43,8 +44,8 @@ function formatDeltaAmount(n: number | null | undefined): string {
 // "기본대여요금 - 등급할인"(=부가세 포함 순대여가, cart의 otNetBeforeVat과 동일 산식)에서
 // 10/110을 역산해 "이 안에 부가세가 얼마 포함돼 있었는지"만 안내용으로 표시한다(합계 계산에
 // 더하지 않음 — 이미 포함돼 있으므로 이중과세 방지).
-function formatVatAmount(netBeforeVat: number): string {
-  const vat = Math.round(netBeforeVat - netBeforeVat / 1.1)
+function formatVatAmount(netBeforeVat: number, couponDiscount = 0, pointsUsed = 0): string {
+  const vat = calcVatForCart(Math.max(0, netBeforeVat - couponDiscount), pointsUsed)
   return `(${vat.toLocaleString('ko-KR')}원)`
 }
 
@@ -586,7 +587,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     배송비:       formatAmount(orderData?.delivery_fee),
     // 2026-09-09 — "포함가 역산" 표시로 전환(위 formatVatAmount 주석 참고). 등급할인까지만
     // 반영한 순대여가(할인쿠폰·포인트는 부가세 계산 기준에서 제외 — cart otNetBeforeVat과 동일)
-    부가세:       formatVatAmount((orderData?.total_amount ?? 0) - (orderData?.discount_amount ?? 0)),
+    // 2026-10-06 — 장바구니 otVat과 동일하게 쿠폰 할인·사용 포인트까지 차감한 실결제 상품분
+    // 기준(calcVatForCart)으로 역산한다(과거엔 멤버십 할인까지만 차감해 부가세가 과대 표기됐음).
+    부가세:       formatVatAmount(
+      (orderData?.total_amount ?? 0) - (orderData?.discount_amount ?? 0),
+      couponDiscountAmount ?? 0,
+      orderData?.selected_points ?? 0,
+    ),
     최종합계:     formatAmount(orderData?.final_amount),
     요금유형:     res.duration_type ? (DURATION_TYPE_LABELS[res.duration_type] ?? res.duration_type) : '-',
     할인차감:     formatDeltaAmount(couponDiscountAmount),
