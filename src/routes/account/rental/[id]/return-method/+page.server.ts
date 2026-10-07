@@ -7,6 +7,7 @@
  */
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 // in_use 이상 = 변경 불가
 const LOCKED_STATUSES = new Set([
@@ -35,7 +36,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 예약 정보 조회 (소유권 검증 포함 — user_id 필터)
   const { data: reservation, error: resErr } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, return_method, product_id, products!rental_reservations_product_id_fkey(name)')
+    .select('id, status, reservation_code, start_date, end_date, return_method, product_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
     .eq('id', reservationId)
     .eq('user_id', session.user.id)
     .maybeSingle()
@@ -45,6 +46,8 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   }
 
   const r = reservation as Record<string, unknown>
+  // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
+  await applyParentFieldsToRowProducts([r], ['name'])
   const product = (r.products as { name: string } | null) ?? null
 
   const rental: RentalForReturnMethod = {

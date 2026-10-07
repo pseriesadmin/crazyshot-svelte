@@ -8,6 +8,7 @@ import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsa
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export const load: PageServerLoad = async ({ params }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -43,7 +44,7 @@ export const load: PageServerLoad = async ({ params }) => {
           return_method,
           pickup_time,
           return_time,
-          products!rental_reservations_product_id_fkey ( name, category, product_code )
+          products!rental_reservations_product_id_fkey ( name, category, product_code, parent_product_id )
         )
       )
     `)
@@ -53,6 +54,13 @@ export const load: PageServerLoad = async ({ params }) => {
   if (signingErr || !signing) {
     throw error(404, '유효하지 않은 계약서 링크입니다.')
   }
+
+  // 자식 재고의 이름·분류는 부모 값을 따른다(품번은 자식 고유값 유지 — 자식 재고 부모 참조 전환 Phase 3-B)
+  await applyParentFieldsToRowProducts(
+    [(signing.contracts as unknown as { rental_reservations?: unknown } | null)?.rental_reservations],
+    ['name', 'category'],
+    admin,
+  )
 
   // 2026-08-21(TASK.md "예약 결제·계약서명 순서 재설계" Phase C, EC-1 방어): 서명은 이미
   // 끝났지만 결제(mock)를 아직 안 한 예약(status='hold' 유지 중)은 '/contract/signed'

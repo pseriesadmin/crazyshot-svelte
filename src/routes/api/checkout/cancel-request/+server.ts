@@ -12,6 +12,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { sendPushToAdmins } from '$lib/server/push'
 import { evaluateReservationCancelKind } from '$lib/server/cancelPolicyLoader'
 import type { RequestHandler } from './$types'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export const POST: RequestHandler = async ({ locals, request }) => {
   const { session } = await locals.safeGetSession()
@@ -28,7 +29,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // ─── 소유권·기본 정보 ────────────────────────────────────────────────
   const { data: rv } = await admin
     .from('rental_reservations')
-    .select('id, status, user_id, tracking_number, pickup_method, start_date, end_date, reservation_code, products!rental_reservations_product_id_fkey(name)')
+    .select('id, status, user_id, tracking_number, pickup_method, start_date, end_date, reservation_code, products!rental_reservations_product_id_fkey(name, parent_product_id)')
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -43,6 +44,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     reservation_code: string | null
     products: { name: string | null } | null
   } | null
+
+  // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C)
+  await applyParentFieldsToRowProducts([reservation], ['name'], admin)
 
   if (!reservation || reservation.user_id !== session.user.id) {
     return json({ ok: false, error: '취소 요청이 불가합니다.' }, { status: 403 })

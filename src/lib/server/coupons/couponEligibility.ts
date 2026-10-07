@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { userCouponUsedCount } from '$lib/utils/couponUsage'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
 
 // ── 7개 자격조건 필드 (coupons 테이블 컬럼과 1:1 대응) ──────────────────────
 export interface CouponEligibilityFields {
@@ -234,12 +235,15 @@ export async function buildCouponEligibilityContext(
         // 적용 카테고리 검증용 — 주문에 담긴 상품들의 category 목록
         const productIds = [...new Set(reservations.map((r) => r.product_id).filter((id): id is string => id != null))]
         if (productIds.length > 0) {
+          type CategoryRow = { category: string | null; parent_product_id: string | null }
           const { data: productRows } = await (client as unknown as {
             from: (t: string) => {
-              select: (c: string) => { in: (k: string, v: string[]) => Promise<{ data: { category: string | null }[] | null }> }
+              select: (c: string) => { in: (k: string, v: string[]) => Promise<{ data: CategoryRow[] | null }> }
             }
-          }).from('products').select('category').in('id', productIds)
-          cartCategories = [...new Set((productRows ?? []).map((p) => p.category).filter((c): c is string => c != null))]
+          }).from('products').select('category, parent_product_id').in('id', productIds)
+          // 자식 재고는 부모 분류를 따른다(서버 _validate_and_consume_coupon과 같은 기준 — Migration #654)
+          const resolvedRows = await resolveParentProductFields(client, productRows ?? [], ['category'])
+          cartCategories = [...new Set(resolvedRows.map((p) => p.category).filter((c): c is string => c != null))]
         }
       }
     }

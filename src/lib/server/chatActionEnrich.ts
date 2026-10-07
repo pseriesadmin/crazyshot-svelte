@@ -94,15 +94,22 @@ async function enrichProductCard(
   // 가격·슬러그는 항상 부모 기준 (§4-1: 자식은 등록정보를 부모에서만 관리)
   const policyId = parentId ?? productId
   let productSlug = product.slug as string
+  // 이름·대표 이미지도 부모 기준 — 자식 재고에 복사된 옛 값 대신 부모 값을 쓴다(자식 재고 부모 참조 전환 Phase 3-C)
+  let productName = product.name as string
+  let imageUrls = product.image_urls as string[] | null
 
   if (parentId) {
     const { data: parentRaw } = await admin
       .from('products')
-      .select('slug')
+      .select('slug, name, image_urls')
       .eq('id', parentId)
       .maybeSingle()
     if (parentRaw) {
-      productSlug = (parentRaw as Record<string, unknown>).slug as string
+      const parent = parentRaw as Record<string, unknown>
+      productSlug = parent.slug as string
+      if (typeof parent.name === 'string' && parent.name) productName = parent.name
+      const parentImages = parent.image_urls as string[] | null
+      if (parentImages && parentImages.length > 0) imageUrls = parentImages
     }
   }
 
@@ -119,12 +126,10 @@ async function enrichProductCard(
     ? ((priceRaw as Record<string, unknown>).price as number)
     : undefined
 
-  const imageUrls = product.image_urls as string[] | null
-
   return {
     ...base,
     product_id: productId,
-    product_name: product.name as string,
+    product_name: productName,
     product_price: dailyRate,
     product_image: imageUrls?.[0],
     action_url: `/products/${productSlug}`,

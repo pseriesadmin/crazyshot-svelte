@@ -95,11 +95,20 @@ export async function getReservationForDhero(
   const addr = addrRow ?? fallbackAddr
 
   // 상품명
-  const { data: product } = await admin
+  // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C) — 배송 주문서에 전달되는 상품명
+  const { data: productRow } = await admin
     .from('products')
-    .select('name')
+    .select('name, parent_product_id')
     .eq('id', r.product_id as string)
     .maybeSingle()
+  let resolvedProductName = (productRow as Record<string, unknown> | null)?.name as string | undefined
+  const parentProductId = (productRow as Record<string, unknown> | null)?.parent_product_id as string | null | undefined
+  if (parentProductId) {
+    const { data: parentRow } = await admin.from('products').select('name').eq('id', parentProductId).maybeSingle()
+    const parentName = (parentRow as Record<string, unknown> | null)?.name as string | undefined
+    if (parentName) resolvedProductName = parentName
+  }
+  const product = { name: resolvedProductName ?? null }
 
   return {
     reservationId,
