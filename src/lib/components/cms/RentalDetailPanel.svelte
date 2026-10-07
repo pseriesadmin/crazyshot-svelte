@@ -22,6 +22,7 @@
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   import { pickLowestUnit } from '$lib/utils/availableUnitOrder'
+  import { RESERVATION_COMPOSITION_EDIT_ENABLED } from '$lib/utils/reservationCompositionPolicy'
 
   interface RentalListRow {
     /** 고객 취소 후 관리자 취소확인 대기 — /cms/rentals 로더가 부착(헤더 [예약취소]=취소확인) */
@@ -136,8 +137,10 @@
 
   // Stage 4 확장 기능 권한 게이트:
   // canEditProducts — hold 상태이고 결제 미완료(payment_confirmed_at IS NULL)인 경우만 상품 추가/삭제 허용
+  // ⛔ 2026-10-06 정책: 예약 구성(상품·재고·옵션) 관리자 직접 편집은 막는다 — 고객이 확인한 금액·계약과 달라지기 때문
+  //    (reservationCompositionPolicy.ts). 이 값이 false면 + 추가·+ 재고 추가·✕·옵션 수량/삭제 UI가 전부 숨겨진다.
   let canEditProducts = $derived(
-    !isRentalView && row.status === 'hold' && !row.payment_confirmed_at
+    RESERVATION_COMPOSITION_EDIT_ENABLED && !isRentalView && row.status === 'hold' && !row.payment_confirmed_at
   )
   // canReassignProductCode — hold 또는 계약완료(confirmed) 상태일 때 상품코드 재배정 허용
   // (2026-09-08 확장: 운송장 등록 여부와 무관 — confirmed는 실물이 아직 반출 전이라 QR 불일치 위험 없음, Stephen 확정)
@@ -344,11 +347,20 @@
     product_code: string | null
   }
 
-  // 예약 시점에 배정된 결합상품 실물(reservation_bundle_assets, 결합상품 Phase 2) — 조회 전용
+  // 예약 시점에 배정된 결합상품 실물(reservation_bundle_assets, 결합상품 Phase 2) — 상품 정보 박스에서 조회·재배정
   interface ReservationBundleAsset {
-    id:           number
-    bundle_name:  string
-    product_code: string | null
+    id:                number
+    bundle_product_id: string
+    bundle_name:       string
+    product_code:      string | null
+  }
+
+  // 옵션상품 실물 배정(reservation_option_assets, Migration 654) — 옵션 1행 × qty = 실물 qty건
+  interface ReservationOptionAsset {
+    id:                    number
+    reservation_option_id: number
+    option_product_id:     string
+    product_code:          string | null
   }
 
   interface OrderSibling {
@@ -508,27 +520,68 @@
       })
   })
 
-  // 결합상품 배정 실물 — 옵션상품과 동일한 lazy-fetch 패턴. 0개(레거시·일반 상품)면 섹션 미표시.
-  let bundlesFetchedForId = $state<number | null>(null)
-  let bundleAssets         = $state<ReservationBundleAsset[]>([])
+  // 결합상품 배정 실물 — 상품 정보 박스의 각 상품(유닛=예약) 아래에 표시. 예약별로 lazy-fetch,
+  // 0개(레거시·일반 상품)면 행 미표시. 재배정 직후에는 해당 예약만 다시 조회한다.
+  let bundleAssetsByRes = $state<Record<number, ReservationBundleAsset[]>>({})
+  const bundleFetchedIds = new Set<number>()   // 비반응형 — 효과가 자기 쓰기로 재실행되지 않게
+  let bundleAnchorId: number | null = null
+
+  async function loadBundleAssets(id: number): Promise<void> {
+    try {
+      const r = await fetch(`/api/cms/reservations/${id}/bundles`)
+      const d = await r.json() as { bundles?: ReservationBundleAsset[] }
+      if (bundleFetchedIds.has(id)) {
+        bundleAssetsByRes = { ...bundleAssetsByRes, [id]: Array.isArray(d.bundles) ? d.bundles : [] }
+      }
+    } catch {
+      if (bundleFetchedIds.has(id)) bundleAssetsByRes = { ...bundleAssetsByRes, [id]: [] }
+    }
+  }
+
   $effect(() => {
     if (activeTab !== 'rental') return
-    if (bundlesFetchedForId === row.reservation_id) return
+    if (bundleAnchorId !== row.reservation_id) {
+      // 다른 예약을 열면 이전 예약의 캐시를 버린다(낡은 배정 표시 방지)
+      bundleAnchorId = row.reservation_id
+      bundleFetchedIds.clear()
+      bundleAssetsByRes = {}
+      bundleReassignKey = null   // 열려 있던 재배정 줄도 닫는다(다른 예약으로 갔다 돌아와도 열린 채로 남지 않게)
+    }
+    for (const item of productInfoItems) {
+      if (bundleFetchedIds.has(item.reservationId)) continue
+      bundleFetchedIds.add(item.reservationId)
+      void loadBundleAssets(item.reservationId)
+    }
+  })
 
-    const id = row.reservation_id
-    bundlesFetchedForId = id
-    bundleAssets = []
+  // 옵션상품 실물 배정 — 이 예약(row)의 옵션 카드 아래에 표시. 예약이 바뀌면 다시 조회한다.
+  let optionAssets = $state<ReservationOptionAsset[]>([])
+  let optionAssetsAnchorId: number | null = null   // 비반응형 — 효과가 자기 쓰기로 재실행되지 않게
 
-    fetch(`/api/cms/reservations/${id}/bundles`)
-      .then(r => r.json())
-      .then(d => {
-        if (bundlesFetchedForId === id) {
-          bundleAssets = Array.isArray(d.bundles) ? d.bundles : []
-        }
-      })
-      .catch(() => {
-        if (bundlesFetchedForId === id) bundleAssets = []
-      })
+  async function loadOptionAssets(id: number): Promise<void> {
+    try {
+      const r = await fetch(`/api/cms/reservations/${id}/options/assets`)
+      const d = await r.json() as { assets?: ReservationOptionAsset[] }
+      if (optionAssetsAnchorId === id) optionAssets = Array.isArray(d.assets) ? d.assets : []
+    } catch {
+      if (optionAssetsAnchorId === id) optionAssets = []
+    }
+  }
+
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (optionAssetsAnchorId === row.reservation_id) return
+    optionAssetsAnchorId = row.reservation_id
+    optionAssets = []
+    optionAssetReassignId = null   // 다른 예약으로 갔다 돌아와도 열린 재배정 줄이 남지 않게
+    void loadOptionAssets(row.reservation_id)
+  })
+
+  // 옵션 행 id → 그 옵션의 실물 배정 목록
+  let optionAssetsByOption = $derived.by(() => {
+    const map: Record<number, ReservationOptionAsset[]> = {}
+    for (const a of optionAssets) (map[a.reservation_option_id] ??= []).push(a)
+    return map
   })
 
   interface RentalSibling {
@@ -957,7 +1010,10 @@
       if (!res.ok || !d.success) {
         csToast.error(d.error ?? '상품코드 재배정에 실패했습니다.')
       } else {
-        csToast.success('상품코드가 재배정됐습니다.')
+        // 결합 패키지는 서버가 결합상품별 가용 재고도 함께 자동 재배정한다(Migration 653) — 새 배정을 다시 불러온다
+        const hadBundles = (bundleAssetsByRes[targetReservationId] ?? []).length > 0
+        csToast.success(hadBundles ? '상품코드가 재배정됐습니다. 결합상품 재고도 함께 자동 재배정됐습니다.' : '상품코드가 재배정됐습니다.')
+        if (hadBundles) { bundleFetchedIds.add(targetReservationId); void loadBundleAssets(targetReservationId) }
         reassignTargetId = null
         availableUnitsFetchedForId = null
         rentalSiblingsFetchedForId = null
@@ -968,6 +1024,132 @@
     } finally {
       reassigning = false
     }
+  }
+
+  // ── 결합상품 실물 재배정 (Migration 652) — 메인 상품 재배정(openReassign/handleReassign)과 같은 흐름 ──
+  let bundleReassignKey      = $state<string | null>(null)   // `${reservationId}:${bundleProductId}`
+  let bundleCandidates       = $state<{ id: string; product_code: string | null }[]>([])
+  let bundleCandidatesLoading = $state(false)
+  let bundleCandidatesError  = $state<string | null>(null)
+  let bundleReassigning      = $state(false)
+  let bundleAutoPickArmedKey = $state<string | null>(null)
+
+  const bundleKey = (reservationId: number, bundleProductId: string): string => `${reservationId}:${bundleProductId}`
+
+  async function openBundleReassign(reservationId: number, bundleProductId: string): Promise<void> {
+    bundleAutoPickArmedKey = null
+    const key = bundleKey(reservationId, bundleProductId)
+    if (bundleReassignKey === key) { bundleReassignKey = null; return }   // 토글 닫기 — 다시 열 때 재조회
+    bundleReassignKey = key
+    bundleCandidates = []
+    bundleCandidatesError = null
+    bundleCandidatesLoading = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${reservationId}/bundles/available?bundle_product_id=${encodeURIComponent(bundleProductId)}`)
+      const d = await res.json() as { units?: { id: string; product_code: string | null }[]; error?: string }
+      if (bundleReassignKey === key) {
+        if (!res.ok) bundleCandidatesError = d.error ?? '가용 재고를 불러오지 못했습니다.'
+        else bundleCandidates = d.units ?? []
+      }
+    } catch {
+      if (bundleReassignKey === key) bundleCandidatesError = '네트워크 오류가 발생했습니다.'
+    } finally {
+      if (bundleReassignKey === key) bundleCandidatesLoading = false
+    }
+  }
+
+  async function handleBundleReassign(reservationId: number, bundleProductId: string, newAssetId: string): Promise<void> {
+    bundleReassigning = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${reservationId}/bundles`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundle_product_id: bundleProductId, new_asset_id: newAssetId }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '결합상품 재배정에 실패했습니다.')
+      } else {
+        csToast.success('결합상품 재고가 재배정됐습니다.')
+        bundleReassignKey = null
+        await loadBundleAssets(reservationId)
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      bundleReassigning = false
+    }
+  }
+
+  // 자동 선택 2단계 확인 — 메인 상품과 동일(1차 클릭 무장, 2차 클릭 실제 재배정)
+  function handleBundleAutoPick(reservationId: number, bundleProductId: string): void {
+    const lowest = pickLowestUnit(bundleCandidates)
+    if (!lowest) return
+    const key = bundleKey(reservationId, bundleProductId)
+    if (bundleAutoPickArmedKey !== key) { bundleAutoPickArmedKey = key; return }
+    bundleAutoPickArmedKey = null
+    void handleBundleReassign(reservationId, bundleProductId, lowest.id)
+  }
+
+  // ── 옵션상품 실물 재배정 (Migration 654) — 결합상품·메인 재배정과 같은 흐름 ──
+  let optionAssetReassignId      = $state<number | null>(null)   // 재배정 줄이 열린 배정 행 id
+  let optionCandidates           = $state<{ id: string; product_code: string | null }[]>([])
+  let optionCandidatesLoading    = $state(false)
+  let optionCandidatesError      = $state<string | null>(null)
+  let optionReassigning          = $state(false)
+  let optionAutoPickArmedId      = $state<number | null>(null)
+
+  async function openOptionAssetReassign(assetRowId: number): Promise<void> {
+    optionAutoPickArmedId = null
+    if (optionAssetReassignId === assetRowId) { optionAssetReassignId = null; return }   // 토글 닫기 — 다시 열 때 재조회
+    optionAssetReassignId = assetRowId
+    optionCandidates = []
+    optionCandidatesError = null
+    optionCandidatesLoading = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/options/assets/available?option_asset_id=${assetRowId}`)
+      const d = await res.json() as { units?: { id: string; product_code: string | null }[]; error?: string }
+      if (optionAssetReassignId === assetRowId) {
+        if (!res.ok) optionCandidatesError = d.error ?? '가용 재고를 불러오지 못했습니다.'
+        else optionCandidates = d.units ?? []
+      }
+    } catch {
+      if (optionAssetReassignId === assetRowId) optionCandidatesError = '네트워크 오류가 발생했습니다.'
+    } finally {
+      if (optionAssetReassignId === assetRowId) optionCandidatesLoading = false
+    }
+  }
+
+  async function handleOptionAssetReassign(assetRowId: number, newAssetId: string): Promise<void> {
+    optionReassigning = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/options/assets`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ option_asset_id: assetRowId, new_asset_id: newAssetId }),
+      })
+      const d = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !d.success) {
+        csToast.error(d.error ?? '옵션상품 재배정에 실패했습니다.')
+      } else {
+        csToast.success('옵션상품 재고가 재배정됐습니다.')
+        optionAssetReassignId = null
+        await loadOptionAssets(row.reservation_id)
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      optionReassigning = false
+    }
+  }
+
+  // 자동 선택 2단계 확인 — 메인·결합상품과 동일(1차 클릭 무장, 2차 클릭 실제 재배정)
+  function handleOptionAutoPick(assetRowId: number): void {
+    const lowest = pickLowestUnit(optionCandidates)
+    if (!lowest) return
+    if (optionAutoPickArmedId !== assetRowId) { optionAutoPickArmedId = assetRowId; return }
+    optionAutoPickArmedId = null
+    void handleOptionAssetReassign(assetRowId, lowest.id)
   }
 
   const STATUS_LABEL: Record<string, string> = {
@@ -1642,7 +1824,7 @@
              재배정 줄이 열린 그룹만 overflow 클리핑을 해제 -->
         <div
           class="info-section"
-          class:picker-open={reassignTargetId !== null && group.units.some(u => u.reservationId === reassignTargetId)}
+          class:picker-open={(reassignTargetId !== null && group.units.some(u => u.reservationId === reassignTargetId)) || (bundleReassignKey !== null && group.units.some(u => bundleReassignKey?.startsWith(`${u.reservationId}:`)))}
         >
           {#if group.representative.imageUrl}
             <div class="info-row">
@@ -1710,6 +1892,9 @@
             </div>
             {#if canReassignUnit(unit) && reassignTargetId === unit.reservationId}
               <div class="reassign-row">
+                {#if (bundleAssetsByRes[unit.reservationId] ?? []).length > 0}
+                  <p class="reassign-note">패키지 재고를 바꾸면 결합상품 재고도 가용 재고 중 가장 낮은 품번으로 함께 자동 재배정됩니다. 결합상품은 아래 줄에서 개별로 다시 바꿀 수 있습니다.</p>
+                {/if}
                 {#if availableUnitsLoading}
                   <span class="reassign-loading">가용 재고 조회 중...</span>
                 {:else if availableUnitsError}
@@ -1762,6 +1947,80 @@
               </div>
             {/if}
             </div>
+            <!-- 결합상품 — 이 유닛(예약)에 배정된 구성품 실물. 상품명 + 상품코드 + 우측 [재배정] (Migration 652) -->
+            {#each bundleAssetsByRes[unit.reservationId] ?? [] as asset (asset.id)}
+              {@const bKey = bundleKey(unit.reservationId, asset.bundle_product_id)}
+              <div class="unit-block" class:unit-block--open={canReassignUnit(unit) && bundleReassignKey === bKey}>
+                <div class="info-row">
+                  <span class="info-label">결합상품</span>
+                  <span class="info-value">
+                    <span class="fw-bold">{asset.bundle_name}</span>
+                    <span class="mono bundle-code">{asset.product_code ?? '미발행'}</span>
+                  </span>
+                  {#if canReassignUnit(unit)}
+                    <button
+                      type="button"
+                      class="btn-reassign-small"
+                      onclick={() => openBundleReassign(unit.reservationId, asset.bundle_product_id)}
+                      aria-label="결합상품 재배정"
+                    >{bundleReassignKey === bKey ? '닫기' : '재배정'}</button>
+                  {/if}
+                </div>
+                {#if canReassignUnit(unit) && bundleReassignKey === bKey}
+                  <div class="reassign-row">
+                    {#if bundleCandidatesLoading}
+                      <span class="reassign-loading">가용 재고 조회 중...</span>
+                    {:else if bundleCandidatesError}
+                      <span class="reassign-error">{bundleCandidatesError}</span>
+                    {:else if bundleCandidates.length === 0}
+                      <span class="reassign-empty">이 날짜에 교체 가능한 재고가 없습니다.</span>
+                    {:else}
+                      <div class="reassign-meta">
+                        <span class="reassign-count">교체 가능 {bundleCandidates.length}개</span>
+                        <button
+                          type="button"
+                          class="btn-reassign-small"
+                          onclick={() => handleBundleAutoPick(unit.reservationId, asset.bundle_product_id)}
+                          disabled={bundleReassigning}
+                          aria-label="가용 재고 중 가장 낮은 순번 자동 선택"
+                        >{bundleAutoPickArmedKey === bKey
+                          ? `${pickLowestUnit(bundleCandidates)?.product_code ?? '(코드 없음)'} 배정 확인`
+                          : '자동 선택'}</button>
+                      </div>
+                      <div class="reassign-picker-wrap">
+                        <SuggestPicker
+                          options={bundleCandidates.map(u => ({
+                            id: u.id,
+                            label: u.product_code ?? '(코드 없음)',
+                          }))}
+                          onselect={(opt) => {
+                            if (opt) handleBundleReassign(unit.reservationId, asset.bundle_product_id, opt.id)
+                          }}
+                        >
+                          {#snippet field(ctrl)}
+                            <input
+                              id={ctrl.id}
+                              name={ctrl.name}
+                              class="reassign-input"
+                              placeholder="품번 검색 또는 선택 (예: 0025)"
+                              value={ctrl.value}
+                              oninput={ctrl.oninput}
+                              onkeydown={ctrl.onkeydown}
+                              onfocus={ctrl.onfocus}
+                              onblur={ctrl.onblur}
+                              aria-autocomplete={ctrl.ariaAutocomplete}
+                              aria-expanded={ctrl.ariaExpanded}
+                              aria-controls={ctrl.ariaControls}
+                              disabled={bundleReassigning}
+                            />
+                          {/snippet}
+                        </SuggestPicker>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
           {/each}
           {#if canEditProducts && group.representative.parentProductId}
             <div class="info-row">
@@ -1783,8 +2042,8 @@
 
       <!-- 옵션상품 — 메인상품 외 예약에 함께 담긴 상품(reservation_options). 없으면 섹션 자체 미표시 -->
       {#if optionsLoading}
-        <div class="section-title">옵션상품</div>
-        <div class="loading-box">옵션상품 조회 중...</div>
+        <!-- 조회 중에는 아무것도 그리지 않는다(2026-10-06) — 옵션이 없는 예약은 섹션 자체가 안 보여야 하고,
+             머리글만 잠깐 보였다 사라지는 깜빡임을 막는다. 옵션이 있으면 조회 완료 후 섹션이 나타난다. -->
       {:else if optionsError}
         <div class="section-title">옵션상품</div>
         <div class="error-box">{optionsError}</div>
@@ -1810,7 +2069,10 @@
                그대로 재사용(qty+1 PATCH), "-"는 그 행 옆 소형 버튼으로 유지(qty-1 PATCH,
                1 미만 차단). 옵션 자체 삭제(전체 제거)는 상품명 행의 ✕ 아이콘이 담당. -->
           {#each options as opt (opt.id)}
-            <div class="info-section">
+            <div
+              class="info-section"
+              class:picker-open={optionAssetReassignId !== null && (optionAssetsByOption[opt.id] ?? []).some(a => a.id === optionAssetReassignId)}
+            >
               <div class="info-row">
                 <span class="info-label">옵션명</span>
                 <span class="info-value fw-bold">
@@ -1832,7 +2094,78 @@
                   >✕</button>
                 {/if}
               </div>
-              {#if opt.product_code}
+              {#if (optionAssetsByOption[opt.id] ?? []).length > 0}
+                <!-- 옵션 실물 배정(Migration 654) — 상품 코드 행 하나당 실물 1대. 메인 상품 코드 행과 같은 구조(.unit-block + 재배정 줄) -->
+                {#each optionAssetsByOption[opt.id] ?? [] as oa, i (oa.id)}
+                  <div class="unit-block" class:unit-block--open={canReassignProductCode && optionAssetReassignId === oa.id}>
+                    <div class="info-row">
+                      <span class="info-label">상품 코드{#if opt.qty > 1} #{i + 1}{/if}</span>
+                      <span class="info-value mono">{oa.product_code ?? '미발행'}</span>
+                      {#if canReassignProductCode}
+                        <button
+                          type="button"
+                          class="btn-reassign-small"
+                          onclick={() => openOptionAssetReassign(oa.id)}
+                          aria-label="옵션상품 재배정"
+                        >{optionAssetReassignId === oa.id ? '닫기' : '재배정'}</button>
+                      {/if}
+                    </div>
+                    {#if canReassignProductCode && optionAssetReassignId === oa.id}
+                      <div class="reassign-row">
+                        {#if optionCandidatesLoading}
+                          <span class="reassign-loading">가용 재고 조회 중...</span>
+                        {:else if optionCandidatesError}
+                          <span class="reassign-error">{optionCandidatesError}</span>
+                        {:else if optionCandidates.length === 0}
+                          <span class="reassign-empty">이 날짜에 교체 가능한 재고가 없습니다.</span>
+                        {:else}
+                          <div class="reassign-meta">
+                            <span class="reassign-count">교체 가능 {optionCandidates.length}개</span>
+                            <button
+                              type="button"
+                              class="btn-reassign-small"
+                              onclick={() => handleOptionAutoPick(oa.id)}
+                              disabled={optionReassigning}
+                              aria-label="가용 재고 중 가장 낮은 순번 자동 선택"
+                            >{optionAutoPickArmedId === oa.id
+                              ? `${pickLowestUnit(optionCandidates)?.product_code ?? '(코드 없음)'} 배정 확인`
+                              : '자동 선택'}</button>
+                          </div>
+                          <div class="reassign-picker-wrap">
+                            <SuggestPicker
+                              options={optionCandidates.map(u => ({
+                                id: u.id,
+                                label: u.product_code ?? '(코드 없음)',
+                              }))}
+                              onselect={(opt2) => {
+                                if (opt2) handleOptionAssetReassign(oa.id, opt2.id)
+                              }}
+                            >
+                              {#snippet field(ctrl)}
+                                <input
+                                  id={ctrl.id}
+                                  name={ctrl.name}
+                                  class="reassign-input"
+                                  placeholder="품번 검색 또는 선택 (예: 0025)"
+                                  value={ctrl.value}
+                                  oninput={ctrl.oninput}
+                                  onkeydown={ctrl.onkeydown}
+                                  onfocus={ctrl.onfocus}
+                                  onblur={ctrl.onblur}
+                                  aria-autocomplete={ctrl.ariaAutocomplete}
+                                  aria-expanded={ctrl.ariaExpanded}
+                                  aria-controls={ctrl.ariaControls}
+                                  disabled={optionReassigning}
+                                />
+                              {/snippet}
+                            </SuggestPicker>
+                          </div>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              {:else if opt.product_code}
                 <div class="info-row">
                   <span class="info-label">상품 코드</span>
                   <span class="info-value mono">{opt.product_code}</span>
@@ -1869,23 +2202,6 @@
         {:else}
           <div class="loading-box" style="color: var(--cs-text-mid); font-style: italic;">옵션 없음 — + 추가로 등록하세요</div>
         {/if}
-      {/if}
-
-      <!-- 결합상품 — 예약 시점에 배정된 실물(장비번호) 표시. 조회 전용, 0개면 섹션 미표시 -->
-      {#if bundleAssets.length > 0}
-        <div class="section-title">결합상품 ({bundleAssets.length}개)</div>
-        {#each bundleAssets as asset (asset.id)}
-          <div class="info-section">
-            <div class="info-row">
-              <span class="info-label">결합상품</span>
-              <span class="info-value fw-bold">{asset.bundle_name}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">장비번호</span>
-              <span class="info-value mono">{asset.product_code ?? '미발행'}</span>
-            </div>
-          </div>
-        {/each}
       {/if}
 
       <!-- 대여 일정 -->
@@ -2933,6 +3249,12 @@
     font-size: 12px;
     color: var(--cs-text-mid);
   }
+  .reassign-note {
+    margin: 0 0 6px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--cs-text-mid);
+  }
   /* 재배정 줄이 열린 상품 그룹만 클리핑 해제 — SuggestPicker 목록 레이어가 잘리지 않게 */
   .info-section.picker-open {
     overflow: visible;
@@ -2961,6 +3283,8 @@
     font-style: italic;
   }
   .reassign-error { color: var(--cs-error); }
+  /* 결합상품 행 — 상품명 옆 상품코드 */
+  .bundle-code { margin-left: 8px; }
 
   /* 옵션상품 수량 "-" — 메인상품 카드와 톤 통일(.qty-count-badge 옆 소형 원형 버튼) */
   .opt-qty-minus-small {

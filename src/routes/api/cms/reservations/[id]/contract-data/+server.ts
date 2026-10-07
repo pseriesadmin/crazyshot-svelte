@@ -10,6 +10,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildLineItems, formatComponentsText } from '$lib/utils/contractLineItems'
 import type { ReservationForLineItems, BundleLink } from '$lib/utils/contractLineItems'
 import { calcVatForCart } from '$lib/utils/cartCouponPoints'
+import { applyParentFieldsInPlace } from '$lib/server/products/resolveParentProductFields'
 import { formatKstDateDot } from '$lib/utils/kstDate'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
@@ -191,6 +192,30 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     return byRes
   }
 
+  // 옵션상품 실물 배정 기록(reservation_option_assets, Migration #654) — 옵션 행(id)별로 실제 배정된 실물
+  // 품번을 모아 "A, B"(수량 2 이상이면 여러 개)로 돌려준다. 재배정이 이 기록을 바꾸므로 계약서도 따라간다.
+  // 기록이 없는 옵션(반출 이후·레거시·가용 재고 없음)은 키가 없어 호출부가 기존 방식(옵션 상품 자체의 품번)으로
+  // 폴백한다. 조회 실패도 폴백으로 흡수한다(계약서 미리보기를 막지 않음).
+  async function resolveAssignedOptionCodes(optionRowIds: number[]): Promise<Record<number, string>> {
+    const byOpt: Record<number, string> = {}
+    if (optionRowIds.length === 0) return byOpt
+    const { data, error: assetErr } = await admin
+      .from('reservation_option_assets')
+      .select('id, reservation_option_id, asset:products!reservation_option_assets_asset_product_id_fkey(product_code)')
+      .in('reservation_option_id', optionRowIds)
+      .order('id', { ascending: true })
+    if (assetErr) return byOpt
+    const codes: Record<number, string[]> = {}
+    for (const row of data ?? []) {
+      const a = Array.isArray(row.asset) ? row.asset[0] : row.asset
+      const code = (a?.product_code as string | null | undefined) ?? null
+      if (!code) continue
+      ;(codes[row.reservation_option_id as number] ??= []).push(code)
+    }
+    for (const [k, v] of Object.entries(codes)) byOpt[Number(k)] = v.join(', ')
+    return byOpt
+  }
+
   // ── 1. 기본 예약 정보 조회 (16개 스칼라 필드의 기준 reservation) ────────────
   const { data: res, error: resErr } = await admin
     .from('rental_reservations')
@@ -258,6 +283,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     getServiceInfoSettings(admin),
   ])
 
+  // 상품명은 부모 값을 따른다 — 고객 계약 화면(contract/[token])과 같은 기준(자식 재고 부모 참조 전환 Phase 3-B).
+  // 품번 product_code는 자식 고유값이라 그대로 둔다.
+  if (productRes.data) await applyParentFieldsInPlace(admin, [productRes.data], ['name'])
+
   // 기준 예약(단독/주문묶음 공용) 메인상품 구성품 — 부모 해석 적용(위 resolveComponentsMap 참고)
   const mainComponentsMap = await resolveComponentsMap([{
     id: res.product_id as string,
@@ -317,6 +346,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         ? await admin.from('products').select('id, name, product_code, components, parent_product_id').in('id', productIdSet)
         : { data: [] }
 
+      // 상품명은 부모 값을 따른다(위 기본 상품과 동일 기준)
+      await applyParentFieldsInPlace(admin, productRows ?? [], ['name'])
+
       // 구성품은 부모 전용 항목이라 부모 해석 필요(resolveComponentsMap 참고)
       const resolvedMainComponentsMap = await resolveComponentsMap(
         (productRows ?? []).map(p => ({
@@ -356,7 +388,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // 모든 reservation의 옵션상품 일괄 조회 (N+1 방지)
       const { data: allOptions } = await admin
         .from('reservation_options')
-        .select('reservation_id, option_name, qty, unit_price, option_product_id')
+        .select('id, reservation_id, option_name, qty, unit_price, option_product_id')
         .in('reservation_id', siblingIds)
         .order('id', { ascending: true })
 
@@ -401,6 +433,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       )
 
       const assignedBundlesByResId = await resolveAssignedBundles(siblingIds)
+      const assignedOptionCodes = await resolveAssignedOptionCodes(
+        (allOptions ?? []).map(o => o.id as number),
+      )
 
       // ReservationForLineItems 배열 구성
       lineItemReservations = (siblingRows ?? []).map(row => {
@@ -411,9 +446,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           option_name:  o.option_name as string,
           qty:          o.qty as number,
           unit_price:   o.unit_price as number,
-          product_code: o.option_product_id
-            ? (optionCodeMap[o.option_product_id as string] ?? null)
-            : null,
+          product_code: assignedOptionCodes[o.id as number]
+            ?? (o.option_product_id ? (optionCodeMap[o.option_product_id as string] ?? null) : null),
           components: o.option_product_id
             ? (optionComponentsMap[o.option_product_id as string] ?? null)
             : null,
@@ -425,7 +459,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     // 주문이 없는 단독 예약 → 기본 예약 1건 + 그 옵션만
     const { data: soloOptions } = await admin
       .from('reservation_options')
-      .select('option_name, qty, unit_price, option_product_id')
+      .select('id, option_name, qty, unit_price, option_product_id')
       .eq('reservation_id', reservationId)
       .order('id', { ascending: true })
 
@@ -455,6 +489,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     // 결합상품 조회 — 단독 예약: 자식 id → 부모 id 해석(resolveBundlesMap)
     const soloPid = res.product_id as string | null
     const soloAssigned = (await resolveAssignedBundles([reservationId]))[reservationId]
+    const soloAssignedOptionCodes = await resolveAssignedOptionCodes(
+      (soloOptions ?? []).map(o => o.id as number),
+    )
     const soloBundleLinks: BundleLink[] = soloAssigned ?? (soloPid
       ? (await resolveBundlesMap([{
           id: soloPid,
@@ -474,9 +511,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           option_name:  o.option_name as string,
           qty:          o.qty as number,
           unit_price:   o.unit_price as number,
-          product_code: o.option_product_id
-            ? (soloCodeMap[o.option_product_id as string] ?? null)
-            : null,
+          product_code: soloAssignedOptionCodes[o.id as number]
+            ?? (o.option_product_id ? (soloCodeMap[o.option_product_id as string] ?? null) : null),
           components: o.option_product_id
             ? (soloComponentsMap[o.option_product_id as string] ?? null)
             : null,

@@ -110,6 +110,21 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const busyIds = new Set((busyRows ?? []).map(r => (r as { product_id: string }).product_id))
 
+  // 4-2. 다른 예약의 결합 구성품·옵션 배정으로 점유된 유닛도 제외(Migration 657 — RPC cms_reassign_reservation_product_code와 같은 기준).
+  // 두 배정표 모두 예약 상태·기간은 예약 행 기준이라 예약을 조인해 같은 겹침 조건('[]')으로 거른다.
+  for (const table of ['reservation_bundle_assets', 'reservation_option_assets'] as const) {
+    const { data: occupied, error: occErr } = await admin
+      .from(table)
+      .select('asset_product_id, rental_reservations!inner(status, start_date, end_date)')
+      .in('asset_product_id', siblingIds)
+      .in('rental_reservations.status', ['hold', 'pending', 'confirmed', 'shipped', 'in_use', 'return_requested', 'damage_claimed'])
+      .lte('rental_reservations.start_date', endDate)
+      .gte('rental_reservations.end_date', startDate)
+
+    if (occErr) return json({ error: occErr.message }, { status: 500 })
+    for (const r of occupied ?? []) busyIds.add((r as { asset_product_id: string }).asset_product_id)
+  }
+
   // 정렬 없이 반환하면 DB 반환 순서(0031, 0036, 0032 …)로 노출돼 특정 품번이 "누락된 것처럼" 보인다
   const availableUnits = sortUnitsByCode(
     siblingsList

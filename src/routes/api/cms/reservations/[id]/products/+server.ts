@@ -3,6 +3,8 @@
  * DELETE /api/cms/reservations/[id]/products — 메인상품 유닛 소프트 취소
  * PATCH  /api/cms/reservations/[id]/products — 상품코드(실물 재고단위) 재배정
  *
+ * ⛔ POST·DELETE는 2026-10-06부터 정책으로 차단(reservationCompositionPolicy.ts) — 재배정(PATCH)만 유지.
+ *
  * - manager 이상 전용 (getCmsRoleForAction + hasSettingsAccess)
  * - 전부 service_role admin 클라이언트로 호출 (Migration 428/430 — GRANT EXECUTE TO service_role)
  * - RPC error_message는 그대로 400으로 클라이언트에 전달 (구조화된 실패 사유 노출)
@@ -16,6 +18,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { RESERVATION_COMPOSITION_EDIT_ENABLED, COMPOSITION_EDIT_BLOCKED_MESSAGE } from '$lib/utils/reservationCompositionPolicy'
 import type { RequestHandler } from './$types'
 
 function parseReservationId(raw: string): number | null {
@@ -31,6 +34,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!RESERVATION_COMPOSITION_EDIT_ENABLED) return json({ error: COMPOSITION_EDIT_BLOCKED_MESSAGE }, { status: 403 })
 
   const reservationId = parseReservationId(params.id)
   if (!reservationId) return json({ error: '잘못된 예약 ID입니다.' }, { status: 400 })
@@ -62,6 +66,7 @@ export const DELETE: RequestHandler = async ({ params, request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!RESERVATION_COMPOSITION_EDIT_ENABLED) return json({ error: COMPOSITION_EDIT_BLOCKED_MESSAGE }, { status: 403 })
 
   const reservationId = parseReservationId(params.id)
   if (!reservationId) return json({ error: '잘못된 예약 ID입니다.' }, { status: 400 })
