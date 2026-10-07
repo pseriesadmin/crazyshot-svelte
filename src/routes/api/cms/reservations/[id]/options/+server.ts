@@ -3,10 +3,12 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
+import { RESERVATION_COMPOSITION_EDIT_ENABLED, COMPOSITION_EDIT_BLOCKED_MESSAGE } from '$lib/utils/reservationCompositionPolicy'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
+// ⛔ POST·PATCH·DELETE(옵션 추가·수량·삭제)는 2026-10-06부터 정책으로 차단(reservationCompositionPolicy.ts) — GET 조회만 유지.
 // 예약(reservation_options)에 담긴 옵션상품 조회 — 대여는 예약 정보를 그대로 관리하는
 // 영역이라 RentalDetailPanel(/cms/rentals·/cms/reservation 공유)이 메인상품 외에 이 옵션도
 // 함께 노출한다. option_product_id가 있는 항목만 상품코드를 조회(부모 상품이면 정책상 NULL).
@@ -67,6 +69,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!RESERVATION_COMPOSITION_EDIT_ENABLED) return json({ error: COMPOSITION_EDIT_BLOCKED_MESSAGE }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
@@ -110,6 +113,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!RESERVATION_COMPOSITION_EDIT_ENABLED) return json({ error: COMPOSITION_EDIT_BLOCKED_MESSAGE }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
@@ -148,6 +152,7 @@ export const DELETE: RequestHandler = async ({ params, request, locals }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
   if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!RESERVATION_COMPOSITION_EDIT_ENABLED) return json({ error: COMPOSITION_EDIT_BLOCKED_MESSAGE }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
