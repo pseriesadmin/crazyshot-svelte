@@ -249,13 +249,23 @@ describe('listPendingEvidence — 큐 조회(보관본 없는 건만, 처리 불
 })
 
 describe('listLegacySignings — 소급 대상(증적 없는 서명 완료 건)을 끝까지 훑는다', () => {
+  const signing = (i: number, over: Row = {}): Row => ({ id: `s${String(i).padStart(3, '0')}`, contract_id: `c${i}`, signed_at: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`, ip_address: null, content_hash: null, signature_data: 'x', snapshot_mode: 'html', ...over })
+
   it('50건 단위 페이지를 넘어 이어서 찾고, 이미 증적이 있는 건은 제외한다', async () => {
-    const signings = Array.from({ length: 130 }, (_, i) => ({ id: `s${String(i).padStart(3, '0')}`, contract_id: `c${i}`, signed_at: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`, ip_address: null, content_hash: null, signature_data: 'x' }))
+    const signings = Array.from({ length: 130 }, (_, i) => signing(i))
     const evidence = [{ signing_id: 's000', signed_at: '2026-09-01T00:00:00.000Z' }, { signing_id: 's120', signed_at: '2026-09-01T00:00:00.000Z' }]
     const f = createFakeAdmin({ contract_signings: signings, contract_signature_evidence: evidence })
     const r = await listLegacySignings(f.admin, 200)
     expect(r).toHaveLength(128) // 130 - 증적 있는 2건
     expect(r.map((x) => x.id)).not.toContain('s000')
     expect(r.map((x) => x.id)).toContain('s129') // 3번째 페이지(100~129)까지 도달
+  })
+
+  it('PDF로 만들 수 없는 건(html 아닌 방식·서명 이미지 없음)은 소급 증적을 만들지 않도록 목록에서 제외한다', async () => {
+    const f = createFakeAdmin({
+      contract_signings: [signing(1), signing(2, { snapshot_mode: 'spreadsheet' }), signing(3, { snapshot_mode: 'flow' }), signing(4, { snapshot_mode: null }), signing(5, { signature_data: null })],
+      contract_signature_evidence: [],
+    })
+    expect((await listLegacySignings(f.admin, 50)).map((x) => x.id)).toEqual(['s001'])
   })
 })
