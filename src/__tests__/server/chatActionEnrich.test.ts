@@ -57,6 +57,30 @@ function makeAdmin(tableResponses: Record<string, unknown[]>): SupabaseClient {
   } as unknown as SupabaseClient
 }
 
+/**
+ * makeAdmin + 부모 일괄 조회 지원 — 자식 재고의 부모 값은 resolveParentProductFields가
+ * `from('products').select().in('id', [...])`로 한 번에 읽는다(두 번째 products 호출).
+ */
+function makeAdminWithParents(
+  tableResponses: Record<string, unknown[]>,
+  parentRows: Array<Record<string, unknown>>,
+): SupabaseClient {
+  const base = makeAdmin(tableResponses) as unknown as { from: (t: string) => Record<string, unknown> }
+  let productCalls = 0
+  return {
+    from: vi.fn().mockImplementation((table: string) => {
+      const chain = base.from(table)
+      if (table === 'products') {
+        productCalls++
+        if (productCalls === 2) {
+          chain.in = vi.fn().mockResolvedValue({ data: parentRows, error: null })
+        }
+      }
+      return chain
+    }),
+  } as unknown as SupabaseClient
+}
+
 // ---------------------------------------------------------------------------
 // 공통 컨텍스트
 
@@ -112,7 +136,7 @@ describe('enrichActionCard — PRODUCT_CARD', () => {
   })
 
   it('자식 상품(parent_product_id 있음) → 부모 slug로 action_url 구성', async () => {
-    const admin = makeAdmin({
+    const admin = makeAdminWithParents({
       products: [
         // 1차: 자식 상품 조회
         {
@@ -122,11 +146,12 @@ describe('enrichActionCard — PRODUCT_CARD', () => {
           image_urls: [],
           parent_product_id: 'parent-uuid',
         },
-        // 2차: 부모 상품 조회 (slug만 필요)
-        { slug: 'sony-fx6' },
       ],
       price_rules: [{ price: 150000 }],
-    })
+    }, [
+      // 2차: 부모 일괄 조회(.in) — 헬퍼가 이름·슬러그·이미지를 부모 값으로 덮어쓴다
+      { id: 'parent-uuid', name: '소니 FX6', slug: 'sony-fx6', image_urls: ['https://x/parent.webp'] },
+    ])
 
     const childCtx: EnrichContext = {
       context_type: 'product_inquiry',
@@ -137,6 +162,32 @@ describe('enrichActionCard — PRODUCT_CARD', () => {
 
     expect(result.product_id).toBe('child-uuid')
     expect(result.action_url).toBe('/products/sony-fx6')  // 부모 slug 사용
+    // 이름·이미지도 부모 값 (자식 재고에 복사된 옛 값이 아님 — 부모 참조 전환)
+    expect(result.product_name).toBe('소니 FX6')
+    expect(result.product_image).toBe('https://x/parent.webp')
+  })
+
+  it('자식 상품인데 부모 값이 비어 있으면 자식 값으로 폴백', async () => {
+    const admin = makeAdminWithParents({
+      products: [
+        {
+          id: 'child-uuid',
+          name: '소니 FX6 #1호기',
+          slug: 'sony-fx6-unit-1',
+          image_urls: ['https://x/child.webp'],
+          parent_product_id: 'parent-uuid',
+        },
+      ],
+      price_rules: [{ price: 150000 }],
+    }, [
+      { id: 'parent-uuid', name: null, slug: 'sony-fx6', image_urls: [] },
+    ])
+
+    const result = await enrichActionCard('PRODUCT_CARD', USER_ID, { context_type: 'product_inquiry', context_id: 'child-uuid' }, admin)
+
+    expect(result.product_name).toBe('소니 FX6 #1호기')
+    expect(result.product_image).toBe('https://x/child.webp')
+    expect(result.action_url).toBe('/products/sony-fx6')
   })
 
   it('DB 조회 실패(예외) → 기본 페이로드로 폴백', async () => {

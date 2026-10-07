@@ -13,6 +13,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ActionPayload } from '$lib/types/chat'
 import { getTrackingStatus } from '$lib/server/courierTracking'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
+
+type ProductCardRow = {
+  id: string
+  name: string
+  slug: string
+  image_urls: string[] | null
+  parent_product_id: string | null
+}
 
 /** chat_sessions 에서 읽어온 세션 컨텍스트 */
 export interface EnrichContext {
@@ -88,30 +97,16 @@ async function enrichProductCard(
 
   if (!productRaw) return base
 
-  const product = productRaw as Record<string, unknown>
-  const parentId = product.parent_product_id as string | null
-
-  // 가격·슬러그는 항상 부모 기준 (§4-1: 자식은 등록정보를 부모에서만 관리)
-  const policyId = parentId ?? productId
-  let productSlug = product.slug as string
-  // 이름·대표 이미지도 부모 기준 — 자식 재고에 복사된 옛 값 대신 부모 값을 쓴다(자식 재고 부모 참조 전환 Phase 3-C)
-  let productName = product.name as string
-  let imageUrls = product.image_urls as string[] | null
-
-  if (parentId) {
-    const { data: parentRaw } = await admin
-      .from('products')
-      .select('slug, name, image_urls')
-      .eq('id', parentId)
-      .maybeSingle()
-    if (parentRaw) {
-      const parent = parentRaw as Record<string, unknown>
-      productSlug = parent.slug as string
-      if (typeof parent.name === 'string' && parent.name) productName = parent.name
-      const parentImages = parent.image_urls as string[] | null
-      if (parentImages && parentImages.length > 0) imageUrls = parentImages
-    }
-  }
+  // 가격·슬러그·이름·대표 이미지는 항상 부모 기준 (§4-1: 자식은 등록정보를 부모에서만 관리 — 자식 재고 부모 참조 전환)
+  const [product] = await resolveParentProductFields(
+    admin,
+    [productRaw as ProductCardRow],
+    ['name', 'slug', 'image_urls'],
+  )
+  const policyId = product.parent_product_id ?? productId
+  const productSlug = product.slug
+  const productName = product.name
+  const imageUrls = product.image_urls
 
   const { data: priceRaw } = await admin
     .from('price_rules')
