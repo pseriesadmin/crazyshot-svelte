@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
 import type { PageServerLoad } from './$types'
 
 interface Asset {
@@ -38,25 +39,15 @@ export const load: PageServerLoad = async ({ params }) => {
     description: string | null
     parent_product_id: string | null
   }
-  const raw = product as RawProduct
-  let resolvedImageUrls: string[] = raw.image_urls ?? []
-  // 이름·분류·설명도 부모 값을 따른다(품번 product_code·is_active는 자식 고유값 — 자식 재고 부모 참조 전환 Phase 3-D)
-  let resolvedName = raw.name
-  let resolvedCategory = raw.category
-  let resolvedDescription = raw.description
-  if (raw.parent_product_id) {
-    const { data: parentRow } = await admin
-      .from('products')
-      .select('name, category, description, image_urls')
-      .eq('id', raw.parent_product_id)
-      .is('deleted_at', null)
-      .maybeSingle()
-    const parent = parentRow as { name: string | null; category: string | null; description: string | null; image_urls: string[] | null } | null
-    resolvedImageUrls = parent?.image_urls ?? []
-    if (parent?.name) resolvedName = parent.name
-    if (parent?.category) resolvedCategory = parent.category
-    if (parent?.description) resolvedDescription = parent.description
-  }
+  // 이름·분류·설명·이미지는 부모 값을 따른다(품번 product_code·is_active는 자식 고유값 — 자식 재고 부모 참조 전환)
+  const [resolved] = await resolveParentProductFields(admin, [product as RawProduct], [
+    'name', 'category', 'description', 'image_urls',
+  ])
+  const raw = resolved
+  const resolvedImageUrls: string[] = resolved.image_urls ?? []
+  const resolvedName = resolved.name
+  const resolvedCategory = resolved.category
+  const resolvedDescription = resolved.description
 
   const { data: assets } = await admin
     .from('assets')

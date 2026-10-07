@@ -6,6 +6,7 @@ import { redirect, error, fail } from '@sveltejs/kit'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { processRentalQrTransition } from '$lib/server/rentalQrTransition'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
 import type { Actions, PageServerLoad } from './$types'
 
 // 반출 전 ~ 반납 직전까지 처리 가능한 상태
@@ -46,14 +47,12 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 
   if (pErr || !product) throw error(404, '상품을 찾을 수 없습니다.')
 
-  // 자식 재고의 이름은 부모 값을 따른다(품번은 자식 고유값 — 자식 재고 부모 참조 전환 Phase 3-D)
-  let displayName = (product as { name: string }).name
-  const parentProductId = (product as { parent_product_id: string | null }).parent_product_id
-  if (parentProductId) {
-    const { data: parentRow } = await admin.from('products').select('name').eq('id', parentProductId).maybeSingle()
-    const parentName = (parentRow as { name: string | null } | null)?.name
-    if (parentName) displayName = parentName
-  }
+  // 자식 재고의 이름은 부모 값을 따른다(품번은 자식 고유값 — 자식 재고 부모 참조 전환)
+  const [resolvedProduct] = await resolveParentProductFields(
+    admin,
+    [product as { id: string; name: string; product_code: string | null; parent_product_id: string | null }],
+    ['name'],
+  )
 
   // 2. 활성 예약 조회 — product_id = 자식(재고 단위) UUID 직접 매칭
   //    ⚠️ rental_reservations에 deleted_at 컬럼 없음 → .is('deleted_at', null) 절대 금지
@@ -79,7 +78,7 @@ export const load: PageServerLoad = async ({ params, parent }) => {
   }
 
   return {
-    product: { ...(product as { id: string; name: string; product_code: string | null }), name: displayName },
+    product: { id: resolvedProduct.id, name: resolvedProduct.name, product_code: resolvedProduct.product_code },
     activeReservation: rsv
       ? {
           id: rsv.id as unknown as number,

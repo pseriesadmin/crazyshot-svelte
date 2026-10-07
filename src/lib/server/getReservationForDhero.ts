@@ -16,6 +16,8 @@
 //   1. src/routes/api/cms/reservations/[id]/dhero/+server.ts (수동 배송접수·상태조회)
 //   2. src/routes/cms/reservation/+page.server.ts updateStatus (shipped/return_requested/cancelled 자동 트리거)
 
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySupabaseClient = { from: (table: string) => any }
 
@@ -101,14 +103,10 @@ export async function getReservationForDhero(
     .select('name, parent_product_id')
     .eq('id', r.product_id as string)
     .maybeSingle()
-  let resolvedProductName = (productRow as Record<string, unknown> | null)?.name as string | undefined
-  const parentProductId = (productRow as Record<string, unknown> | null)?.parent_product_id as string | null | undefined
-  if (parentProductId) {
-    const { data: parentRow } = await admin.from('products').select('name').eq('id', parentProductId).maybeSingle()
-    const parentName = (parentRow as Record<string, unknown> | null)?.name as string | undefined
-    if (parentName) resolvedProductName = parentName
-  }
-  const product = { name: resolvedProductName ?? null }
+  const [resolvedProduct] = productRow
+    ? await resolveParentProductFields(admin, [productRow as { name: string | null; parent_product_id: string | null }], ['name'])
+    : []
+  const product = { name: resolvedProduct?.name ?? null }
 
   return {
     reservationId,

@@ -30,6 +30,9 @@ export const CHILD_OWN_FIELDS: readonly string[] = [
 
 type ProductLike = { id?: string; parent_product_id?: string | null }
 
+/** 헬퍼가 쓰는 건 `from`뿐이다 — 느슨하게 타입된 서비스 클라이언트(getReservationForDhero 등)도 받을 수 있게 좁힌다. */
+type ParentReadClientLike = Pick<SupabaseClient, 'from'>
+
 function isRowWithId(v: unknown): v is Record<string, unknown> & { id: string } {
   return typeof v === 'object' && v !== null && typeof (v as { id?: unknown }).id === 'string'
 }
@@ -59,7 +62,7 @@ export function mergeParentFields<T extends object>(
  * 부모 조회 실패·부모 없음이면 해당 행은 변경 없이 돌려준다(화면이 깨지지 않게 폴백).
  */
 export async function resolveParentProductFields<T extends ProductLike>(
-  client: SupabaseClient,
+  client: ParentReadClientLike,
   rows: T[],
   fields: readonly string[],
 ): Promise<T[]> {
@@ -91,7 +94,7 @@ export async function resolveParentProductFields<T extends ProductLike>(
  * 객체에는 반드시 `parent_product_id`가 select에 포함돼 있어야 한다.
  */
 export async function applyParentFieldsInPlace<T extends ProductLike>(
-  client: SupabaseClient,
+  client: ParentReadClientLike,
   items: ReadonlyArray<T | null | undefined>,
   fields: readonly string[],
 ): Promise<void> {
@@ -117,7 +120,7 @@ type EmbeddedProduct = ProductLike & Record<string, unknown>
 export async function applyParentFieldsToRowProducts(
   rows: ReadonlyArray<unknown>,
   fields: readonly string[],
-  client: SupabaseClient = createParentReadClient(),
+  client: ParentReadClientLike = createParentReadClient(),
   key = 'products',
 ): Promise<void> {
   const items: EmbeddedProduct[] = []
