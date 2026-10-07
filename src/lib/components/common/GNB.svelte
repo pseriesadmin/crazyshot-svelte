@@ -232,6 +232,14 @@
   </nav>
 </div>
 <style>
+  /* 터치 하이라이트 제거 — 안드로이드 크롬이 탭한 링크·버튼에 잠깐 씌우는 반투명 박스(눌림 피드백은 각 요소의 :active 스타일이 담당) */
+  .gnb-desktop-wrap a,
+  .gnb-desktop-wrap button,
+  .gnb-mobile-wrap a,
+  .gnb-mobile-wrap button {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   /* ── 스크롤 인터랙션 공통 ── */
   .gnb-desktop-wrap,
   .gnb-mobile-wrap {

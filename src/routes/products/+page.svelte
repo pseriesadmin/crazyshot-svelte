@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { goto } from '$app/navigation'
+  import { goto, preloadData } from '$app/navigation'
   import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
   import { fly, fade } from 'svelte/transition'
   import type { PageData } from './$types'
@@ -100,6 +100,45 @@
   // 활성 카테고리 — URL ?category= 파라미터 기준 (SSR 데이터 반영, 없으면 'all')
   let activeCategory = $derived(data.urlCategory ?? 'all')
 
+  // 카테고리 이동 즉시 반응: 누르는 순간 선택 표시·목록 제목을 바꾸고 목록을 흐리게 한다(서버 데이터는 뒤따라 도착, 약 0.5초).
+  // pendingCategory는 click '이후'에만 바꾼다 — 터치 중에 화면을 바꾸면 iOS Safari가 click을 취소한다(아래 lastPointerType 주석).
+  let pendingCategory = $state<string | null>(null)
+  let pendingTimer: ReturnType<typeof setTimeout> | undefined
+  let shownCategory = $derived(pendingCategory ?? activeCategory)
+  let categoryLoading = $derived(pendingCategory !== null && pendingCategory !== activeCategory)
+  // 실제 데이터(URL)가 바뀌면 대기 상태 해제
+  $effect(() => {
+    void activeCategory
+    pendingCategory = null
+    clearTimeout(pendingTimer)
+  })
+  // 화면을 떠날 때 안전망 타이머 정리
+  $effect(() => () => clearTimeout(pendingTimer))
+
+  function categoryHref(cat: { id: string }): string {
+    return cat.id === 'all' ? '/products' : `/products?category=${cat.id}`
+  }
+  // 터치(pointerdown) 즉시 데이터 요청을 먼저 시작 — 손가락을 대고 떼는 사이(약 0.1~0.2초)만큼 단축. DOM·스타일은 바꾸지 않는다.
+  function preloadCategory(cat: { id: string; name: string }): void {
+    if (cat.name === '추천패키지' || cat.id === activeCategory) return
+    preloadData(categoryHref(cat)).catch(() => { /* 미리 불러오기 실패는 무시 — 클릭 시 정상 이동이 다시 시도 */ })
+  }
+  function selectCategory(cat: { id: string; name: string }): void {
+    triggerTouchBubble(cat.id)
+    if (cat.name === '추천패키지') { goto('/hype-pack'); return }
+    clearTimeout(pendingTimer)
+    if (cat.id !== activeCategory) {
+      pendingCategory = cat.id
+      pendingTimer = setTimeout(() => { pendingCategory = null }, 6000)   // 이동 실패·지연 시 흐림이 남지 않게 안전망
+    } else {
+      // 이동 중에 '현재 카테고리'를 다시 누른 경우: 앞선 이동(B)은 이번 goto가 대체하므로 대기 표시를 즉시 해제
+      pendingCategory = null
+    }
+    goto(categoryHref(cat))
+      .catch(() => { /* 이동 실패는 아래 finally에서 대기 상태만 해제 */ })
+      .finally(() => { if (pendingCategory === cat.id) pendingCategory = null })
+  }
+
   // 모바일 터치 인터랙션: 터치 후 호버 상태가 은은하게 버블 확대됐다가 복귀(마우스는 CSS :hover가 담당)
   // ⛔ 터치 '중'(pointerdown)에는 DOM·스타일을 바꾸지 않는다 — iOS Safari는 손가락이 닿은 동안(약 0.1초 이상) 화면이
   //    바뀌면 그 탭을 호버 동작으로 보고 click을 취소해 카테고리가 전환되지 않는다(실측: 접촉 0.2초 탭 실패).
@@ -118,9 +157,9 @@
     })
   }
   let activeCategoryLabel = $derived(
-    activeCategory === 'all'
+    shownCategory === 'all'
       ? '전체'
-      : (displayCats.find((c) => c.id === activeCategory)?.name ?? '')
+      : (displayCats.find((c) => c.id === shownCategory)?.name ?? '')
   )
 
   // 선택된 카테고리의 노출 배너(이미지가 있고 노출 ON인 경우만)
@@ -356,19 +395,15 @@
   <div class="body-wrap">
     <div class="cat-section">
 
-        <div class="cat-icons" class:cat-icons-empty={displayCats.length === 0} style="position:relative">
+        <div class="cat-icons" class:cat-icons-empty={displayCats.length === 0} style="position:relative; --cat-cols:{Math.min(Math.max(displayCats.length, 1), 4)}">
 
           {#each displayCats as cat}
             <button
               class="cat-btn"
-              class:active={activeCategory === cat.id}
-              onclick={() => {
-                triggerTouchBubble(cat.id)
-                if (cat.name === '추천패키지') { goto('/hype-pack'); return }
-                goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
-              }}
-              aria-pressed={activeCategory === cat.id}
-              onpointerdown={(e) => { lastPointerType = e.pointerType }}
+              class:active={shownCategory === cat.id}
+              onclick={() => selectCategory(cat)}
+              aria-pressed={shownCategory === cat.id}
+              onpointerdown={(e) => { lastPointerType = e.pointerType; preloadCategory(cat) }}
             >
               {#if cat.icon_url}
                 <!-- ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 있으면 OFF 위에 겹쳐 교차 전환 -->
@@ -379,7 +414,7 @@
                   {/if}
                 </div>
               {/if}
-              <span class="cat-label" class:active={activeCategory === cat.id}>{cat.name}</span>
+              <span class="cat-label" class:active={shownCategory === cat.id}>{cat.name}</span>
             </button>
           {/each}
 
@@ -613,7 +648,7 @@
   <!-- ─────────────────────────────────────────────────────────────────────── -->
 
   <!-- MOBILE list (white bg, rounded top-right) -->
-  <div class="m-list">
+  <div class="m-list" class:loading={categoryLoading} aria-busy={categoryLoading}>
     <!-- 목록 타이틀(centered) — 선택된 분류명 표시(전체/렌즈/카메라 등, PC 목록 헤더 .d-list-cat과 동일 값) -->
     <div class="m-best-pick-header" style="position:relative">
       {#if data.isCms}
@@ -812,7 +847,7 @@
   </div>
 
   <!-- DESKTOP list -->
-  <div class="d-list">
+  <div class="d-list" class:loading={categoryLoading} aria-busy={categoryLoading}>
     <div class="d-list-inner">
       <div class="d-list-header" style="position:relative">
         <span class="d-list-cat">{activeCategoryLabel}</span>
@@ -1038,9 +1073,10 @@
   /* Category icons grid */
   .cat-icons {
     --cat-gap: clamp(8px, 3vw, 20px); /* 좁은 화면에서 열 간격도 함께 줄임 */
-    /* 모바일: 4열 기준 폭으로 줄바꿈하되 줄별로 가운데 정렬 — 3개만 있어도 중앙(그리드는 왼쪽부터 채워 쏠림) */
-    display: flex;
-    flex-wrap: wrap;
+    /* 모바일: 그룹(최대 4열 폭) 자체는 가운데 정렬하고, 그룹 안은 최대 4개씩 왼쪽부터 가로 배열.
+       열 수 = min(아이콘 수, 4) → 3개면 3열 폭의 그룹이 중앙에 놓이고 안은 좌측 정렬, 5개 이상이면 4열 폭에 줄별 좌측 정렬 */
+    display: grid;
+    grid-template-columns: repeat(var(--cat-cols, 4), calc((100% - 3 * var(--cat-gap)) / 4));
     justify-content: center;
     gap: 20px var(--cat-gap);
     cursor: pointer;
@@ -1063,8 +1099,7 @@
     border: none;
     cursor: pointer;
     padding: 0;
-    flex: 0 0 calc((100% - 3 * var(--cat-gap)) / 4); /* 4열 폭 고정 — 컨테이너를 넘지 않음 */
-    min-width: 0;
+    min-width: 0;   /* 열 폭(4열 기준)은 .cat-icons 그리드가 결정 */
     touch-action: manipulation; /* 더블탭 줌 지연 제거 — 한 번 터치로 즉시 이동 */
     -webkit-tap-highlight-color: transparent;
     /* iOS Safari: 아이콘(이미지)을 약 0.4초 이상 누르면 '공유/사진 앱에 저장' 길게 누르기 메뉴가 떠 카테고리 이동 대신 가로채임 */
@@ -1711,6 +1746,9 @@
   /* ─────────────────────────────────────────────────────────────────── */
   /* MOBILE LIST SECTION */
   /* ─────────────────────────────────────────────────────────────────── */
+  /* 카테고리 이동 중: 목록을 흐리게 해 '반응 중'임을 즉시 알림(클릭 방지 포함) */
+  .m-list, .d-list { transition: opacity 0.15s ease; }
+  .m-list.loading, .d-list.loading { opacity: 0.45; pointer-events: none; }
   .m-list {
     background: white;
     border-radius: 30px 30px 50px 50px; /* 상단 좌우 30px = 지침 card 대 Mobile(front-uiux.md §4, 2026-09-29) · 하단 50px는 기존(요청 2026-09-29) 유지 */
