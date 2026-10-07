@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { enhance, applyAction, deserialize } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import type { ActionResult } from '@sveltejs/kit'
@@ -7,7 +8,7 @@
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
   import { supabase } from '$lib/services/supabase'
-  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
@@ -425,6 +426,9 @@
     // 못해 콘텐츠 탭의 미저장 로컬 편집이 조용히 남아있던 버그(products.md §4-2 위반).
     localContentBlocks = parseContentBlocks(product)
     localKeywords = parseKeywords(product)
+    // 새 에디터는 마운트 이후 prop 변경을 따라가지 않으므로 서버값 재동기화는 {#key}로 재마운트한다
+    // (+= 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행해 무한 루프가 된다)
+    untrack(() => { contentEditorKey += 1 })
   })
 
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
@@ -987,6 +991,8 @@
   let localContentBlocks = $state<ContentBlock[]>(parseContentBlocks(product))
   let localKeywords = $state<string[]>(parseKeywords(product))
   let isSavingContent = $state(false)
+  let contentEditorKey = $state(0)
+  let contentEditorRef = $state<RichContentEditor | undefined>()
   const isDirtyContent = $derived(
     JSON.stringify(localContentBlocks) !== JSON.stringify(parseContentBlocks(product)) ||
     JSON.stringify(localKeywords) !== JSON.stringify(parseKeywords(product))
@@ -1045,12 +1051,19 @@
     if (isAnySaving) return
     // PRODUCT-NULL-RACE-1: product.id를 시작 시점에 스냅샷(handleSectionSave 주석 참고)
     const savedProductId = product.id
+    // 대기 중인 편집(디바운스 250ms)을 즉시 반영하고 직렬화 누락 여부를 점검 — 변경이 없으면 원본 그대로
+    const flushed = contentEditorRef?.flush()
+    if (flushed && !flushed.ok) {
+      csToast.error('본문을 저장 형식으로 변환하는 중 내용이 달라져 저장을 멈췄어요. 새로고침 후 다시 시도해주세요.')
+      return
+    }
+    const blocksToSave = flushed?.blocks ?? localContentBlocks
     isSavingContent = true
     try {
       const fd = new FormData()
       fd.append('product_id', savedProductId)
       fd.append('section_type', 'content')
-      fd.append('content_blocks', JSON.stringify(localContentBlocks))
+      fd.append('content_blocks', JSON.stringify(blocksToSave))
       fd.append('keywords', JSON.stringify(localKeywords))
       const res = await fetch('?/updateSection', { method: 'POST', body: fd })
       // OPT-SAVE-ERR-1과 동일 수정: res.ok가 아니라 deserialize로 판정해야 실제 실패
@@ -2464,7 +2477,18 @@
           </button>
           {/if}
         </div>
-        <CmsContentEditor bind:blocks={localContentBlocks} bind:keywords={localKeywords} />
+        {#key contentEditorKey}
+          <div class="content-editor-box">
+            <RichContentEditor
+              bind:this={contentEditorRef}
+              bind:blocks={localContentBlocks}
+              bind:keywords={localKeywords}
+              variant="cms"
+              readonly={isChildProduct}
+              placeholder="상품설명을 입력하세요"
+            />
+          </div>
+        {/key}
       </div>
     {/if}
 
@@ -3790,6 +3814,12 @@
   .child-image-notice strong { color: var(--cs-text); }
 
   /* 자식 상품 읽기 전용 안내 배너 */
+  /* 새 콘텐츠 에디터(RichContentEditor) 래퍼 — 구독 설명 탭과 동일. overflow:clip은 내부 sticky 툴바를 유지하면서 모서리만 자른다 */
+  .content-editor-box {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: clip;
+  }
   .child-readonly-notice {
     margin-bottom: 16px;
     padding: 10px 14px;

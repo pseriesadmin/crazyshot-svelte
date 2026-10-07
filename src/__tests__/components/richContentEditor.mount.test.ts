@@ -485,4 +485,83 @@ describe('RichContentEditor — mount', () => {
       expect(target.querySelector('button[aria-label="HTML 블록 추가"]')).toBeNull()
     })
   })
+
+  describe('읽기 전용(readonly)', () => {
+    it('내용은 보이지만 편집 불가·도구 없음·키워드 입력 없음, 저장 요청 시 원본 그대로', async () => {
+      const blocks: ContentBlock[] = [{ type: 'text', html: '<p>재고 단위에서 보는 본문</p>' }]
+      mountEditor(blocks, { variant: 'cms', readonly: true, keywords: ['태그1'] })
+      await ready()
+      const pm = target.querySelector<HTMLElement>('.ProseMirror')!
+      expect(pm.textContent).toContain('재고 단위에서 보는 본문')
+      expect(pm.getAttribute('contenteditable')).toBe('false')
+      expect(target.querySelector('.rc-toolbar-wrap')).toBeNull()
+      expect(target.querySelector('button[aria-label="굵게"]')).toBeNull()
+      expect(target.querySelector('.kw-input')).toBeNull()
+      expect(target.querySelector('.kw-del')).toBeNull()
+      expect(target.textContent).toContain('태그1')
+      const flushed = api.flush()
+      expect(flushed.ok).toBe(true)
+      expect(flushed.blocks).toEqual(blocks)
+    })
+
+    it('읽기 전용에서는 묶음 안 사진 끌어 순서 바꾸기도 막혀 있다(소스 가드)', async () => {
+      const src = (await import('node:fs')).readFileSync('src/lib/components/editor/RichContentEditor.svelte', 'utf8')
+      expect(src).toMatch(/function onHostPointerDown\(e: PointerEvent\) \{\s*if \(readonly \|\| !editor/)
+      expect(src).toMatch(/!d\.moved \|\| d\.to === d\.from \|\| !editor \|\| readonly/)
+    })
+
+    it('readonly가 아니면 편집 가능하고 툴바가 있다', async () => {
+      mountEditor([{ type: 'text', html: '<p>본문</p>' }], { variant: 'cms' })
+      await ready()
+      expect(target.querySelector('.ProseMirror')!.getAttribute('contenteditable')).toBe('true')
+      expect(target.querySelector('.rc-toolbar-wrap')).toBeTruthy()
+    })
+  })
+
+  describe('언마운트 시 대기 중인 입력 보존', () => {
+    it('편집 직후(250ms 이내) 편집기가 사라져도 마지막 입력이 바인딩된 blocks에 반영된다', async () => {
+      let bound: ContentBlock[] = [{ type: 'text', html: '<p>처음</p>' }]
+      const props = {
+        get blocks() { return bound },
+        set blocks(v: ContentBlock[]) { bound = v },
+        keywords: [] as string[],
+        variant: 'cms',
+      }
+      app = mount(RichContentEditor, { target, props })
+      api = app as unknown as typeof api
+      await ready()
+      const pm = target.querySelector<HTMLElement>('.ProseMirror')!
+      const editor = (pm as unknown as { editor: import('@tiptap/core').Editor }).editor
+      editor.commands.setTextSelection(3)
+      editor.commands.insertContent('마지막입력')
+      // 디바운스(250ms)가 끝나기 전에 즉시 언마운트 — 탭 전환으로 편집기가 사라지는 상황
+      expect(JSON.stringify(bound)).not.toContain('마지막입력')
+      unmount(app)
+      app = null
+      expect(JSON.stringify(bound)).toContain('마지막입력')
+    })
+
+    it('flush()로 이미 저장 직렬화한 뒤에는 정리 단계가 같은 내용을 다시 덮어쓰지 않는다', async () => {
+      let bound: ContentBlock[] = [{ type: 'text', html: '<p>처음</p>' }]
+      const props = {
+        get blocks() { return bound },
+        set blocks(v: ContentBlock[]) { bound = v },
+        keywords: [] as string[],
+        variant: 'cms',
+      }
+      app = mount(RichContentEditor, { target, props })
+      api = app as unknown as typeof api
+      await ready()
+      const pm = target.querySelector<HTMLElement>('.ProseMirror')!
+      const editor = (pm as unknown as { editor: import('@tiptap/core').Editor }).editor
+      editor.commands.setTextSelection(3)
+      editor.commands.insertContent('저장분')
+      expect(api.flush().ok).toBe(true) // 저장 직전 반영(대기 타이머 해제)
+      const sentinel: ContentBlock[] = [{ type: 'text', html: '<p>서버에서 다시 받은 값</p>' }]
+      bound = sentinel // 저장 후 invalidateAll이 서버값으로 재동기화한 상황
+      unmount(app)
+      app = null
+      expect(bound).toBe(sentinel)
+    })
+  })
 })

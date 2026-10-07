@@ -6,9 +6,11 @@
   interface Props {
     keywords: string[]
     max?: number
+    /** 읽기 전용 — 입력·삭제 불가, 태그만 보여준다 */
+    readonly?: boolean
   }
 
-  let { keywords = $bindable([]), max = 10 }: Props = $props()
+  let { keywords = $bindable([]), max = 10, readonly = false }: Props = $props()
   let kwInput = $state('')
 
   function add() {
@@ -38,10 +40,10 @@
     {#each keywords as kw (kw)}
       <span class="kw-tag">
         <span class="kw-hash">#</span>{kw}
-        <button type="button" class="kw-del" onclick={() => remove(kw)} aria-label={`${kw} 태그 삭제`}>×</button>
+        {#if !readonly}<button type="button" class="kw-del" onclick={() => remove(kw)} aria-label={`${kw} 태그 삭제`}>×</button>{/if}
       </span>
     {/each}
-    {#if keywords.length < max}
+    {#if !readonly && keywords.length < max}
       <input
         type="text"
         class="kw-input"
