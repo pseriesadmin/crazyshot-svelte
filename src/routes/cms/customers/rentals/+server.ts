@@ -6,6 +6,7 @@ import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 // GET /cms/customers/rentals?userId=<user_profiles.id>
 // CMS 관리자 전용(manager 이상): 고객 상품 대여 이력 조회 (service_role, RLS 우회)
@@ -50,13 +51,16 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       pickup_method,
       return_method,
       created_at,
-      products!rental_reservations_product_id_fkey(name, product_code)
+      products!rental_reservations_product_id_fkey(name, product_code, parent_product_id)
     `)
     .eq('user_id', authUserId)
     .order('created_at', { ascending: false })
     .limit(50)
 
   if (error) return json({ error: error.message }, { status: 500 })
+
+  // 자식 재고의 이름은 부모 값을 따른다(품번은 자식 고유값 — 자식 재고 부모 참조 전환 Phase 3-D)
+  await applyParentFieldsToRowProducts(data ?? [], ['name'], admin)
 
   return json(data ?? [])
 }

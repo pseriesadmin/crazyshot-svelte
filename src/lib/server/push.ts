@@ -10,6 +10,7 @@ import type { Database, NotificationToken, PushNotificationConfig } from '$lib/t
 import { callTypedRpc } from '$lib/utils/rpc'
 import { sendLifecycleSms } from './sms'
 import { filterAdminPushRecipientsByMenu } from '$lib/server/adminPushMenuFilter'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface PushPayload {
   title: string
@@ -290,13 +291,15 @@ export async function sendReservationLifecyclePush(
 
     const { data: resv } = await admin
       .from('rental_reservations')
-      .select('user_id, products!rental_reservations_product_id_fkey(name)')
+      .select('user_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
       .eq('id', reservationId)
       .single()
 
     const row = resv as { user_id?: string; products?: { name?: string } | { name?: string }[] | null } | null
     if (!row?.user_id) return
 
+    // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C)
+    await applyParentFieldsToRowProducts([row], ['name'], admin)
     const productsField = row.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
 
@@ -350,12 +353,13 @@ export async function sendCardSms(
       admin.from('user_profiles').select('phone').eq('id', params.userId).maybeSingle(),
       admin
         .from('rental_reservations')
-        .select('products!rental_reservations_product_id_fkey(name)')
+        .select('products!rental_reservations_product_id_fkey(name, parent_product_id)')
         .eq('id', params.reservationId)
         .maybeSingle(),
     ])
     const phone = (profile as { phone?: string | null } | null)?.phone
     if (!phone) return
+    await applyParentFieldsToRowProducts([resv], ['name'], admin)
     const productsField = (resv as { products?: { name?: string } | { name?: string }[] | null } | null)?.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
     await sendLifecycleSms(admin, {
@@ -545,3 +549,4 @@ export async function sendUrgentChatAdminPush(
     // 조회 실패 등 — 채팅 메시지 발송 자체는 이미 성공 처리된 상태이므로 전파하지 않음
   }
 }
+

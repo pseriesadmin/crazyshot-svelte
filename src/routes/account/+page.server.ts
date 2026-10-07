@@ -6,6 +6,7 @@ import { loadMyActivity } from '$lib/server/account/loadMyActivity'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
 import { maskDocUrlsForClient } from '$lib/server/userDocs'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 interface AccountProfile {
   id: string
@@ -81,7 +82,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     ),
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products!rental_reservations_product_id_fkey(name, category)')
+      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -89,7 +90,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     // PC 패널용: 대여 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category)')
+      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
       .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
       .order('created_at', { ascending: false })
@@ -118,6 +119,12 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     loadUserCoupons(locals.supabase, session.user.id),
     loadMyActivity(locals.supabase, session.user.id),
   ])
+
+  // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
+  await applyParentFieldsToRowProducts(
+    [recentRentalRes.data, ...((rentalsRes.data ?? []) as unknown[])],
+    ['name', 'category'],
+  )
 
   const stats = (statsRes.data as Array<{
     total_count: number; active_count: number; shipping_count: number; done_count: number; cancelled_count: number
