@@ -1,7 +1,6 @@
 // src/lib/server/push.ts
 // FCM 푸시알림 서버 발신 허브 — 도메인 코드는 이 모듈을 통해서만 푸시를 발송한다
 // (Firebase Admin SDK를 도메인 코드가 직접 호출하지 않도록 하는 단일 허브 원칙)
-import { AGENT_REQUEST_KIND_LABEL } from '$lib/server/crazychat/action'
 import { FIREBASE_ADMIN_CLIENT_EMAIL, FIREBASE_ADMIN_PRIVATE_KEY, SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_FIREBASE_PROJECT_ID, PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -551,28 +550,3 @@ export async function sendUrgentChatAdminPush(
   }
 }
 
-/**
- * 크레이지챗 접수 관리자 푸시(2026-10-07, S3) — 에이전트가 고객의 예약 시간 변경·연장 요청을 접수했을 때 호출한다.
- * 관리자 전용 알림이라 chat_messages가 아니라 푸시(+CMS 접수 카드)로만 전달한다(service-operations.md §17).
- * 실패해도 절대 throw하지 않는다(접수 기록은 이미 저장된 상태).
- */
-export async function sendCrazychatRequestAdminPush(
-  admin: SupabaseClient,
-  info: { kind: 'time_change' | 'extend'; userId: string; sessionId: string },
-): Promise<void> {
-  try {
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('full_name')
-      .eq('id', info.userId)
-      .maybeSingle()
-    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
-    await sendPushToAdmins('crazychat_request', {
-      title: '크레이지챗이 요청을 접수했어요',
-      body: `${customerName}님의 ${AGENT_REQUEST_KIND_LABEL[info.kind]}이 접수됐어요. 확인해 주세요.`,
-      link: `/cms/chat?session=${info.sessionId}`,
-    })
-  } catch {
-    // 조회 실패 등 — 접수 기록은 이미 저장된 상태이므로 전파하지 않음
-  }
-}
