@@ -519,8 +519,8 @@ export const actions: Actions = {
     }
 
     // 재고 1개 자동 생성 (자식 상품 — create_hold_reservation 기준)
-    // ※ 2026-10-07(Migration 661)부터 이 RPC는 부모의 이미지·설명 등을 자식에 복사하지 않고 이름·분류만 넣는다(products.md §2-16,
-    //   자식은 부모를 참조). 위 BND-11 주석의 "복사해가는 image_urls" 설명은 그 이전 동작 기준이며, 이관 → 생성 순서는 그대로 둬도 무해하다.
+    // 위 BND-11 이관 블록 이후에 실행해야 이 RPC가 복사해가는 부모 image_urls가
+    // 이미 정상 경로로 갱신된 상태다(순서 수정 사유는 위 BND-11 주석 참고).
     const { error: invError } = await admin.rpc('auto_create_inventory_for_product', { p_product_id: product.id })
     if (invError) regWarnings.push('inv')
 

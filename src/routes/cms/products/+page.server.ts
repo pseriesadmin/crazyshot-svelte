@@ -20,7 +20,6 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
 import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
-import { resolveParentProductFields, PARENT_DISPLAY_FIELDS, PARENT_CONTENT_FIELDS, PARENT_POLICY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -1432,20 +1431,14 @@ export const actions: Actions = {
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
 
-    const { data: sourceRow, error: sourceError } = await admin
+    const { data: source, error: sourceError } = await admin
       .from('products')
       .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, is_bundle_product, product_code, code_series, parent_product_id, content_blocks, keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
 
-    if (sourceError || !sourceRow) return fail(404, { error: '원본 상품을 찾을 수 없습니다.' })
-
-    // 원본이 자식 재고면 표시·콘텐츠·정책 값은 부모 기준으로 해석한다(자식 재고 부모 참조 전환 Phase 5 — 자식에는 복사 값이 없거나
-    // 옛 값일 수 있다). 품번(product_code)·code_series·parent_product_id 같은 자식 고유값은 덮어쓰지 않는다.
-    const [source] = await resolveParentProductFields(admin, [sourceRow], [
-      ...PARENT_DISPLAY_FIELDS, ...PARENT_CONTENT_FIELDS, ...PARENT_POLICY_FIELDS, 'option_only', 'is_bundle_product',
-    ])
+    if (sourceError || !source) return fail(404, { error: '원본 상품을 찾을 수 없습니다.' })
 
     // ── add_inventory 모드: 동일 상품 재고 추가 ──────────────────
     if (mode === 'add_inventory') {
@@ -1513,12 +1506,20 @@ export const actions: Actions = {
           .insert({
             id: newId,
             qr_payload: `https://crazyshot.kr/qr/product/${newId}`,
-            // 재고(자식)는 부모 정보를 복사해 저장하지 않고 참조한다(products.md §2-16, 자식 재고 부모 참조 전환 Phase 5).
-            // NOT NULL인 name·category만 부모 값을 넣는다(폴백 겸용) — 브랜드·설명·이미지·사양·콘텐츠·판매전용·판매가 등은 복사 금지.
             category: source.category,
             name: source.name,
             slug,
+            brand: source.brand,
+            description: source.description,
+            product_caption: source.product_caption,
+            image_urls: source.image_urls,
+            specifications: source.specifications,
+            content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
+            keywords: (source as Record<string, unknown>).keywords ?? [],
             is_active: true, // products.md §3: 신규 자식 기본값 true (즉시 대여 가능)
+            sale_price: source.sale_price,
+            sale_only: source.sale_only,
+            option_only: (source as Record<string, unknown>).option_only ?? false,
             parent_product_id: rootProductId,
           })
           .select('id')
@@ -1696,14 +1697,12 @@ export const actions: Actions = {
       .is('deleted_at', null)
 
     // 옵션상품 연결(옵션상품 탭)도 그대로 복제 — get 결과 행(option_product_id 등)을 upsert 입력으로 그대로 사용
-    // 옵션·결합상품 링크는 부모에만 있다 — 원본이 자식 재고면 그 부모의 링크를 복제한다(is_bundle_product를 부모 값으로 복제하는 것과 일치)
-    const sourceLinkOwnerId = ((source as Record<string, unknown>).parent_product_id as string | null) ?? sourceProductId
-    const { data: sourceOptionLinks } = await admin.rpc('get_product_option_links', { p_product_id: sourceLinkOwnerId })
+    const { data: sourceOptionLinks } = await admin.rpc('get_product_option_links', { p_product_id: sourceProductId })
     const createdIds: string[] = []
     const cloneWarnings: string[] = []
 
     // 결합상품 연결(결합상품 탭)도 그대로 복제
-    const { data: sourceBundleLinks, error: bundleFetchErr } = await admin.rpc('get_product_bundle_links', { p_product_id: sourceLinkOwnerId })
+    const { data: sourceBundleLinks, error: bundleFetchErr } = await admin.rpc('get_product_bundle_links', { p_product_id: sourceProductId })
     if (bundleFetchErr) cloneWarnings.push('결합상품 목록을 불러오지 못해 복사하지 못했습니다 (결합상품 탭에서 다시 저장해주세요)')
     // BND-BATCH-2: 순번 상한 도달 시 이미 생성된 상품(품번 미발급)은 그대로 인정하고,
     // 남은 개수는 더 시도해봤자 동일 사유로 실패하므로 즉시 중단(§2-10③ 배치 부분실패 정책과 동일 원리)

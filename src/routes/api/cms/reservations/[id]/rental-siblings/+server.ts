@@ -5,7 +5,6 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 // 같은 주문(orders/order_items, Migration 280)에 속한 다른 예약(상품)의 "대여정보" 탭 표시용
 // 상세 필드 조회 — RentalDetailPanel(/cms/rentals·/cms/reservation 공유) 대여정보 탭 "상품 정보"
@@ -74,9 +73,6 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     .in('id', siblingIds)
 
   if (rowsErr) return json({ error: rowsErr.message }, { status: 500 })
-
-  // 자식 재고의 이름·분류·대표 이미지는 부모 값을 따른다(품번·parent_product_id는 자식 고유값 유지 — 자식 재고 부모 참조 전환 Phase 3-D)
-  await applyParentFieldsToRowProducts(rows ?? [], ['name', 'category', 'image_urls'], admin)
 
   const siblings = (rows ?? []).map(r => {
     const product = r.products as unknown as {

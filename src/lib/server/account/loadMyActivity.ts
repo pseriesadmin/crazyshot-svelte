@@ -5,7 +5,6 @@
 // 읽기 전용·본인 행만: 모든 쿼리에 user_id 조건을 걸고, RLS(public_select_* 등)는 그대로 따른다.
 // 일부 조회가 실패해도(fail-soft) 나머지 내정보 화면 로드를 막지 않고 빈 목록으로 돌려준다.
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface MyLogItem {
   id: number | string
@@ -66,7 +65,7 @@ export async function loadMyActivity(supabase: SupabaseClient, userId: string): 
   try {
     const [rentalRes, reviewRes, commentRes] = await Promise.all([
       untypedFrom(supabase, 'rental_reservations')
-        .select('id, status, start_date, end_date, created_at, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+        .select('id, status, start_date, end_date, created_at, products!rental_reservations_product_id_fkey(name)')
         .eq('user_id', userId)
         .in('status', ['returned', 'completed'])
         .order('end_date', { ascending: false })
@@ -82,9 +81,6 @@ export async function loadMyActivity(supabase: SupabaseClient, userId: string): 
         .order('created_at', { ascending: false })
         .limit(LIMIT),
     ])
-
-    // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
-    await applyParentFieldsToRowProducts((rentalRes.data ?? []) as unknown[], ['name'])
 
     const logs: MyLogItem[] = ((rentalRes.data ?? []) as unknown as Array<{
       id: number | string; status: string; start_date: string | null; end_date: string | null; created_at: string

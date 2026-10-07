@@ -5,7 +5,6 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 // 같은 주문(orders/order_items, Migration 251)에 속한 다른 예약(상품) 목록 조회 —
 // RentalDetailPanel(/cms/rentals·/cms/reservation 공유) 결제정보 탭에서 "이 예약과 함께
@@ -48,13 +47,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   const { data: rows, error: rowsErr } = await admin
     .from('rental_reservations')
-    .select('id, reservation_code, status, product_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+    .select('id, reservation_code, status, product_id, products!rental_reservations_product_id_fkey(name)')
     .in('id', siblingIds)
 
   if (rowsErr) return json({ error: rowsErr.message }, { status: 500 })
-
-  // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-D)
-  await applyParentFieldsToRowProducts(rows ?? [], ['name'], admin)
 
   const siblings = (rows ?? []).map(r => ({
     reservationId:   r.id as number,

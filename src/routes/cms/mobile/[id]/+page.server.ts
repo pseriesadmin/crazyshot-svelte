@@ -40,22 +40,14 @@ export const load: PageServerLoad = async ({ params }) => {
   }
   const raw = product as RawProduct
   let resolvedImageUrls: string[] = raw.image_urls ?? []
-  // 이름·분류·설명도 부모 값을 따른다(품번 product_code·is_active는 자식 고유값 — 자식 재고 부모 참조 전환 Phase 3-D)
-  let resolvedName = raw.name
-  let resolvedCategory = raw.category
-  let resolvedDescription = raw.description
   if (raw.parent_product_id) {
     const { data: parentRow } = await admin
       .from('products')
-      .select('name, category, description, image_urls')
+      .select('image_urls')
       .eq('id', raw.parent_product_id)
       .is('deleted_at', null)
       .maybeSingle()
-    const parent = parentRow as { name: string | null; category: string | null; description: string | null; image_urls: string[] | null } | null
-    resolvedImageUrls = parent?.image_urls ?? []
-    if (parent?.name) resolvedName = parent.name
-    if (parent?.category) resolvedCategory = parent.category
-    if (parent?.description) resolvedDescription = parent.description
+    resolvedImageUrls = (parentRow as { image_urls: string[] } | null)?.image_urls ?? []
   }
 
   const { data: assets } = await admin
@@ -68,12 +60,12 @@ export const load: PageServerLoad = async ({ params }) => {
   return {
     product: {
       id: raw.id,
-      name: resolvedName,
+      name: raw.name,
       product_code: raw.product_code,
-      category: resolvedCategory,
+      category: raw.category,
       image_urls: resolvedImageUrls,
       is_active: raw.is_active,
-      description: resolvedDescription,
+      description: raw.description,
     } as {
       id: string
       name: string

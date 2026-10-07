@@ -4,7 +4,6 @@
  */
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface RentalForHistory {
   id: number
@@ -50,7 +49,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 예약 정보 + 상품명 조회 (소유권 검증 포함)
   const { data: reservation, error: resErr } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, product_id, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, product_id, products!rental_reservations_product_id_fkey(name, category)')
     .eq('id', reservationId)
     .eq('user_id', session.user.id)
     .maybeSingle()
@@ -60,8 +59,6 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   }
 
   const r = reservation as Record<string, unknown>
-  // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
-  await applyParentFieldsToRowProducts([r], ['name', 'category'])
   const product = (r.products as { name: string; category: string } | null) ?? null
 
   const rental: RentalForHistory = {

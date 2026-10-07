@@ -6,7 +6,6 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import type { PageServerLoad } from './$types'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface ReservationDetail {
   id:                 string
@@ -43,7 +42,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 소유권 확인은 RLS 클라이언트로 — user_id 불일치 시 조회 자체가 안 됨
   const { data: raw } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, category)')
     .eq('id', params.id)
     .eq('user_id', session.user.id)
     .maybeSingle()
@@ -55,9 +54,6 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
 
   const reservationId = Number(params.id)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-  // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
-  await applyParentFieldsToRowProducts([raw], ['name', 'category'], admin)
 
   // 옵션상품 조회
   const { data: optionRows } = await admin

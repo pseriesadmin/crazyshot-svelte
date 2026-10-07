@@ -3,7 +3,6 @@ import type { PageServerLoad } from './$types'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
-import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface MyRental {
   id:                     string
@@ -32,7 +31,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category)')
     .eq('user_id', session.user.id)
     // 취소중(고객이 취소했고 관리자 확인 전) 예약도 목록에 남긴다 — 관리자가 취소확인하면 /account/cancel로 이동
     .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
@@ -42,9 +41,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   if (error) {
     return { rentals: [] as MyRental[] }
   }
-
-  // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
-  await applyParentFieldsToRowProducts(data ?? [], ['name', 'category'])
 
   const reservationIds = (data ?? []).map((r: Record<string, unknown>) => r.id as string | number)
 
