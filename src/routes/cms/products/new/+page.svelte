@@ -5,7 +5,7 @@
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
-  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
@@ -688,6 +688,7 @@
   // ── 콘텐츠 에디터 ──────────────────────────────────
   let contentBlocks = $state<ContentBlock[]>([])
   let contentKeywords = $state<string[]>([])
+  let contentEditorRef = $state<RichContentEditor | undefined>()
 
   function addSpec() { specs = [...specs, { key: '', value: '' }] }
   function removeSpec(i: number) { specs = specs.filter((_, idx) => idx !== i) }
@@ -742,7 +743,7 @@
   <form
     method="POST"
     action="?/create"
-    use:enhance={({ cancel }) => {
+    use:enhance={({ cancel, formData }) => {
       // 버그 수정(2026-08-13): 선택된 그룹에 조합코드가 있는데 콤보 카드를 하나도 안 고르고
       // 제출하면 서버가 조용히 카테고리 자동 폴백(코드설정에 없는 임의 품번)으로 빠지던 문제
       // 방지 — 콤보가 존재하는 그룹은 제출 전에 선택을 강제한다(서버에도 동일 검증 이중 적용).
@@ -751,6 +752,14 @@
         cancel()
         return
       }
+      // 새 에디터는 250ms 디바운스로 본문을 반영하므로, 제출 직전에 대기분을 즉시 반영하고 직렬화 누락 여부를 점검한다
+      const flushed = contentEditorRef?.flush()
+      if (flushed && !flushed.ok) {
+        csToast.error('본문을 저장 형식으로 변환하는 중 내용이 달라져 등록을 멈췄어요. 새로고침 후 다시 시도해주세요.')
+        cancel()
+        return
+      }
+      if (flushed) formData.set('content_blocks', JSON.stringify(flushed.blocks))
       isLoading = true
       return async ({ update }) => { await update(); isLoading = false }
     }}
@@ -1032,7 +1041,15 @@
 
       <!-- 콘텐츠 에디터 -->
       <div class="field-row">
-        <CmsContentEditor bind:blocks={contentBlocks} bind:keywords={contentKeywords} />
+        <div class="content-editor-box">
+          <RichContentEditor
+            bind:this={contentEditorRef}
+            bind:blocks={contentBlocks}
+            bind:keywords={contentKeywords}
+            variant="cms"
+            placeholder="상품설명을 입력하세요"
+          />
+        </div>
         <!-- 직렬화 hidden inputs -->
         <input type="hidden" name="content_blocks" value={JSON.stringify(contentBlocks)} />
         <input type="hidden" name="keywords" value={JSON.stringify(contentKeywords)} />
@@ -1804,6 +1821,14 @@
     flex-direction: column;
     gap: 16px;
   }
+  /* 새 콘텐츠 에디터(RichContentEditor) 래퍼 — 상품 상세 상품설명 탭과 동일. overflow:clip은 내부 sticky 툴바를 유지하면서 모서리만 자른다 */
+  .content-editor-box {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: clip;
+    width: 100%;
+  }
+
   .form-section {
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg);

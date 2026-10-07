@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+const newPage = readFileSync('src/routes/cms/products/new/+page.svelte', 'utf8')
 const panel = readFileSync('src/lib/components/cms/ProductDetailPanel.svelte', 'utf8')
 const editor = readFileSync('src/lib/components/editor/RichContentEditor.svelte', 'utf8')
 const keywords = readFileSync('src/lib/components/editor/KeywordTagInput.svelte', 'utf8')
@@ -51,9 +52,38 @@ describe('편집기 읽기 전용 모드', () => {
     expect(editor).toMatch(/editor\.setEditable\(!ro\)/)
   })
 
+  it('편집기 루트가 내부 폼의 submit 전파를 막는다(바깥 <form> 안에서 쓰일 때 상품 등록 오제출 방지)', () => {
+    expect(editor).toMatch(/<div class="rc-root"[^>]*onsubmit=\{\(e\) => e\.stopPropagation\(\)\}/)
+  })
+
   it('키워드 입력은 읽기 전용이면 입력창·삭제 버튼을 숨긴다', () => {
     expect(keywords).toMatch(/readonly\?: boolean/)
     expect(keywords).toMatch(/\{#if !readonly\}<button[^>]*kw-del/)
     expect(keywords).toMatch(/\{#if !readonly && keywords\.length < max\}/)
+  })
+})
+
+describe('상품 신규등록 화면 새 편집기 배선', () => {
+  it('옛 편집기 대신 RichContentEditor(cms 변형)를 쓰고 키워드를 유지한다', () => {
+    expect(newPage).not.toMatch(/CmsContentEditor/)
+    expect(newPage).toMatch(/import RichContentEditor from '\$lib\/components\/editor\/RichContentEditor\.svelte'/)
+    const tag = newPage.match(/<RichContentEditor\s+bind:this[\s\S]*?\/>/)?.[0] ?? ''
+    expect(tag).toMatch(/variant="cms"/)
+    expect(tag).toMatch(/bind:blocks=\{contentBlocks\}/)
+    expect(tag).toMatch(/bind:keywords=\{contentKeywords\}/)
+    expect(tag).not.toMatch(/showKeywords=\{false\}/)
+    expect(tag).not.toMatch(/readonly/)
+  })
+
+  it('제출 직전에 대기 중 편집을 flush해 폼 값에 싣고, 실패 시 제출을 취소한다', () => {
+    expect(newPage).toMatch(/use:enhance=\{\(\{ cancel, formData \}\) =>/)
+    expect(newPage).toMatch(/contentEditorRef\?\.flush\(\)/)
+    expect(newPage).toMatch(/flushed && !flushed\.ok[\s\S]*?cancel\(\)/)
+    expect(newPage).toMatch(/formData\.set\('content_blocks', JSON\.stringify\(flushed\.blocks\)\)/)
+  })
+
+  it('서버가 읽는 hidden 필드(content_blocks·keywords)는 그대로 유지된다', () => {
+    expect(newPage).toMatch(/name="content_blocks"/)
+    expect(newPage).toMatch(/name="keywords"/)
   })
 })
