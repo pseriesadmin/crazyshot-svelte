@@ -9,6 +9,7 @@ import { isCouponUserEligible, matchesUserGradeRequired } from '$lib/server/coup
 import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
+import { resolveParentProductFields, createParentReadClient, PARENT_DISPLAY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/docApproval'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -327,8 +328,11 @@ export const load: PageServerLoad = async ({ locals }) => {
         .filter(p => p.parent_product_id)
         .map(p => p.parent_product_id as string)
     )]
+    // 부모 값은 서비스 클라이언트로 읽는다 — 고객 세션(RLS)은 노출 OFF·삭제된 부모를 읽지 못하는데, 새 재고(자식)는 판매전용·이미지 등을
+    // 복사해 갖고 있지 않아(Phase 5) 폴백이 먹지 않는다. 서버(DB 함수)는 부모를 정상으로 읽으므로 화면·서버 판정이 어긋나지 않게 한다.
+    const parentReadClient = createParentReadClient()
     if (parentIdsNeeded.length > 0) {
-      const { data: parentRows } = await supabase
+      const { data: parentRows } = await parentReadClient
         .from('products')
         .select('id, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_only, sale_price')
         .in('id', parentIdsNeeded)
@@ -365,6 +369,10 @@ export const load: PageServerLoad = async ({ locals }) => {
         return next
       })
     }
+
+    // 표시·분류 값(이름·브랜드·분류·슬러그·이미지)도 부모 우선으로 해석 — 자식 재고에 복사된 옛 값 대신 부모 값을 쓴다
+    // (쿠폰 카테고리 판정은 서버 _validate_and_consume_coupon과 같은 기준 — Migration #654)
+    serverProducts = await resolveParentProductFields(parentReadClient, serverProducts, PARENT_DISPLAY_FIELDS)
 
     for (const row of (priceRulesResult.data ?? []) as Array<{ product_id: string; duration_type: string; price: number; deposit_amount: number | null }>) {
       const entry = productPriceRules[row.product_id] ?? { price12h: null, price24h: null, deposit: null }
