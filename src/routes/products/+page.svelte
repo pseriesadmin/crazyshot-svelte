@@ -100,11 +100,15 @@
   // 활성 카테고리 — URL ?category= 파라미터 기준 (SSR 데이터 반영, 없으면 'all')
   let activeCategory = $derived(data.urlCategory ?? 'all')
 
-  // 모바일 터치 인터랙션: 터치 즉시 호버 상태가 은은하게 버블 확대됐다가 복귀(마우스는 CSS :hover가 담당)
+  // 모바일 터치 인터랙션: 터치 후 호버 상태가 은은하게 버블 확대됐다가 복귀(마우스는 CSS :hover가 담당)
+  // ⛔ 터치 '중'(pointerdown)에는 DOM·스타일을 바꾸지 않는다 — iOS Safari는 손가락이 닿은 동안(약 0.1초 이상) 화면이
+  //    바뀌면 그 탭을 호버 동작으로 보고 click을 취소해 카테고리가 전환되지 않는다(실측: 접촉 0.2초 탭 실패).
+  //    포인터 종류만 기록해 두고, click이 확정된 뒤에 버블을 재생한다.
+  let lastPointerType = 'mouse'
   let touchBubbleId = $state<string | null>(null)
   let touchBubbleTimer: ReturnType<typeof setTimeout> | undefined
-  function triggerTouchBubble(e: PointerEvent, id: string): void {
-    if (e.pointerType === 'mouse') return
+  function triggerTouchBubble(id: string): void {
+    if (lastPointerType === 'mouse') return
     clearTimeout(touchBubbleTimer)
     touchBubbleId = null
     // 같은 아이콘을 연속 터치해도 애니가 처음부터 다시 재생되도록 한 프레임 뒤에 클래스 부여
@@ -359,11 +363,12 @@
               class="cat-btn"
               class:active={activeCategory === cat.id}
               onclick={() => {
+                triggerTouchBubble(cat.id)
                 if (cat.name === '추천패키지') { goto('/hype-pack'); return }
                 goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
               }}
               aria-pressed={activeCategory === cat.id}
-              onpointerdown={(e) => triggerTouchBubble(e, cat.id)}
+              onpointerdown={(e) => { lastPointerType = e.pointerType }}
             >
               {#if cat.icon_url}
                 <!-- ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 있으면 OFF 위에 겹쳐 교차 전환 -->
@@ -1062,6 +1067,10 @@
     min-width: 0;
     touch-action: manipulation; /* 더블탭 줌 지연 제거 — 한 번 터치로 즉시 이동 */
     -webkit-tap-highlight-color: transparent;
+    /* iOS Safari: 아이콘(이미지)을 약 0.4초 이상 누르면 '공유/사진 앱에 저장' 길게 누르기 메뉴가 떠 카테고리 이동 대신 가로채임 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .cat-icon-box {
     display: flex;
@@ -1107,6 +1116,9 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
+    pointer-events: none;      /* 터치는 이미지가 아니라 버튼이 받는다(이미지 길게 누르기 메뉴 방지) */
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
   }
   /* ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 등록된 카테고리: 기존 배경색·오버레이 효과 대신
      OFF/ON 두 이미지를 겹쳐 부드럽게 교차 전환 — ON 미등록 카테고리는 기존 효과 유지 */
