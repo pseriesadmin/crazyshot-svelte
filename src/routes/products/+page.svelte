@@ -6,6 +6,7 @@
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import { tabBarState } from '$lib/stores/tabBar.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
@@ -98,6 +99,20 @@
 
   // 활성 카테고리 — URL ?category= 파라미터 기준 (SSR 데이터 반영, 없으면 'all')
   let activeCategory = $derived(data.urlCategory ?? 'all')
+
+  // 모바일 터치 인터랙션: 터치 즉시 호버 상태가 은은하게 버블 확대됐다가 복귀(마우스는 CSS :hover가 담당)
+  let touchBubbleId = $state<string | null>(null)
+  let touchBubbleTimer: ReturnType<typeof setTimeout> | undefined
+  function triggerTouchBubble(e: PointerEvent, id: string): void {
+    if (e.pointerType === 'mouse') return
+    clearTimeout(touchBubbleTimer)
+    touchBubbleId = null
+    // 같은 아이콘을 연속 터치해도 애니가 처음부터 다시 재생되도록 한 프레임 뒤에 클래스 부여
+    requestAnimationFrame(() => {
+      touchBubbleId = id
+      touchBubbleTimer = setTimeout(() => { touchBubbleId = null }, 460)
+    })
+  }
   let activeCategoryLabel = $derived(
     activeCategory === 'all'
       ? '전체'
@@ -194,7 +209,7 @@
   // 일반 배치 자리의 기준점(0높이) — 도크 전환 여부와 무관하게 항상 같은 문서 위치에 존재
   let slotEl = $state<HTMLDivElement | null>(null)
   // 모바일 BottomTabBar(스크롤 다운 시 숨김·업 시 노출)와 동일 규칙으로 노출 여부를 추적 — 노출 중이면 도크를 탭바 높이만큼 위로 띄워 가려짐 방지
-  let tabBarShown = $state(true)
+  let tabBarShown = $derived(!tabBarState.hidden)  // BottomTabBar가 갱신하는 공용 store를 읽음 — 이 화면에서 따로 추적하지 않음(iOS 판정 어긋남 방지)
   let wrapH = $state(0)
   $effect(() => { if (!dockOn && wrapH > 0) flowH = wrapH })
 
@@ -218,8 +233,6 @@
         if (goingUp && slotTop > window.innerHeight) endDock = true       // 자리가 화면 아래로 완전히 벗어난 뒤에만 도크 전환
         else if (!goingUp && slotTop <= window.innerHeight) endDock = false // 자리가 화면에 다시 들어오면 일반 배치 복귀
       }
-      if (y > lastY && y > 50) tabBarShown = false
-      else if (y < lastY) tabBarShown = true
       lastY = y
       dockVisible = false
       dockExpanded = false
@@ -350,10 +363,11 @@
                 goto(cat.id === 'all' ? '/products' : `/products?category=${cat.id}`)
               }}
               aria-pressed={activeCategory === cat.id}
+              onpointerdown={(e) => triggerTouchBubble(e, cat.id)}
             >
               {#if cat.icon_url}
                 <!-- ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 있으면 OFF 위에 겹쳐 교차 전환 -->
-                <div class="cat-icon-box" class:has-on={!!cat.icon_active_url}>
+                <div class="cat-icon-box" class:has-on={!!cat.icon_active_url} class:touch-bubble={touchBubbleId === cat.id}>
                   <img src={cat.icon_url} alt={cat.name} class="cat-custom-icon cat-icon-off" />
                   {#if cat.icon_active_url}
                     <img src={cat.icon_active_url} alt="" aria-hidden="true" class="cat-custom-icon cat-icon-on" />
@@ -1018,11 +1032,14 @@
 
   /* Category icons grid */
   .cat-icons {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 20px 20px;
+    --cat-gap: clamp(8px, 3vw, 20px); /* 좁은 화면에서 열 간격도 함께 줄임 */
+    /* 모바일: 4열 기준 폭으로 줄바꿈하되 줄별로 가운데 정렬 — 3개만 있어도 중앙(그리드는 왼쪽부터 채워 쏠림) */
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px var(--cat-gap);
     cursor: pointer;
-    margin-bottom: 20px;
+    margin-bottom: 26px; /* 아이콘 ↔ 키워드 칩 분리도: 20px의 30% 추가(모바일 전용 — PC는 아래 min-width 블록에서 20px 유지) */
   }
   /* 카테고리 미설정 상태: 라운드 블록 BG만 표시 */
   .cat-icons-empty {
@@ -1041,13 +1058,18 @@
     border: none;
     cursor: pointer;
     padding: 0;
+    flex: 0 0 calc((100% - 3 * var(--cat-gap)) / 4); /* 4열 폭 고정 — 컨테이너를 넘지 않음 */
+    min-width: 0;
+    touch-action: manipulation; /* 더블탭 줌 지연 제거 — 한 번 터치로 즉시 이동 */
+    -webkit-tap-highlight-color: transparent;
   }
   .cat-icon-box {
     display: flex;
-    width: 70px;
-    height: 70px;
-    min-width: 70px;
-    min-height: 70px;
+    width: 100%;          /* 열 폭에 맞춰 축소, 최대 70px */
+    max-width: 70px;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
     flex-direction: column;
     justify-content: center;
     align-items: center;
@@ -1057,8 +1079,11 @@
     overflow: hidden;
     transition: background 0.2s;
   }
-  .cat-btn:hover .cat-icon-box {
-    background: #3b2f8a;
+  /* 호버 효과는 마우스 기기 전용 — 터치 기기는 첫 탭이 호버로 소비돼 클릭(이동)이 두 번째 탭에서야 되던 문제 */
+  @media (hover: hover) {
+    .cat-btn:hover .cat-icon-box {
+      background: #3b2f8a;
+    }
   }
   .cat-icon-box {
     position: relative;
@@ -1073,8 +1098,10 @@
     transition: opacity 0.2s;
     pointer-events: none;
   }
-  .cat-btn:hover .cat-icon-box::after {
-    opacity: 0.45;
+  @media (hover: hover) {
+    .cat-btn:hover .cat-icon-box::after {
+      opacity: 0.45;
+    }
   }
   .cat-custom-icon {
     width: 100%;
@@ -1083,8 +1110,10 @@
   }
   /* ON 이미지(호버·선택 공용, 상자 배경 포함 SVG)가 등록된 카테고리: 기존 배경색·오버레이 효과 대신
      OFF/ON 두 이미지를 겹쳐 부드럽게 교차 전환 — ON 미등록 카테고리는 기존 효과 유지 */
-  .cat-icon-box.has-on,
-  .cat-btn:hover .cat-icon-box.has-on { background: transparent; }
+  .cat-icon-box.has-on { background: transparent; }
+  @media (hover: hover) {
+    .cat-btn:hover .cat-icon-box.has-on { background: transparent; }
+  }
   .cat-icon-box.has-on::after { display: none; }
   .cat-icon-box.has-on .cat-icon-off { transition: opacity 0.25s ease; }
   .cat-icon-box.has-on .cat-icon-on {
@@ -1093,10 +1122,38 @@
     opacity: 0;
     transition: opacity 0.25s ease;
   }
-  .cat-btn:hover .cat-icon-box.has-on .cat-icon-on,
   .cat-btn.active .cat-icon-box.has-on .cat-icon-on { opacity: 1; }
-  .cat-btn:hover .cat-icon-box.has-on .cat-icon-off,
   .cat-btn.active .cat-icon-box.has-on .cat-icon-off { opacity: 0; }
+  @media (hover: hover) {
+    .cat-btn:hover .cat-icon-box.has-on .cat-icon-on { opacity: 1; }
+    .cat-btn:hover .cat-icon-box.has-on .cat-icon-off { opacity: 0; }
+  }
+
+  /* 터치 전용: 터치 즉시 옅고 은은하게 버블 확대 → 복귀 (호버 상태를 짧게 미리 보여줌) */
+  @keyframes cat-touch-bubble {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.07); }
+    70%  { transform: scale(0.985); }
+    100% { transform: scale(1); }
+  }
+  @keyframes cat-touch-on {
+    0%   { opacity: 0; }
+    35%  { opacity: 0.55; }
+    100% { opacity: 0; }
+  }
+  @keyframes cat-touch-veil {
+    0%   { opacity: 0; }
+    35%  { opacity: 0.3; }
+    100% { opacity: 0; }
+  }
+  .cat-icon-box.touch-bubble { animation: cat-touch-bubble 0.42s ease-out; }
+  .cat-btn:not(.active) .cat-icon-box.touch-bubble.has-on .cat-icon-on { animation: cat-touch-on 0.42s ease-out; }
+  .cat-icon-box.touch-bubble:not(.has-on)::after { animation: cat-touch-veil 0.42s ease-out; }
+  @media (prefers-reduced-motion: reduce) {
+    .cat-icon-box.touch-bubble,
+    .cat-btn:not(.active) .cat-icon-box.touch-bubble.has-on .cat-icon-on,
+    .cat-icon-box.touch-bubble:not(.has-on)::after { animation: none; }
+  }
   .cat-label {
     display: none;
     font-family: 'Noto Sans KR', sans-serif;
@@ -1328,19 +1385,22 @@
     /* 전체가 아니라 상단 30%만 노출 — 목록을 가리는 면적 최소화 */
     transform: translateY(100%);
     opacity: 0;
-    transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease, bottom 0.3s ease;
+    /* 위치는 transform 하나로만 제어(bottom 전환 없음) — iOS Safari가 스크롤 중 고정 요소의 bottom 변경을 늦게 반영해
+       탭바가 사라진 자리가 빈 띠로 남던 문제 방지 */
+    will-change: transform;
+    transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease;
     pointer-events: none;
   }
   /* 모바일: BottomTabBar(높이 70px, z-index 50)가 노출 중이면 그 위로 배치 — PC는 탭바가 없어 @media에서 해제 */
-  .bottom-dock.dock-on.dock-above-tab { bottom: 70px; }
+  .bottom-dock.dock-on.dock-above-tab { --dock-lift: 70px; }
   .bottom-dock.dock-on.dock-visible {
-    transform: translateY(70%);
+    transform: translateY(calc(70% - var(--dock-lift, 0px)));
     opacity: 1;
     pointer-events: auto;
     cursor: pointer;
   }
   .bottom-dock.dock-on.dock-visible.dock-expanded {
-    transform: translateY(0);
+    transform: translateY(calc(0px - var(--dock-lift, 0px)));
     overflow-y: auto;
     cursor: auto;
   }
@@ -1934,7 +1994,7 @@
     .bottom-dock { --dr: 50px; }
     .bottom-dock :global(.brand-marquee-wrap) { margin-top: 0; }
     .bottom-dock:not(.dock-on) .md-picks-section { padding-top: 26px; }
-    .bottom-dock.dock-on.dock-above-tab { bottom: 0; }
+    .bottom-dock.dock-on.dock-above-tab { --dock-lift: 0px; }
     .bottom-dock:not(.dock-on)::before { display: block; }
     .body-wrap {
       padding: var(--layout-pc-gnb-offset) 0 60px;
@@ -1949,8 +2009,8 @@
       margin-bottom: 20px;
     }
     /* PC 카테고리 버튼 크기(2026-09-29): 100→80px로 20% 축소 후 80→88px로 10% 확대 — 상자 88px·반경 26px, 버튼 높이 128px(라벨 영역 유지) */
-    .cat-btn { height: 128px; justify-content: space-between; }
-    .cat-icon-box { width: 88px; height: 88px; min-width: 88px; min-height: 88px; border-radius: 26px; justify-content: center; align-items: center; }
+    .cat-btn { height: 128px; justify-content: space-between; flex: 0 0 auto; }
+    .cat-icon-box { width: 88px; max-width: none; height: 88px; min-width: 88px; min-height: 88px; border-radius: 26px; justify-content: center; align-items: center; }
     .cat-label { display: block; }
     .cat-label.active { color: #3b2f8a; }
 
