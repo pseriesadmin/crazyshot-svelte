@@ -31,6 +31,8 @@
     placeholder?: string
     /** 키워드 입력란 노출 여부 */
     showKeywords?: boolean
+    /** 읽기 전용(도구·편집 불가, 내용만 보여준다) — 재고 단위 상품처럼 수정 권한이 없는 화면용 */
+    readonly?: boolean
     /** 내용이 바뀔 때(디바운스 후 blocks 갱신 시) 호출 */
     onchange?: () => void
   }
@@ -42,6 +44,7 @@
     variant = 'user',
     placeholder = '내용을 입력하세요',
     showKeywords = true,
+    readonly = false,
     onchange,
   }: Props = $props()
 
@@ -123,6 +126,7 @@
     if (!editor || !conv) return { blocks, ok: true }
     if (!dirty) return { blocks, ok: true } // 무변경 저장 = 원본 그대로
     clearTimeout(syncTimer)
+    syncPending = false // 저장이 최신 문서를 직접 직렬화하므로 정리 단계에서 같은 내용을 다시 덮어쓰지 않는다
     const v = conv.verifySerialization(editor.getJSON())
     blocks = v.blocks
     return { blocks: v.blocks, ok: v.ok }
@@ -143,10 +147,13 @@
   }
 
   // ── 동기화 ──────────────────────────────────────────
+  let syncPending = false // 디바운스 대기 중인 편집이 있는지 — 편집기가 사라질 때(탭 전환 등) 마지막 입력 유실 방지
   function scheduleSync() {
     dirty = true
+    syncPending = true
     clearTimeout(syncTimer)
     syncTimer = setTimeout(() => {
+      syncPending = false
       if (!editor || !conv) return
       blocks = conv.docToBlocks(editor.getJSON())
       onchange?.()
@@ -509,7 +516,7 @@
     window.removeEventListener('pointerup', onImgDragUp)
     window.removeEventListener('pointercancel', onImgDragCancel)
     clearDragMarks()
-    if (!d || !commit || !d.moved || d.to === d.from || !editor) return
+    if (!d || !commit || !d.moved || d.to === d.from || !editor || readonly) return
     // 끄는 사이 문서가 바뀔 수 있다(다른 업로드 완료 등) → 위치·선택에 의존하지 않고, 시작한 묶음 노드를 문서에서 다시 찾는다.
     // 노드가 그대로면 위치가 밀렸어도 정상 반영하고, 그 묶음이 사라졌거나 내용이 바뀌었으면 반영하지 않는다.
     let pos = -1
@@ -533,7 +540,7 @@
   }
 
   function onHostPointerDown(e: PointerEvent) {
-    if (!editor || e.button !== 0 || imgDrag) return
+    if (readonly || !editor || e.button !== 0 || imgDrag) return // 읽기 전용에서는 묶음 안 사진 순서 끌기도 막는다
     const fig = (e.target as HTMLElement | null)?.closest<HTMLElement>('figure.rc-fig')
     const sel = selectedNode()
     if (!fig || !sel || sel.node.type.name !== 'imageGroup') return
@@ -865,6 +872,7 @@
       conv = converter
       editor = new Editor({
         element: host,
+        editable: !readonly,
         extensions: [...ext.createRichExtensions(), ...ext.createEditorOnlyExtensions(placeholder)],
         content: converter.blocksToDoc($state.snapshot(blocks) as ContentBlock[]),
         editorProps: {
@@ -918,6 +926,12 @@
     return () => {
       destroyed = true
       clearTimeout(syncTimer)
+      // 대기 중인 편집이 있으면 버리지 않고 마지막으로 한 번 반영한다(탭을 바꿔 편집기가 사라져도 입력이 남도록)
+      if (syncPending && editor && conv && !readonly) {
+        syncPending = false
+        blocks = conv.docToBlocks(editor.getJSON())
+        onchange?.()
+      }
       clearTimeout(blurTimer)
       host?.removeEventListener('pointerdown', onHostPointerDown)
       endImgDrag(false)
@@ -929,7 +943,13 @@
     }
   })
 
-  const showMobileBar = $derived(isMobile && (focused || sheet !== null))
+  // 읽기 전용 전환(prop 변경)을 이미 만들어진 에디터에도 반영
+  $effect(() => {
+    const ro = readonly
+    if (editor && editor.isEditable === ro) editor.setEditable(!ro)
+  })
+
+  const showMobileBar = $derived(!readonly && isMobile && (focused || sheet !== null))
   const tableActive = $derived(ctxKind === 'table')
 </script>
 
@@ -1023,7 +1043,7 @@
   <input bind:this={addToGroupInput} type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" multiple hidden onchange={(e) => void addToGroup(pickedFiles(e))} />
 
   <!-- ═════════ PC / 태블릿 툴바 ═════════ -->
-  {#if !isMobile}
+  {#if !isMobile && !readonly}
     <div class="rc-toolbar-wrap" bind:this={toolbarWrap} role="toolbar" aria-label="서식 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       <div class="rc-toolbar rc-toolbar-fmt">
         <button type="button" class="rc-btn" aria-label="실행취소" title="실행취소 (Ctrl+Z)" disabled={!editor || !editor.can().undo()} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
@@ -1082,7 +1102,7 @@
   <!-- ═════════ 편집 캔버스 ═════════ -->
   <div class="rc-canvas-wrap" bind:this={canvasWrap}>
     <div class="rc-host" bind:this={host}></div>
-  {#if ctxKind}
+  {#if ctxKind && !readonly}
     <div class="rc-ctx" style={ctxStyle} role="toolbar" aria-label="선택 항목 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       {#if ctxKind === 'image' && groupAttrs}
         {@const head = !!groupAttrs.images[curIdx()]?.isHead}
@@ -1131,7 +1151,7 @@
   </div>
 
   {#if showKeywords}
-    <KeywordTagInput bind:keywords />
+    <KeywordTagInput bind:keywords {readonly} />
   {/if}
 
   <!-- ═════════ 선택 시트(PC: 툴바 아래 팝오버 / 모바일: 하단 시트) ═════════ -->
