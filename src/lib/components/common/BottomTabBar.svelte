@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+  import { tabBarState } from '$lib/stores/tabBar.svelte'
 
   interface Props {
     activeTab?: string  // 명시적으로 넘길 때. 없으면 URL로 자동 감지.
@@ -23,21 +24,28 @@
   let poppingTab = $state<string | null>(null)
   let moreMenuOpen = $state(false)
 
-  // 스크롤 인터랙션: 다운 → 가림, 업 → 보임
-  let hidden = $state(false)
+  // 스크롤 인터랙션: 다운 → 가림, 업 → 보임 (상태는 공용 store — 탭바 위에 뜨는 요소와 판정 공유)
   let lastY = 0
+  // iOS Safari 스크롤 끝 고무줄 되튕김(수 px 역방향)이 '스크롤 업'으로 오판돼 탭바가 깜빡이는 것을 막는 최소 이동량
+  const SCROLL_DELTA = 8
 
   function onScroll() {
     const y = window.scrollY
-    if (y > lastY && y > 50) hidden = true     // 스크롤 다운 → 가림
-    else if (y < lastY)       hidden = false    // 스크롤 업 → 보임
+    if (y <= 50) { tabBarState.hidden = false; lastY = y; return }   // 최상단 — 항상 보임
+    const dy = y - lastY
+    if (Math.abs(dy) < SCROLL_DELTA) return                          // 미세 이동 무시(lastY 유지 → 느린 스크롤은 누적)
+    tabBarState.hidden = dy > 0                                       // 다운 → 가림 / 업 → 보임
     lastY = y
   }
 
   $effect(() => {
     lastY = window.scrollY
+    tabBarState.hidden = false
     window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      tabBarState.hidden = false
+    }
   })
 
   const TABS = [
@@ -62,7 +70,7 @@
   const INACTIVE = '#c1bbec'
 </script>
 
-<div class="tab-bar" class:hidden>
+<div class="tab-bar" class:hidden={tabBarState.hidden}>
   {#each TABS as tab}
     <button
       class="tab-item"
@@ -119,11 +127,15 @@
     align-items: center;
     height: 70px;
     transform: translateY(0);
-    transition: transform 0.3s ease;
+    will-change: transform;           /* iOS Safari: 별도 합성 레이어로 그려 숨김/표시 전환이 스크롤 중에도 즉시 반영되게 */
+    transition: transform 0.3s ease, visibility 0s linear 0s;
   }
 
   .tab-bar.hidden {
     transform: translateY(100%);
+    visibility: hidden;               /* 전환이 끝난 뒤 완전히 감춤 — 숨겨진 바의 위쪽 그림자·잔상이 하단에 남지 않게 */
+    pointer-events: none;
+    transition: transform 0.3s ease, visibility 0s linear 0.3s;
   }
 
   /* PC에서는 숨김 */
