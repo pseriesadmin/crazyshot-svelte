@@ -6,6 +6,7 @@
 	import type { PageData } from './$types'
 	import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
 	import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
+	import SubGnb from '$lib/components/common/SubGnb.svelte'
 	import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 	import { makeEmptyTextBlock, type ContentBlock } from '$lib/types/content-editor'
 	import { csToast } from '$lib/utils/toast'
@@ -508,6 +509,8 @@
      PC LAYOUT (≥ 768px)
      ============================================================ -->
 <div class="d-page">
+	<!-- PC sub-GNB — 전역 GNB가 /crazylog/* 에서 제외되므로 SubGnb 표준(noGnbOffset) 적용, 모바일은 자체 헤더 사용 -->
+	<SubGnb title="로그 등록" pcOnly noGnbOffset />
 	<div class="d-container">
 		<!-- Notice bar -->
 		<div class="d-notice">
