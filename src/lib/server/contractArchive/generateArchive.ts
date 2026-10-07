@@ -344,6 +344,7 @@ interface LegacySigning {
   ip_address: string | null
   content_hash: string | null
   signature_data: string | null
+  snapshot_mode?: string | null
 }
 
 /**
@@ -357,7 +358,8 @@ export async function listLegacySignings(admin: SupabaseClient, limit: number): 
     const from = page * QUERY_PAGE
     const { data, error } = await admin
       .from('contract_signings')
-      .select('id, contract_id, signed_at, ip_address, content_hash, signature_data')
+      // snapshot_mode: 서명 시점 스냅샷의 작성 방식만 가볍게 가져온다(스냅샷 본문 전체를 읽지 않는다)
+      .select('id, contract_id, signed_at, ip_address, content_hash, signature_data, snapshot_mode:signed_content_snapshot->>authoring_mode')
       .not('signed_at', 'is', null)
       .order('signed_at', { ascending: true })
       .order('id', { ascending: true })
@@ -368,7 +370,12 @@ export async function listLegacySignings(admin: SupabaseClient, limit: number): 
     const { data: evs, error: evErr } = await admin.from('contract_signature_evidence').select('signing_id, signed_at').in('signing_id', rows.map((r) => r.id))
     if (evErr) throw new Error(evErr.message)
     const have = new Set(((evs ?? []) as { signing_id: string; signed_at: string }[]).map((e) => `${e.signing_id}|${new Date(e.signed_at).getTime()}`))
-    for (const r of rows) if (!have.has(`${r.id}|${new Date(r.signed_at).getTime()}`)) out.push(r)
+    for (const r of rows) {
+      if (have.has(`${r.id}|${new Date(r.signed_at).getTime()}`)) continue
+      // PDF로 다시 만들 수 없는 건(html이 아닌 작성 방식·서명 이미지 없음)은 소급 증적(삭제 불가 기록)도 만들지 않는다 — 어차피 영구 실패로 끝난다
+      if (r.snapshot_mode !== 'html' || !r.signature_data) continue
+      out.push(r)
+    }
     if (rows.length < QUERY_PAGE) break
   }
   return out.slice(0, limit)
