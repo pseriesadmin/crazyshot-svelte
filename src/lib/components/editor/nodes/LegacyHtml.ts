@@ -4,7 +4,7 @@
  * 저장 시 attrs.html을 그대로 원래 블록 타입(kind)으로 되돌려 쓴다.
  */
 import { Node } from '@tiptap/core'
-import { sanitizeForPreview } from '$lib/utils/previewSanitize'
+import { buildSandboxedPreviewDoc } from '$lib/utils/previewSanitize'
 
 export interface LegacyHtmlAttrs {
   html: string
@@ -65,9 +65,17 @@ export const LegacyHtml = Node.create({
       const badge = document.createElement('div')
       badge.className = 'rc-legacy-badge'
       badge.textContent = '원본 보존 블록 — 선택하면 편집·변환 도구가 나타나요'
+      // 원본(정화하지 않은 HTML)을 샌드박스 iframe으로만 보여준다 — 스크립트·이벤트·외부 접근 차단. 클릭은 바깥 래퍼가 받아 노드 선택이 된다.
       const body = document.createElement('div')
-      body.className = 'rc-legacy-body rc-content'
-      body.innerHTML = sanitizeForPreview(String(node.attrs.html ?? ''))
+      body.className = 'rc-legacy-body'
+      const frame = document.createElement('iframe')
+      frame.setAttribute('sandbox', '')
+      frame.setAttribute('referrerpolicy', 'no-referrer')
+      frame.setAttribute('title', '원본 보존 블록 미리보기')
+      frame.setAttribute('tabindex', '-1')
+      frame.setAttribute('loading', 'lazy')
+      frame.srcdoc = buildSandboxedPreviewDoc(String(node.attrs.html ?? ''))
+      body.append(frame)
       dom.append(badge, body)
       return { dom }
     }

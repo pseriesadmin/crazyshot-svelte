@@ -286,3 +286,12 @@ describe('이미지 묶음 폭·정렬', () => {
     editor.destroy()
   })
 })
+
+describe('원본 그대로 불러온 본문의 위험 링크', () => {
+  it('변환 가능 블록의 javascript: 링크는 문서로 불러올 때 제거된다(링크 마크로 남지 않음)', () => {
+    const out = docToBlocks(blocksToDoc([{ type: 'text', html: '<p><a href="javascript:alert(1)">클릭</a> 글</p>' }]))
+    const html = (out[0] as { html: string }).html
+    expect(html).not.toMatch(/javascript:/i)
+    expect(html).toContain('클릭')
+  })
+})

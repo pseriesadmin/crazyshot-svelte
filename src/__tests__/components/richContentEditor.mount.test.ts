@@ -423,5 +423,66 @@ describe('RichContentEditor — mount', () => {
       await wait()
       expect(groups(editor)[0].images.map((i) => i.alt)).toEqual(['b', 'c', 'a'])
     })
+
+    it('원본 보존 블록은 샌드박스 iframe으로만 미리 보이고, 원본 악성 HTML이 편집 화면 DOM에서 실행·삽입되지 않는다', async () => {
+      const evil = '<h4>제목</h4><p>본문 <img src="x" onerror="window.__pwned=1"><script>window.__pwned=2</script></p>'
+      mountEditor([{ type: 'text', html: evil }])
+      await ready()
+      const frame = target.querySelector<HTMLIFrameElement>('.rc-legacy iframe')!
+      expect(frame).toBeTruthy()
+      expect(frame.getAttribute('sandbox')).toBe('') // allow-scripts 등 허용 토큰 없음
+      expect(frame.srcdoc).toContain('window.__pwned=1') // 원본은 그대로(바이트 보존)
+      expect(frame.srcdoc).toContain("default-src 'none'") // CSP로 스크립트·네트워크 차단
+      expect(target.querySelector('.rc-legacy img, .rc-legacy script')).toBeNull() // 호스트 DOM에는 파싱된 요소가 없다
+      expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined()
+      expect(api.flush().blocks[0]).toEqual({ type: 'text', html: evil }) // 무변경 저장 = 원본 그대로
+    })
+
+    it('원본 보존 블록은 다른 곳을 고쳐도 원본이 한 글자도 바뀌지 않고 저장된다(수정 모드 원본 보존)', async () => {
+      const original = '<p>앞<img src="https://x/a.png" alt="a"><font color="#f00">빨강</font><sup>2</sup></p>'
+      mountEditor([{ type: 'text', html: original }, { type: 'text', html: '<p>일반 문단</p>' }])
+      await ready()
+      const editor = editorOf()
+      editor.commands.focus('end')
+      editor.commands.insertContent('추가')
+      await wait(350)
+      const out = api.flush().blocks
+      expect(out.some((b) => b.type === 'text' && b.html === original)).toBe(true)
+    })
+
+    it('CMS 변형: "HTML 블록 추가"로 원본 HTML을 서식 변환 없이 그대로 넣을 수 있고, 취소하면 빈 카드가 남지 않는다', async () => {
+      mountEditor([{ type: 'text', html: '<p>본문</p>' }], { variant: 'cms' })
+      await ready()
+      expect(target.querySelector('.rc-root')!.getAttribute('data-variant')).toBe('cms')
+      const addBtn = btn('HTML 블록 추가')
+
+      // 취소 → 카드 없음
+      addBtn.click()
+      await wait()
+      expect(target.querySelector('.rc-modal')).toBeTruthy()
+      ;[...target.querySelectorAll<HTMLButtonElement>('.rc-modal button')].find((b) => b.textContent?.trim() === '취소')!.click()
+      await wait()
+      expect(target.querySelector('.rc-modal')).toBeNull()
+      expect(target.querySelector('.rc-legacy')).toBeNull()
+
+      // 입력 후 적용 → html 블록으로 저장, 원본 문자열 그대로
+      const raw = '<div class="gemini"><h4>소제목</h4><p style="color:red">빨강<sup>2</sup></p></div>'
+      btn('HTML 블록 추가').click()
+      await wait()
+      const ta = target.querySelector<HTMLTextAreaElement>('.rc-modal textarea')!
+      ta.value = raw
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+      await wait()
+      ;[...target.querySelectorAll<HTMLButtonElement>('.rc-modal button')].find((b) => b.textContent?.trim() === '적용')!.click()
+      await wait(350)
+      const blocks = api.flush().blocks
+      expect(blocks.some((b) => b.type === 'html' && b.content === raw)).toBe(true)
+    })
+
+    it('일반(user) 변형에는 "HTML 블록 추가" 버튼이 없다', async () => {
+      mountEditor([{ type: 'text', html: '<p>본문</p>' }])
+      await ready()
+      expect(target.querySelector('button[aria-label="HTML 블록 추가"]')).toBeNull()
+    })
   })
 })

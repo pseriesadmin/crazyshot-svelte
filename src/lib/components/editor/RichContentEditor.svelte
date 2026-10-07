@@ -16,7 +16,7 @@
   import { resizeProductImage } from '$lib/utils/imageResize'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
-  import { sanitizeForPreview } from '$lib/utils/previewSanitize'
+  import { buildSandboxedPreviewDoc } from '$lib/utils/previewSanitize'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import KeywordTagInput from './KeywordTagInput.svelte'
   import '$lib/styles/rich-content.css'
@@ -80,6 +80,8 @@
 
   // 원본 보존 블록 다이얼로그
   interface LegacyDialog {
+    /** 방금 '+ HTML'로 만든 빈 블록 — 취소하면 빈 카드를 남기지 않고 지운다 */
+    isNew?: boolean
     mode: 'edit' | 'convert'
     html: string
     from: number
@@ -573,9 +575,42 @@
     }
   }
 
+  /** 원본 HTML 블록 새로 추가(Gemini·imweb 등에서 복사한 HTML을 서식 변환 없이 그대로 보존해 넣는 용도) */
+  function addHtmlBlock() {
+    if (!editor) return
+    const id = `lg-new-${Date.now()}`
+    insertMedia({ type: 'legacyHtml', attrs: { html: '', kind: 'html', id } })
+    let pos = -1
+    editor.state.doc.descendants((n, p) => {
+      if (pos < 0 && n.type.name === 'legacyHtml' && n.attrs.id === id) pos = p
+      return pos < 0
+    })
+    if (pos < 0) return
+    editor.commands.setNodeSelection(pos)
+    const node = editor.state.doc.nodeAt(pos)
+    if (!node) return
+    legacyDlg = { isNew: true, mode: 'edit', html: '', from: pos, nodeSize: node.nodeSize, attrs: { ...node.attrs }, ack: false }
+  }
+
+  /** 다이얼로그 닫기 — 새로 만든 빈 HTML 블록이면 카드째 지운다 */
+  function closeLegacyDialog() {
+    const d = legacyDlg
+    legacyDlg = null
+    if (d?.isNew && editor) {
+      const node = editor.state.doc.nodeAt(d.from)
+      if (node && node.type.name === 'legacyHtml' && !String(node.attrs.html ?? '').trim()) {
+        editor.chain().focus().deleteRange({ from: d.from, to: d.from + node.nodeSize }).run()
+      }
+    }
+  }
+
   function applyLegacyEdit() {
     if (!editor || !legacyDlg) return
     const { from, attrs, html } = legacyDlg
+    if (legacyDlg.isNew && !html.trim()) {
+      closeLegacyDialog()
+      return
+    }
     editor
       .chain()
       .focus()
@@ -745,7 +780,7 @@
 
   function onKeyDownWindow(e: KeyboardEvent) {
     if (e.key === 'Escape' && sheet) sheet = null
-    if (e.key === 'Escape' && legacyDlg) legacyDlg = null
+    if (e.key === 'Escape' && legacyDlg) closeLegacyDialog()
     if (e.key === 'Escape' && imgDrag) endImgDrag(false)
   }
 
@@ -1036,6 +1071,9 @@
         <button type="button" class="rc-btn rc-btn-wide" data-sheet-btn aria-label="표" disabled={!editor} onclick={(e) => openSheet('table', e)}>{@render icon('table')}<span>표</span></button>
         <button type="button" class="rc-btn rc-btn-wide" aria-label="구분선" disabled={!editor} onclick={() => insertMedia({ type: 'horizontalRule' })}>{@render icon('divider')}<span>구분선</span></button>
         <button type="button" class="rc-btn rc-btn-wide" aria-label="첨부" disabled={!editor} onclick={() => attachInput.click()}>{@render icon('attach')}<span>첨부</span></button>
+        {#if variant === 'cms'}
+          <button type="button" class="rc-btn rc-btn-wide" aria-label="HTML 블록 추가" title="복사한 HTML을 서식 변환 없이 그대로 넣기" disabled={!editor} onclick={addHtmlBlock}><span class="rc-glyph">&lt;/&gt;</span><span>HTML</span></button>
+        {/if}
         {#if uploading > 0}<span class="rc-chip" role="status">사진 업로드 중 ({uploading})</span>{/if}
       </div>
     </div>
@@ -1244,27 +1282,27 @@
 
   <!-- ═════════ 원본 보존 블록 다이얼로그 ═════════ -->
   {#if legacyDlg}
-    <div class="rc-modal-back" role="presentation" onclick={() => (legacyDlg = null)}></div>
+    <div class="rc-modal-back" role="presentation" onclick={closeLegacyDialog}></div>
     <div class="rc-modal" role="dialog" aria-modal="true" aria-label={legacyDlg.mode === 'edit' ? '원본 HTML 편집' : '새 서식으로 변환'}>
       <div class="rc-sheet-head">
         <span class="rc-sheet-title">{legacyDlg.mode === 'edit' ? '원본 HTML 편집' : '새 서식으로 변환'}</span>
-        <button type="button" class="rc-sheet-close" aria-label="닫기" onclick={() => (legacyDlg = null)}>✕</button>
+        <button type="button" class="rc-sheet-close" aria-label="닫기" onclick={closeLegacyDialog}>✕</button>
       </div>
       {#if legacyDlg.mode === 'edit'}
         <textarea class="rc-textarea" bind:value={legacyDlg.html} aria-label="원본 HTML" spellcheck="false"></textarea>
         <div class="rc-form-row">
-          <button type="button" class="rc-chipbtn" onclick={() => (legacyDlg = null)}>취소</button>
+          <button type="button" class="rc-chipbtn" onclick={closeLegacyDialog}>취소</button>
           <button type="button" class="rc-chipbtn rc-chipbtn-on" onclick={applyLegacyEdit}>적용</button>
         </div>
       {:else if legacyDlg.preview}
         <div class="rc-compare">
           <div>
             <p class="rc-compare-title">변환 전(원본)</p>
-            <div class="rc-compare-box rc-content">{@html sanitizeForPreview(legacyDlg.html)}</div>
+            <iframe class="rc-compare-box" sandbox="" referrerpolicy="no-referrer" title="변환 전(원본) 미리보기" tabindex="-1" srcdoc={buildSandboxedPreviewDoc(legacyDlg.html)}></iframe>
           </div>
           <div>
             <p class="rc-compare-title">변환 후</p>
-            <div class="rc-compare-box rc-content">{@html sanitizeForPreview(legacyDlg.preview.html)}</div>
+            <iframe class="rc-compare-box" sandbox="" referrerpolicy="no-referrer" title="변환 후 미리보기" tabindex="-1" srcdoc={buildSandboxedPreviewDoc(legacyDlg.preview.html)}></iframe>
           </div>
         </div>
         {#if legacyDlg.preview.textMatches}
@@ -1274,7 +1312,7 @@
           <label class="rc-label"><input type="checkbox" bind:checked={legacyDlg.ack} /> 내용이 달라지는 것을 확인했어요</label>
         {/if}
         <div class="rc-form-row">
-          <button type="button" class="rc-chipbtn" onclick={() => (legacyDlg = null)}>취소</button>
+          <button type="button" class="rc-chipbtn" onclick={closeLegacyDialog}>취소</button>
           <button type="button" class="rc-chipbtn rc-chipbtn-on" disabled={!legacyDlg.preview.textMatches && !legacyDlg.ack} onclick={applyLegacyConvert}>변환 적용</button>
         </div>
       {/if}
@@ -1324,8 +1362,8 @@
     cursor: pointer;
     transition: background 0.12s;
   }
-  .rc-btn:hover:not(:disabled) { background: rgba(59, 47, 138, 0.08); }
-  .rc-btn-active { background: rgba(59, 47, 138, 0.14); color: var(--cs-purple); }
+  .rc-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--cs-purple) 8%, transparent); }
+  .rc-btn-active { background: color-mix(in srgb, var(--cs-purple) 14%, transparent); color: var(--cs-purple); }
   .rc-btn:disabled { opacity: 0.4; cursor: default; }
   .rc-btn-wide { padding: 0 10px; }
   .rc-drop { min-width: 92px; justify-content: space-between; }
@@ -1371,7 +1409,7 @@
     padding: 5px 8px;
     border-radius: var(--radius-md);
     background: var(--cs-purple-op10);
-    box-shadow: 0 4px 14px rgba(16, 11, 50, 0.16);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--cs-dark) 16%, transparent);
     overflow-x: auto;
   }
   .rc-ctx > * { flex-shrink: 0; }
@@ -1391,7 +1429,7 @@
     cursor: pointer;
     transition: background 0.12s;
   }
-  .rc-ib:hover:not(:disabled) { background: rgba(59, 47, 138, 0.1); }
+  .rc-ib:hover:not(:disabled) { background: color-mix(in srgb, var(--cs-purple) 10%, transparent); }
   .rc-ib:disabled { opacity: 0.3; cursor: default; }
   .rc-ib-on { background: var(--cs-purple); color: var(--cs-white); }
   .rc-ib-on:hover:not(:disabled) { background: var(--cs-purple-hover); }
@@ -1414,7 +1452,7 @@
     cursor: pointer;
     transition: background 0.12s;
   }
-  .rc-seg-btn:hover { background: rgba(59, 47, 138, 0.1); }
+  .rc-seg-btn:hover { background: color-mix(in srgb, var(--cs-purple) 10%, transparent); }
   .rc-chipbtn {
     display: inline-flex;
     align-items: center;
@@ -1533,7 +1571,8 @@
     font: var(--text-pc-script-12);
     font-weight: 700;
   }
-  .rc-host :global(.rc-legacy-body) { padding: 12px 16px; max-height: 260px; overflow: auto; }
+  .rc-host :global(.rc-legacy-body) { position: relative; height: 200px; overflow: hidden; }
+  .rc-host :global(.rc-legacy-body iframe) { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; background: var(--cs-white); }
   /* 표: 셀 선택(드래그·Shift+클릭) 표시와 가로 넘침 */
   .rc-host :global(.rc-canvas .tableWrapper) { overflow-x: auto; }
   .rc-host :global(.rc-canvas table) { margin: 0; }
@@ -1544,10 +1583,18 @@
     position: absolute;
     inset: 0;
     z-index: 2;
-    background: rgba(59, 47, 138, 0.2);
+    background: color-mix(in srgb, var(--cs-purple) 20%, transparent);
     pointer-events: none;
   }
   .rc-host :global(.ProseMirror-gapcursor::after) { border-top-color: var(--cs-purple); }
+
+  /* CMS 변형(cms-uiux.md 토큰 허용 범위): --text-m-* 금지 → 캔버스(고객 화면 본문과 같은 타이포를 보여주는 작성 영역)는 14px/500 고정값 */
+  .rc-root[data-variant='cms'] .rc-host :global(.rc-canvas) {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.8;
+  }
 
   /* ── 선택 시트(PC 팝오버) ── */
   .rc-sheet {
@@ -1559,7 +1606,7 @@
     padding: 10px 12px 12px;
     border-radius: var(--radius-md);
     background: var(--cs-white);
-    box-shadow: 0 8px 24px rgba(16, 11, 50, 0.18);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--cs-dark) 18%, transparent);
   }
   .rc-sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .rc-sheet-title { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
@@ -1591,7 +1638,7 @@
     text-align: left;
     cursor: pointer;
   }
-  .rc-list-item:hover { background: rgba(59, 47, 138, 0.08); }
+  .rc-list-item:hover { background: color-mix(in srgb, var(--cs-purple) 8%, transparent); }
   .rc-list-h2 { font-size: 18px; font-weight: 900; }
   .rc-list-h3 { font-size: 16px; font-weight: 900; }
   .rc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1627,7 +1674,7 @@
   .rc-ok { margin: 8px 0 0; font: var(--text-pc-script-12); color: var(--cs-purple); font-weight: 700; }
   .rc-emoji { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
   .rc-emoji-btn { height: 34px; border: none; border-radius: var(--radius-sm); background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }
-  .rc-emoji-btn:hover { background: rgba(59, 47, 138, 0.08); }
+  .rc-emoji-btn:hover { background: color-mix(in srgb, var(--cs-purple) 8%, transparent); }
   .rc-more-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 2px; }
   .rc-more-item {
     display: flex;
@@ -1658,10 +1705,10 @@
     background: var(--cs-surface-gray);
   }
   .rc-more-on { color: var(--cs-purple); }
-  .rc-more-on .rc-more-ic { background: rgba(59, 47, 138, 0.14); }
+  .rc-more-on .rc-more-ic { background: color-mix(in srgb, var(--cs-purple) 14%, transparent); }
 
   /* ── 모달 ── */
-  .rc-modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(16, 11, 50, 0.45); }
+  .rc-modal-back { position: fixed; inset: 0; z-index: 60; background: color-mix(in srgb, var(--cs-dark) 45%, transparent); }
   .rc-modal {
     position: fixed;
     top: 50%;
@@ -1690,13 +1737,12 @@
   .rc-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .rc-compare-title { margin: 0 0 4px; font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-dark); }
   .rc-compare-box {
-    max-height: 260px;
-    overflow: auto;
-    padding: 10px 12px;
+    display: block;
+    width: 100%;
+    height: 260px;
+    border: 0;
     border-radius: var(--radius-sm);
-    background: var(--cs-surface-gray);
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-dark);
+    background: var(--cs-white);
   }
 
   /* ═════════ 모바일 (≤767px) ═════════ */
@@ -1706,7 +1752,7 @@
     right: 0;
     z-index: 40;
     background: var(--cs-white);
-    box-shadow: 0 -4px 16px rgba(16, 11, 50, 0.12);
+    box-shadow: 0 -4px 16px color-mix(in srgb, var(--cs-dark) 12%, transparent);
   }
   .rc-mbar-scroll {
     display: flex;
@@ -1743,7 +1789,7 @@
     z-index: 45;
     padding: 12px 16px 16px;
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    box-shadow: 0 -8px 24px rgba(16, 11, 50, 0.18);
+    box-shadow: 0 -8px 24px color-mix(in srgb, var(--cs-dark) 18%, transparent);
   }
   .rc-sheet-mobile .rc-swatch { height: 44px; }
   .rc-sheet-mobile .rc-list-item { min-height: 44px; }

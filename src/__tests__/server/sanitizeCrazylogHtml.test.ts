@@ -144,16 +144,16 @@ describe('sanitizeCrazylogBlocks', () => {
   })
 })
 
-describe('배선 — 글을 화면으로 내려보내는 두 로더가 정화를 거친다', () => {
+describe('배선 — 다른 방문자에게 보이는 상세 로더만 정화를 거친다', () => {
   const read = (p: string): string => readFileSync(p, 'utf-8')
   it('상세 로더', () => {
     const s = read('src/routes/crazylog/view/[slug]/+page.server.ts')
     expect(s).toContain("from '$lib/server/sanitizeCrazylogHtml'")
     expect(s).toContain('contentBlocks: sanitizeCrazylogBlocks(postData.content_blocks)')
   })
-  it('작성·수정 로더(에디터 innerHTML 주입 경로)', () => {
+  it('작성·수정 로더는 원본을 내려보낸다(2026-10-06) — 정화본을 내려보내면 수정 후 저장 시 원본이 영구 손실된다. 안전성은 에디터가 보장(스키마 변환 + 샌드박스 iframe 미리보기)', () => {
     const s = read('src/routes/crazylog/[slug]/+page.server.ts')
-    expect(s).toContain("from '$lib/server/sanitizeCrazylogHtml'")
-    expect(s).toContain('content_blocks: sanitizeCrazylogBlocks(postData.content_blocks)')
+    expect(s).not.toContain('sanitizeCrazylogBlocks(')
+    expect(s).toMatch(/existingPost\s*=\s*\{\s*\.\.\.postData\s*\}/)
   })
 })
