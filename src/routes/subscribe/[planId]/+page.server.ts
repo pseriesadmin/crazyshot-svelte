@@ -2,6 +2,7 @@ import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import type { TierBenefitRow } from '$lib/types/subscription'
 import { formatBenefitForDisplay } from '$lib/utils/subscriptionBenefits'
+import { sanitizeContentBlocks } from '$lib/server/sanitizeContentHtml'
 
 // database.ts 자동생성 타입이 신규 subscription_plans 컬럼 조합을 아직 좁은 select에서
 // 정확히 추론하지 못해(narrow-select 시 never로 축소되는 postgrest-js 타입 추론 이슈) 명시적으로 캐스팅
@@ -93,7 +94,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
   }))
 
   return {
-    plan,
+    // 구독 설명(content_blocks)은 {@html}로 출력되므로 고객 화면으로 내려보내기 전에 정화(저장값은 그대로)
+    plan: { ...plan, content_blocks: sanitizeContentBlocks(plan.content_blocks) },
     featureRows,
     customerKey: session.user.id,
     customerEmail: session.user.email ?? '',

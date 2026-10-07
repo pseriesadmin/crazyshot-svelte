@@ -10,6 +10,7 @@
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte';
   import type { Tables, ProductOptionLinkRow, ProductBundleLinkRow } from '$lib/types/database';
   import type { ContentBlock } from '$lib/types/content-editor';
+  import { imageBlockBoxStyle } from '$lib/types/content-editor';
   import {
     clampReservationQty,
     createMultiUnitReservation,
@@ -1098,7 +1099,7 @@
                   <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                   <div class="cb-text">{@html block.html}</div>
                 {:else if block.type === 'image'}
-                  <div class="cb-images cb-images--{block.layout}">
+                  <div class="cb-images cb-images--{block.layout}" style={imageBlockBoxStyle(block.width, block.align)}>
                     {#each block.images.filter(img => !img.isHead) as img}
                       <img src={img.url} alt={img.alt} loading="lazy" class="cb-img" />
                     {/each}
@@ -1973,6 +1974,12 @@
   .cb-images--full .cb-img  { width: 100%; }
   .cb-images--half .cb-img  { width: calc(50% - 4px); }
   .cb-images--third .cb-img { width: calc(33.333% - 6px); }
+  .cb-images--individual { flex-direction: column; }
+  .cb-images--individual .cb-img { width: 100%; }
+  .cb-images--collage .cb-img { flex: 1 1 calc(50% - 4px); width: auto; min-width: 0; max-height: 400px; }
+  /* 슬라이드: 가로 스크롤 스트립(편집 화면·크레이지로그 상세와 같은 배치) */
+  .cb-images--slide { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x mandatory; }
+  .cb-images--slide .cb-img { flex: 0 0 85%; width: 85%; scroll-snap-align: center; }
   .cb-img {
     border-radius: var(--radius-md);
     object-fit: cover;

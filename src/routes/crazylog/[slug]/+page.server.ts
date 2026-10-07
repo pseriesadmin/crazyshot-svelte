@@ -1,7 +1,6 @@
 import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
-import { sanitizeCrazylogBlocks } from '$lib/server/sanitizeCrazylogHtml'
 
 function calcLevel(creditScore: number | null): string {
 	const score = creditScore ?? 0
@@ -69,8 +68,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			throw error(403, '수정 권한이 없습니다.')
 		}
 
-		// 에디터가 본문을 innerHTML로 불러오므로 수정 모드에서도 정화한 본문을 내려보낸다(저장된 악성 스크립트가 작성 화면에서 실행되는 것 방지)
-		existingPost = { ...postData, content_blocks: sanitizeCrazylogBlocks(postData.content_blocks) }
+		// 본문은 정화하지 않은 원본을 에디터로 내려보낸다(2026-10-06). 정화본을 내려보내면 수정 후 저장 시 이미지·iframe·색상 등 원본이
+		// 영구히 정화본으로 덮어써진다. 안전성: 새 에디터는 변환 가능한 블록을 스키마(허용 노드·마크)로만 불러오고, 변환 불가 원본은
+		// 샌드박스 iframe(스크립트·이벤트·외부 접근 차단)으로만 미리 보여준다. 저장값은 원래 원본이고, 다른 방문자에게 보이는 상세 화면은
+		// 서버 로더(view/[slug])가 계속 정화한다.
+		existingPost = { ...postData }
 	}
 
 	const postViewCount = existingPost

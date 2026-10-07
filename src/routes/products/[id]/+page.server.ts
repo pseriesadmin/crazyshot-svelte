@@ -5,6 +5,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getCategoryGroups, joinDisplayCategories, type CatSettingsItem, type DisplayCategory } from '$lib/server/productCategorySettings';
 import { getWishedProductIds } from '$lib/server/getWishedProductIds';
+import { sanitizeContentBlocks } from '$lib/server/sanitizeContentHtml';
 import {
 	CANON_EOS_R5_FIXTURE,
 	isLegacyNumericId,
@@ -108,7 +109,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	}
 
 	const row = product as ProductRow;
-	const enriched = await attachPrices(locals.supabase, row);
+	// 상품설명(content_blocks)은 {@html}로 출력되므로 고객 화면으로 내려보내기 전에 정화(저장값은 그대로) — sanitizeContentHtml.ts
+	const enrichedRaw = await attachPrices(locals.supabase, row);
+	const enriched = { ...enrichedRaw, content_blocks: sanitizeContentBlocks(row.content_blocks) } as typeof enrichedRaw;
 
 	// 대여정책 — allowed_period_ids / allowed_method_ids (products 행에 저장된 ID 배열)
 	const periodIds = ((row as unknown as Record<string, unknown>).allowed_period_ids as string[] | null) ?? [];

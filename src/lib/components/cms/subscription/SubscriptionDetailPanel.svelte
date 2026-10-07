@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { invalidateAll } from '$app/navigation'
   import { enhance, deserialize } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import FreeRentalItemSelector from './FreeRentalItemSelector.svelte'
-  import CmsContentEditor from '$lib/components/cms/CmsContentEditor.svelte'
+  import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { resizeProductImage } from '$lib/utils/imageResize'
   import {
@@ -94,7 +95,11 @@
 
   // ── 상품설명 ──────────────────────────────────────────────
   let localContentBlocks = $state<ContentBlock[]>((plan.content_blocks ?? []).map((b) => ({ ...b })))
+  // 구독 설명은 키워드를 저장하지 않으므로(saveContent는 content_blocks만 전송) 키워드 입력란은 숨긴다
   let localContentKeywords = $state<string[]>([])
+  // 새 에디터는 마운트 이후 prop 변경을 따라가지 않는 단일 진실 원천 — 저장·플랜 전환 후 서버값 재동기화는 {#key}로 재마운트
+  let contentEditorKey = $state(0)
+  let contentEditorRef = $state<RichContentEditor | undefined>()
 
   const isDirtyContent = $derived(
     JSON.stringify(localContentBlocks) !== JSON.stringify(plan.content_blocks ?? [])
@@ -166,6 +171,7 @@
     localPricing = { monthly_price: plan.monthly_price }
     localContentBlocks = (plan.content_blocks ?? []).map((b) => ({ ...b }))
     localContentKeywords = []
+    untrack(() => { contentEditorKey += 1 }) // += 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행(무한 루프)한다
     imageUploadError = null
     localSpecs = plan.features.map((f) => ({ ...f }))
     localBenefits = buildLocalBenefits()
@@ -252,11 +258,18 @@
   function closeLightbox(): void { lightboxUrl = null }
 
   async function saveContent(): Promise<void> {
+    // 대기 중인 편집(디바운스 250ms)을 즉시 반영하고 직렬화 누락 여부를 점검 — 변경이 없으면 원본 그대로
+    const flushed = contentEditorRef?.flush()
+    if (flushed && !flushed.ok) {
+      csToast.error('본문을 저장 형식으로 변환하는 중 내용이 달라져 저장을 멈췄어요. 새로고침 후 다시 시도해주세요.')
+      return
+    }
+    const blocksToSave = flushed?.blocks ?? localContentBlocks
     isSaving = true
     const fd = new FormData()
     fd.set('plan_id', String(plan.id))
     fd.set('section_type', 'content')
-    fd.set('content_blocks', JSON.stringify(localContentBlocks))
+    fd.set('content_blocks', JSON.stringify(blocksToSave))
     const res = await fetch('?/updateSection', { method: 'POST', body: fd })
     isSaving = false
     // OPT-SAVE-ERR-1과 동일 수정: res.ok만으로는 실제 실패 사유를 알 수 없음(SvelteKit
@@ -469,7 +482,18 @@
               {isSaving ? '저장 중...' : '저장'}
             </button>
           </div>
-          <CmsContentEditor bind:blocks={localContentBlocks} bind:keywords={localContentKeywords} />
+          {#key contentEditorKey}
+            <div class="content-editor-box">
+              <RichContentEditor
+                bind:this={contentEditorRef}
+                bind:blocks={localContentBlocks}
+                bind:keywords={localContentKeywords}
+                variant="cms"
+                showKeywords={false}
+                placeholder="구독 설명을 입력하세요"
+              />
+            </div>
+          {/key}
         </div>
       {/if}
 
@@ -978,5 +1002,12 @@
   .subscriber-status-active { color: var(--cs-purple); }
   .subscriber-status-cancelled, .subscriber-status-expired { color: var(--cs-text-light); }
   .subscriber-date { flex: 0 0 90px; color: var(--cs-text-light); text-align: right; }
+
+  /* 새 콘텐츠 에디터(RichContentEditor) 래퍼 — border-default·카드 반경 base(8px). overflow:clip은 내부 sticky 툴바를 유지하면서 모서리만 자른다 */
+  .content-editor-box {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: clip;
+  }
 </style>
 
