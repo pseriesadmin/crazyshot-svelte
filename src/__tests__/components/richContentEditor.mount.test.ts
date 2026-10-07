@@ -518,6 +518,30 @@ describe('RichContentEditor — mount', () => {
     })
   })
 
+  describe('바깥 <form> 안에 놓일 때(상품 신규등록 화면)', () => {
+    it('편집기 안 팝오버 폼(유튜브·링크 등)의 submit이 바깥 폼의 제출로 번지지 않는다', async () => {
+      const outer = document.createElement('form')
+      target.appendChild(outer)
+      const inner = document.createElement('div')
+      outer.appendChild(inner)
+      let outerSubmits = 0
+      outer.addEventListener('submit', (e) => { outerSubmits += 1; e.preventDefault() })
+      app = mount(RichContentEditor, { target: inner, props: { blocks: [{ type: 'text', html: '<p>본문</p>' }], keywords: [] as string[], variant: 'cms' as const } })
+      api = app as unknown as typeof api
+      for (let i = 0; i < 50 && !target.querySelector('.ProseMirror'); i++) await wait(20)
+      btn('동영상').click()
+      await wait()
+      const input = target.querySelector<HTMLInputElement>('input[aria-label="유튜브 주소"]')!
+      input.value = 'https://youtu.be/dQw4w9WgXcQ'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await wait()
+      target.querySelector<HTMLFormElement>('.rc-sheet form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await wait(350)
+      expect(api.flush().blocks.some((b) => b.type === 'youtube')).toBe(true) // 편집기 기능은 정상 동작
+      expect(outerSubmits).toBe(0) // 바깥 폼(상품 등록)은 제출되지 않는다
+    })
+  })
+
   describe('언마운트 시 대기 중인 입력 보존', () => {
     it('편집 직후(250ms 이내) 편집기가 사라져도 마지막 입력이 바인딩된 blocks에 반영된다', async () => {
       let bound: ContentBlock[] = [{ type: 'text', html: '<p>처음</p>' }]
@@ -525,7 +549,7 @@ describe('RichContentEditor — mount', () => {
         get blocks() { return bound },
         set blocks(v: ContentBlock[]) { bound = v },
         keywords: [] as string[],
-        variant: 'cms',
+        variant: 'cms' as const,
       }
       app = mount(RichContentEditor, { target, props })
       api = app as unknown as typeof api
@@ -547,7 +571,7 @@ describe('RichContentEditor — mount', () => {
         get blocks() { return bound },
         set blocks(v: ContentBlock[]) { bound = v },
         keywords: [] as string[],
-        variant: 'cms',
+        variant: 'cms' as const,
       }
       app = mount(RichContentEditor, { target, props })
       api = app as unknown as typeof api

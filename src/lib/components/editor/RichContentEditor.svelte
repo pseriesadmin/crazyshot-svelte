@@ -1037,7 +1037,8 @@
   {/if}
 {/snippet}
 
-<div class="rc-root" data-variant={variant} class:rc-mobile={isMobile}>
+<!-- 편집기 안 팝오버 폼(링크·유튜브·사진 설명·표)의 submit이 바깥 <form>(예: 상품 신규등록)의 제출로 번지지 않게 막는다 -->
+<div class="rc-root" data-variant={variant} class:rc-mobile={isMobile} onsubmit={(e) => e.stopPropagation()}>
   <input bind:this={photoInput} type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" multiple hidden onchange={(e) => void insertImages(pickedFiles(e), 'group')} />
   <input bind:this={attachInput} type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" multiple hidden onchange={(e) => void insertImages(pickedFiles(e), 'each')} />
   <input bind:this={addToGroupInput} type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" multiple hidden onchange={(e) => void addToGroup(pickedFiles(e))} />
