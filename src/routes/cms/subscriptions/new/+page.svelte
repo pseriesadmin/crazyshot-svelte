@@ -152,6 +152,7 @@
 
   let name = $state('')
   let tagline = $state('')
+  let description = $state('')
   let monthlyPrice = $state(0)
   let membershipGrade = $state('')
   let sortOrder = $state(0)
@@ -292,6 +293,10 @@
       <div class="field-row">
         <label class="field-label" for="tagline">서브타이틀</label>
         <input id="tagline" class="f-input" type="text" name="tagline" bind:value={tagline} placeholder="예: 완벽한 입문자의 선택" />
+      </div>
+      <div class="field-row">
+        <label class="field-label" for="description">카드 설명</label>
+        <textarea id="description" class="f-input f-textarea" name="description" rows="3" bind:value={description} placeholder="/members 플랜 카드에 표시되는 설명 문구"></textarea>
       </div>
       <div class="field-row">
         <label class="field-label" for="monthly_price">월 가격</label>

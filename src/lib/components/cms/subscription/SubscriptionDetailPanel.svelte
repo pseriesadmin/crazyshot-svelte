@@ -68,6 +68,7 @@
   let localBasic = $state({
     name: plan.name,
     tagline: plan.tagline ?? '',
+    description: plan.description ?? '',
     membership_grade: plan.membership_grade ?? '',
     sort_order: plan.sort_order,
     is_popular: plan.is_popular,
@@ -76,6 +77,7 @@
   const isDirtyBasic = $derived(
     localBasic.name !== plan.name ||
     localBasic.tagline !== (plan.tagline ?? '') ||
+    localBasic.description !== (plan.description ?? '') ||
     localBasic.membership_grade !== (plan.membership_grade ?? '') ||
     localBasic.sort_order !== plan.sort_order ||
     localBasic.is_popular !== plan.is_popular
@@ -156,6 +158,7 @@
     localBasic = {
       name: plan.name,
       tagline: plan.tagline ?? '',
+      description: plan.description ?? '',
       membership_grade: plan.membership_grade ?? '',
       sort_order: plan.sort_order,
       is_popular: plan.is_popular,
@@ -385,6 +388,10 @@
             <div class="inline-row">
               <label class="vr-label" for="sb-tagline">서브타이틀</label>
               <input id="sb-tagline" class="il-input" type="text" name="tagline" bind:value={localBasic.tagline} placeholder="예: 완벽한 입문자의 선택" />
+            </div>
+            <div class="inline-row">
+              <label class="vr-label" for="sb-description">카드 설명</label>
+              <textarea id="sb-description" class="il-textarea" name="description" rows="3" bind:value={localBasic.description} placeholder="/members 플랜 카드에 표시되는 설명 문구"></textarea>
             </div>
             <div class="inline-row">
               <span class="vr-label">연동 등급</span>

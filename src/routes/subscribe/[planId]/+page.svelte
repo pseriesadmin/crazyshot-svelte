@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { PageData } from './$types'
   import type { ContentBlock } from '$lib/types/content-editor'
+  import { imageBlockBoxStyle } from '$lib/types/content-editor'
   import { page } from '$app/stores'
+  import SubGnb from '$lib/components/common/SubGnb.svelte'
   // 정기결제(빌링, mid=bill_crazyhevr) 전용 클라이언트 키 — 단건결제(mid=crazysfc8s)
   // PUBLIC_TOSS_CLIENT_KEY와는 서로 다른 상점의 별개 키(공용 아님)
   import { env as publicEnv } from '$env/dynamic/public'
@@ -90,9 +92,12 @@
   <title>{data.plan.name} 구독하기 — CrazyShot</title>
 </svelte:head>
 
+<!-- 전역 GNB는 +layout에서 /subscribe 제외 — 서브 화면 표준(SubGnb)이 내비를 담당 -->
+<SubGnb title="구독 신청" noGnbOffset backHref="/members" />
+
 <div class="subscribe-wrap">
   <div class="subscribe-card">
-    <!-- 헤더 밴드 — 이미지 + 이름 + 태그라인 + 가격 (PricingCards PC 카드 톤 재활용) -->
+    <!-- 헤더 밴드 — /members 플랜 카드와 동일 구성: 상단 보라/하단 다크 기본 BG 위에 이미지(전체 cover) → 오버레이 → 텍스트 (구독 버튼 없음) -->
     <div class="subscribe-header">
       {#if galleryUrls.length > 0}
         <div class="subscribe-header-img-wrap">
@@ -104,6 +109,12 @@
         <p class="subscribe-tagline">{data.plan.tagline}</p>
       {/if}
       <p class="subscribe-price">{data.plan.monthly_price.toLocaleString()}<span>원 / 월</span></p>
+      <!-- 카드와 동일한 서브 스크립트: PC "per user / month" · 모바일 "1인 계정 / 월" -->
+      <p class="subscribe-unit-sub"><span class="unit-pc">per user / month</span><span class="unit-m">1인 계정 / 월</span></p>
+      {#if data.plan.description}
+        <!-- 카드 설명 문구(/members 카드와 동일 데이터) — 헤더 안 BG 이미지 위 -->
+        <p class="subscribe-header-desc">{data.plan.description}</p>
+      {/if}
     </div>
 
     <div class="subscribe-body">
@@ -124,7 +135,7 @@
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               <div class="cb-text">{@html block.html}</div>
             {:else if block.type === 'image'}
-              <div class="cb-images cb-images--{block.layout}">
+              <div class="cb-images cb-images--{block.layout}" style={imageBlockBoxStyle(block.width, block.align)}>
                 {#each block.images.filter((img: { isHead?: boolean }) => !img.isHead) as img}
                   <img src={img.url} alt={img.alt} loading="lazy" class="cb-img" />
                 {/each}
@@ -149,8 +160,6 @@
             {/if}
           {/each}
         </div>
-      {:else if data.plan.description}
-        <p class="subscribe-desc">{data.plan.description}</p>
       {/if}
 
       <!-- 제공 내용 표 테이블 (/members FeaturesTable 라벨 응용 — 이 플랜 값만 단일 열 표시) -->
@@ -189,33 +198,48 @@
     background: var(--cs-lilac); padding: 40px 20px;
   }
   .subscribe-card {
-    width: 100%; max-width: 900px; background: var(--cs-white); border-radius: var(--radius-2xl, 50px);
+    width: 100%; max-width: 900px; background: var(--cs-white); border-radius: var(--radius-xl); /* 모바일 큰 카드 30px (PC 50px × 0.60) */
     overflow: hidden;
   }
 
   /* ── 헤더 밴드 — 이미지+이름+태그라인+가격을 진하게 강조 ── */
   .subscribe-header {
-    background: var(--cs-purple);
+    position: relative;
+    isolation: isolate;
+    min-height: 380px;
+    /* 카드 기본 BG와 동일: 상단 보라 / 하단 다크 */
+    background: linear-gradient(to bottom, var(--cs-purple) 0 51%, var(--cs-dark) 51% 100%);
     padding: 40px 32px;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: center;
     gap: 12px;
     text-align: center;
   }
-  .subscribe-header-img-wrap {
-    width: 220px; height: 220px;
-    display: flex; align-items: center; justify-content: center;
-    margin-bottom: 8px;
-  }
-  .subscribe-header-img { width: 100%; height: 100%; object-fit: contain; }
-  .subscribe-name { font-family: var(--font-kr); font-size: 32px; font-weight: 900; color: var(--cs-white); margin: 0; }
+  /* 이미지 = 헤더 전체 BG(cover) + 가독성 오버레이 */
+  .subscribe-header-img-wrap { position: absolute; inset: 0; z-index: -1; overflow: hidden; }
+  .subscribe-header-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .subscribe-header-img-wrap::after { content: ''; position: absolute; inset: 0; background: rgba(16, 11, 50, 0.35); }
+  .subscribe-name { font-family: var(--font-kr); font-size: 32px; font-weight: 900; color: var(--cs-white); margin: 0; line-height: 1.4; padding: 6px 0; }
   .subscribe-tagline {
     background: var(--cs-red-badge); color: var(--cs-white); font-size: 15px; font-weight: 700;
-    border-radius: 20px; padding: 8px 20px; margin: 0;
+    border-radius: 20px; padding: 8px 20px; margin: 12px 0; line-height: 1.4;
   }
   .subscribe-price { font-family: var(--font-kr); font-size: 40px; font-weight: 900; color: var(--cs-white); margin: 8px 0 0; }
   .subscribe-price span { font-size: 18px; font-weight: 700; color: rgba(255,255,255,0.75); margin-left: 4px; }
+
+  .subscribe-header-desc {
+    margin: 8px 0 0; max-width: 520px; white-space: pre-wrap;
+    font-family: var(--font-kr); font-size: 16px; font-weight: 700; line-height: 1.6;
+    letter-spacing: -0.5px; color: var(--cs-white);
+  }
+  .subscribe-unit-sub { margin: 0; font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: var(--cs-white); }
+  .subscribe-unit-sub .unit-pc { display: none; }
+  @media (min-width: 768px) {
+    .subscribe-unit-sub .unit-pc { display: inline; }
+    .subscribe-unit-sub .unit-m { display: none; }
+  }
 
   /* ── 본문 ── */
   .subscribe-body {
@@ -225,7 +249,6 @@
     align-items: center;
     gap: 16px;
   }
-  .subscribe-desc { width: 100%; font-size: 15px; color: var(--cs-text-mid); line-height: 1.7; margin: 0; }
 
   .subscribe-cta {
     width: 100%; max-width: 420px; padding: 16px; border: none; border-radius: var(--radius-xl);
@@ -279,6 +302,12 @@
   .cb-images--full .cb-img  { width: 100%; }
   .cb-images--half .cb-img  { width: calc(50% - 4px); }
   .cb-images--third .cb-img { width: calc(33.333% - 6px); }
+  .cb-images--individual { flex-direction: column; }
+  .cb-images--individual .cb-img { width: 100%; }
+  .cb-images--collage .cb-img { flex: 1 1 calc(50% - 4px); width: auto; min-width: 0; max-height: 400px; }
+  /* 슬라이드: 가로 스크롤 스트립(편집 화면·크레이지로그 상세와 같은 배치) */
+  .cb-images--slide { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x mandatory; }
+  .cb-images--slide .cb-img { flex: 0 0 85%; width: 85%; scroll-snap-align: center; }
   .cb-img {
     border-radius: var(--radius-md);
     object-fit: cover;
@@ -369,7 +398,8 @@
   @media (min-width: 768px) {
     .subscribe-wrap { padding: 60px 20px; }
     .subscribe-header { padding: 56px 48px; }
-    .subscribe-header-img-wrap { width: 280px; height: 280px; }
+    .subscribe-header { min-height: 470px; }
+    .subscribe-card { border-radius: var(--radius-2xl); }
     .subscribe-name { font-size: 40px; }
     .subscribe-price { font-size: 52px; }
     .subscribe-body { padding: 48px; }

@@ -447,7 +447,6 @@
 
   /* 아코디언 */
   .m-accordion {
-    border-top: 1px solid var(--cs-purple-dark);
     padding-top: 20px;
   }
 
