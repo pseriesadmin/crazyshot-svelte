@@ -232,8 +232,18 @@ export async function archiveEvidence(admin: SupabaseClient, ev: EvidenceRecord,
   }
 }
 
-/** 실패 횟수가 이 값 이상이면 자동 재시도를 멈춘다(독성 건이 큐 앞을 계속 점유하지 않게). 운영자가 원인 해결 후 수동 처리. */
-export const MAX_AUTO_ATTEMPTS = 5
+/**
+ * 실패한 건의 재시도 대기 시간 — 실패 횟수가 늘수록 길어지되(10분·20분·40분·80분·이후 2시간) 상한이 있어 영구 정지는 없다.
+ * 일시 장애(Chromium 기동 실패·Storage/DB 오류 등)는 장애가 풀리면 늦어도 2시간 안에 스스로 복구된다.
+ * 독성 건(계속 실패하는 건)은 2시간에 1번만 시도해 큐를 막지 못한다.
+ */
+export function archiveRetryDelayMs(failCount: number): number {
+  if (failCount <= 0) return 0
+  return Math.min(10 * 60_000 * 2 ** (failCount - 1), 2 * 60 * 60_000)
+}
+
+/** 이 횟수 이상 실패한 건은 "오래 막힌 건"으로 모니터링(크론 응답 stalled·서버 로그)한다. */
+export const STALLED_FAILURE_COUNT = 5
 
 /**
  * 보관 실패를 감사로그에 남긴다(증적 행은 수정할 수 없어 별도 기록으로 큐 순서·제외를 관리한다).
@@ -248,40 +258,83 @@ export async function recordArchiveFailure(admin: SupabaseClient, ev: EvidenceRe
   return !error
 }
 
-/** 보관본이 아직 없는 서명 증적(오래된 순). */
-export async function listPendingEvidence(admin: SupabaseClient, limit: number): Promise<EvidenceRecord[]> {
-  const out: EvidenceRecord[] = []
-  const PAGE = 200
-  for (let from = 0; out.length < limit; from += PAGE) {
-    const { data, error } = await admin.from('contract_signature_evidence').select(EVIDENCE_COLUMNS).order('captured_at', { ascending: true }).range(from, from + PAGE - 1)
+export interface PendingEvidenceResult {
+  /** 지금 시도할 증적(실패가 적은 건 우선, 같으면 오래된 순) */
+  items: EvidenceRecord[]
+  /** 재시도 대기 시간이 아직 안 지나 이번에는 건너뛴 건수 */
+  waiting: number
+  /** 실패가 STALLED_FAILURE_COUNT회 이상 쌓인 건수(모니터링 대상) */
+  stalled: number
+}
+
+// URL 길이 한도(약 8KB)를 넘지 않도록 .in()에 넣는 id 수를 작게 유지한다(UUID 50개 ≈ 1.9KB)
+const QUERY_PAGE = 50
+const MAX_SCAN_PAGES = 40
+
+/**
+ * 보관본이 아직 없는 서명 증적.
+ * "보관본 없음"은 DB에서 한 번에 거른다(contract_final_documents.evidence_id FK를 이용한 anti-join) — 보관 완료 건이 늘어도
+ * 매번 처음부터 훑지 않는다. 계약이 삭제된 증적(원본 없음)·영구 실패 건은 제외하고, 실패 이력이 있는 건은 재시도 대기 시간이
+ * 지난 뒤에만 다시 돌려준다(ignoreBackoff면 대기 무시 — 운영자 수동 재시도).
+ */
+export async function listPendingEvidence(
+  admin: SupabaseClient,
+  limit: number,
+  opts: { now?: Date; ignoreBackoff?: boolean } = {},
+): Promise<PendingEvidenceResult> {
+  const now = (opts.now ?? new Date()).getTime()
+  const gather = limit * 2 // 우선순위 정렬을 위해 여유 있게 모은 뒤 limit만큼 자른다
+  const eligible: { ev: EvidenceRecord; fails: number }[] = []
+  let waiting = 0
+  let stalled = 0
+
+  for (let page = 0; page < MAX_SCAN_PAGES && eligible.length < gather; page++) {
+    const from = page * QUERY_PAGE
+    const { data, error } = await admin
+      .from('contract_signature_evidence')
+      .select(`${EVIDENCE_COLUMNS}, contract_final_documents!left(id)`)
+      .is('contract_final_documents', null)
+      .order('captured_at', { ascending: true })
+      .range(from, from + QUERY_PAGE - 1)
     if (error) throw new Error(error.message)
-    const rows = (data ?? []) as EvidenceRecord[]
+    const rows = ((data ?? []) as (EvidenceRecord & { contract_final_documents?: unknown })[]).map((r) => {
+      const { contract_final_documents: _joined, ...ev } = r
+      void _joined
+      return ev as EvidenceRecord
+    })
     if (rows.length === 0) break
-    const { data: done } = await admin.from('contract_final_documents').select('evidence_id').in('evidence_id', rows.map((r) => r.id))
-    const doneIds = new Set(((done ?? []) as { evidence_id: string }[]).map((d) => d.evidence_id))
-    const todo = rows.filter((r) => !doneIds.has(r.id))
-    if (todo.length > 0) {
-      const contractIds = [...new Set(todo.map((r) => r.contract_id))]
-      // 계약이 삭제된 증적은 PDF를 만들 원본이 없다(증적은 계약과 FK가 없어 남는다) — 큐에서 제외
-      const { data: alive } = await admin.from('contracts').select('id').in('id', contractIds)
-      const aliveIds = new Set(((alive ?? []) as { id: string }[]).map((c) => c.id))
-      // 이전 실패 기록: 영구 실패 또는 자동 재시도 상한 초과는 제외, 나머지는 실패가 적은 건을 앞으로(독성 건이 큐를 막지 않게)
-      const { data: failedLogs } = await admin.from('contract_audit_log').select('metadata').eq('event_type', 'evidence_failed').in('contract_id', contractIds)
-      const failCount = new Map<string, number>()
-      const permanentIds = new Set<string>()
-      for (const l of (failedLogs ?? []) as { metadata: { stage?: string; evidence_id?: string; permanent?: boolean } | null }[]) {
-        const m = l.metadata
-        if (m?.stage !== 'archive' || !m.evidence_id) continue
-        failCount.set(m.evidence_id, (failCount.get(m.evidence_id) ?? 0) + 1)
-        if (m.permanent) permanentIds.add(m.evidence_id)
-      }
-      const eligible = todo.filter((r) => aliveIds.has(r.contract_id) && !permanentIds.has(r.id) && (failCount.get(r.id) ?? 0) < MAX_AUTO_ATTEMPTS)
-      eligible.sort((a, b) => (failCount.get(a.id) ?? 0) - (failCount.get(b.id) ?? 0))
-      out.push(...eligible)
+
+    const contractIds = [...new Set(rows.map((r) => r.contract_id))]
+    // 계약이 삭제된 증적은 PDF를 만들 원본이 없다(증적은 계약과 FK가 없어 남는다) — 제외
+    const { data: alive, error: aliveErr } = await admin.from('contracts').select('id').in('id', contractIds)
+    if (aliveErr) throw new Error(aliveErr.message)
+    const aliveIds = new Set(((alive ?? []) as { id: string }[]).map((c) => c.id))
+    const { data: logs, error: logErr } = await admin.from('contract_audit_log').select('metadata, created_at').eq('event_type', 'evidence_failed').in('contract_id', contractIds)
+    if (logErr) throw new Error(logErr.message)
+    const failCount = new Map<string, number>()
+    const lastFailAt = new Map<string, number>()
+    const permanentIds = new Set<string>()
+    for (const l of (logs ?? []) as { metadata: { stage?: string; evidence_id?: string; permanent?: boolean } | null; created_at: string }[]) {
+      const m = l.metadata
+      if (m?.stage !== 'archive' || !m.evidence_id) continue
+      failCount.set(m.evidence_id, (failCount.get(m.evidence_id) ?? 0) + 1)
+      lastFailAt.set(m.evidence_id, Math.max(lastFailAt.get(m.evidence_id) ?? 0, new Date(l.created_at).getTime()))
+      if (m.permanent) permanentIds.add(m.evidence_id)
     }
-    if (rows.length < PAGE) break
+
+    for (const ev of rows) {
+      if (!aliveIds.has(ev.contract_id) || permanentIds.has(ev.id)) continue
+      const fails = failCount.get(ev.id) ?? 0
+      if (fails >= STALLED_FAILURE_COUNT) stalled++
+      const dueAt = (lastFailAt.get(ev.id) ?? 0) + archiveRetryDelayMs(fails)
+      if (!opts.ignoreBackoff && fails > 0 && now < dueAt) { waiting++; continue }
+      eligible.push({ ev, fails })
+    }
+    if (rows.length < QUERY_PAGE) break
   }
-  return out.slice(0, limit)
+
+  eligible.sort((a, b) => a.fails - b.fails) // Array.sort는 안정 정렬 — 같은 횟수면 오래된 순(수집 순서) 유지
+  return { items: eligible.slice(0, limit).map((e) => e.ev), waiting, stalled }
 }
 
 interface LegacySigning {
@@ -296,20 +349,29 @@ interface LegacySigning {
 /**
  * 소급(서명 증적 도입 전 서명 건): 증적 행이 없는 서명 완료 건에 "소급 증적"을 만든다.
  * 동의 기록·UA·약관 스냅샷은 당시 기록이 없으므로 비워 둔다(consent_log 빈 배열 = 소급 표시). 서명 일시·IP·서명 이미지 해시는 실제 값.
+ * 서명 완료 건을 오래된 순으로 50건씩 끝까지 훑는다(.in()에 많은 id를 넣어 URL 한도를 넘지 않게, 처음 N건만 보고 끝내지 않게).
  */
 export async function listLegacySignings(admin: SupabaseClient, limit: number): Promise<LegacySigning[]> {
-  const { data, error } = await admin
-    .from('contract_signings')
-    .select('id, contract_id, signed_at, ip_address, content_hash, signature_data')
-    .not('signed_at', 'is', null)
-    .order('signed_at', { ascending: true })
-    .limit(500)
-  if (error) throw new Error(error.message)
-  const rows = (data ?? []) as LegacySigning[]
-  if (rows.length === 0) return []
-  const { data: evs } = await admin.from('contract_signature_evidence').select('signing_id, signed_at').in('signing_id', rows.map((r) => r.id))
-  const have = new Set(((evs ?? []) as { signing_id: string; signed_at: string }[]).map((e) => `${e.signing_id}|${new Date(e.signed_at).getTime()}`))
-  return rows.filter((r) => !have.has(`${r.id}|${new Date(r.signed_at).getTime()}`)).slice(0, limit)
+  const out: LegacySigning[] = []
+  for (let page = 0; page < 200 && out.length < limit; page++) {
+    const from = page * QUERY_PAGE
+    const { data, error } = await admin
+      .from('contract_signings')
+      .select('id, contract_id, signed_at, ip_address, content_hash, signature_data')
+      .not('signed_at', 'is', null)
+      .order('signed_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + QUERY_PAGE - 1)
+    if (error) throw new Error(error.message)
+    const rows = (data ?? []) as LegacySigning[]
+    if (rows.length === 0) break
+    const { data: evs, error: evErr } = await admin.from('contract_signature_evidence').select('signing_id, signed_at').in('signing_id', rows.map((r) => r.id))
+    if (evErr) throw new Error(evErr.message)
+    const have = new Set(((evs ?? []) as { signing_id: string; signed_at: string }[]).map((e) => `${e.signing_id}|${new Date(e.signed_at).getTime()}`))
+    for (const r of rows) if (!have.has(`${r.id}|${new Date(r.signed_at).getTime()}`)) out.push(r)
+    if (rows.length < QUERY_PAGE) break
+  }
+  return out.slice(0, limit)
 }
 
 export async function createLegacyEvidence(admin: SupabaseClient, s: LegacySigning): Promise<EvidenceRecord | null> {

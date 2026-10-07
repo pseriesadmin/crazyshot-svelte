@@ -16,8 +16,13 @@ describe.skipIf(!live)('최종본 PDF 보관 — Stage 라이브', () => {
 
   it('소급 증적을 만들고 PDF를 생성·보관하면 기록·파일·뷰어 주소가 갖춰지고 재실행해도 중복되지 않는다', async () => {
     const legacy = await listLegacySignings(admin, 20)
-    const pending = await listPendingEvidence(admin, 20)
-    console.info('[live] legacy signings', legacy.length, 'pending evidence', pending.length)
+    const pendingResult = await listPendingEvidence(admin, 20)
+    const pending = pendingResult.items
+    console.info('[live] legacy signings', legacy.length, 'pending evidence', pending.length, 'waiting', pendingResult.waiting, 'stalled', pendingResult.stalled)
+    // anti-join이 실제 PostgREST에서 동작하는지 — 이미 보관된 증적은 대기열에 없어야 한다
+    const { data: archivedRows } = await admin.from('contract_final_documents').select('evidence_id')
+    const archived = new Set((archivedRows ?? []).map((r: { evidence_id: string }) => r.evidence_id))
+    expect(pending.some((p) => archived.has(p.id))).toBe(false)
 
     // 실제로 만들 수 있는 첫 건을 찾는다(캔버스 방식 등 지원 안 되는 건은 건너뜀)
     let done: { evidenceId: string; contractId: string; source: string; path: string } | null = null

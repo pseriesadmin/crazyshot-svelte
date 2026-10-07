@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { archiveEvidence, listPendingEvidence, recordArchiveFailure, ARCHIVE_BUCKET, type EvidenceRecord } from '$lib/server/contractArchive/generateArchive'
+import { archiveEvidence, listPendingEvidence, listLegacySignings, recordArchiveFailure, archiveRetryDelayMs, ARCHIVE_BUCKET, type EvidenceRecord } from '$lib/server/contractArchive/generateArchive'
 import { sha256Hex } from '$lib/contract-signature/signatureEvidence'
 
 type Row = Record<string, unknown>
@@ -16,15 +16,26 @@ function createFakeAdmin(seed: Record<string, Row[]>, opts: { existingObjects?: 
   function query(table: string) {
     const filters: [string, unknown][] = []
     const inFilters: [string, unknown[]][] = []
+    let antiJoin = false
+    let rangeFrom = 0
+    let rangeTo = Number.MAX_SAFE_INTEGER
     let mode: 'select' | 'insert' | 'update' = 'select'
     let payload: Row = {}
-    const run = (): Row[] => (tables[table] ?? []).filter((r) => filters.every(([k, v]) => r[k] === v) && inFilters.every(([k, vs]) => vs.includes(r[k])))
+    const run = (): Row[] => {
+      const done = new Set((tables.contract_final_documents ?? []).map((d) => d.evidence_id))
+      return (tables[table] ?? [])
+        .filter((r) => filters.every(([k, v]) => r[k] === v) && inFilters.every(([k, vs]) => vs.includes(r[k])) && (!antiJoin || !done.has(r.id)))
+        .slice(rangeFrom, rangeTo + 1)
+    }
     const api = {
       select: () => api,
       eq: (k: string, v: unknown) => { filters.push([k, v]); return api },
       in: (k: string, vs: unknown[]) => { inFilters.push([k, vs]); return api },
+      // 보관본 없음 anti-join(contract_final_documents.evidence_id FK 임베드 + is null) 대역
+      is: (k: string, v: unknown) => { if (k === 'contract_final_documents' && v === null) antiJoin = true; return api },
+      not: () => api,
       order: () => api,
-      range: () => api,
+      range: (from: number, to: number) => { rangeFrom = from; rangeTo = to; return api },
       insert: (row: Row) => { mode = 'insert'; payload = row; return api },
       update: (values: Row) => { mode = 'update'; payload = values; return api },
       maybeSingle: async () => ({ data: run()[0] ?? null, error: null }),
@@ -181,40 +192,70 @@ describe('archiveEvidence — 최종본 PDF 생성·불변 보관', () => {
   })
 })
 
-describe('listPendingEvidence — 큐에서 처리 불가 건을 제외해 뒤 건이 막히지 않게 한다', () => {
-  it('보관 완료·계약 삭제(원본 없음)·영구 실패로 기록된 증적을 제외하고 나머지를 오래된 순으로 돌려준다', async () => {
-    const ev = (id: string, contract: string): Row => ({ id, contract_id: contract, signing_id: `s-${id}`, captured_at: id })
+const NOW = new Date('2026-10-07T12:00:00.000Z')
+const minutesAgo = (m: number): string => new Date(NOW.getTime() - m * 60_000).toISOString()
+
+describe('listPendingEvidence — 큐 조회(보관본 없는 건만, 처리 불가 건 제외, 재시도 대기)', () => {
+  const ev = (id: string, contract = 'c-alive'): Row => ({ id, contract_id: contract, signing_id: `s-${id}`, captured_at: id })
+  const fail = (id: string, minAgo: number, permanent = false, contract = 'c-alive'): Row => ({ contract_id: contract, event_type: 'evidence_failed', created_at: minutesAgo(minAgo), metadata: { stage: 'archive', evidence_id: id, permanent } })
+
+  it('보관 완료·계약 삭제(원본 없음)·영구 실패로 기록된 증적을 제외하고 오래된 순으로 돌려준다', async () => {
     const f = createFakeAdmin({
-      contract_signature_evidence: [ev('e1', 'c-alive'), ev('e2', 'c-gone'), ev('e3', 'c-failed'), ev('e4', 'c-done'), ev('e5', 'c-failed')],
+      contract_signature_evidence: [ev('e1'), ev('e2', 'c-gone'), ev('e3'), ev('e4'), ev('e5')],
       contract_final_documents: [{ evidence_id: 'e4' }],
-      contracts: [{ id: 'c-alive' }, { id: 'c-failed' }, { id: 'c-done' }],
-      contract_audit_log: [
-        { contract_id: 'c-failed', event_type: 'evidence_failed', metadata: { stage: 'archive', evidence_id: 'e3', permanent: true } },
-        { contract_id: 'c-failed', event_type: 'evidence_failed', metadata: { stage: 'sign', error: 'x' } },
-      ],
+      contracts: [{ id: 'c-alive' }],
+      contract_audit_log: [fail('e3', 600, true), { contract_id: 'c-alive', event_type: 'evidence_failed', created_at: minutesAgo(1), metadata: { stage: 'sign', error: 'x' } }],
     })
-    const pending = await listPendingEvidence(f.admin, 10)
-    expect(pending.map((p) => p.id)).toEqual(['e1', 'e5'])
+    const r = await listPendingEvidence(f.admin, 10, { now: NOW })
+    expect(r.items.map((p) => p.id)).toEqual(['e1', 'e5'])
+    expect(r).toMatchObject({ waiting: 0, stalled: 0 })
   })
-})
 
-describe('listPendingEvidence — 실패 이력 기반 순서·상한', () => {
-  const ev = (id: string): Row => ({ id, contract_id: 'c-1', signing_id: `s-${id}`, captured_at: id })
-  const fail = (id: string, permanent = false): Row => ({ contract_id: 'c-1', event_type: 'evidence_failed', metadata: { stage: 'archive', evidence_id: id, permanent } })
-
-  it('실패가 적은 건을 앞으로, 자동 재시도 상한(5회) 이상은 제외한다', async () => {
+  it('실패 이력이 있는 건은 재시도 대기가 지난 뒤에만 돌려주고, 실패가 적은 건을 앞으로 둔다(영구 정지 없음)', async () => {
     const f = createFakeAdmin({
       contract_signature_evidence: [ev('e1'), ev('e2'), ev('e3'), ev('e4')],
-      contract_final_documents: [],
-      contracts: [{ id: 'c-1' }],
-      contract_audit_log: [fail('e1'), fail('e1'), fail('e2'), ...Array.from({ length: 5 }, () => fail('e3'))],
+      contracts: [{ id: 'c-alive' }],
+      contract_audit_log: [
+        fail('e1', 5),                                   // 1회 실패, 10분 대기 중 → 건너뜀
+        fail('e2', 30),                                  // 1회 실패, 10분 경과 → 재시도
+        ...[400, 300, 200, 150, 130].map((m) => fail('e3', m)), // 5회 실패, 마지막 130분 전(상한 2시간 경과) → 재시도, 막힌 건으로 집계
+      ],
     })
-    expect((await listPendingEvidence(f.admin, 10)).map((p) => p.id)).toEqual(['e4', 'e2', 'e1'])
+    const r = await listPendingEvidence(f.admin, 10, { now: NOW })
+    expect(r.items.map((p) => p.id)).toEqual(['e4', 'e2', 'e3']) // 새 건 → 실패 1회 → 실패 5회
+    expect(r.waiting).toBe(1)
+    expect(r.stalled).toBe(1)
+    // 운영자 수동 재시도(?retry=1)는 대기를 무시한다
+    expect((await listPendingEvidence(f.admin, 10, { now: NOW, ignoreBackoff: true })).items.map((p) => p.id)).toContain('e1')
+  })
+
+  it('재시도 대기 시간은 10분부터 두 배씩 늘고 2시간에서 멈춘다', () => {
+    expect([0, 1, 2, 3, 4, 5, 9].map(archiveRetryDelayMs)).toEqual([0, 10, 20, 40, 80, 120, 120].map((m) => m * 60_000))
+  })
+
+  it('조회는 한 번에 50건 단위로 이어서 끝까지 찾는다(.in()에 많은 id를 넣지 않음)', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ev(`e${String(i).padStart(3, '0')}`))
+    const f = createFakeAdmin({ contract_signature_evidence: many, contracts: [{ id: 'c-alive' }], contract_audit_log: [] })
+    const r = await listPendingEvidence(f.admin, 100, { now: NOW })
+    expect(r.items).toHaveLength(100)
+    expect(r.items[0].id).toBe('e000')
   })
 
   it('recordArchiveFailure는 사유·영구 여부를 담은 실패 이벤트를 남기고 성공 여부를 돌려준다', async () => {
     const f = createFakeAdmin({})
     expect(await recordArchiveFailure(f.admin, (await evidenceFor(null)), 'invalid_pdf_output', false)).toBe(true)
     expect(f.inserts.contract_audit_log[0]).toMatchObject({ contract_id: 'c-1', event_type: 'evidence_failed', metadata: { stage: 'archive', evidence_id: 'ev-1', reason: 'invalid_pdf_output', permanent: false } })
+  })
+})
+
+describe('listLegacySignings — 소급 대상(증적 없는 서명 완료 건)을 끝까지 훑는다', () => {
+  it('50건 단위 페이지를 넘어 이어서 찾고, 이미 증적이 있는 건은 제외한다', async () => {
+    const signings = Array.from({ length: 130 }, (_, i) => ({ id: `s${String(i).padStart(3, '0')}`, contract_id: `c${i}`, signed_at: `2026-09-01T00:00:${String(i % 60).padStart(2, '0')}.000Z`, ip_address: null, content_hash: null, signature_data: 'x' }))
+    const evidence = [{ signing_id: 's000', signed_at: '2026-09-01T00:00:00.000Z' }, { signing_id: 's120', signed_at: '2026-09-01T00:00:00.000Z' }]
+    const f = createFakeAdmin({ contract_signings: signings, contract_signature_evidence: evidence })
+    const r = await listLegacySignings(f.admin, 200)
+    expect(r).toHaveLength(128) // 130 - 증적 있는 2건
+    expect(r.map((x) => x.id)).not.toContain('s000')
+    expect(r.map((x) => x.id)).toContain('s129') // 3번째 페이지(100~129)까지 도달
   })
 })

@@ -24,9 +24,20 @@ vi.mock('$lib/server/contractArchive/loadArchivedPdf', async (orig) => {
   const real = await orig<typeof import('$lib/server/contractArchive/loadArchivedPdf')>()
   return { ...real, loadLatestArchivedPdf: vi.fn(async (_a: unknown, ids: string[]) => { state.loadArgs.push(ids); return state.pdf }) }
 })
+const archive = vi.hoisted(() => ({
+  items: [] as { id: string; contract_id: string }[],
+  results: [] as { ok: boolean; reason?: string; permanent?: boolean; alreadyArchived?: boolean; source?: string }[],
+  attempted: [] as string[],
+  failures: [] as { id: string; reason: string; permanent: boolean }[],
+  retryFlag: undefined as boolean | undefined,
+  waiting: 0,
+  stalled: 0,
+}))
 vi.mock('$lib/server/contractArchive/generateArchive', () => ({
-  archiveEvidence: vi.fn(), createLegacyEvidence: vi.fn(), listLegacySignings: vi.fn(async () => []),
-  listPendingEvidence: vi.fn(async () => []), recordPermanentArchiveFailure: vi.fn(),
+  archiveEvidence: vi.fn(async (_a: unknown, ev: { id: string }) => { archive.attempted.push(ev.id); return archive.results.shift() ?? { ok: true, source: 'original', alreadyArchived: false } }),
+  createLegacyEvidence: vi.fn(), listLegacySignings: vi.fn(async () => []),
+  listPendingEvidence: vi.fn(async (_a: unknown, _l: number, o?: { ignoreBackoff?: boolean }) => { archive.retryFlag = o?.ignoreBackoff; return { items: archive.items, waiting: archive.waiting, stalled: archive.stalled } }),
+  recordArchiveFailure: vi.fn(async (_a: unknown, ev: { id: string }, reason: string, permanent: boolean) => { archive.failures.push({ id: ev.id, reason, permanent }); return true }),
 }))
 vi.mock('@supabase/supabase-js', () => {
   function query(table: string) {
@@ -54,9 +65,10 @@ const PDF = { finalDocumentId: 'fd-1', contractId: 'c-1', source: 'original' as 
 beforeEach(() => {
   state.cronSecret = 'secret'; state.enabled = undefined; state.cmsRole = 'manager'; state.menuDenied = false
   state.pdf = null; state.audits = []; state.loadArgs = []; state.tables = {}
+  Object.assign(archive, { items: [], results: [], attempted: [], failures: [], retryFlag: undefined, waiting: 0, stalled: 0 })
 })
 
-const asCron = (auth?: string) => ({ request: new Request('https://x/api/cron/contract-archive', { headers: auth ? { authorization: auth } : {} }), url: new URL('https://x/api/cron/contract-archive') }) as never
+const asCron = (auth?: string, qs = '') => ({ request: new Request('https://x/api/cron/contract-archive', { headers: auth ? { authorization: auth } : {} }), url: new URL(`https://x/api/cron/contract-archive${qs}`) }) as never
 
 describe('/api/cron/contract-archive — 인증·스위치', () => {
   it('CRON_SECRET 미설정·인증 실패는 401, 올바른 키면 통과한다', async () => {
@@ -73,6 +85,56 @@ describe('/api/cron/contract-archive — 인증·스위치', () => {
   it('CONTRACT_ARCHIVE_ENABLED=false면 생성을 건너뛴다', async () => {
     state.enabled = 'false'
     expect(await (await cronGet(asCron('Bearer secret'))).json()).toEqual({ ok: true, skipped: 'disabled' })
+  })
+})
+
+describe('/api/cron/contract-archive — 처리 루프(실패 기록·연속 실패 중단·재시도·모니터링)', () => {
+  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, contract_id: `c${i + 1}` }))
+
+  it('실패한 건은 사유와 함께 기록하고, 영구 실패 여부를 구분해 기록한다', async () => {
+    archive.items = items(2)
+    archive.results = [{ ok: false, reason: 'invalid_pdf_output', permanent: false }, { ok: false, reason: 'unsupported_authoring_mode', permanent: true }]
+    const body = await (await cronGet(asCron('Bearer secret'))).json()
+    expect(archive.failures).toEqual([
+      { id: 'e1', reason: 'invalid_pdf_output', permanent: false },
+      { id: 'e2', reason: 'unsupported_authoring_mode', permanent: true },
+    ])
+    expect(body).toMatchObject({ ok: true, created: 0, failed: 2, stoppedEarly: false })
+  })
+
+  it('일시 오류가 연속 3건이면 시스템 장애로 보고 이번 실행을 멈춘다(영구 실패는 연속 횟수에 넣지 않는다)', async () => {
+    archive.items = items(6)
+    archive.results = Array.from({ length: 6 }, () => ({ ok: false, reason: 'storage_upload_failed', permanent: false }))
+    const body = await (await cronGet(asCron('Bearer secret'))).json()
+    expect(archive.attempted).toEqual(['e1', 'e2', 'e3'])
+    expect(body.stoppedEarly).toBe(true)
+
+    archive.attempted = []; archive.failures = []
+    archive.items = items(5)
+    archive.results = Array.from({ length: 5 }, () => ({ ok: false, reason: 'unsupported_authoring_mode', permanent: true }))
+    const perm = await (await cronGet(asCron('Bearer secret'))).json()
+    expect(archive.attempted).toHaveLength(5)
+    expect(perm.stoppedEarly).toBe(false)
+  })
+
+  it('성공이 끼면 연속 실패 횟수가 초기화되고, 한 번에 만드는 PDF는 3건으로 제한된다', async () => {
+    archive.items = items(8)
+    archive.results = [
+      { ok: false, reason: 'x', permanent: false }, { ok: false, reason: 'x', permanent: false }, { ok: true, source: 'original' },
+      { ok: false, reason: 'x', permanent: false }, { ok: true, source: 'original' }, { ok: true, source: 'original' },
+    ]
+    const body = await (await cronGet(asCron('Bearer secret'))).json()
+    expect(body.created).toBe(3)
+    expect(archive.attempted).toHaveLength(6) // 3건을 만들면 거기서 멈춤
+  })
+
+  it('?retry=1은 재시도 대기를 무시하고, 응답에 대기·막힌 건수를 싣는다', async () => {
+    archive.waiting = 4; archive.stalled = 2
+    const body = await (await cronGet(asCron('Bearer secret', '?retry=1'))).json()
+    expect(archive.retryFlag).toBe(true)
+    expect(body).toMatchObject({ waiting: 4, stalled: 2 })
+    await cronGet(asCron('Bearer secret'))
+    expect(archive.retryFlag).toBe(false)
   })
 })
 

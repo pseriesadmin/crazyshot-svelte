@@ -18,6 +18,7 @@ export const config = { maxDuration: 300 }
 const MAX_CREATED_PER_RUN = 3 // 한 번에 만드는 PDF 수(브라우저는 순차 실행 — Lambda 메모리 보호)
 const MAX_ATTEMPTS_PER_RUN = 8 // 실패 건이 앞줄을 막아도 뒤 건이 처리되도록 시도 상한을 따로 둔다
 const TIME_BUDGET_MS = 240_000
+const MAX_CONSECUTIVE_FAILURES = 3 // 연속 3건 실패하면 시스템 장애로 보고 이번 실행을 멈춘다(Lambda 시간·메모리 낭비 방지)
 
 // GET /api/cron/contract-archive — Vercel Cron 전용(10분 간격, vercel.json).
 // 서명 증적은 있는데 최종본 PDF가 없는 건을 오래된 순으로 만들어 보관한다(서명 응답은 PDF 생성에 막히지 않는다).
@@ -39,24 +40,33 @@ export const GET: RequestHandler = async ({ request, url }) => {
   const results: { evidenceId: string; contractId: string; ok: boolean; source?: string; reason?: string }[] = []
   let created = 0
   let attempts = 0
+  let consecutiveFailures = 0
+  let waiting = 0
+  let stalled = 0
 
   const processOne = async (ev: EvidenceRecord): Promise<void> => {
     attempts++
     const r = await archiveEvidence(admin, ev)
     if (r.ok) {
+      consecutiveFailures = 0
       if (!r.alreadyArchived) created++
       results.push({ evidenceId: ev.id, contractId: ev.contract_id, ok: true, source: r.source })
     } else {
       console.error('[cron/contract-archive] 보관 실패:', ev.id, r.reason)
+      if (!r.permanent) consecutiveFailures++
       await recordArchiveFailure(admin, ev, r.reason, !!r.permanent)
       results.push({ evidenceId: ev.id, contractId: ev.contract_id, ok: false, reason: r.reason })
     }
   }
   const budgetLeft = (): boolean =>
-    created < MAX_CREATED_PER_RUN && attempts < MAX_ATTEMPTS_PER_RUN && Date.now() - started < TIME_BUDGET_MS
+    created < MAX_CREATED_PER_RUN && attempts < MAX_ATTEMPTS_PER_RUN && consecutiveFailures < MAX_CONSECUTIVE_FAILURES && Date.now() - started < TIME_BUDGET_MS
 
   try {
-    for (const ev of await listPendingEvidence(admin, MAX_ATTEMPTS_PER_RUN)) {
+    const pending = await listPendingEvidence(admin, MAX_ATTEMPTS_PER_RUN, { ignoreBackoff: url.searchParams.get('retry') === '1' })
+    waiting = pending.waiting
+    stalled = pending.stalled
+    if (stalled > 0) console.error(`[cron/contract-archive] 오래 막힌 건 ${stalled}건(실패 5회 이상) — 원인 확인 필요`)
+    for (const ev of pending.items) {
       if (!budgetLeft()) break
       await processOne(ev)
     }
@@ -75,5 +85,5 @@ export const GET: RequestHandler = async ({ request, url }) => {
     return json({ ok: false, error: message, created, attempts, results }, { status: 500 })
   }
 
-  return json({ ok: true, created, attempts, failed: results.filter((r) => !r.ok).length, results })
+  return json({ ok: true, created, attempts, failed: results.filter((r) => !r.ok).length, waiting, stalled, stoppedEarly: consecutiveFailures >= MAX_CONSECUTIVE_FAILURES, results })
 }
