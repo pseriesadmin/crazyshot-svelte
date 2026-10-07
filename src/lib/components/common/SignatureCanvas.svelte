@@ -10,12 +10,18 @@
   interface Props {
     width?:    number
     height?:   number
+    /** 선 굵기(캔버스 버퍼 px) — 모바일처럼 버퍼가 화면에 축소 표시되는 경우 키워 화면상 굵기를 유지 */
+    lineWidth?: number
+    /** 지정하면 서명 여백을 잘라낸 뒤 이 크기에 맞춰(비율 유지·가운데) 내보낸다 — 입력 캔버스 비율과 저장 이미지 비율을 분리 */
+    exportSize?: { width: number; height: number }
     onchange?: (valid: boolean, data: SignatureData | null) => void
   }
 
   let {
     width  = 360,
     height = 160,
+    lineWidth = 2,
+    exportSize,
     onchange,
   }: Props = $props()
 
@@ -71,8 +77,42 @@
     }
     onchange(valid, {
       strokeCount: strokes,
-      pngBase64:   canvas.toDataURL('image/png'),
+      pngBase64:   exportPng(),
     })
+  }
+
+  // exportSize 지정 시: 그려진 영역만 잘라 지정 크기에 맞춰 투명 배경 PNG로 내보낸다(서명이 작게 저장되는 것 방지)
+  function exportPng(): string {
+    if (!canvas) return ''
+    if (!exportSize) return canvas.toDataURL('image/png')
+    const ctx = getCtx()
+    if (!ctx) return canvas.toDataURL('image/png')
+    const { width: w, height: h } = canvas
+    const { data } = ctx.getImageData(0, 0, w, h)
+    let minX = w, minY = h, maxX = -1, maxY = -1
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (data[(y * w + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (maxX < 0) return canvas.toDataURL('image/png')
+    const pad = 6
+    const sx = Math.max(0, minX - pad), sy = Math.max(0, minY - pad)
+    const sw = Math.min(w, maxX + pad + 1) - sx, sh = Math.min(h, maxY + pad + 1) - sy
+    const out = document.createElement('canvas')
+    out.width = exportSize.width
+    out.height = exportSize.height
+    const octx = out.getContext('2d')
+    if (!octx) return canvas.toDataURL('image/png')
+    const scale = Math.min(out.width / sw, out.height / sh, 2)   // 아주 작은 표식이 과하게 확대·굵어지지 않게 상한
+    const dw = sw * scale, dh = sh * scale
+    octx.drawImage(canvas, sx, sy, sw, sh, (out.width - dw) / 2, (out.height - dh) / 2, dw, dh)
+    return out.toDataURL('image/png')
   }
 
   export function clearCanvas() {
@@ -87,7 +127,7 @@
     const ctx = getCtx()
     if (!ctx) return
     ctx.strokeStyle = '#100B32'
-    ctx.lineWidth   = 2
+    ctx.lineWidth   = lineWidth
     ctx.lineCap     = 'round'
     ctx.lineJoin    = 'round'
   }

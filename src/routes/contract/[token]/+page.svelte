@@ -173,6 +173,24 @@
   const policyTexts = $derived(data.policyTexts ?? { terms: '', refund: '', privacy: '' })
   let sigValid  = $state(false)
   let sigData   = $state<SignatureData | null>(null)
+  // 모바일 서명란: 입력 캔버스를 세로로 키워(PC 대비 3배 이상) 손가락으로 서명하기 편하게 — 저장 이미지는 PC와 같은 600×160 비율로 정규화
+  let isMobile  = $state(false)
+  $effect(() => {
+    const mq = window.matchMedia('(max-width: 767px)')
+    const sync = () => {
+      if (isMobile === mq.matches) return
+      isMobile = mq.matches
+      // flow 모드 캔버스는 크기가 바뀌면 그림이 지워지므로(회전·창 크기 변경) 서명 상태도 함께 초기화 — 화면에 보이는 서명 = 제출되는 서명 유지
+      // (canvas 모드의 인라인 서명은 크기 불변이라 그림이 남으므로 상태도 유지)
+      if (!isCanvasMode) {
+        sigValid = false
+        sigData  = null
+      }
+    }
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  })
   let signing_  = $state(false)
   let signError = $state('')
   // EC-1 방어(+page.server.ts 참고) — 서명은 이미 됐지만 결제(mock) 전인 채로 재진입한
@@ -702,11 +720,15 @@
         <!-- 전자 서명 캔버스 (flow 모드 전용 — canvas 모드는 위 페이지 내 인라인 서명) -->
         {#if !isCanvasMode}
           <div class="sig-section">
-            <SignatureCanvas
-              width={600}
-              height={160}
-              onchange={handleSigChange}
-            />
+            {#key isMobile}
+              <SignatureCanvas
+                width={600}
+                height={isMobile ? 480 : 160}
+                lineWidth={isMobile ? 4 : 2}
+                exportSize={isMobile ? { width: 600, height: 160 } : undefined}
+                onchange={handleSigChange}
+              />
+            {/key}
           </div>
         {:else}
           <p class="canvas-sign-hint">위 계약서 서명란에 직접 서명해 주세요.</p>
@@ -1416,6 +1438,79 @@
   @media print {
     .spreadsheet-doc-content { overflow: visible; }
     .spreadsheet-doc-content :global(.ss-table) { page-break-inside: auto; }
+  }
+
+
+  /* ══════════════════════════════════════════════════════════════════════
+     모바일(≤767px) 전자계약 수신·서명 화면 보정 (2026-10-07)
+     - 계약서 HTML 서식은 A4 데스크톱 고정 레이아웃(5열 표·nowrap 라벨)이라 모바일에서 열이 눌리고
+       페이지가 가로로 밀렸다 → 저장된 계약서 HTML은 그대로 두고 이 화면의 CSS로만 재배치(저장·해시·PDF 무영향)
+     - 표 3종(당사자·정산)은 '라벨 | 값' 2열, 장비내역은 카드형으로 재배치
+     ══════════════════════════════════════════════════════════════════════ */
+  @media (max-width: 767px) {
+    .contract-main { padding: 16px 12px 40px; gap: 14px; }
+    .summary-card { padding: 18px 16px; }
+    .summary-item { align-items: flex-start; }
+    .summary-label { flex: 0 0 72px; }
+    .summary-value { min-width: 0; overflow-wrap: anywhere; word-break: keep-all; }
+
+    .html-contract-doc { padding: 14px 8px; min-width: 0; overflow: hidden; }
+    /* margin:auto + flex 세로 컨테이너는 내용 폭만큼만 줄어들어(shrink-to-fit) 좌우 여백이 과도해짐 → 폭 100% 고정 */
+    .html-contract-doc :global(.contract-wrap) { width: 100%; margin: 0; padding: 4px 0 12px; font-size: 14px; max-width: 100%; }
+    .html-contract-doc :global(.contract-wrap h1.contract-title) { font-size: 20px; letter-spacing: 4px; margin-bottom: 14px; }
+    .html-contract-doc :global(.contract-wrap .issue-date-row) { flex-wrap: wrap; margin-bottom: 18px; }
+    .html-contract-doc :global(.contract-wrap td),
+    .html-contract-doc :global(.contract-wrap th) {
+      font-size: 13px; padding: 9px 8px; line-height: 1.5;
+      word-break: keep-all; overflow-wrap: anywhere;
+    }
+    .html-contract-doc :global(.contract-wrap .label-cell) { white-space: normal; width: auto; }
+    .html-contract-doc :global(.contract-wrap .terms) { font-size: 13px; line-height: 1.85; }
+
+    /* ① 당사자·정산 표(라벨 셀이 있는 표): 행 구조를 풀어 '라벨 | 값' 2열 그리드로 */
+    .html-contract-doc :global(.contract-wrap table:has(.label-cell)) { display: block; border: 0; }
+    .html-contract-doc :global(.contract-wrap table:has(.label-cell) tbody) {
+      display: grid; grid-template-columns: 38% minmax(0, 1fr); border-top: 1px solid #333; border-left: 1px solid #333;
+    }
+    .html-contract-doc :global(.contract-wrap table:has(.label-cell) tr) { display: contents; }
+    .html-contract-doc :global(.contract-wrap table:has(.label-cell) td) {
+      border-top: 0; border-left: 0; text-align: left !important; width: auto !important; min-width: 0;
+    }
+    /* 한 행에 셀이 5개인 당사자 표의 첫 칸(임대인/임차인)은 제목 줄로 전체 폭 */
+    .html-contract-doc :global(.contract-wrap table:has(.label-cell) td.label-cell:first-child:nth-last-child(5):not([rowspan])) {
+      grid-column: 1 / -1; background: #dce6f1; font-size: 14px;
+    }
+    /* 정산표: 특약사항은 맨 아래 전체 폭, '구분' 제목 줄도 전체 폭 */
+    .html-contract-doc :global(.contract-wrap td.label-cell[rowspan="5"]) { grid-column: 1 / -1; order: 98; background: #dce6f1; }
+    .html-contract-doc :global(.contract-wrap td.cs-special-notes-cell) { grid-column: 1 / -1; order: 99; }
+    .html-contract-doc :global(.contract-wrap tr.final-row td.label-cell[rowspan="2"]:nth-child(3)) { grid-column: 1 / -1; background: #dce6f1; }
+
+    /* ② 대여 장비내역(5열 표): 헤더를 숨기고 한 행씩 카드로 */
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5))) { display: block; border: 0; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) thead) { display: none; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) tbody) { display: block; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) tr) {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid #333; margin-bottom: 10px;
+    }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td) {
+      border: 0; border-bottom: 1px solid #ddd; text-align: left !important;
+    }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(2)) { grid-column: 1 / -1; font-weight: 700; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(5)) { grid-column: 1 / -1; border-bottom: 0; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(1))::before { content: 'NO. '; font-weight: 700; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(3))::before { content: '수량 '; font-weight: 700; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(4))::before { content: '금액 '; font-weight: 700; }
+    .html-contract-doc :global(.contract-wrap table:has(thead th:nth-child(5)) td:nth-child(5))::before { content: '비고 '; font-weight: 700; }
+
+    /* 도장·서명 이미지가 칸 밖으로 커지지 않게 */
+    .html-contract-doc :global(.contract-wrap .issuer-sig-overlay) { max-width: 84px !important; height: auto !important; }
+    .html-contract-doc :global(.contract-wrap .customer-sig-overlay) { max-width: 140px !important; height: auto !important; }
+
+    /* 서명 영역 */
+    .sign-section { padding: 18px 14px; }
+    .consent-text, .policy-toggle span { word-break: keep-all; overflow-wrap: break-word; }
+    .policy-toggle { text-align: left; gap: 8px; }
+    .sig-section :global(.sig-canvas) { min-height: 240px; }   /* 서명란 세로: 기존(약 80px)의 3배 이상 */
   }
 
   /* 인쇄 — A4 기준 출력 */
