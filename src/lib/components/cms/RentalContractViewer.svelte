@@ -60,6 +60,40 @@
     isRentalView = false,
   }: Props = $props()
 
+  // PDF 미리보기 높이를 브라우저(상세 패널 본문) 높이에 맞춘다 — 패널 본문의 남은 세로 공간 전체를 쓰고
+  // (위쪽 배너·발행 목록 높이와 아래 액션 버튼 높이를 뺀 값), 창 크기·패널 크기가 바뀌면 다시 계산한다.
+  // 본문 스크롤 영역(.panel-body)을 찾지 못하면 기본 높이(360px)를 유지한다.
+  const PDF_MIN_HEIGHT = 360
+  let pdfWrapEl: HTMLDivElement | null = $state(null)
+  let pdfHeight: number | null = $state(null)
+
+  $effect(() => {
+    const wrap = pdfWrapEl
+    if (!browser || !wrap) return
+    const scroller = wrap.closest<HTMLElement>('.panel-body')
+    if (!scroller) return
+
+    function fit(): void {
+      if (!wrap || !scroller) return
+      const top = wrap.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+      const actions = (wrap.nextElementSibling as HTMLElement | null)?.offsetHeight ?? 0
+      const bottomPad = parseFloat(getComputedStyle(scroller).paddingBottom) || 0
+      const GAP_TO_ACTIONS = 12 // .contract-viewer의 항목 간 간격
+      const next = Math.max(PDF_MIN_HEIGHT, Math.floor(scroller.clientHeight - top - actions - GAP_TO_ACTIONS - bottomPad))
+      pdfHeight = next // 같은 값이면 갱신되지 않는다
+    }
+
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(scroller)
+    if (wrap.parentElement) ro.observe(wrap.parentElement)
+    window.addEventListener('resize', fit)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', fit)
+    }
+  })
+
   const PICKUP_LABELS: Record<string, string> = {
     crazydelivery: '크레이지샷 배송',
     quick:         '당일퀵 배송',
@@ -326,7 +360,7 @@
 
   <!-- PDF 미리보기·다운로드: 서명 완료 후에만 표시 -->
   {#if contractPdfUrl && customerSignedAt}
-    <div class="pdf-wrap">
+    <div class="pdf-wrap" bind:this={pdfWrapEl} style:height={pdfHeight != null ? `${pdfHeight}px` : undefined}>
       <iframe
         src={contractPdfUrl}
         title="계약서 미리보기"
@@ -417,7 +451,8 @@
     border: 1px solid var(--cs-lilac);
     border-radius: var(--cms-radius-sm);
     overflow: hidden;
-    height: 360px;
+    height: 360px; /* 기본값 — 패널 높이를 측정하면 style로 덮어쓴다(위 fit) */
+    min-height: 360px;
   }
   .pdf-frame {
     width: 100%;
