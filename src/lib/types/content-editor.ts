@@ -41,6 +41,15 @@ export function normalizeImageAlign(v: unknown): ImageAlign {
   return v === 'left' || v === 'right' ? v : 'center'
 }
 
+/** 일반 블록 흐름(비-flex 부모)에서 쓰는 폭·정렬 스타일 — 상품설명·구독 상세용. 기본값(100%·가운데)이면 빈 문자열 */
+export function imageBlockBoxStyle(width: unknown, align: unknown): string {
+  const w = normalizeImageWidth(width)
+  const a = normalizeImageAlign(align)
+  if (w >= IMAGE_WIDTH_MAX && a === 'center') return ''
+  const margin = a === 'left' ? '0 auto 0 0' : a === 'right' ? '0 0 0 auto' : '0 auto'
+  return `width: ${w}%; margin: ${margin}`
+}
+
 /** 폭·정렬이 기본값(100%·가운데)이면 빈 문자열, 아니면 flex 컬럼 안에서 쓰는 인라인 스타일 */
 export function imageBlockStyle(width: unknown, align: unknown): string {
   const w = normalizeImageWidth(width)

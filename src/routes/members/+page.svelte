@@ -76,11 +76,8 @@
     flex-direction: column;
     align-items: center;
     min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
-    padding-bottom: 80px;
-  }
-
-  @media (min-width: 768px) {
-    .members-page { padding-bottom: 0; }
+    /* 하단 여백 없음 — 다크 푸터가 페이지 끝까지. 바텀탭은 fixed 오버레이(스크롤 다운 시 숨김)라 여백 불필요 */
+    padding-bottom: 0;
   }
 
   /* Mobile: 섹션 간격 없이 연속 배치 */

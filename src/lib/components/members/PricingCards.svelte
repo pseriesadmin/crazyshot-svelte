@@ -9,11 +9,9 @@
 
   let { plans, selectedPlanId, onselect }: Props = $props()
 
-  // PC 카드는 슬롯별(1/2/3) 이미지 배치·크롭이 각기 다른 비정형 레이아웃 — index 순서로 슬롯 매핑
-  function slotClass(index: number): 'slot-1' | 'slot-2' | 'slot-3' {
-    if (index === 0) return 'slot-1'
-    if (index === 1) return 'slot-2'
-    return 'slot-3'
+  // CMS 이미지 탭은 image_urls에 저장 — 레거시 단일 image_url(시드된 /members/plan-*.png)은 폴백으로만 사용
+  function planImage(plan: SubscriptionPlanRow): string | null {
+    return plan.image_urls?.[0] || plan.image_url || null
   }
 
   let pressedId = $state<number | null>(null)
@@ -31,21 +29,22 @@
   </div>
   <!-- Cards -->
   <div class="pricing-pc-inner">
-    {#each plans as plan, i (plan.id)}
+    {#each plans as plan (plan.id)}
       <div
-        class="plan-card-pc {slotClass(i)}"
+        class="plan-card-pc"
         class:selected={selectedPlanId === plan.id}
-        data-name="plan{i + 1}"
+        data-name="plan"
         onclick={() => onselect(plan.id)}
         role="button"
         tabindex="0"
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(plan.id) } }}
       >
-        <!-- 순수 배경 div — 자식 없음 -->
+        <!-- 순수 배경 div — 자식 없음 (이미지가 없을 때의 기본 배경) -->
         <div class="plan-title-block" data-name="title"></div>
-        {#if (plan.image_url ?? plan.image_urls?.[0])}
+        {#if planImage(plan)}
+          <!-- 카드 전체를 덮는 BG 이미지 -->
           <div class="plan-img-wrap">
-            <img src={(plan.image_url ?? plan.image_urls?.[0])} alt="" class="plan-img" />
+            <img src={planImage(plan)} alt="" class="plan-img" />
           </div>
         {/if}
         {#if plan.tagline}
@@ -77,6 +76,7 @@
         class="plan-card-m"
         class:pressed={pressedId === plan.id}
         class:selected={selectedPlanId === plan.id}
+        class:has-bg={!!planImage(plan)}
         onpointerdown={() => { pressedId = plan.id }}
         onpointerup={() => { pressedId = null }}
         onpointerleave={() => { pressedId = null }}
@@ -85,6 +85,10 @@
         tabindex="0"
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(plan.id) } }}
       >
+        {#if planImage(plan)}
+          <!-- 카드 전체를 덮는 BG 이미지 -->
+          <img src={planImage(plan)} alt="{plan.name} 카메라 장비" class="plan-m-bg" />
+        {/if}
         <!-- 타이틀 영역 -->
         <div class="plan-m-title" class:active={pressedId === plan.id || selectedPlanId === plan.id}>
           <div class="plan-m-name-row">
@@ -99,15 +103,19 @@
 
         <!-- 본문 영역 -->
         <div class="plan-m-body">
-          {#if (plan.image_url ?? plan.image_urls?.[0])}
-            <img src={(plan.image_url ?? plan.image_urls?.[0])} alt="{plan.name} 카메라 장비" class="plan-m-img" />
-          {/if}
           {#if plan.tagline}
             <span class="plan-m-tagline">{plan.tagline}</span>
           {/if}
           {#if plan.description}
             <p class="plan-m-desc">{plan.description}</p>
           {/if}
+          <a
+            href="/subscribe/{plan.id}"
+            class="plan-m-subscribe-btn"
+            onclick={(e) => e.stopPropagation()}
+          >
+            구독신청하기
+          </a>
         </div>
       </div>
     {/each}
@@ -260,14 +268,11 @@
     z-index: 1;
   }
 
-  /* ─ Image (슬롯별 배치/크롭) ─ */
+  /* ─ Image (카드 전체 BG, 통이미지) ─ */
   .plan-img-wrap { position: absolute; inset: 0; overflow: hidden; }
-  .plan-img { width: 100%; height: 100%; object-fit: cover; }
-
-  .slot-1 .plan-img-wrap { left: -45px; top: 85px; width: 210px; height: 248px; right: auto; bottom: auto; }
-  .slot-2 .plan-img-wrap { top: 24.75%; right: 57.75%; bottom: 27%; left: -11.75%; }
-  .slot-3 .plan-img-wrap { left: 152px; top: 114px; width: 363px; height: 189px; right: auto; bottom: auto; display: flex; align-items: center; justify-content: center; }
-  .slot-3 .plan-img { transform: scaleY(-1) rotate(180deg); }
+  .plan-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 흰 글자 가독성용 오버레이 */
+  .plan-img-wrap::after { content: ''; position: absolute; inset: 0; background: rgba(16, 11, 50, 0.35); }
 
   /* ─ Tagline ─ */
   .plan-tagline {
@@ -355,6 +360,7 @@
     border-radius: 30px;
     background: var(--cs-dark);
     overflow: hidden;
+    position: relative;
     box-shadow: 0 2px 8px rgba(16, 11, 50, 0.15);
     transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
                 box-shadow 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -370,22 +376,42 @@
     box-shadow: 0 0 0 3px var(--cs-red-badge), 0 8px 24px rgba(16, 11, 50, 0.45);
   }
 
+  .plan-m-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+  }
+  /* PC와 동일: 상단 보라 / 하단 다크 기본 BG 위에 이미지 → 오버레이 → 텍스트 순으로 쌓는다 */
+  .plan-card-m.has-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(16, 11, 50, 0.35);
+    z-index: 1;
+    pointer-events: none;
+  }
+  .plan-card-m.has-bg .plan-m-body { background: var(--cs-dark); }
+  .plan-card-m.has-bg .plan-m-title > *,
+  .plan-card-m.has-bg .plan-m-body > * { position: relative; z-index: 2; }
+
   .plan-m-title {
     background: var(--cs-purple);
     padding: 30px;
     display: flex;
     flex-direction: column;
+    align-items: center;
+    text-align: center;
     gap: 15px;
     transition: background 0.2s;
-  }
-
-  .plan-m-title.active {
-    background: var(--cs-purple-light);
   }
 
   .plan-m-name-row {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 10px;
   }
 
@@ -399,6 +425,7 @@
   .plan-m-price-row {
     display: flex;
     align-items: baseline;
+    justify-content: center;
     gap: 6px;
   }
 
@@ -439,12 +466,6 @@
     );
   }
 
-  .plan-m-img {
-    width: 100%;
-    max-height: 150px;
-    object-fit: contain;
-  }
-
   .plan-m-tagline {
     background: var(--cs-red-badge);
     color: var(--cs-white);
@@ -457,6 +478,23 @@
     width: 100%;
   }
 
+  /* 모바일 구독신청 CTA — front-uiux §5 모바일 primary(44px · red-badge · 30px · hover BG만) */
+  .plan-m-subscribe-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0 20px;
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    border-radius: var(--radius-xl);
+    font: var(--text-m-body-16B);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .plan-m-subscribe-btn:hover { background: var(--cs-red); }
+
   .plan-m-desc {
     font-family: var(--font-kr);
     font-size: 16px;
@@ -465,6 +503,6 @@
     line-height: 1.6;
     letter-spacing: -0.5px;
     margin: 0;
-    text-align: left;
+    text-align: center;
   }
 </style>
