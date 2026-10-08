@@ -34,8 +34,10 @@ export function createRecommendSearcher(loadGroups: SynonymGroupLoader = loadCon
     const { getProductSearchIndex } = await import('$lib/server/searchEngine/adapters/productSearchIndex')
     const index = await getProductSearchIndex()
     const merged = new Map<string, number>()
+    // L-2: 질문 끝이 분류 이름이면("소니 카메라") 그 분류 상품을 앞 구간에 두는 검색을 쓴다(없으면 기존 search 그대로)
+    const searchTerm = typeof index.searchWithCategoryIntent === 'function' ? index.searchWithCategoryIntent : index.search.bind(index)
     const add = (q: string, weight: number) => {
-      for (const r of index.search(q, { fuzzy: 0.2, prefix: true, limit: 30 })) {
+      for (const r of searchTerm(q, { fuzzy: 0.2, prefix: true, limit: 30 })) {
         const id = r.document.id
         merged.set(id, Math.max(merged.get(id) ?? 0, r.score * weight))
       }
