@@ -442,9 +442,9 @@
     </div>
   {/if}
 
-  <!-- 서명 직후 최종본 PDF 생성 대기: 크론(10분 간격)이 만들기 전까지 안내만 표시한다 -->
+  <!-- 서명 직후 최종본 PDF 생성 대기: 서명·결제 직후 즉시 생성(보통 1분 안), 실패 시 10분 크론이 만들기 전까지 안내만 표시한다 -->
   {#if customerSignedAt && !contractPdfUrl}
-    <div class="banner banner-sent" role="status">최종본 PDF를 준비 중입니다. 서명 완료 후 보통 10분 안에 표시됩니다. 잠시 후 다시 열어 주세요.</div>
+    <div class="banner banner-sent" role="status">최종본 PDF를 준비 중입니다. 서명 완료 후 보통 1분 안에 표시됩니다. 잠시 후 다시 열어 주세요.</div>
   {/if}
 
   <!-- PDF 미리보기·다운로드: 서명 완료 후에만 표시 -->

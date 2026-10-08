@@ -10,6 +10,7 @@ import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { scheduleArchiveNow } from '$lib/server/contractArchive/archiveNow'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
@@ -401,6 +402,10 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
       })
     }
   }
+
+  // 최종본 PDF 즉시 생성(2026-10-08, Stephen 지시) — 응답은 기다리지 않고 백그라운드로 보관 크론 엔드포인트를 호출한다. 실패·누락돼도 10분 크론이 처리(fallback).
+  // 서명+결제가 모두 끝나는 시점(승인 알림 헬퍼 sendApprovalNotifications)에서도 한 번 더 호출하며, 이미 보관된 건은 멱등이라 중복 생성되지 않는다.
+  if (signing.contract_id && signReservationId != null) scheduleArchiveNow(signReservationId)
 
   return json({ ok: true })
 }

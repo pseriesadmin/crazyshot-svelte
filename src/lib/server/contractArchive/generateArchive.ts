@@ -350,6 +350,40 @@ export async function listPendingEvidence(
   return { items: eligible.slice(0, limit).map((e) => e.ev), waiting, stalled }
 }
 
+/**
+ * 이 예약(같은 주문의 형제 예약 포함)에 속한 서명 증적 중 보관본이 아직 없는 건 — 서명·결제 직후 즉시 생성(archiveNow)이 호출하는 대상 지정 조회.
+ * 같은 주문의 계약은 대표 예약 한 곳에 붙을 수 있어 order_items로 형제를 함께 본다. 계약이 삭제된 증적은 제외한다.
+ */
+export async function listPendingEvidenceForReservation(admin: SupabaseClient, reservationId: number | string): Promise<EvidenceRecord[]> {
+  const ids = new Set<string>([String(reservationId)])
+  const { data: own, error: ownErr } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId)
+  if (ownErr) throw new Error(ownErr.message)
+  const orderIds = [...new Set(((own ?? []) as { order_id: string | number | null }[]).map((r) => r.order_id).filter((v): v is string | number => v != null))]
+  if (orderIds.length > 0) {
+    const { data: sib, error: sibErr } = await admin.from('order_items').select('reservation_id').in('order_id', orderIds)
+    if (sibErr) throw new Error(sibErr.message)
+    for (const r of (sib ?? []) as { reservation_id: string | number | null }[]) if (r.reservation_id != null) ids.add(String(r.reservation_id))
+  }
+  const { data, error } = await admin
+    .from('contract_signature_evidence')
+    .select(`${EVIDENCE_COLUMNS}, contract_final_documents!left(id)`)
+    .in('reservation_id', [...ids])
+    .is('contract_final_documents', null)
+    .order('captured_at', { ascending: true })
+    .limit(10)
+  if (error) throw new Error(error.message)
+  const rows = ((data ?? []) as (EvidenceRecord & { contract_final_documents?: unknown })[]).map((r) => {
+    const { contract_final_documents: _joined, ...ev } = r
+    void _joined
+    return ev as EvidenceRecord
+  })
+  if (rows.length === 0) return []
+  const { data: alive, error: aliveErr } = await admin.from('contracts').select('id').in('id', [...new Set(rows.map((r) => r.contract_id))])
+  if (aliveErr) throw new Error(aliveErr.message)
+  const aliveIds = new Set(((alive ?? []) as { id: string }[]).map((c) => c.id))
+  return rows.filter((r) => aliveIds.has(r.contract_id))
+}
+
 interface LegacySigning {
   id: string
   contract_id: string

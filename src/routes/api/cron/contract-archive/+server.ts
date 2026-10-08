@@ -7,6 +7,7 @@ import {
   createLegacyEvidence,
   listLegacySignings,
   listPendingEvidence,
+  listPendingEvidenceForReservation,
   recordArchiveFailure,
   type EvidenceRecord,
 } from '$lib/server/contractArchive/generateArchive'
@@ -48,7 +49,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
   let stalled = 0
   let sealSummary: Awaited<ReturnType<typeof sealPendingDocuments>> | null = null
 
-  const processOne = async (ev: EvidenceRecord): Promise<void> => {
+  const processOne = async (ev: EvidenceRecord, opts: { recordFailure?: boolean } = {}): Promise<void> => {
     attempts++
     const r = await archiveEvidence(admin, ev, { sealKey })
     if (r.ok) {
@@ -58,10 +59,30 @@ export const GET: RequestHandler = async ({ request, url }) => {
     } else {
       console.error('[cron/contract-archive] 보관 실패:', ev.id, r.reason)
       if (!r.permanent) consecutiveFailures++
-      await recordArchiveFailure(admin, ev, r.reason, !!r.permanent)
+      // 대상 지정(즉시 생성) 호출의 실패는 기록하지 않는다 — 기록하면 10분 크론의 재시도 백오프가 길어진다(sp3 MINOR). 실패는 응답·서버 로그에만 남는다.
+      if (opts.recordFailure !== false) await recordArchiveFailure(admin, ev, r.reason, !!r.permanent)
       results.push({ evidenceId: ev.id, contractId: ev.contract_id, ok: false, reason: r.reason })
     }
   }
+  // 대상 지정 모드(`?reservationId=`): 서명·결제 직후 즉시 생성 호출(archiveNow.ts) — 그 예약(같은 주문 형제 포함)의 대기 증적만 만든다.
+  // 소급·봉인 보강·다른 대기 건은 건드리지 않는다(빨리 끝나야 하고, 다른 건 처리는 10분 크론 몫). 인증은 위 Bearer 검사를 그대로 거친다.
+  const reservationParam = url.searchParams.get('reservationId')
+  if (reservationParam !== null) {
+    if (!/^\d{1,15}$/.test(reservationParam)) return json({ error: 'reservationId가 올바르지 않습니다.' }, { status: 400 })
+    try {
+      const items = await listPendingEvidenceForReservation(admin, reservationParam)
+      for (const ev of items) {
+        if (Date.now() - started >= TIME_BUDGET_MS) break
+        await processOne(ev, { recordFailure: false })
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      console.error('[cron/contract-archive] 대상 지정 처리 중단:', message)
+      return json({ ok: false, error: message, targeted: reservationParam, created, attempts, results }, { status: 500 })
+    }
+    return json({ ok: true, targeted: reservationParam, created, attempts, failed: results.filter((r) => !r.ok).length, results })
+  }
+
   const budgetLeft = (): boolean =>
     created < MAX_CREATED_PER_RUN && attempts < MAX_ATTEMPTS_PER_RUN && consecutiveFailures < MAX_CONSECUTIVE_FAILURES && Date.now() - started < TIME_BUDGET_MS
 
