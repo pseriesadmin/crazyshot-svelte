@@ -30,6 +30,11 @@ describe('상품설명 탭 새 편집기 배선', () => {
     expect(panel).toMatch(/untrack\(\(\) => \{ contentEditorKey \+= 1 \}\)/)
   })
 
+  it('재동기화 $effect의 첫 실행은 편집기를 다시 마운트하지 않는다(마운트 직후 이중 생성 방지)', () => {
+    expect(panel).toMatch(/if \(contentEditorSynced\) untrack\(\(\) => \{ contentEditorKey \+= 1 \}\)\s*contentEditorSynced = true/)
+    expect(panel).toMatch(/let contentEditorSynced = false/)
+  })
+
   it('저장 직전 flush로 대기 중 편집을 반영하고 실패 시 저장을 멈춘다', () => {
     expect(panel).toMatch(/contentEditorRef\?\.flush\(\)/)
     expect(panel).toMatch(/flushed && !flushed\.ok/)
@@ -85,5 +90,18 @@ describe('상품 신규등록 화면 새 편집기 배선', () => {
   it('서버가 읽는 hidden 필드(content_blocks·keywords)는 그대로 유지된다', () => {
     expect(newPage).toMatch(/name="content_blocks"/)
     expect(newPage).toMatch(/name="keywords"/)
+  })
+})
+
+describe('구독 설명 탭·원본 HTML 다이얼로그 후속 보완', () => {
+  const sub = readFileSync('src/lib/components/cms/subscription/SubscriptionDetailPanel.svelte', 'utf8')
+
+  it('구독 설명 탭도 재동기화 첫 실행에서는 재마운트하지 않는다', () => {
+    expect(sub).toMatch(/if \(contentEditorSynced\) untrack\(\(\) => \{ contentEditorKey \+= 1 \}\)\s*contentEditorSynced = true/)
+    expect(sub).toMatch(/let contentEditorSynced = false/)
+  })
+
+  it('원본 HTML 변환 확인 체크박스에서 Enter는 무시한다(바깥 등록 폼의 암묵 제출 방지)', () => {
+    expect(editor).toMatch(/<input type="checkbox" bind:checked=\{legacyDlg\.ack\} onkeydown=\{\(e\) => \{ if \(e\.key === 'Enter'\) e\.preventDefault\(\) \}\} \/>/)
   })
 })
