@@ -8,7 +8,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
-import { VALID_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
 
 // PATCH /api/cms/canned-responses/[id] — 수정
@@ -52,7 +52,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
   // CSV 일괄등록(bulk-import) 등으로 pending_review=true였던 항목도 저장 즉시 해제한다.
   updates.pending_review = false
 
-  if (updates.category && !VALID_CATEGORIES.includes(updates.category as string)) {
+  if (updates.category && !isAssignableCategory(updates.category as string, await loadCannedCategories(createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)))) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })
   }
 

@@ -28,6 +28,8 @@ export interface RunDeps {
   sendAdminPush?: (admin: AdminClient, info: { kind: 'time_change' | 'extend'; userId: string; sessionId: string }) => Promise<void>
   /** 긴급 상담(상담원 호출) 관리자 푸시 */
   sendUrgent?: (admin: AdminClient, sessionId: string, userId: string) => Promise<void>
+  /** 막연한 추천 요청에 보낼 인기 상품 조회(테스트용 주입). 기본은 지식 저장소의 예약 집계 */
+  loadPopular?: (admin: AdminClient) => Promise<{ hits: Array<{ id: string; score: number }>; rows: Array<{ id: string; name: string; slug: string; image_urls: string[] | null; sale_only: boolean | null; is_active?: boolean | null; option_only?: boolean | null; deleted_at?: string | null }>; prices: Record<string, number> }>
   /** 추천형 상품 검색기(테스트용 주입). 기본은 상품 자연어 검색 인덱스 */
   searchProducts?: (admin: AdminClient, query: string, tokens: readonly string[]) => Promise<{
     hits: Array<{ id: string; score: number }>

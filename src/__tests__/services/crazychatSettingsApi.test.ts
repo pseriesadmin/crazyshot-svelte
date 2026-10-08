@@ -141,12 +141,6 @@ describe('PUT settings', () => {
     expect(r.status).toBe(200)
     expect(writes()[0].row).toMatchObject({ agent_enabled: false })
   })
-  it('AI가 켜진 동안 허용 분류 변경은 슈퍼마스터 전용', async () => {
-    settingsRow = { ...baseRow(), agent_enabled: true, ai_fallback_enabled: true, ai_allowed_categories: ['general'] }
-    expect((await put({ ai_allowed_categories: ['general', 'return'] })).status).toBe(403)
-    mockRole.mockResolvedValue('superadmin')
-    expect((await put({ ai_allowed_categories: ['general', 'return'] })).status).toBe(200)
-  })
   it('같은 값으로 저장하면 쓰기·감사 없음', async () => {
     const r = await put({ query: 'off' })
     expect(r.data).toMatchObject({ ok: true, unchanged: true })

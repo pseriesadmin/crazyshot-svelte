@@ -9,9 +9,10 @@
 import { sendPushToUser } from '$lib/server/push'
 import { loadCrazychatSettings, resolveFeatureMode } from './settings'
 import {
-  RECOMMEND_REPLY, buildRecommendMetrics, extractRecommendQuery, isRecommendQuestion, pickRecommendCards,
+  RECOMMEND_REPLY, buildRecommendMetrics, extractRecommendQuery, extractSeekingQuery, isProductSeekingQuestion, isRecommendQuestion, pickRecommendCards,
 } from './recommend'
 import { defaultRecommendSearcher } from './recommend-search'
+import { defaultLoadPopular } from './popular'
 import {
   afterAgentReply, insertAgentMessage, recordObservation,
   type AdminClient, type QueryRunContext, type QueryRunResult, type RunDeps,
@@ -20,6 +21,8 @@ import {
 const NOT_HANDLED: QueryRunResult = { handled: false }
 /** 검색 점수 하한(너무 약한 일치로 엉뚱한 상품을 추천하지 않도록). Stage 인덱스 점수 분포로 보정(이름 일치는 10 이상, 본문·사양의 우연한 일치는 2~3대) */
 export const RECOMMEND_MIN_SCORE = 4
+/** "상품을 찾는 질문"(추천 표현 없음)의 하한 — 추천 요청보다 높게 둬서 이름·브랜드 수준의 확실한 일치일 때만 카드를 보낸다 */
+export const RECOMMEND_SEEKING_MIN_SCORE = 8
 
 export async function runCrazychatRecommend(admin: AdminClient, ctx: QueryRunContext, deps: RunDeps = {}): Promise<QueryRunResult> {
   let mode: 'observe' | 'on' | null = null
@@ -29,13 +32,47 @@ export async function runCrazychatRecommend(admin: AdminClient, ctx: QueryRunCon
     const resolved = resolveFeatureMode(settings, 'recommend')
     if (resolved === 'off') return NOT_HANDLED
     mode = resolved
-    if (!isRecommendQuestion(ctx.content)) return NOT_HANDLED
+    const isRecommend = isRecommendQuestion(ctx.content)
+    if (!isRecommend && !isProductSeekingQuestion(ctx.content)) return NOT_HANDLED
+    const minScore = isRecommend ? RECOMMEND_MIN_SCORE : RECOMMEND_SEEKING_MIN_SCORE
 
     const push = deps.sendPush ?? sendPushToUser
-    const { query, tokens } = extractRecommendQuery(ctx.content)
+    const { query, tokens } = isRecommend ? extractRecommendQuery(ctx.content) : extractSeekingQuery(ctx.content)
 
-    // 용도·종류를 말하지 않은 추천 요청 → 되묻기(카드 없음)
+    // 용도·종류를 말하지 않은 추천 요청 → 지식 저장소의 인기 상품 카드를 먼저 시도하고, 없으면 되묻기(카드 없음).
+    // 상품을 찾는 질문은 검색어가 있어야만 여기까지 온다.
     if (!query) {
+      let popularCards: ReturnType<typeof pickRecommendCards> = []
+      let popularHits: Array<{ id: string; score: number }> = []
+      try {
+        const pop = await (deps.loadPopular ?? defaultLoadPopular)(admin)
+        popularHits = pop.hits
+        popularCards = pickRecommendCards(pop.hits, pop.rows, pop.prices, { minScore: 0, minRatio: 0 })
+      } catch (e) {
+        console.error('[crazychat] 인기 상품 조회 실패(되묻기로 이어감):', e instanceof Error ? e.message : String(e))
+      }
+      if (popularCards.length > 0) {
+        const metrics = buildRecommendMetrics(popularHits, 0, false)
+        if (mode !== 'on') {
+          await recordObservation(admin, { message_id: ctx.messageId, mode, intent: 'recommend', outcome: 'answered', group_count: popularCards.length }, metrics)
+          return NOT_HANDLED
+        }
+        const intro = await insertAgentMessage(admin, ctx.sessionId, RECOMMEND_REPLY.popularIntro, undefined, 'recommend')
+        if (intro) {
+          let sent = 0
+          for (const card of popularCards) {
+            const m = await insertAgentMessage(admin, ctx.sessionId, '', { ...card })
+            if (m) sent++
+          }
+          if (sent > 0) {
+            await recordObservation(admin, { message_id: ctx.messageId, mode, intent: 'recommend', outcome: 'answered', group_count: sent }, metrics)
+            await afterAgentReply(admin, ctx, push, { title: '인기 상품을 보내드렸어요', body: '채팅에서 확인해 주세요.' })
+            return { handled: true, aiMessage: intro }
+          }
+          // 카드가 한 장도 저장되지 않았으면 안내만 남기지 않는다 — 안내를 지우고 아래 되묻기로 이어간다
+          try { await admin.from('chat_messages').delete().eq('id', (intro as { id: string }).id) } catch { /* 지우기 실패는 무시 */ }
+        }
+      }
       await recordObservation(admin, { message_id: ctx.messageId, mode, intent: 'recommend', outcome: 'no_data', group_count: 0 })
       if (mode !== 'on') return NOT_HANDLED
       const msg = await insertAgentMessage(admin, ctx.sessionId, RECOMMEND_REPLY.needDetail, undefined, 'recommend')
@@ -46,9 +83,9 @@ export async function runCrazychatRecommend(admin: AdminClient, ctx: QueryRunCon
 
     const searcher = deps.searchProducts ?? defaultRecommendSearcher
     const found = await searcher(admin, query, tokens)
-    const cards = pickRecommendCards(found.hits, found.rows, found.prices, { minScore: RECOMMEND_MIN_SCORE })
+    const cards = pickRecommendCards(found.hits, found.rows, found.prices, { minScore })
     // 재보정용 메트릭(점수·후보 상품 id·사용한 하한·동의어 확장 여부) — 카드 발송 여부와 무관하게 기록
-    const metrics = buildRecommendMetrics(found.hits, RECOMMEND_MIN_SCORE, found.usedExpansion === true)
+    const metrics = buildRecommendMetrics(found.hits, minScore, found.usedExpansion === true)
 
     if (cards.length === 0) {
       await recordObservation(admin, { message_id: ctx.messageId, mode, intent: 'recommend', outcome: 'no_data', group_count: 0 }, metrics)

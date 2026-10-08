@@ -18,6 +18,7 @@ import type { ChatMessage, ChatIntent, ActionPayload } from '$lib/types/chat'
 import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
 import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, WAIT_SUPPRESS_MINUTES } from '$lib/server/cannedAutoReply'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
+import { loadSensitiveCategoryKeys } from '$lib/server/cannedCategories'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
@@ -32,7 +33,7 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 // 캔드매칭이 AI 의도분류를 건너뛰므로 chat_intent_logs가 비어 긴급배지(is_urgent)가 뜨지
 // 않던 결함 보완 — 파손/CS컴플레인 카테고리 캔드응답이 발송되면 그 자동응답과 별개로
 // CS_ESCALATE 인텐트 로그를 남겨, 관리자 확인 없이 방치되지 않도록 한다.
-const SENSITIVE_CANNED_CATEGORIES = new Set(['damage', 'cs'])
+// 기본(파손·CS)은 코드 기준 + 관리자가 설정에서 민감으로 표시한 분류(canned_response_categories.human_only)를 더한다(60초 캐시, 실패 시 기본값)
 
 const SYSTEM_PROMPT = `당신은 크레이지샷(crazyshot.kr) 촬영장비 렌탈 플랫폼의 AI 어시스턴트입니다.
 고객의 메시지를 분석하여 의도를 분류하고 적절한 응답을 생성하세요.
@@ -222,7 +223,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
             // 민감 카테고리는 자동응답을 보내면서도 긴급판정용 인텐트 로그를 별도로 남김
             // (sessions/+server.ts의 is_urgent 판정이 이 로그를 근거로 함)
-            if (match.category && SENSITIVE_CANNED_CATEGORIES.has(match.category)) {
+            if (match.category && (await loadSensitiveCategoryKeys(admin)).has(match.category)) {
               await admin
                 .from('chat_intent_logs')
                 .insert({

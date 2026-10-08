@@ -118,6 +118,26 @@ interface SettingsReader {
   }
 }
 
+/**
+ * AI 허용 분류의 정본은 빠른답변 분류 설정(canned_response_categories.ai_allowed, Migration #682).
+ * 표를 못 읽거나 ai_allowed 컬럼이 없으면 null(= 기존 설정 컬럼 값으로 폴백).
+ */
+async function loadAiAllowedFromCategories(admin: SettingsReader): Promise<string[] | null> {
+  try {
+    const res = (await (admin as unknown as { from: (t: string) => { select: (c: string) => PromiseLike<{ data: unknown; error: { message: string } | null }> } })
+      .from('canned_response_categories').select('value, sort_order, is_active, human_only, ai_allowed')) as { data?: unknown; error?: unknown } | null
+    if (!res || res.error || !Array.isArray(res.data)) return null
+    const rows = res.data as Record<string, unknown>[]
+    if (!rows.some((r) => typeof r?.ai_allowed === 'boolean')) return null
+    return rows
+      .filter((r) => r && r.ai_allowed === true && r.is_active !== false && r.human_only !== true && typeof r.value === 'string' && !isHumanOnlyTopic(r.value))
+      .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))
+      .map((r) => r.value as string)
+  } catch {
+    return null
+  }
+}
+
 /** 설정을 읽는다. 테이블 없음·행 없음·DB 오류·예외 어느 쪽이든 ALL_OFF(고객 채팅 흐름을 막지 않는다). */
 export async function loadCrazychatSettings(admin: SettingsReader): Promise<CrazychatSettings> {
   const BASE_COLS = 'agent_enabled, query_enabled, query_observe, action_enabled, action_observe, ai_fallback_enabled, ai_fallback_observe, ai_allowed_categories'
@@ -131,7 +151,10 @@ export async function loadCrazychatSettings(admin: SettingsReader): Promise<Craz
       console.error('[crazychat] 설정 조회 실패(전부 꺼짐으로 처리):', error.message)
       return ALL_OFF
     }
-    return parseCrazychatSettings(data)
+    const parsed = parseCrazychatSettings(data)
+    if (parsed === ALL_OFF) return parsed
+    const fromCategories = await loadAiAllowedFromCategories(admin)
+    return fromCategories ? { ...parsed, aiAllowedCategories: fromCategories } : parsed
   } catch (e) {
     console.error('[crazychat] 설정 조회 예외(전부 꺼짐으로 처리):', e instanceof Error ? e.message : String(e))
     return ALL_OFF

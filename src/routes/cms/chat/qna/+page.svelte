@@ -7,9 +7,10 @@
   import CannedResponsePanel from '$lib/components/cms/CannedResponsePanel.svelte'
   import { csToast } from '$lib/utils/toast'
   import { extractQaPairsFromCsvText } from '$lib/utils/kakaoCsvQaExtractor'
-  import { CANNED_RESPONSE_CATEGORIES, getCategoryLabel } from '$lib/constants/cannedResponseCategories'
+  import { getCategoryLabel, sortCategories, type CannedCategory } from '$lib/constants/cannedResponseCategories'
+  import CannedCategorySettings from '$lib/components/cms/CannedCategorySettings.svelte'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
-  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+  import { getRoleLevel, hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { PageData } from './$types'
   import type { CannedResponseRow, ReplyCandidateRow } from './+page.server'
 
@@ -20,6 +21,12 @@
   // | 검색 갭(zeroResults, NLSearch B안)
   type ActiveTab = 'qna' | 'candidates' | 'replies' | 'zeroResults'
   let activeTab = $state<ActiveTab>('qna')
+
+  // 빠른답변 분류(설정에서 추가·수정) — 서버가 내려준 목록을 화면에서 갱신한다
+  let categories = $state<CannedCategory[]>(data.categories)
+  $effect(() => { categories = data.categories })
+  const activeCategories = $derived(sortCategories(categories, { activeOnly: true }))
+  let showCategorySettings = $state(false)
 
   // NLSearch A안(2026-09-02): 빠른답변 후보 승격 모달 상태
   let approvingCandidate = $state<ReplyCandidateRow | null>(null)
@@ -374,13 +381,16 @@
             class:active={filterCat === null}
             onclick={() => filterCat = null}
           >전체</button>
-          {#each CANNED_RESPONSE_CATEGORIES as cat}
+          {#each activeCategories as cat (cat.value)}
             <button
               class="filter-pill"
               class:active={filterCat === cat.value}
               onclick={() => filterCat = cat.value}
             >{cat.label}</button>
           {/each}
+          {#if canManageCandidates}
+            <button class="filter-pill filter-pill--settings" onclick={() => (showCategorySettings = true)} aria-label="분류 설정" title="분류 추가·수정">＋ 분류 설정</button>
+          {/if}
         </div>
 
         <!-- 정렬 — cms-uiux.md §7-13 순환식 단일 버튼 -->
@@ -462,7 +472,7 @@
                 <span class="ic-pending" title="CSV 일괄등록 후 아직 열어서 검토·저장하지 않은 항목 — 실시간 고객채팅 자동매칭에서 제외된 상태">미검토</span>
               {/if}
               {#if item.category}
-                <span class="ic-cat">{getCategoryLabel(item.category)}</span>
+                <span class="ic-cat">{getCategoryLabel(item.category, categories)}</span>
               {/if}
             </div>
             <div class="ic-mid">
@@ -483,13 +493,14 @@
     <!-- 우측 상세 패널 -->
     <div class="detail-pane" class:detail-pane--collapsed={!hasDetailContent}>
       {#if showNew}
-        <CannedResponsePanel item={null} onclose={closePanel} oncreated={handleCreated} />
+        <CannedResponsePanel item={null} onclose={closePanel} oncreated={handleCreated} {categories} />
       {:else if data.selectedItem}
         {#key data.selectedId}
           <CannedResponsePanel
             item={data.selectedItem}
             onclose={closePanel}
             oncreated={handleCreated}
+            {categories}
           />
         {/key}
       {:else}
@@ -794,7 +805,7 @@
             <span class="rc-field-label">빠른답변 분류</span>
             <div class="cat-pills">
               <button type="button" class="cat-pill" class:active={approveCategory === null} onclick={() => approveCategory = null}>없음</button>
-              {#each CANNED_RESPONSE_CATEGORIES as cat}
+              {#each activeCategories as cat (cat.value)}
                 <button type="button" class="cat-pill" class:active={approveCategory === cat.value} onclick={() => approveCategory = cat.value}>{cat.label}</button>
               {/each}
             </div>
@@ -819,6 +830,15 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showCategorySettings}
+  <CannedCategorySettings
+    {categories}
+    canEnableAi={getRoleLevel(data.cmsRole ?? '') >= getRoleLevel('superadmin')}
+    onchange={(list) => { categories = list; if (filterCat && !list.some((c) => c.value === filterCat && c.is_active)) filterCat = null }}
+    onclose={() => { showCategorySettings = false; void invalidateAll() }}
+  />
 {/if}
 
 <style>
@@ -947,6 +967,7 @@
     color: var(--cs-white);
   }
   .filter-pill:hover:not(.active) { color: var(--cs-purple); }
+  .filter-pill--settings { color: var(--cs-text-mid); background: transparent; }
 
   /* 정렬 — cms-uiux.md §7-13 순환식 단일 버튼 표준 */
   .sort-btn {
