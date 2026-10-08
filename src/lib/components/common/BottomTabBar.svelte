@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack, tick } from 'svelte'
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
@@ -49,6 +50,43 @@
     lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
   }
 
+  // iOS 26 Safari는 position:fixed; bottom:0 요소가 레이아웃에 있으면 transform으로 숨겨도 그 영역(탭바 70px+안전영역)을
+  // 뷰포트에서 예약해 본문이 잘리고 빈 띠가 남는다 → 숨김 전환(0.3s)이 끝나면 display:none으로 레이아웃에서 완전히 뺀다.
+  // 표시할 때는 먼저 레이아웃에 되돌리고(removed=false) DOM 반영 뒤 강제 리플로우로 숨김 상태를 확정한 다음 transform을 풀어
+  // 슬라이드 전환을 유지한다(rAF는 백그라운드·절전 탭에서 멈춰 숨김이 풀리지 않을 수 있어 쓰지 않는다).
+  let barEl = $state<HTMLDivElement | undefined>()
+  let cssHidden = $state(false)   // transform 숨김 클래스
+  let removed = $state(false)     // display:none (레이아웃 제거)
+  let removeTimer: ReturnType<typeof setTimeout> | undefined
+  let showToken = 0               // 빠른 숨김/표시 반복 시 지난 표시 작업을 무효화
+
+  $effect(() => {
+    const wantHidden = tabBarState.hidden
+    clearTimeout(removeTimer)
+    const token = ++showToken
+    if (wantHidden) {
+      cssHidden = true
+      removeTimer = setTimeout(() => { removed = true }, 320)
+    } else if (untrack(() => removed)) {   // removed를 추적하면 아래에서 false로 바꾸는 순간 effect가 재실행돼 표시 작업이 취소된다
+      removed = false
+      void tick().then(() => {
+        if (token !== showToken) return
+        void barEl?.offsetHeight           // 숨김 상태(translateY 100%)로 한 번 그려 둔 뒤
+        cssHidden = false                  // 클래스를 풀어 슬라이드 인
+      })
+    } else {
+      cssHidden = false
+    }
+    return () => { clearTimeout(removeTimer) }
+  })
+
+  // 탭바가 레이아웃에서 빠지거나 돌아오면 뷰포트 높이가 바뀌며 scroll/resize가 발생 — 그 보정 입력으로 상태가 뒤집히지 않게 잠근다
+  function onResize() {
+    locked = true
+    clearTimeout(lockTimer)
+    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
+  }
+
   $effect(() => {
     lastY = window.scrollY
     tabBarState.hidden = false
@@ -57,8 +95,10 @@
     const prevOverscroll = html.style.overscrollBehaviorY
     html.style.overscrollBehaviorY = 'none'
     window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onResize, { passive: true })
     return () => {
       window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onResize)
       clearTimeout(lockTimer)
       locked = false
       html.style.overscrollBehaviorY = prevOverscroll
@@ -88,7 +128,7 @@
   const INACTIVE = '#c1bbec'
 </script>
 
-<div class="tab-bar" class:hidden={tabBarState.hidden}>
+<div class="tab-bar" class:hidden={cssHidden} class:removed bind:this={barEl}>
   {#each TABS as tab}
     <button
       class="tab-item"
@@ -154,6 +194,11 @@
     visibility: hidden;               /* 전환이 끝난 뒤 완전히 감춤 — 숨겨진 바의 위쪽 그림자·잔상이 하단에 남지 않게 */
     pointer-events: none;
     transition: transform 0.3s ease, visibility 0s linear 0.3s;
+  }
+
+  /* 숨김 전환이 끝난 뒤 레이아웃에서 완전히 제거 — iOS 26 Safari의 하단 고정 요소 영역 예약 해제용(위 스크립트 주석 참고) */
+  .tab-bar.removed {
+    display: none;
   }
 
   /* PC에서는 숨김 */
