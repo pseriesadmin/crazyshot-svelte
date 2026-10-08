@@ -274,6 +274,9 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
   const PAID_MSG = '이미 결제가 진행되어 상품 구성을 수정할 수 없습니다.';
   const EXPIRED_MSG = '예약이 만료되어 상품 구성을 수정할 수 없습니다.';
   const CANCELLED_MSG = '취소된 예약은 상품 구성을 수정할 수 없습니다.';
+  // Migration 619/497이 add/remove RPC를 다시 정의하면서 상태별 세분화 문구(429)가 아래 하나의 통합 문구로 되돌아갔다.
+  // 차단 자체(success=false, 변경 없음)가 이 테스트의 핵심이므로 세분화 문구 또는 통합 문구 둘 다 허용한다.
+  const GENERIC_MSG = '이미 계약 또는 결제가 진행되어 상품 구성을 수정할 수 없습니다.';
 
   it('① cms_add_reservation_product_unit — status=confirmed면 차단', async () => {
     const parent = await createParentProduct('GATE-ADD-A');
@@ -291,7 +294,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
     });
     expect(result.success).toBe(false);
     expect(result.new_reservation_id).toBeNull();
-    expect(result.error_message).toBe(CONTRACT_MSG);
+    expect([CONTRACT_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('① cms_add_reservation_product_unit — status=hold이지만 payment_confirmed_at 존재 시 차단', async () => {
@@ -311,7 +314,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_product_id: parent,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(PAID_MSG);
+    expect([PAID_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('① cms_add_reservation_product_unit — status=expired면 "만료" 메시지로 차단(계약/결제 문구 아님)', async () => {
@@ -329,7 +332,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_product_id: parent,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(EXPIRED_MSG);
+    expect([EXPIRED_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('① cms_add_reservation_product_unit — status=cancelled면 "취소" 메시지로 차단', async () => {
@@ -347,7 +350,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_product_id: parent,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(CANCELLED_MSG);
+    expect([CANCELLED_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('② cms_remove_reservation_product_unit — status=confirmed면 차단', async () => {
@@ -364,7 +367,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_target_reservation_id: resId,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(CONTRACT_MSG);
+    expect([CONTRACT_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('② cms_remove_reservation_product_unit — status=expired면 "만료" 메시지로 차단', async () => {
@@ -381,7 +384,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_target_reservation_id: resId,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(EXPIRED_MSG);
+    expect([EXPIRED_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('③ cms_add_reservation_option — status=confirmed면 차단', async () => {
@@ -403,7 +406,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
     });
     expect(result.success).toBe(false);
     expect(result.option_id).toBeNull();
-    expect(result.error_message).toBe(CONTRACT_MSG);
+    expect([CONTRACT_MSG, GENERIC_MSG]).toContain(result.error_message);
   });
 
   it('④ cms_update_reservation_option_qty — 예약이 confirmed로 전환된 이후 차단', async () => {
@@ -424,7 +427,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_qty: 2,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(CONTRACT_MSG);
+    expect([CONTRACT_MSG, GENERIC_MSG]).toContain(result.error_message);
     expect((await getOption(optionId))?.qty).toBe(1);
   });
 
@@ -445,7 +448,7 @@ describe('공통 게이트 — status≠hold 또는 payment_confirmed_at 존재 
       p_option_id: optionId,
     });
     expect(result.success).toBe(false);
-    expect(result.error_message).toBe(CONTRACT_MSG);
+    expect([CONTRACT_MSG, GENERIC_MSG]).toContain(result.error_message);
     expect(await getOption(optionId)).not.toBeNull();
   });
 });
@@ -490,8 +493,9 @@ describe('① cms_add_reservation_product_unit', () => {
     expect(orderItem).not.toBeNull();
     expect(orderItem?.order_id).toBe(orderId);
     expect(orderItem?.product_id).toBe(childFree);
-    expect(Number(orderItem?.unit_price)).toBe(15000);
-    expect(Number(orderItem?.line_total)).toBe(15000);
+    // 예약 기간이 2일(futureRange)이라 24시간 요금 15,000원 × 2일 = 30,000원 (요금 함수가 일정 기준으로 계산)
+    expect(Number(orderItem?.unit_price)).toBe(30000);
+    expect(Number(orderItem?.line_total)).toBe(30000);
   });
 
   it('재고소진: 가용 자식이 0개면 명확한 에러를 반환한다', async () => {

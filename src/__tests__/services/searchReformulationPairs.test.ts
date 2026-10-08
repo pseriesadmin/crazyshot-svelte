@@ -117,10 +117,11 @@ function makeLog(
   }
 }
 
-const T0 = new Date('2026-08-15T10:00:00Z')
-const T1 = new Date('2026-08-15T10:01:00Z')  // +60s (시간창 내)
-const T2 = new Date('2026-08-15T10:02:05Z')  // +125s (시간창 초과)
-const T_OLD = new Date('2026-07-01T10:00:00Z') // 45일 전 (lookback 밖)
+// 고정 날짜는 lookback(30일) 창이 지나면 "기간 밖"이 되어 정상 케이스가 시간이 지나면 깨진다 — 현재 시각 기준 상대값 사용
+const T0 = new Date(Date.now() - 60 * 60 * 1000)          // 1시간 전
+const T1 = new Date(T0.getTime() + 60 * 1000)             // +60s (시간창 내)
+const T2 = new Date(T0.getTime() + 125 * 1000)            // +125s (시간창 초과)
+const T_OLD = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000) // 45일 전 (lookback 밖)
 
 // ── 테스트 케이스 ────────────────────────────────────────────────────────────
 

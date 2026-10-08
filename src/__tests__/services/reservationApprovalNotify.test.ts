@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify';
+import { createTestProduct, type TestProduct } from '../helpers/createTestProduct';
 
 /**
  * CMS 예약 승인(/cms/reservation ?/approveReservation) — 다중상품 주문 배치알림 연동
@@ -26,11 +27,17 @@ afterEach(async () => {
   }
 });
 
+// 임의 상품(limit(1))을 잡으면 다른 테스트·누수 예약과 날짜가 겹치므로 이 파일 전용 상품을 만들고 끝나면 삭제한다.
+let fixture: TestProduct;
+
 beforeAll(async () => {
-  const { data, error } = await admin.from('products').select('id').limit(1).single();
-  if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
-  testProductId = (data as { id: string }).id;
-});
+  fixture = await createTestProduct(admin, 'APPROVENOTIFY', 1);
+  testProductId = fixture.childId;
+}, 60000);
+
+afterAll(async () => {
+  await fixture?.cleanup();
+}, 60000);
 
 async function createEphemeralUser(): Promise<string> {
   const email = `tdd-approvenotify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;

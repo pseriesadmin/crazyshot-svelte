@@ -33,6 +33,18 @@ vi.mock('$lib/env/supabasePublic', () => ({
   getSupabaseUrl: () => 'https://test.supabase.co',
 }))
 
+// 2026-10-06 메뉴 권한 서버 집행(2-C) — 핸들러가 메뉴 게이트와 CMS 역할 조회를 먼저 호출한다.
+// 이 테스트의 관심사는 자식→부모 치환/이미지 목록 갱신이므로 두 게이트는 통과로 고정한다
+// (게이트 자체는 별도 테스트가 검증).
+vi.mock('$lib/server/requireMenuAccess', () => ({
+  requireAnyMenuAccessApi: vi.fn().mockResolvedValue(null),
+  requireMenuAccessApi: vi.fn().mockResolvedValue(null),
+  requireMenuAccessAction: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('$lib/server/getCmsRoleForAction', () => ({
+  getCmsRoleForAction: vi.fn().mockResolvedValue('manager'),
+}))
+
 // ── createClient mock 참조 가져오기 ──────────────────────────────────────────
 import { createClient } from '@supabase/supabase-js'
 

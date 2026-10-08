@@ -11,7 +11,7 @@
  * 것이 정상(RED 상태).
  */
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public'
@@ -21,8 +21,34 @@ const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 // Stage DB 확인된 활성 자식 4개짜리 부모 상품(Canon RF 24-70mm F2.8L) — 다른 테스트 파일들과 공유
 const FIXTURE_4CHILD_ID = '955238da-5440-47b1-906d-4865232f3a6c'
-// 활성 자식 1개짜리 부모 상품(SONY PXW-Z90) — "완전 점유" 재현이 간단함
-const FIXTURE_1CHILD_ID = '467c8f9b-ca0e-4143-8c27-d04c993a8baa'
+// 활성 자식 1개짜리 "완전 점유" 재현용 부모 상품 — 공유 픽스처(SONY PXW-Z90)가 삭제돼 이 파일이 직접 만들고 afterAll에서 완전 삭제한다.
+let FIXTURE_1CHILD_ID = ''
+let fixtureParentId = ''
+
+beforeAll(async () => {
+  const { data: parent, error } = await admin
+    .from('products')
+    .insert({ name: `[TDD-UNAVAIL] 1child ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, category: 'other', is_active: true })
+    .select('id')
+    .single()
+  if (error || !parent) throw new Error(`부모상품 생성 실패: ${error?.message}`)
+  fixtureParentId = (parent as { id: string }).id
+  const { error: cErr } = await admin
+    .from('products')
+    .insert({ name: `[TDD-UNAVAIL] 1child 자식`, category: 'other', is_active: true, parent_product_id: fixtureParentId })
+  if (cErr) throw new Error(`자식상품 생성 실패: ${cErr.message}`)
+  FIXTURE_1CHILD_ID = fixtureParentId
+}, 60000)
+
+afterAll(async () => {
+  if (!fixtureParentId) return
+  // 이 파일의 예약은 afterEach에서 이미 지워졌지만, 중단 대비로 한 번 더 확인 후 상품 삭제
+  const { data: kids } = await admin.from('products').select('id').eq('parent_product_id', fixtureParentId)
+  const ids = [fixtureParentId, ...((kids ?? []) as Array<{ id: string }>).map(k => k.id)]
+  await admin.from('rental_reservations').delete().in('product_id', ids)
+  await admin.from('products').delete().eq('parent_product_id', fixtureParentId)
+  await admin.from('products').delete().eq('id', fixtureParentId)
+}, 60000)
 
 type Cleanup = () => Promise<void>
 const cleanups: Cleanup[] = []

@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+server';
 import { POST as payMock } from '../../routes/api/contracts/[token]/pay-mock/+server';
 import { load as contractPageLoad } from '../../routes/contract/[token]/+page.server';
-import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
+import { createTestProduct, type TestProduct } from '../helpers/createTestProduct'
 
 /**
  * TASK.md "예약 결제·계약서명 순서 재설계"(2026-08-21) — Phase F TDD 스위트
@@ -24,6 +24,10 @@ import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// 이 파일의 각 테스트는 서명 API(PDF 보관본 생성·알림 포함)와 결제 API를 실제로 호출해 한 건당 3~6초가 걸린다(실측).
+// 기본 5초 제한에 걸려 간헐 실패하므로 이 파일에만 넉넉한 제한을 둔다.
+vi.setConfig({ testTimeout: 30000 });
+
 let testProductId: string;
 
 type Cleanup = () => Promise<void>;
@@ -36,12 +40,17 @@ afterEach(async () => {
   }
 });
 
+// 임의 상품(limit(1))은 누수 예약과 날짜가 겹칠 수 있어 이 파일 전용 상품(24h 요금 포함)을 만들고 끝나면 삭제한다.
+let fixture: TestProduct;
+
 beforeAll(async () => {
-  const { data, error } = await admin.from('products').select('id').limit(1).single();
-  if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
-  testProductId = (data as { id: string }).id;
-  await ensure24hPriceRule(admin, testProductId);
-});
+  fixture = await createTestProduct(admin, 'PAYCONTRACT', 1);
+  testProductId = fixture.childId;
+}, 60000);
+
+afterAll(async () => {
+  await fixture?.cleanup();
+}, 60000);
 
 function randomFutureDateRange(): { start: string; end: string } {
   const dayOffset = Math.floor(Math.random() * 3650) + 1;
@@ -152,10 +161,36 @@ async function callSign(token: string): Promise<{ status: number; body: Record<s
   return { status: res.status, body };
 }
 
+// 2026-10-03: pay-mock은 "서버 저장 결제금액이 0원인 주문"만 확정하고, 주문이 없는 예약은 거부한다
+// (payAmountServerVerification.test.ts 참고). 이 파일의 pay-mock 테스트는 "쿠폰·포인트 전액상쇄 무료결제"
+// 경로의 서명/결제 게이팅을 검증하는 것이므로, 호출 직전에 그 주문 상태(주문 존재 + final_amount=0)를 재현한다.
+async function prepareFreeOrderForToken(token: string): Promise<void> {
+  const { data: signing } = await admin.from('contract_signings').select('contract_id').eq('token', token).single();
+  const { data: contract } = await admin.from('contracts').select('reservation_id, user_id').eq('id', (signing as { contract_id: string }).contract_id).single();
+  const { reservation_id: reservationId, user_id: userId } = contract as { reservation_id: number; user_id: string };
+  // hold가 아닌 예약(이미 confirmed 등)은 pay-mock이 주문 확인 이전에 no-op 처리하므로 주문 준비가 필요 없다
+  const { data: rv } = await admin.from('rental_reservations').select('status').eq('id', reservationId).single();
+  if ((rv as { status: string }).status !== 'hold') return;
+  let { data: item } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle();
+  if (!item) {
+    const { error } = await admin.rpc('create_reservation_order', { p_user_id: userId, p_reservation_ids: [reservationId] });
+    if (error) throw new Error(`create_reservation_order 실패: ${error.message}`);
+    ({ data: item } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle());
+    const createdOrderId = (item as { order_id: number }).order_id;
+    cleanups.push(async () => {
+      await admin.from('order_items').delete().eq('order_id', createdOrderId);
+      await admin.from('orders').delete().eq('id', createdOrderId);
+    });
+  }
+  const orderId = (item as { order_id: number }).order_id;
+  await admin.from('orders').update({ final_amount: 0 }).eq('id', orderId);
+}
+
 async function callPayMock(
   token: string,
   payload: Record<string, unknown> = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  await prepareFreeOrderForToken(token);
   const request = new Request(`http://localhost/api/contracts/${token}/pay-mock`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -822,6 +857,7 @@ describe('G: 형제 예약 결제확정 게이팅 — 주문 단위로 통일(Mi
     expect((await getReservationRow(siblingId))?.status).toBe('hold');
 
     // 결제(mock, 쿠폰/포인트로 전액상쇄되는 무료결제 경로) — 대표 예약의 토큰으로 호출.
+    // (callPayMock이 호출 직전 주문 final_amount=0 상태를 재현한다)
     const payRes = await callPayMock(token);
     expect(payRes.status).toBe(200);
     expect(payRes.body.confirmed).toBe(true);

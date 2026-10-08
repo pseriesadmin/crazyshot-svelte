@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
+import { createTestProduct, type TestProduct } from '../helpers/createTestProduct';
 import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+server';
 
 /**
@@ -18,6 +19,9 @@ import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+s
  */
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// 서명 API(PDF 보관본 생성 포함)를 실제로 호출해 한 건당 3~6초가 걸린다(실측) — 기본 5초 제한에 간헐 실패하므로 이 파일에만 넉넉한 제한을 둔다.
+vi.setConfig({ testTimeout: 30000 });
 
 const SERVER_SOURCE_PATH = new URL('../../routes/api/contracts/[token]/sign/+server.ts', import.meta.url);
 
@@ -131,11 +135,17 @@ async function callSign(token: string): Promise<{ status: number; body: Record<s
   return { status: res.status, body };
 }
 
+// 임의 상품(limit(1))은 누수 예약과 날짜가 겹칠 수 있어 이 파일 전용 상품을 만들고 끝나면 삭제한다.
+let fixture: TestProduct;
+
 beforeAll(async () => {
-  const { data, error } = await admin.from('products').select('id').limit(1).single();
-  if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
-  testProductId = data.id as string;
-});
+  fixture = await createTestProduct(admin, 'CONTRACTSIGN', 1);
+  testProductId = fixture.childId;
+}, 60000);
+
+afterAll(async () => {
+  await fixture?.cleanup();
+}, 60000);
 
 const cleanups: Cleanup[] = [];
 

@@ -116,19 +116,21 @@ describe('updateSection pricing — sale_only=true 상품 수정 (TDD-SALEONLY-2
     expect(r.sectionType).toBe('pricing');
   });
 
-  it('sale_only=false 시 price_24h 없으면 fail(400) 반환 (회귀 방지)', async () => {
+  it('sale_only=false 이고 price_24h가 없어도 저장된다 — 24시간 가격은 선택 입력 (products.md §2-9, 2026-09-28 필수 폐기)', async () => {
     const admin = makeUpdateSectionAdminStub();
     createClientMock.mockReturnValue(admin);
 
     const result = await callUpdateSection({
       request: makePricingFormRequest({
         sale_only: 'false',
-        // price_24h 미포함 — 기존대로 차단
+        // price_24h 미포함 — 과거엔 fail(400)이었으나 현재는 허용
       }),
     });
 
-    const r = result as { status?: number };
-    expect(r.status).toBe(400);
+    const r = result as { success?: boolean; sectionType?: string; status?: number };
+    expect(r.status).not.toBe(400);
+    expect(r.success).toBe(true);
+    expect(r.sectionType).toBe('pricing');
   });
 
   it('sale_only=false + price_24h 있으면 {success:true} 반환 (정상 경로 회귀)', async () => {
