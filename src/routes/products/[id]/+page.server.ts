@@ -73,7 +73,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const rawId = params.id;
 	const { session } = await locals.safeGetSession();
 
-	let query = locals.supabase.from('products').select('*').is('parent_product_id', null);
+	// 삭제(soft delete)된 상품은 접근 규칙(RLS)에만 맡기지 않고 직접 거른다 — CMS 관리자 세션은 RLS가 삭제된 행까지
+	// 허용해, 삭제된 옛 상품이 같은 주소(slug)를 남겨 두면 "한 줄만 기대"하는 아래 조회가 두 줄을 만나 503이 났다(2026-10-08).
+	let query = locals.supabase.from('products').select('*').is('parent_product_id', null).is('deleted_at', null);
 
 	if (isLegacyNumericId(rawId)) {
 		// crazyshot-stage / 실서비스형 — 숫자 id (예: 9)
