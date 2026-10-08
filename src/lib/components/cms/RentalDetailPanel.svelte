@@ -14,7 +14,6 @@
     const msg = result.type === 'failure' && result.status === 403 ? result.data?.error : null
     return typeof msg === 'string' && msg ? msg : '처리 중 오류가 발생했습니다.'
   }
-  import { isLockerHour } from '$lib/utils/lockerTimeRange'
   import { DHERO_STATUS_LABEL } from '$lib/utils/dheroLabels'
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
@@ -152,11 +151,15 @@
   let canReassignProductCode = $derived(
     row.status === 'hold' || row.status === 'confirmed'
   )
+  // 수령 또는 반납 방식이 방문(visit)·퀵서비스(quick)이면 시간대·예약 단계와 무관하게 항상 노출(사용하지 않아도 노출).
+  // 취소·만료 예약은 비밀번호가 폐기되고 저장도 거부되므로(Migration #673) 입력·저장만 비활성화한다.
+  const LOCKER_FIELD_METHODS = ['visit', 'quick']
   let showLockerPasswordField = $derived(
     canManagePaymentAndLocker &&
-    ((row.pickup_method === 'visit' && isLockerHour(row.pickup_time)) ||
-     (row.return_method === 'visit' && isLockerHour(row.return_time)))
+    (LOCKER_FIELD_METHODS.includes(row.pickup_method ?? '') ||
+     LOCKER_FIELD_METHODS.includes(row.return_method ?? ''))
   )
+  let lockerPwClosed = $derived(row.status === 'cancelled' || row.status === 'expired')
 
   let qrOverlayOpen = $state(false)
 
@@ -1562,8 +1565,10 @@
         body: JSON.stringify({ locker_password: lockerPassword || null }),
       })
       if (!res.ok) {
-        const d = await res.json().catch(() => ({})) as { error?: string }
-        lockerPwError = d.error ?? '저장에 실패했습니다.'
+        // SvelteKit error()는 {message}로, json({error})는 {error}로 응답 — 둘 다 읽어 실제 사유(예: 숫자 4~6자리)를 보여준다
+        const d = await res.json().catch(() => ({})) as { error?: string; message?: string }
+        lockerPwError = d.error ?? d.message ?? '저장에 실패했습니다.'
+        csToast.error(lockerPwError)
       } else {
         csToast.success('무인보관함 비밀번호가 저장되었습니다.')
       }
@@ -1572,6 +1577,44 @@
     } finally {
       lockerPwSaving = false
     }
+  }
+
+  // 시범 발송 — 회사 테스트폰으로 자동 발송과 같은 문구를 실제 발송하고, 발송 문구·시각을 그대로 보여준다
+  let lockerTestSending = $state(false)
+  let lockerTestResult  = $state<{ message: string; sent_at: string; to_masked: string } | null>(null)
+  let lockerTestResultFor = $state<number | null>(null)
+
+  async function sendLockerTest(): Promise<void> {
+    if (lockerTestSending) return
+    lockerTestSending = true
+    lockerPwError = null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password/test-send`, {
+        method:  'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ locker_password: lockerPassword || null }),
+      })
+      const d = await res.json().catch(() => ({})) as { error?: string; message?: string; sent_at?: string; to_masked?: string }
+      if (!res.ok || !d.message || !d.sent_at) {
+        lockerPwError = d.error ?? '시범 발송에 실패했습니다.'
+        csToast.error(lockerPwError)
+      } else {
+        lockerTestResult = { message: d.message, sent_at: d.sent_at, to_masked: d.to_masked ?? '' }
+        lockerTestResultFor = row.reservation_id
+        csToast.success('시범 발송이 완료되었습니다.')
+      }
+    } catch {
+      lockerPwError = '시범 발송 중 오류가 발생했습니다.'
+    } finally {
+      lockerTestSending = false
+    }
+  }
+
+  function formatKstDateTime(iso: string): string {
+    return new Date(iso).toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    })
   }
 
   // 중복 발송 가드 — 5분 내 동일 알림 발송 이력 추적 (세션 내 휘발, 새로고침 시 초기화)
@@ -2243,7 +2286,20 @@
       <!-- 무인보관함 비밀번호 — 방문대여(visit)+영업외시간(23:00~08:59) 조합일 때만, manager 이상 전용
            (rental-lifecycle.md·service-operations.md 정책 참고 — 2026-08-20 신설) -->
       {#if showLockerPasswordField}
-        <div class="section-title">무인보관함 비밀번호</div>
+        <div class="section-title-row">
+          <span class="section-title">무인보관함 비밀번호</span>
+          <div class="section-title-btns">
+            {#if lockerPwError}
+              <span class="tracking-error-msg">{lockerPwError}</span>
+            {/if}
+            <button
+              type="button"
+              class="btn-tracking-save btn-tracking-save--sm"
+              onclick={saveLockerPassword}
+              disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || lockerPwLoading}
+            >{lockerPwSaving ? '저장 중...' : '비밀번호 확정'}</button>
+          </div>
+        </div>
         {#if lockerPwLoading}
           <div class="loading-box">비밀번호 정보 조회 중...</div>
         {:else}
@@ -2255,21 +2311,28 @@
                 type="text"
                 placeholder="무인보관함 비밀번호 입력"
                 bind:value={lockerPassword}
+                disabled={lockerPwClosed}
               />
+              <button
+                type="button"
+                class="btn-reassign-small"
+                onclick={sendLockerTest}
+                disabled={lockerTestSending || lockerPwClosed}
+              >{lockerTestSending ? '발송 중...' : '시범 발송'}</button>
             </div>
           </div>
-          <div class="tracking-action-row">
-            <button
-              class="btn-tracking-save"
-              onclick={saveLockerPassword}
-              disabled={lockerPwSaving}
-            >
-              {lockerPwSaving ? '저장 중...' : '비밀번호 저장'}
-            </button>
-            {#if lockerPwError}
-              <span class="tracking-error-msg">{lockerPwError}</span>
-            {/if}
-          </div>
+          {#if lockerTestResult && lockerTestResultFor === row.reservation_id}
+            <div class="info-section locker-test-result">
+              <div class="info-row">
+                <span class="info-label">발송 문자</span>
+                <span class="info-value locker-test-msg">{lockerTestResult.message}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">발송 시간</span>
+                <span class="info-value">{formatKstDateTime(lockerTestResult.sent_at)}{lockerTestResult.to_masked ? ` · 수신 ${lockerTestResult.to_masked}` : ''}</span>
+              </div>
+            </div>
+          {/if}
         {/if}
       {/if}
 
@@ -3220,6 +3283,7 @@
     background: var(--cs-text-mid);
     color: var(--cs-white);
   }
+  .btn-reassign-small:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* 상품 코드 행 + 재배정 줄을 하나의 그룹으로 — 그룹 안은 구분선 없이 이어지고 아래 구분선은 그룹 전체에 1줄(2026-10-06) */
   .unit-block {
@@ -3797,6 +3861,8 @@
     cursor: pointer;
     transition: background 0.12s;
   }
+  .locker-test-result { margin-top: 8px; }
+  .locker-test-msg { white-space: pre-wrap; word-break: break-all; }
   .btn-tracking-save:hover:not(:disabled)    { background: var(--crazy-shot-purple-80); }
   .btn-tracking-save:disabled { opacity: 0.5; cursor: not-allowed; }
 

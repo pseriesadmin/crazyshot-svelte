@@ -19,9 +19,11 @@ export async function sendSms(to: string, message: string): Promise<void> {
 
   const service = new SolapiMessageService(apiKey, apiSecret)
 
-  // 수신번호·발신번호 양쪽 모두 하이픈 제거 필수 (Solapi 공식 예제 명시 요건)
-  const toClean   = to.replace(/-/g, '')
-  const fromClean = senderPhone.replace(/-/g, '')
+  // 수신번호·발신번호 양쪽 모두 숫자만 남긴다 — Solapi는 하이픈 불가이고, 복사·붙여넣기로 들어간 보이지 않는
+  // 방향 제어문자(U+202D/U+202C 등)가 섞인 번호는 발송이 실패하므로 하이픈뿐 아니라 숫자 외 전부 제거한다.
+  const toClean   = to.replace(/[^0-9]/g, '')
+  const fromClean = senderPhone.replace(/[^0-9]/g, '')
+  if (!toClean) throw new Error('SMS 수신번호 형식 오류')
 
   const res = await service.send({
     to:   toClean,
@@ -33,6 +35,11 @@ export async function sendSms(to: string, message: string): Promise<void> {
     const first = res.failedMessageList[0]
     throw new Error(`SMS 발송 실패: ${JSON.stringify(first)}`)
   }
+}
+
+// 무인보관함 안내 문자 본문 — 크론(/api/cron/locker-guide)과 CMS "시범 발송"이 같은 문구를 쓰도록 한 곳에서 만든다.
+export function buildLockerGuideSms(productName: string | null | undefined, password: string): string {
+  return `[크레이지샷] ${productName ?? '상품'} 무인보관함 이용 비밀번호: ${password}`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
