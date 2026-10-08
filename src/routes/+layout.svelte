@@ -11,6 +11,7 @@
 	import LoadingIndicator from '$lib/components/common/LoadingIndicator.svelte';
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
 	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
+	import ViewportDebug from '$lib/components/common/ViewportDebug.svelte';
 	import ChevronIcon from '$lib/components/common/ChevronIcon.svelte';
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
@@ -97,6 +98,10 @@
 </script>
 
 <PushNotificationInit />
+<!-- 뷰포트 진단 패널 — ?viewportdebug=1 일 때만 마운트(iOS Safari 상하 영역 원인 확인용 임시 도구, 평소에는 실행되지 않음) -->
+{#if page.url.searchParams.get('viewportdebug') === '1'}
+	<ViewportDebug />
+{/if}
 <LoadingIndicator loading={isLoadingHome} label="홈 화면 불러오는 중" />
 
 {#if !page.url.pathname.startsWith('/cms')}

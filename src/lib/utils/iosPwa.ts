@@ -23,10 +23,24 @@ export function isStandaloneDisplayMode(): boolean {
 export function shouldShowIosAddToHomeScreenBanner(): boolean {
   if (typeof window === 'undefined') return false
   if (!isIOSDevice() || isStandaloneDisplayMode()) return false
-  return window.localStorage.getItem(IOS_A2HS_DISMISSED_KEY) !== 'true'
+  if (dismissedInMemory) return false
+  try {
+    return window.localStorage.getItem(IOS_A2HS_DISMISSED_KEY) !== 'true'
+  } catch {
+    // 저장소 접근 불가(사생활 보호 모드 등) — 영구 기록은 못 하므로 이번 방문 동안의 메모리 값만 따른다
+    return true
+  }
 }
+
+// 저장소 쓰기가 막힌 환경에서도 닫은 뒤 같은 방문 중에는 다시 뜨지 않게 하는 보조 값
+let dismissedInMemory = false
 
 export function dismissIosAddToHomeScreenBanner(): void {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(IOS_A2HS_DISMISSED_KEY, 'true')
+  dismissedInMemory = true
+  try {
+    window.localStorage.setItem(IOS_A2HS_DISMISSED_KEY, 'true')
+  } catch {
+    // 저장 실패는 무시 — 메모리 값으로 이번 방문만 차단
+  }
 }

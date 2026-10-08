@@ -9,10 +9,11 @@
 <svelte:head>
   <style>
     /* Members 페이지: 모바일(<1024px, MembersHero·PC여백 보정과 동일 기준)에서
-       공통 데스크톱 GNB·FloatingBar 숨김. 원본 그대로 유지. */
+       공통 데스크톱 GNB 숨김. 원본 그대로 유지.
+       2026-10-09(Stephen 지시): 공통 플로팅 아이콘 메뉴(.fab-bar)는 이 규칙에서 제외 — 모바일에서도 노출.
+       (이전엔 <1024px에서 .fab-bar까지 함께 숨겨 /members 모바일만 플로팅 메뉴가 없었음. PC 1024px 이상은 원래 노출) */
     @media (max-width: 1023px) {
-      .gnb-desktop-wrap,
-      .fab-bar {
+      .gnb-desktop-wrap {
         display: none !important;
       }
     }

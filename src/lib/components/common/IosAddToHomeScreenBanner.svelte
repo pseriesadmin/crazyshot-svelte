@@ -70,7 +70,7 @@
   .a2hs-close {
     position: absolute;
     top: var(--spacing-2);
-    right: var(--spacing-2);
+    left: var(--spacing-2); /* 2026-10-09(Stephen 지시): 우하단 공통 플로팅 아이콘 메뉴와 터치가 겹쳐 닫기 버튼을 좌측으로 이동 */
     width: 28px;
     height: 28px;
     min-width: 28px;
@@ -91,7 +91,7 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-3);
-    padding-right: var(--spacing-6);
+    padding-left: var(--spacing-6); /* 좌측 닫기 버튼 자리 */
   }
 
   .a2hs-icon {

@@ -338,8 +338,8 @@
   .tab-bar {
     display: flex;
     background: var(--cs-dark);
-    border-radius: 20px;
-    padding: 4px;
+    border-radius: 24px; /* 2026-10-09(Stephen 지시): 20→24px — 안쪽 활성 탭 16px + 여백 8px과 둥근 정도가 맞는 값 */
+    padding: 8px; /* 2026-10-09(Stephen 지시): 탭바 배경 안쪽 여백 4→8px — 활성 탭이 배경 가장자리에 붙어 보이던 문제 */
     gap: 2px;
   }
 
@@ -350,13 +350,12 @@
     justify-content: center;
     gap: 6px;
     padding: 11px 4px 10px;
+    min-height: 44px; /* 2026-10-09: 모바일 터치타겟 44px 기준(글자 14px 확대로 43.4px가 되어 미달 → 보정) */
     border: none;
     border-radius: 16px;
     background: transparent;
     color: var(--cs-purple-pale);
-    font-family: var(--font-kr);
-    font-size: 12px;
-    font-weight: 500;
+    font: var(--text-m-script-14); /* 2026-10-09(Stephen 지시): 12px(script-12) → 14px(script-14) 한 사이즈 업, 두께 500 유지 */
     cursor: pointer;
     transition: background 0.28s, color 0.28s, box-shadow 0.28s;
     white-space: nowrap;

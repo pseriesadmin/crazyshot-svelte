@@ -34,6 +34,22 @@
     }
   })
 
+  // 모달이 열려 있는 동안 배경(문서) 스크롤 잠금 — 대화 영역이 비었거나 스크롤이 끝났을 때
+  // 터치 스크롤이 배경 화면으로 전이(scroll chaining)되는 현상 방지. 닫힘/언마운트 시 원래 값 복원.
+  $effect(() => {
+    if (!isOpen) return
+    const html = document.documentElement
+    const body = document.body
+    const prevHtml = html.style.overflow
+    const prevBody = body.style.overflow
+    html.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
+    return () => {
+      html.style.overflow = prevHtml
+      body.style.overflow = prevBody
+    }
+  })
+
   // ESC 키로 닫기
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') onclose()
@@ -85,6 +101,7 @@
     background: rgba(16, 11, 50, 0);
     z-index: 200;
     animation: fade-in 0.2s ease forwards;
+    touch-action: none; /* 백드롭 위 터치 스크롤이 배경으로 전달되지 않도록 */
   }
 
   @keyframes fade-in {
@@ -108,6 +125,7 @@
     animation: slide-up 0.3s cubic-bezier(0.32, 0.72, 0, 1);
     max-width: 480px;
     margin: 0 auto;
+    overscroll-behavior: contain; /* 시트 안 스크롤이 끝나도 배경으로 전이 금지 */
   }
 
   @keyframes slide-up {

@@ -369,10 +369,12 @@
   }
 
   /* ── 모바일 Footer ── */
+  /* 2026-10-09(Stephen 지시): 모바일 반응형에서는 홈을 제외한 서브 화면에 푸터를 노출하지 않는다 — 전역 푸터(+layout.svelte)는 ≤640px에서
+     이미 숨겨져 있고(홈만 예외), 이 /members 전용 모바일 푸터만 남아 있어 숨긴다. 마크업·상태는 그대로 두어 복원은 display만 되돌리면 된다. */
   .m-footer {
     background: var(--cs-dark);
     padding: 50px 25px;
-    display: flex;
+    display: none;
     flex-direction: column;
     gap: 30px;
   }

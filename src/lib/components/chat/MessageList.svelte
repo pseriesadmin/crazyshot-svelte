@@ -218,6 +218,7 @@
     padding: 20px;
     flex: 1 0 0;
     overflow-y: auto;
+    overscroll-behavior-y: contain; /* 목록 끝/빈 목록에서 스크롤이 배경 화면으로 전이되지 않게 */
     width: 100%;
     min-height: 0;
     /* ⚠️ scroll-behavior:smooth 절대 금지 — Chrome/Firefox는 scrollTo()뿐 아니라
