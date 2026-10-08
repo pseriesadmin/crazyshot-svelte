@@ -133,7 +133,7 @@
     <!-- 주간 자동응답(빠른답변) 최다사용 TOP 10 -->
     {#if topCannedResponses.length > 0}
       <section class="ranking-section">
-        <h3 class="section-title">자주 요청된 자동응답</h3>
+        <h3 class="section-title">자주 요청된 빠른답변</h3>
         <div class="ranking-list">
           {#each topCannedResponses as item, i (item.canned_response_id)}
             <div class="ranking-row">

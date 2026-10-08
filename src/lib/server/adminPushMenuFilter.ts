@@ -16,6 +16,8 @@ export const ADMIN_PUSH_EVENT_MENU_KEYS: Record<string, string | undefined> = {
   payment_completed: 'rental.reservation',
   contract_signed: 'rental.reservation',
   identity_review: 'customers.list',
+  // 크레이지챗 접수(2026-10-07, S3)는 상담 화면 권한을 따른다
+  crazychat_request: 'consulting.chat',
 }
 
 export async function filterAdminPushRecipientsByMenu(

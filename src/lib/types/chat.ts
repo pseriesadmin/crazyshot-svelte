@@ -29,6 +29,7 @@ export type ActionCardType =
   | 'refund_failed'    // 환불 RPC 실패 알림 (관리자 전용, admin_only=true)
   | 'coupon_duplicate_warning'  // 이미 보유한 쿠폰 재선물 경고 (관리자 전용, admin_only=true)
   // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
+  | 'crazychat_reply'     // 크레이지챗(조회·접수·AI)이 보낸 텍스트 답변 표시 — 관리자 화면 배지 전용, 고객 화면 미노출
   | 'auto_canned_reply'   // 빠른답변 자동매칭 성공 (하이브리드 1단계, AI 호출 전)
   // GSD-17: 관리자 @ 멘션 상품 카드 / GSD-20: 이미지·CTA 있는 자동응답 카드
   | 'product_link'

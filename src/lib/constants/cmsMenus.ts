@@ -48,6 +48,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     subMenus: [
       { menu_key: 'consulting.chat', label: '채팅', href: '/cms/chat' },
       { menu_key: 'consulting.qna', label: '빠른답변목록', href: '/cms/chat/qna' },
+      { menu_key: 'consulting.crazychat', label: '크레이지챗', href: '/cms/chat/crazychat', requiresSettingsAccess: true },
     ],
   },
   {

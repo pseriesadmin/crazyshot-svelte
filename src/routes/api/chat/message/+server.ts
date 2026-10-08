@@ -23,6 +23,7 @@ import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
 import { sendPushToUser, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
+import { runCrazychatAgent } from '$lib/server/crazychat/agent'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -292,6 +293,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     } catch (err) {
       // 자동답변 매칭 실패 시 2단계(AI 파이프라인)로 폴백 — 단, 원인 진단을 위해 로그는 남긴다
       console.error('[chat/message] 하이브리드 자동답변 1단계 실패:', err)
+    }
+  }
+
+  // 1-b. 크레이지챗(2026-10-07, S2 조회형 + S3 접수형): 빠른답변이 처리하지 않은 "내 예약·서류·결제 상태" 질문은 본인 데이터로 답하고,
+  //   "시간 변경·연장·상담원 호출·서류 재제출" 요청은 접수/안내한다(예약·결제·계약은 에이전트가 바꾸지 않는다).
+  //   기능 스위치(crazychat_settings)가 꺼져 있으면(기본값) 아무것도 읽지 않고 곧바로 아래 기존 흐름으로 이어진다. 로직·권한은 crazychat/agent.ts.
+  if (admin) {
+    const crazy = await runCrazychatAgent(admin, {
+      userId: session.user.id,
+      sessionId: body.session_id,
+      messageId: (userMessage as { id: string }).id,
+      content: body.content.trim(),
+      adminEngaged: (chatSession as { admin_id?: string | null }).admin_id != null,
+    })
+    if (crazy.handled) {
+      return json(
+        { user_message: userMessage as ChatMessage, ai_message: crazy.aiMessage, intent_log: null },
+        { status: 201 },
+      )
     }
   }
 

@@ -35,6 +35,11 @@
     isAdmin && (message.action_payload as { type?: string } | null)?.type === 'auto_canned_reply'
   )
 
+  // 크레이지챗 배지: 크레이지챗(조회·접수·AI)이 보낸 텍스트 답변 — 관리자 뷰에서만 표시(고객 뷰 노출 금지)
+  let isCrazychatBadge = $derived(
+    isAdmin && (message.action_payload as { type?: string } | null)?.type === 'crazychat_reply'
+  )
+
   // 시간 포맷 HH:MM
   let timeLabel = $derived(
     new Date(message.created_at).toLocaleTimeString('ko-KR', {
@@ -246,6 +251,9 @@
     <div class="bubble" class:bubble--own={isOwn} class:bubble--other={!isOwn}>
       {#if isActionCard && message.action_payload}
         <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} {onctamodal} />
+      {/if}
+      {#if isCrazychatBadge}
+        <img class="cc-badge" src="/crazychat-badge.svg" alt="크레이지챗이 보낸 답변" width="24" height="24" />
       {/if}
       {#if isAutoBadge}
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
@@ -466,6 +474,15 @@
     letter-spacing: 0.2px;
     white-space: nowrap;
     align-self: flex-start;
+  }
+
+  /* ── 크레이지챗 배지(로고) ── */
+  .cc-badge {
+    display: block;
+    width: 24px;
+    height: 24px;
+    align-self: flex-start;
+    flex-shrink: 0;
   }
 
   /* ── 텍스트 버블 ── */

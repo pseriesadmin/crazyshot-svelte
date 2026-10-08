@@ -1,4 +1,4 @@
-// PATCH /api/chat/sessions/[id]/manual-mode — 세션별 자동응답 수동전환 토글
+// PATCH /api/chat/sessions/[id]/manual-mode — 세션별 크레이지챗 답변 수동전환 토글
 // GSD-8: P3-1 — 세션 담당 권한선 = 기존 세션 열람 권한과 동일 (manager 게이트 없음)
 // RPC: set_chat_session_manual_mode
 

@@ -208,13 +208,13 @@
       })
       if (res.ok) {
         autoReply = !autoReply
-        csToast.success(`자동답변 ${autoReply ? 'ON' : 'OFF'}`)
+        csToast.success(`크레이지챗 · 빠른답변 ${autoReply ? 'ON' : 'OFF'}`)
         await invalidateAll()
       } else if (res.status === 403) {
         const d403 = await res.json().catch(() => ({})) as { error?: string }
-        csToast.error(d403.error ?? '매니저 이상만 자동답변 스위치를 변경할 수 있습니다.')
+        csToast.error(d403.error ?? '매니저 이상만 크레이지챗 · 빠른답변 스위치를 변경할 수 있습니다.')
       } else if (res.status === 404) {
-        csToast.error('자동답변 설정 테이블이 아직 준비되지 않았습니다. (마이그레이션 적용 필요)')
+        csToast.error('크레이지챗 · 빠른답변 설정 테이블이 아직 준비되지 않았습니다. (마이그레이션 적용 필요)')
       } else {
         const d = await res.json().catch(() => ({})) as { error?: string }
         csToast.error(d.error ?? '저장 실패')
@@ -394,9 +394,9 @@
           <span class="sort-label" class:sort-label-active={sortKey !== 'usage'}>{SORT_LABELS[sortKey]}</span>
         </button>
 
-        <!-- 자동답변 ON/OFF 토글 -->
+        <!-- 크레이지챗 · 빠른답변 ON/OFF 토글 -->
         <div class="ar-toggle-wrap">
-          <span class="ar-label">자동답변</span>
+          <span class="ar-label">크레이지챗 · 빠른답변</span>
           <button
             class="ar-toggle"
             class:ar-on={autoReply}
@@ -405,7 +405,7 @@
             title={canManageAR ? (autoReply ? 'OFF로 끄기' : 'ON으로 켜기') : '매니저 이상만 변경 가능'}
             role="switch"
             aria-checked={autoReply}
-            aria-label="자동답변 {autoReply ? 'ON' : 'OFF'}"
+            aria-label="크레이지챗 · 빠른답변 {autoReply ? 'ON' : 'OFF'}"
           >
             <span class="ar-thumb"></span>
           </button>
@@ -972,7 +972,7 @@
   }
   .sort-label-active { color: var(--cs-purple); }
 
-  /* 자동답변 토글 */
+  /* 크레이지챗 · 빠른답변 토글 */
   .ar-toggle-wrap {
     display: flex;
     align-items: center;
