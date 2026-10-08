@@ -12,6 +12,8 @@ import type { CannedMatchEvaluation, CannedResponseForMatch, SynonymGroupData } 
 import { decideWithModel, parseModel } from './cannedMatchModel'
 import type { CannedMatchModel, ModelVerdict } from './cannedMatchModel'
 import weights from './cannedMatchModel.weights.json'
+import { withOffHoursMarker } from './offHoursTime'
+import { normalizeQuestion } from './questionNormalize'
 
 /** 학습된 확률 모델(저장소의 가중치 파일). 형식이 맞지 않으면 서버 시작 시점에 바로 실패해 조용한 오작동을 막는다. */
 export const activeModel: CannedMatchModel = parseModel(weights)
@@ -36,7 +38,10 @@ export function decideAutoReply(
   synonymGroups: SynonymGroupData[],
   model: CannedMatchModel = activeModel,
 ): AutoReplyDecision {
-  const evaluation = evaluateCannedMatch(message, candidates, synonymGroups)
+  // 질문 속 시각이 공식 영업시간(09:00~22:00) 밖이면 표식 단어를 붙인다 — 매처가 숫자 시각을 핵심 단어로 쓰지 않기 때문(offHoursTime.ts)
+  // 영업 외 판정은 반드시 원문에 먼저(정규화가 "퀵→퀵배송"으로 만드는 '배송'이 "새벽배송 제외 규칙"에 걸리지 않도록),
+  // 그 뒤에 표기 정규화(한 글자 명사·띄어 쓴 복합어 — questionNormalize.ts)를 적용한다
+  const evaluation = evaluateCannedMatch(normalizeQuestion(withOffHoursMarker(message)), candidates, synonymGroups)
   const verdict = decideWithModel(evaluation, model)
   return { evaluation, verdict, answer: verdict.decision === 'answer' ? evaluation.best : null }
 }
