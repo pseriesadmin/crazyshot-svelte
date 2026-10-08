@@ -156,6 +156,7 @@ export interface ChatMessage {
   created_at: string
   is_bookmarked?: boolean  // GSD-12: 관리자 북마크 여부 — 클라이언트 집계 시 병합
   admin_only?: boolean     // Migration #404 — true면 관리자에게만 보이는 카드(경고·검토요청 등)
+  send_failed?: boolean    // 클라이언트 전용 — 자동 재시도까지 실패한 내 임시 메시지("다시 보내기" 표시). DB 컬럼 아님
 }
 
 export interface ChatIntentLog {
