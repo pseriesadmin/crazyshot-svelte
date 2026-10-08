@@ -187,6 +187,7 @@ async function loadCategoryLabels(): Promise<Map<string, string[]>> {
       .from('code_mapping_groups')
       .select('name, default_category')
       .not('default_category', 'is', null)
+      .eq('is_active', true) // DB 함수 search_category_intent(Migration 683)와 같은 기준 — 비활성 그룹 이름은 쓰지 않는다
     if (error) {
       console.error('[productSearchIndex] 분류 이름 조회 실패:', error.message)
       return new Map()
