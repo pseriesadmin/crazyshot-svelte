@@ -217,14 +217,12 @@
   }
 
   /* ══ Mobile Sub GNB ══ */
+  /* 숨김은 .sub-gnb-mobile의 transform만으로 처리한다 — 래퍼 높이(max-height)를 접으면 문서 높이가 바뀌어
+     바닥에서 브라우저의 scrollY 보정 ↔ 표시/숨김 판정이 되먹임 루프(반복 떨림)를 만든다(2026-10-08 /account 하단 떨림). 되돌리지 말 것. */
   .sub-gnb-mobile-wrap {
     overflow: hidden;
     max-height: 100px;
-    transition: max-height 0.3s ease;
     width: 100%;
-  }
-  .sub-gnb-mobile-wrap.gnb-hidden {
-    max-height: 0;
   }
 
   .sub-gnb-mobile {

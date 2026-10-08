@@ -26,24 +26,42 @@
 
   // 스크롤 인터랙션: 다운 → 가림, 업 → 보임 (상태는 공용 store — 탭바 위에 뜨는 요소와 판정 공유)
   let lastY = 0
-  // iOS Safari 스크롤 끝 고무줄 되튕김(수 px 역방향)이 '스크롤 업'으로 오판돼 탭바가 깜빡이는 것을 막는 최소 이동량
-  const SCROLL_DELTA = 8
+  // iOS Safari 스크롤 끝 고무줄 되튕김(수 px 역방향)·툴바 접힘/펼침이 '스크롤 업'으로 오판돼 탭바가 깜빡이는 것을 막는 장치 3종
+  const SCROLL_DELTA = 10      // ① 최소 이동량
+  const EDGE_PX = 2            // ② 바닥 경계(고무줄 구간)는 판정에서 제외
+  const LOCK_MS = 350          // ③ 숨김/표시 전환(0.3s) 직후에는 레이아웃·툴바 변화로 생기는 보정 스크롤을 무시
+  let locked = false
+  let lockTimer: ReturnType<typeof setTimeout> | undefined
 
   function onScroll() {
+    if (locked) return
     const y = window.scrollY
     if (y <= 50) { tabBarState.hidden = false; lastY = y; return }   // 최상단 — 항상 보임
+    const max = document.documentElement.scrollHeight - window.innerHeight
+    if (y >= max - EDGE_PX) { lastY = Math.max(0, Math.min(y, max)); return }  // 바닥 경계 — 현재 상태 유지
     const dy = y - lastY
     if (Math.abs(dy) < SCROLL_DELTA) return                          // 미세 이동 무시(lastY 유지 → 느린 스크롤은 누적)
-    tabBarState.hidden = dy > 0                                       // 다운 → 가림 / 업 → 보임
     lastY = y
+    const next = dy > 0                                               // 다운 → 가림 / 업 → 보임
+    if (next === tabBarState.hidden) return
+    tabBarState.hidden = next
+    locked = true
+    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
   }
 
   $effect(() => {
     lastY = window.scrollY
     tabBarState.hidden = false
+    // iOS 16+ 고무줄 바운스가 scrollY를 최대값 밖으로 밀어 '위로 스크롤'로 읽히는 것을 차단 — 탭바가 떠 있는 동안만 적용(전역 CSS 아님)
+    const html = document.documentElement
+    const prevOverscroll = html.style.overscrollBehaviorY
+    html.style.overscrollBehaviorY = 'none'
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => {
       window.removeEventListener('scroll', onScroll)
+      clearTimeout(lockTimer)
+      locked = false
+      html.style.overscrollBehaviorY = prevOverscroll
       tabBarState.hidden = false
     }
   })
