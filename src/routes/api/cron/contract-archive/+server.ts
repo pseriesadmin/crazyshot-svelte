@@ -10,6 +10,8 @@ import {
   recordArchiveFailure,
   type EvidenceRecord,
 } from '$lib/server/contractArchive/generateArchive'
+import { getSealKey } from '$lib/server/contractArchive/sealEnv'
+import { sealPendingDocuments } from '$lib/server/contractArchive/sealPending'
 import type { RequestHandler } from './$types'
 
 // Chromium 기동 + 렌더링 여유 — 전용 함수로 분리된다(adapter-vercel 라우트별 설정)
@@ -37,16 +39,18 @@ export const GET: RequestHandler = async ({ request, url }) => {
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
   const started = Date.now()
+  const sealKey = getSealKey() // 없으면 봉인 기능 꺼짐(보관은 계속)
   const results: { evidenceId: string; contractId: string; ok: boolean; source?: string; reason?: string }[] = []
   let created = 0
   let attempts = 0
   let consecutiveFailures = 0
   let waiting = 0
   let stalled = 0
+  let sealSummary: Awaited<ReturnType<typeof sealPendingDocuments>> | null = null
 
   const processOne = async (ev: EvidenceRecord): Promise<void> => {
     attempts++
-    const r = await archiveEvidence(admin, ev)
+    const r = await archiveEvidence(admin, ev, { sealKey })
     if (r.ok) {
       consecutiveFailures = 0
       if (!r.alreadyArchived) created++
@@ -79,11 +83,16 @@ export const GET: RequestHandler = async ({ request, url }) => {
         if (ev) await processOne(ev)
       }
     }
+
+    // 봉인이 아직 없는 보관본(키 설정 전 생성분·봉인 실패분) 보강 — 실패해도 보관 크론 결과에는 영향 없다
+    if (sealKey && Date.now() - started < TIME_BUDGET_MS) {
+      try { sealSummary = await sealPendingDocuments(admin, sealKey, 20, { deadlineMs: started + TIME_BUDGET_MS }) } catch (e) { console.error('[cron/contract-archive] 봉인 보강 실패:', e instanceof Error ? e.message : e) }
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     console.error('[cron/contract-archive] 처리 중단:', message)
     return json({ ok: false, error: message, created, attempts, results }, { status: 500 })
   }
 
-  return json({ ok: true, created, attempts, failed: results.filter((r) => !r.ok).length, waiting, stalled, stoppedEarly: consecutiveFailures >= MAX_CONSECUTIVE_FAILURES, results })
+  return json({ ok: true, created, attempts, failed: results.filter((r) => !r.ok).length, waiting, stalled, seal: sealKey ? sealSummary : 'disabled', stoppedEarly: consecutiveFailures >= MAX_CONSECUTIVE_FAILURES, results })
 }

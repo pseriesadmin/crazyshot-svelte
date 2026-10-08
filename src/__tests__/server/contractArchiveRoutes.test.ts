@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({
   enabled: undefined as string | undefined,
   cmsRole: 'manager' as string | null,
   menuDenied: false,
-  pdf: null as null | { finalDocumentId: string; contractId: string; source: 'original'; bytes: Uint8Array },
+  pdf: null as null | { finalDocumentId: string; contractId: string; source: 'original'; recordedSha256: string | null; bytes: Uint8Array },
   audits: [] as Record<string, unknown>[],
   loadArgs: [] as string[][],
   tables: {} as Record<string, Record<string, unknown>[]>,
@@ -60,7 +60,7 @@ import { GET as cronGet } from '../../routes/api/cron/contract-archive/+server'
 import { GET as cmsGet } from '../../routes/api/cms/contracts/[id]/final-pdf/+server'
 import { GET as customerGet } from '../../routes/api/account/rental/[id]/contract-pdf/+server'
 
-const PDF = { finalDocumentId: 'fd-1', contractId: 'c-1', source: 'original' as const, bytes: new Uint8Array([37, 80, 68, 70, 45]) }
+const PDF = { finalDocumentId: 'fd-1', contractId: 'c-1', source: 'original' as const, recordedSha256: null as string | null, bytes: new Uint8Array([37, 80, 68, 70, 45]) }
 
 beforeEach(() => {
   state.cronSecret = 'secret'; state.enabled = undefined; state.cmsRole = 'manager'; state.menuDenied = false
@@ -169,7 +169,7 @@ describe('/api/account/rental/[id]/contract-pdf — 고객 사본 받기', () =>
       supabase: { from: () => { const q: Record<string, unknown> = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: ownedReservation ? { id: 7 } : null, error: null }) }; return q } },
     }
   }
-  const call = (l: ReturnType<typeof locals>, id = '7') => customerGet({ params: { id }, locals: l, getClientAddress: () => '9.9.9.9' } as never)
+  const call = (l: ReturnType<typeof locals>, id = '7', qs = '') => customerGet({ params: { id }, locals: l, getClientAddress: () => '9.9.9.9', url: new URL(`https://x/?${qs}`) } as never)
 
   beforeEach(() => {
     state.tables = {
@@ -212,5 +212,81 @@ describe('/api/account/rental/[id]/contract-pdf — 고객 사본 받기', () =>
     state.pdf = { ...PDF, finalDocumentId: 'fd-2' }
     await call(locals('u-1', true))
     expect(state.audits.filter((a) => a.eventType === 'copy_downloaded')).toHaveLength(1)
+  })
+
+  it('?view=1 — inline 표시, viewed(kind=final_pdf)만 기록하고 copy_downloaded는 기록하지 않는다. 비로그인·타 고객은 그대로 차단', async () => {
+    expect((await call(locals(null, true), '7', 'view=1')).status).toBe(401)
+    expect((await call(locals('u-2', false), '7', 'view=1')).status).toBe(404)
+    state.pdf = PDF
+    state.audits = []
+    const res = await call(locals('u-1', true), '7', 'view=1')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toMatch(/^inline/)
+    expect(state.audits.filter((a) => a.eventType === 'copy_downloaded')).toHaveLength(0)
+    expect(state.audits[0]).toMatchObject({ eventType: 'viewed', actorType: 'customer', actorId: 'u-1', metadata: { kind: 'final_pdf', final_document_id: 'fd-1' } })
+    state.loadArgs = []
+    await call(locals('u-9', true), '7', 'view=1') // 서명자가 아니면 PDF를 읽지 않는다
+    expect(state.loadArgs[0]).toEqual([])
+  })
+
+  it('?verify=1 — 보관 시점 해시와 현재 바이트 해시를 대조(JSON), 아무 감사 기록도 남기지 않는다', async () => {
+    const { sha256OfBytes } = await import('$lib/server/contractArchive/loadArchivedPdf')
+    const actual = await sha256OfBytes(PDF.bytes)
+    state.audits = []
+    state.pdf = { ...PDF, recordedSha256: actual }
+    const ok = await (await call(locals('u-1', true), '7', 'verify=1')).json()
+    expect(ok).toMatchObject({ match: true, actualSha256: actual, recordedSha256: actual })
+    state.pdf = { ...PDF, recordedSha256: 'deadbeef' }
+    expect((await (await call(locals('u-1', true), '7', 'verify=1')).json()).match).toBe(false)
+    state.pdf = { ...PDF, recordedSha256: null }
+    expect((await (await call(locals('u-1', true), '7', 'verify=1')).json()).match).toBe(false)
+    expect(state.audits).toHaveLength(0)
+    state.pdf = null
+    expect((await call(locals('u-1', true), '7', 'verify=1')).status).toBe(404)
+  })
+})
+
+describe('/api/account/rental/[id]/contract-pdf?verify=1&sha256= — 내가 가진 파일 지문 대조', () => {
+  const bytes = new Uint8Array([37, 80, 68, 70, 45])
+  let recorded = ''
+  const locals = {
+    safeGetSession: async () => ({ session: { user: { id: 'u-1' } } }),
+    supabase: { from: () => { const q: Record<string, unknown> = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: { id: 7 }, error: null }) }; return q } },
+  }
+  const call = (qs: string) => customerGet({ params: { id: '7' }, locals, url: new URL(`https://x/?verify=1${qs}`), getClientAddress: () => '9.9.9.9' } as never)
+
+  beforeEach(async () => {
+    const { createHash } = await import('node:crypto')
+    recorded = createHash('sha256').update(bytes).digest('hex')
+    state.tables = {
+      order_items: [{ reservation_id: 7, order_id: 'o-1' }],
+      contracts: [{ id: 'c-1', reservation_id: 7 }],
+      contract_signings: [{ contract_id: 'c-1', user_id: 'u-1', signed_at: '2026-10-06' }],
+      contract_final_documents: [{ id: 'fd-1', contract_id: 'c-1', pdf_sha256: recorded }, { id: 'fd-old', contract_id: 'c-1', pdf_sha256: 'b'.repeat(64) }],
+    }
+    state.pdf = { finalDocumentId: 'fd-1', contractId: 'c-1', source: 'original', bytes, recordedSha256: recorded } as never
+  })
+
+  it('파일 지문 없이 호출하면 기존처럼 보관본 무결성만 돌려준다(submitted=null)', async () => {
+    const body = await (await call('')).json()
+    expect(body).toMatchObject({ match: true, submitted: null })
+  })
+
+  it('형식이 틀린 지문은 400이다', async () => {
+    expect((await call('&sha256=zzz')).status).toBe(400)
+  })
+
+  it('보관 기록과 같은 지문은 authentic, 한 글자 다른 지문(수정·AI 재생성)은 modified, 이전 서명본 지문은 superseded다', async () => {
+    expect((await (await call(`&sha256=${recorded}`)).json()).submitted).toMatchObject({ status: 'authentic', archiveIntact: true })
+    const tampered = recorded.slice(0, 63) + (recorded.endsWith('0') ? '1' : '0')
+    expect((await (await call(`&sha256=${tampered}`)).json()).submitted.status).toBe('modified')
+    expect((await (await call(`&sha256=${'b'.repeat(64)}`)).json()).submitted.status).toBe('superseded')
+  })
+
+  it('지문 확인 결과는 열람(viewed, kind=verify_file) 감사로 남고 교부 증빙(copy_downloaded)은 만들지 않는다', async () => {
+    state.audits = []
+    await call(`&sha256=${recorded}`)
+    expect(state.audits.some((a) => a.eventType === 'viewed' && (a.metadata as { kind?: string })?.kind === 'verify_file' && (a.metadata as { status?: string }).status === 'authentic')).toBe(true)
+    expect(state.audits.some((a) => a.eventType === 'copy_downloaded')).toBe(false)
   })
 })

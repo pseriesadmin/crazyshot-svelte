@@ -90,7 +90,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   if (!signingRow) {
     // 목록 페이지는 서명 완료 건에만 버튼을 노출하지만, 그 사이 상태가 바뀌었을 수 있는
     // 엣지케이스 — 하드 에러 대신 화면에서 안내 문구로 처리
-    return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null, serviceInfo: null }
+    return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null, serviceInfo: null, finalPdfReady: false, finalPdfUnavailable: false }
   }
 
   const liveContract = signingRow.contracts as unknown as {
@@ -211,5 +211,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     orderData,
     serviceInfo,
     finalPdfReady: !!finalDoc,
+    // 서명 시점 스냅샷이 html 방식이 아니거나 서명 이미지가 없으면 PDF를 영구히 만들 수 없다(소급 불가) — 화면은 '준비 중'이 아니라 웹 화면 확인 안내
+    finalPdfUnavailable: !finalDoc && !((snapshot?.authoring_mode === 'html') && !!signingRow.signature_data),
   }
 }

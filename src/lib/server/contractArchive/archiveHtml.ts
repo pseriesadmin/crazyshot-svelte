@@ -120,10 +120,15 @@ export function buildArchiveHtml(args: {
     ${row('PDF 생성 일시(KST)', ev.generatedAtKst)}
   </table>`
 
+  // 진위 판단 안내 — 이 문서 안의 해시 값은 문서를 고쳐 쓰는 사람이 함께 바꿀 수 있어 진위 근거가 되지 않는다.
+  // 진위는 크레이지샷 공식 사이트에서 이 PDF 파일을 선택해 서버 보관 기록과 대조해야만 확인된다.
+  const verifyNote = `<p class="archive-notice">진위 확인 안내 — 이 문서에 적힌 해시 값만으로는 진위를 알 수 없습니다. 공식 사이트(crazyshot.kr/contract-verify)에서 이 PDF 파일을 선택해 확인하세요. 문서를 수정하거나 다른 프로그램·AI로 다시 저장·변환한 파일은 일치하지 않습니다.</p>`
+
   const evidencePage = `<section class="archive-appendix">
     <h2>서명 증적 요약</h2>
     ${notice}
     ${evidenceTable}
+    ${verifyNote}
   </section>`
 
   const policyPage = terms

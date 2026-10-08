@@ -110,4 +110,13 @@ describe('buildArchiveHtml — 한글 폰트 임베드 옵션', () => {
     const html = buildArchiveHtml({ contractHtml: CONTRACT_HTML, evidence: EVIDENCE, terms: TERMS })
     expect(html).toMatch(/@page\s*\{[^}]*margin:\s*12mm 0/)
   })
+
+  it('증적 쪽에 "문서 안 해시만으로는 진위를 알 수 없고 공식 사이트에서 파일을 확인하라"는 안내를 넣는다(원본·재생성본 모두)', () => {
+    for (const source of ['original', 'regenerated'] as const) {
+      const html = buildArchiveHtml({ contractHtml: CONTRACT_HTML, evidence: { ...EVIDENCE, source }, terms: source === 'original' ? TERMS : null })
+      expect(html).toContain('진위 확인 안내')
+      expect(html).toContain('crazyshot.kr/contract-verify')
+      expect(html).toContain('해시 값만으로는 진위를 알 수 없습니다')
+    }
+  })
 })
