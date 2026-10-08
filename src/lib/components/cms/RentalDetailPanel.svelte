@@ -3206,6 +3206,8 @@
     align-items: center;
     justify-content: space-between;
   }
+  /* 여정 스테퍼(위 둥근 박스)와 첫 구역 제목 '대여 정보' 사이 세로 여백 — 아래 구역들과 같은 24px (2026-10-08) */
+  :global(.journey-stepper) + .section-title { margin-top: 24px; }
   .section-title-row .section-title { padding: 4px 0 2px; }
   /* 운송장 정보 제목행(저장 버튼 포함)과 아래 입력 박스(.info-section) 사이 분리 여백 — 이 그룹에만 적용 */
   .rental-shipping-group .section-title-row { margin-bottom: 12px; }
@@ -3894,6 +3896,8 @@
   .rental-method-group,
   .locker-group,
   .tracking-group { margin-top: 24px; }
+  /* 무인보관함 제목 줄(배정 확정 버튼 포함)과 아래 입력 박스 사이 여백 — 운송장 그룹(.rental-shipping-group)과 같은 12px */
+  .locker-group .section-title-row { margin-bottom: 12px; }
   .locker-no-input { flex: 0 0 130px; }
   /* 입력 가이드(placeholder) — 강조 없이 본문보다 한 단계 작은 폰트 토큰(12px), 굵기 보통 */
   .locker-input::placeholder { font: var(--text-pc-script-12); font-weight: 400; }
