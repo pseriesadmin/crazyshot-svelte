@@ -11,6 +11,7 @@
   import { csToast } from '$lib/utils/toast'
   import type { SelectedProductDetail } from '$lib/server/products/loadSelectedProductDetail'
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
+  import { pickActiveDetail } from '$lib/utils/holdDetailWhileRefreshing'
   import { buildProductQrPayload, buildQrDataUrl } from '$lib/utils/qrIssue'
 
   interface Props { data: PageData }
@@ -90,10 +91,30 @@
       })
   })
 
-  const activeDetail = $derived<SelectedProductDetail>(
+  const computedDetail = $derived<SelectedProductDetail>(
     activeSelectedId === data.selectedId
       ? extractServerDetail(data)
       : (overrideDetail ?? EMPTY_DETAIL)
+  )
+
+  // PANEL-HOLD-1(2026-10-08): 저장 후 invalidateAll() 재조회 동안 "열린 상품 id"와 data.selectedId가
+  // 잠깐 어긋나면 computedDetail이 빈 상세가 되어 패널이 닫혔다(220ms 슬라이드) 상세 fetch 후 새
+  // 컴포넌트로 다시 열리며 보던 탭이 기본정보로 초기화됐다. 같은 상품이 계속 선택된 상태에서만
+  // 마지막 정상 상세를 붙들어 패널을 유지한다(닫기·다른 상품 선택은 pickActiveDetail이 그대로 비움).
+  let heldDetail = $state<SelectedProductDetail | null>(null)
+  $effect(() => {
+    const c = computedDetail
+    if (c.rootProduct && c.selectedProduct) heldDetail = c
+  })
+  // refreshing: 열린 id와 서버 선택 id가 어긋나 있고 shallow-routing 조회 결과(overrideDetail)가 아직 없는 "진행 중" 상태에서만 붙든다.
+  // 그 외에 상세가 비는 경우(예: 열려 있던 재고를 일괄 삭제해 서버가 상세를 못 돌려줌)는 기존처럼 패널이 닫힌다.
+  const activeDetail = $derived<SelectedProductDetail>(
+    pickActiveDetail({
+      computed: computedDetail,
+      held: heldDetail,
+      activeSelectedId,
+      refreshing: activeSelectedId !== data.selectedId && overrideDetail === null,
+    })
   )
 
   const CATEGORIES = $derived([
