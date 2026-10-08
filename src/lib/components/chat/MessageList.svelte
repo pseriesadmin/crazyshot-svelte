@@ -4,6 +4,7 @@
   // Realtime INSERT → pushMessage → 자동 하단 스크롤
 
   import MessageBubble from './MessageBubble.svelte'
+  import LoadingIndicator from '$lib/components/common/LoadingIndicator.svelte'
   import type { ChatMessage, ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   // 당일 이전 대화카드는 시간(HH:MM)만 있어 며칠 치인지 헷갈림 — 날짜가 바뀌는 지점마다
@@ -31,6 +32,10 @@
     hasMoreOlder?: boolean
     /** 부모가 이전 메시지 조회 중일 때 true — 중복 트리거 방지 + 상단 로딩 표시 */
     isLoadingOlder?: boolean
+    /** 내 메시지를 보낸 뒤 답변을 기다리는 중 — 목록 하단에 로고 로딩 애니메이션 표시(지연 400ms 후, 짧게 끝나면 안 보임) */
+    awaitingReply?: boolean
+    /** 전송 실패한 내 메시지의 "다시 보내기" */
+    onresend?: (messageId: string) => void
     /** 위로 스크롤해 상단 근처에 도달하면 호출 — 부모가 이전 페이지를 불러와 messages 앞에 prepend */
     onloadmore?: () => void
     onaction?: (payload: ActionPayload) => void
@@ -48,6 +53,8 @@
     isAdmin = false,
     hasMoreOlder = false,
     isLoadingOlder = false,
+    awaitingReply = false,
+    onresend,
     onloadmore,
     onaction,
     ondelete,
@@ -190,12 +197,15 @@
             {isAdmin}
             {onaction}
             {ondelete}
+            {onresend}
             {onbookmark}
             {oncouponapprove}
             {onctamodal}
           />
         </div>
       {/each}
+      <!-- 답변 대기 로딩 — 내부 wrapper 안이라 ResizeObserver가 바닥 고정 상태에서 자동으로 따라 내려간다 -->
+      <LoadingIndicator inline loading={awaitingReply} label="답변을 불러오는 중" />
     </div>
   {/if}
 </div>

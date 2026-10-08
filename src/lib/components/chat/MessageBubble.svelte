@@ -12,6 +12,8 @@
     isAdmin?: boolean
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
+    /** 전송 실패한 내 메시지(send_failed) 다시 보내기 */
+    onresend?: (messageId: string) => void
     onbookmark?: (messageId: string) => void
     /** COUPON_GIFT_CARD 승인·거절 콜백 — AdminChatPanel에서 주입 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
@@ -19,7 +21,7 @@
     onctamodal?: (info: CtaModalRequest) => void
   }
 
-  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onbookmark, oncouponapprove, onctamodal }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onresend, onbookmark, oncouponapprove, onctamodal }: Props = $props()
 
   // GSD-12: 북마크 로컬 상태 — {#each messages as message (message.id)} 키로 인스턴스가 1:1 고정되므로
   // $state(prop) 초기화가 안전함 (재마운트 문제 없음 — MessageList.svelte keyed each 검증 완료)
@@ -262,11 +264,16 @@
         <p class="bubble-text">{message.content}</p>
       {/if}
       <div class="bubble-status">
+        {#if message.send_failed}
+          <span class="send-failed-text">전송되지 않았어요</span>
+          <button type="button" class="resend-btn" onclick={() => onresend?.(message.id)}>다시 보내기</button>
+        {:else}
         <span class="bubble-time">{timeLabel}</span>
         <svg class="done-double" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-label={message.is_read ? '읽음' : '전송됨'}>
           <path d="M1 8.5l2.8 2.8L8 5" stroke={message.is_read ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M5 8.5l2.8 2.8L13 5" stroke={message.is_read ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
+        {/if}
         {#if isAdmin}
           <button
             class="bookmark-btn"
@@ -429,6 +436,25 @@
   .done-double {
     flex-shrink: 0;
   }
+  /* 전송 실패 표시 — 오류 문구 대신 말풍선 안에서 조용히 안내(아웃라인·그림자 없음, 호버는 배경색만) */
+  .send-failed-text {
+    font: 400 12px/16px 'Noto Sans KR', sans-serif;
+    color: var(--cs-red-badge, #FF3535);
+    white-space: nowrap;
+  }
+  .resend-btn {
+    min-height: 44px;
+    padding: 0 8px;
+    margin: -14px -4px -14px 0;
+    border: none;
+    border-radius: var(--radius-md, 15px);
+    background: transparent;
+    color: var(--cs-purple, #3B2F8A);
+    font: 700 12px/16px 'Noto Sans KR', sans-serif;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .resend-btn:hover { background: rgba(59, 47, 138, 0.08); }
   .del-btn {
     background: none;
     border: none;

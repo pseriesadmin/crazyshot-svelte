@@ -132,7 +132,7 @@ export async function loadMessages(
 
 export async function sendMessage(
   req: SendMessageRequest
-): Promise<{ response: SendMessageResponse | null; error: string | null }> {
+): Promise<{ response: SendMessageResponse | null; error: string | null; retryable: boolean }> {
   let res: Response
   try {
     res = await fetch('/api/chat/message', {
@@ -141,15 +141,36 @@ export async function sendMessage(
       body: JSON.stringify(req),
     })
   } catch {
-    // 오프라인·서버 불가 등으로 fetch 자체가 reject되는 경우 — 호출부가 입력 잠금 해제·안내를 할 수 있게 오류 결과로 변환
-    return { response: null, error: '네트워크 연결을 확인해 주세요.' }
+    // 오프라인·서버 불가 등으로 fetch 자체가 reject되는 경우 — 호출부가 입력 잠금 해제·재시도를 할 수 있게 오류 결과로 변환(일시적 장애이므로 재시도 가능)
+    return { response: null, error: '네트워크 연결을 확인해 주세요.', retryable: true }
   }
   if (!res.ok) {
     const { error } = await res.json().catch(() => ({ error: 'Network error' }))
-    return { response: null, error }
+    // 5xx(서버 일시 오류)만 재시도 대상 — 400(내용 오류)·401(로그인)·403(권한)은 다시 보내도 같은 결과
+    return { response: null, error, retryable: res.status >= 500 }
   }
   const response = await res.json()
-  return { response, error: null }
+  return { response, error: null, retryable: false }
+}
+
+// 재시도 전 중복 방지 확인 — 서버가 내 메시지를 저장한 뒤(AI 답변 저장 단계 등) 오류를 돌려준 경우 같은 내용을 또 보내지 않는다.
+// since 이후 이 세션에 같은 내용으로 저장된 내 메시지가 있으면 돌려준다(RLS: 본인 세션 메시지만 조회 가능).
+export async function findSavedUserMessage(
+  sessionId: string,
+  content: string,
+  sinceISO: string
+): Promise<ChatMessage | null> {
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('sender_type', 'user')
+    .eq('content', content.trim())
+    .gte('created_at', sinceISO)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (error || !data || data.length === 0) return null
+  return data[0] as unknown as ChatMessage
 }
 
 // ──────────────────────────────────────────────

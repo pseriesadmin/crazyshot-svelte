@@ -118,6 +118,13 @@ export function removeMessage(messageId: string): void {
   chatStore.messages = chatStore.messages.filter((m) => m.id !== messageId)
 }
 
+// 자동 재시도까지 실패한 내 임시 메시지 표시(말풍선에 "다시 보내기") — 클라이언트 전용 플래그
+export function markMessageSendFailed(messageId: string): void {
+  chatStore.messages = chatStore.messages.map((m) =>
+    m.id === messageId ? { ...m, send_failed: true } : m
+  )
+}
+
 // 상대방이 읽었을 때 is_read 로컬 반영
 export function markMessageRead(messageId: string): void {
   chatStore.messages = chatStore.messages.map((m) =>

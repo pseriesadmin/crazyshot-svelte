@@ -12,12 +12,13 @@
     loadUserSession,
     loadMessages,
     sendMessage,
+    findSavedUserMessage,
     sendAttachment,
     deleteMessage,
     subscribeToChatMessages,
     markMessagesRead,
   } from '$lib/services/chatService'
-  import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead } from '$lib/stores/chat.svelte'
+  import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead, markMessageSendFailed } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ActionPayload } from '$lib/types/chat'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
@@ -190,15 +191,22 @@
   }
 
   // ── 메시지 전송 ──
+  // 일시적 실패(네트워크·서버 5xx)는 사용자에게 알리기 전에 조용히 다시 시도한다. 그래도 안 되면 오류 문구 대신
+  // 내 말풍선에 "다시 보내기"만 남긴다(입력한 내용이 사라지지 않게). 재시도 전에는 이미 저장됐는지 확인해 중복 전송을 막는다.
+  const RETRY_DELAYS_MS = [700, 1500]
+  const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
   async function handleSend(content: string) {
     if (!session || isSending) return
     isSending = true
+    const sessionId = session.id
+    const sinceISO = new Date(Date.now() - 3000).toISOString()
 
     // 낙관적(optimistic) 렌더링 — 서버 응답(AI 답변 생성 포함) 완료 전에 내 메시지 즉시 표시
     const tempId = `temp-${crypto.randomUUID()}`
     pushMessage({
       id: tempId,
-      session_id: session.id,
+      session_id: sessionId,
       sender_type: 'user',
       content,
       message_type: 'text',
@@ -207,25 +215,46 @@
       created_at: new Date().toISOString(),
     })
 
+    let failed = false
     try {
-      const { response, error } = await sendMessage({ session_id: session.id, content })
+      let result = await sendMessage({ session_id: sessionId, content })
 
-      removeMessage(tempId)
+      for (let i = 0; result.error && result.retryable && i < RETRY_DELAYS_MS.length; i++) {
+        // 서버가 내 메시지를 저장한 뒤 오류를 돌려줬다면(예: AI 답변 저장 단계 실패) 다시 보내지 않는다
+        const saved = await findSavedUserMessage(sessionId, content, sinceISO)
+        if (saved) {
+          removeMessage(tempId)
+          pushMessage(saved)
+          errorMsg = null
+          return
+        }
+        await wait(RETRY_DELAYS_MS[i])
+        result = await sendMessage({ session_id: sessionId, content })
+      }
 
-      if (error) {
-        // 대화 목록을 에러 화면으로 교체하지 않고 토스트로만 안내 — 입력창이 비워진 뒤라 보내지 못한 내용을 함께 보여준다
-        const preview = content.length > 30 ? `${content.slice(0, 30)}…` : content
-        csToast.error(`메시지를 보내지 못했어요. 다시 보내주세요. (${error}) — "${preview}"`)
-      } else if (response) {
+      if (result.error) {
+        console.error('[chat] 메시지 전송 실패:', result.error)
+        failed = true
+      } else if (result.response) {
+        removeMessage(tempId)
         // Realtime으로 이미 수신될 수 있으나 fallback으로 직접 push
-        pushMessage(response.user_message)
-        if (response.ai_message) pushMessage(response.ai_message)
+        pushMessage(result.response.user_message)
+        if (result.response.ai_message) pushMessage(result.response.ai_message)
         errorMsg = null
       }
     } finally {
-      removeMessage(tempId)
+      if (failed) markMessageSendFailed(tempId)
+      else removeMessage(tempId)
       isSending = false
     }
+  }
+
+  // 실패한 내 메시지의 "다시 보내기" — 실패 말풍선을 치우고 같은 내용을 새로 전송
+  function handleResend(messageId: string) {
+    const failedMsg = chatStore.messages.find((m) => m.id === messageId)
+    if (!failedMsg?.content) return
+    removeMessage(messageId)
+    void handleSend(failedMsg.content)
   }
 
   // ── 파일 업로드 ──
@@ -317,6 +346,8 @@
       ondelete={handleDeleteMessage}
       hasMoreOlder={chatStore.hasMoreOlderMessages}
       isLoadingOlder={chatStore.isLoadingOlderMessages}
+      awaitingReply={isSending}
+      onresend={handleResend}
       onloadmore={handleLoadMoreOlderMessages}
     />
   {/if}

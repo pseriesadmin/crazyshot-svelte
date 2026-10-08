@@ -17,8 +17,10 @@
     delay?: number
     minDuration?: number
     label?: string
+    /** true면 전체 화면 오버레이 대신 흐름 안에 작게 표시(채팅 답변 대기 등) — 같은 BI·모션을 그대로 사용 */
+    inline?: boolean
   }
-  let { loading, delay = 400, minDuration = 400, label = '불러오는 중' }: Props = $props()
+  let { loading, delay = 400, minDuration = 400, label = '불러오는 중', inline = false }: Props = $props()
 
   let visible = $state(false)
   let showTimer: ReturnType<typeof setTimeout> | null = null
@@ -62,7 +64,7 @@
 </script>
 
 {#if visible}
-  <div class="cs-loading-overlay" role="status" aria-live="polite" aria-label={label}>
+  <div class="cs-loading-overlay" class:inline role="status" aria-live="polite" aria-label={label}>
     <svg class="cs-loading-bi" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 214 203" fill="none" aria-hidden="true">
       <path d="M101.09 0C156.92 0.000210288 202.179 45.2598 202.179 101.09C202.178 156.92 156.92 202.178 101.09 202.179C45.2598 202.179 0.000210313 156.92 0 101.09C0 45.2597 45.2597 0 101.09 0ZM101.733 65.6758C81.8195 65.6758 65.6758 81.8195 65.6758 101.733C65.6758 121.647 81.8195 137.791 101.733 137.791C121.647 137.791 137.791 121.647 137.791 101.733C137.791 81.8195 121.647 65.6759 101.733 65.6758Z" fill="url(#cs-loading-grad-1)"/>
       <path d="M101.09 0C156.92 0.000210288 202.179 45.2598 202.179 101.09C202.178 156.92 156.92 202.178 101.09 202.179C45.2598 202.179 0.000210313 156.92 0 101.09C0 45.2597 45.2597 0 101.09 0ZM101.733 65.6758C81.8195 65.6758 65.6758 81.8195 65.6758 101.733C65.6758 121.647 81.8195 137.791 101.733 137.791C121.647 137.791 137.791 121.647 137.791 101.733C137.791 81.8195 121.647 65.6759 101.733 65.6758Z" fill="url(#cs-loading-grad-2)"/>
@@ -128,6 +130,27 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+
+  /* 인라인(채팅 답변 대기 등): 오버레이 속성 해제 + 작은 로고·도트 한 줄. PC 확대 규칙도 되돌려 크기를 고정한다 */
+  .cs-loading-overlay.inline {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 6px 4px;
+    background: none;
+    backdrop-filter: none;
+    animation: none;
+  }
+  .cs-loading-overlay.inline .cs-loading-bi { width: 30px; }
+  .cs-loading-overlay.inline .cs-loading-dots { gap: 5px; }
+  .cs-loading-overlay.inline .cs-loading-dots span { width: 5px; height: 5px; }
+  @media (prefers-reduced-motion: reduce) {
+    .cs-loading-overlay.inline .cs-loading-bi,
+    .cs-loading-overlay.inline .cs-loading-dots span { animation: none; }
   }
   .cs-loading-dots span {
     display: block;
