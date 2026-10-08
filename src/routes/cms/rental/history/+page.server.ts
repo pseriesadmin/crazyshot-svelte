@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
 import type { PageServerLoad } from './$types'
 
 // 순수 상품 이력관리 전용 화면 — /cms/products의 상세 편집 기능(옵션·가격·대여정책 등)은
@@ -115,11 +116,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         admin.from('products').select('id', { count: 'exact', head: true }).eq('parent_product_id', rootId).eq('is_active', true).is('deleted_at', null),
         admin
           .from('products')
-          .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
+          .select('id, name, product_code, is_active, parent_product_id, price_rules!left(duration_type, price, is_active, deleted_at)')
           .eq('parent_product_id', rootId)
           .is('deleted_at', null)
           .order('created_at', { ascending: true }),
       ])
+      // 재고(자식) 이름은 부모 값을 따른다(부모 이름 변경이 자식 행의 name 칼럼에는 복사되지 않음 — products.md §2-16)
+      const invRows = await resolveParentProductFields(admin, invRes.data ?? [], ['name'])
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const src = (policyRes.data ?? spAny) as any
@@ -137,7 +140,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         price24h: selectedPriceRules.find((r) => r.duration_type === '24h')?.price ?? null,
       }
 
-      inventoryList = (invRes.data ?? []).map((p) => {
+      inventoryList = invRows.map((p) => {
         const row = p as Record<string, unknown>
         return {
           id: row.id as string,

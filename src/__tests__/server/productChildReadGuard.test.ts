@@ -32,10 +32,8 @@ const EMBED = /products!rental_reservations_product_id_fkey\s*\(([^)]*)\)/g
 const DIRECT = /from\('products'\)\s*\.select\(\s*(['`"])([^'`"]*)\1/g
 
 /** 규칙에서 의도적으로 빠지는 파일 — 이유를 반드시 적는다 */
-const ALLOWED_FILES: Record<string, string> = {
-  'src/lib/server/products/loadSelectedProductDetail.ts':
-    'CMS 상품 상세 패널 로더 — 선택한 상품이 자식이면 policySourceId(부모)를 직접 조회해 그 행을 정본(src)으로 쓴다(자체 부모 해석). 예약 조회는 상태별 재고 집계용',
-}
+// (비어 있음 — 2026-10-08 loadSelectedProductDetail.ts의 재고 목록 이름도 헬퍼로 해석해 마지막 예외가 사라졌다)
+const ALLOWED_FILES: Record<string, string> = {}
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')

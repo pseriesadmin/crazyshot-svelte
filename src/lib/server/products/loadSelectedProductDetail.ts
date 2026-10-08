@@ -6,6 +6,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCode'
 import type { KeyValueItem } from '$lib/utils/keyValueList'
+import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
 
 export type CategoryComboItem = {
   combo_row_id: string
@@ -368,12 +369,15 @@ export async function loadSelectedProductDetail(
     ? ((selectedProduct as unknown as Record<string, unknown>).parent_product_id as string | null)
     : null
   const rootId = parentProductId ?? selectedId
-  const { data: invData } = await admin
+  const { data: invRaw } = await admin
     .from('products')
-    .select('id, name, product_code, is_active, price_rules!left(duration_type, price, is_active, deleted_at)')
+    .select('id, name, product_code, is_active, parent_product_id, price_rules!left(duration_type, price, is_active, deleted_at)')
     .eq('parent_product_id', rootId)
     .is('deleted_at', null)
     .order('created_at', { ascending: true })
+  // 재고(자식) 이름은 부모 값을 따른다 — 부모 이름을 바꿔도 자식 행의 name 칼럼은 그대로라 직접 읽으면 옛 이름이 보인다.
+  // (품번·활성 여부는 자식 고유값이라 그대로 — 자식 재고 부모 참조 전환, products.md §2-16)
+  const invData = await resolveParentProductFields(admin, invRaw ?? [], ['name'])
 
   const inventoryList: InventoryUnit[] = (invData ?? []).map((p) => ({
     id: p.id as string,
