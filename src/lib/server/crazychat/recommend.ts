@@ -3,7 +3,7 @@
 // 사람 전용 주제·타인 정보·예약 조회/접수 질문은 추천 대상이 아니다.
 
 import { stripTrailingParticle } from '$lib/server/searchEngine/core/koreanTokenizer'
-import { expandQueryWithConfirmedSynonyms, type SynonymGroup } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryByTokens, expandQueryWithConfirmedSynonyms, type SynonymGroup } from '$lib/server/searchEngine/core/synonymExpander'
 import { classifyActionIntent } from './action'
 import { classifyQueryIntent, MAX_QUESTION_LENGTH } from './query'
 import { detectHumanOnlyTopic } from './topics'
@@ -77,30 +77,28 @@ export function buildRecommendSearchTerms(
   const terms: RecommendSearchTerm[] = [{ q: query, weight: 1, expanded: false }]
   if (groups.length === 0) return terms
 
-  const seen = new Set<string>([query.toLowerCase()])
-  let variantCount = 0
-  const push = (q: string): void => {
-    const cleaned = q.trim()
-    const key = cleaned.toLowerCase()
-    if (!cleaned || seen.has(key) || variantCount >= MAX_SYNONYM_VARIANTS) return
-    seen.add(key)
-    variantCount++
-    terms.push({ q: cleaned, weight: SYNONYM_VARIANT_WEIGHT, expanded: true })
-  }
-
-  const mutableGroups = [...groups]
-  // ① 검색어 전체가 동의어와 일치하는 경우
-  for (const syn of expandQueryWithConfirmedSynonyms(query, mutableGroups)) push(syn)
-  // ② 단어 하나만 동의어로 바꾼 변형(나머지 단어는 그대로 유지)
-  tokens.forEach((token, i) => {
-    for (const syn of expandQueryWithConfirmedSynonyms(token, mutableGroups)) {
-      push(tokens.map((t, j) => (j === i ? syn : t)).join(' '))
-    }
+  // 변형 생성은 core의 expandQueryByTokens 하나로 모았다(고객 검색·CMS 검색 제안과 같은 코드).
+  // 전체 변형 수(whole + 단어 치환)가 MAX_SYNONYM_VARIANTS를 넘지 않도록 단어 치환 상한을 남은 칸 수로 준다.
+  // whole도 대소문자 무시로 중복을 제거한다("Sony"/"SONY"는 MiniSearch에서 같은 검색 — 상한 칸 낭비 방지)
+  const seenWhole = new Set<string>([query.toLowerCase()])
+  const wholeTaken = expandQueryWithConfirmedSynonyms(query, [...groups])
+    .filter((w) => {
+      const key = w.toLowerCase()
+      if (seenWhole.has(key)) return false
+      seenWhole.add(key)
+      return true
+    })
+    .slice(0, MAX_SYNONYM_VARIANTS)
+  const { tokenVariants } = expandQueryByTokens(query, groups, {
+    tokens,
+    maxVariants: MAX_SYNONYM_VARIANTS - wholeTaken.length,
   })
+  for (const q of [...wholeTaken, ...tokenVariants]) terms.push({ q, weight: SYNONYM_VARIANT_WEIGHT, expanded: true })
   return terms
 }
 
 export interface RecommendHit { id: string; score: number }
+
 /**
  * 재보정용 관찰 메트릭: 카드 발송 여부와 무관하게 상위 3개 후보의 점수·상품 id를 남긴다
  * (하한 미달로 탈락한 "아깝게 놓친" 후보도 포함). 숫자와 상품 id뿐 — 검색어·고객 문장은 담지 않는다.

@@ -31,7 +31,7 @@ import { findParentIdsByProductCode } from '$lib/server/products/searchByProduct
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
-import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
 import type { RequestHandler } from './$types'
 import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 
@@ -171,9 +171,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
       // ── 2차: H-3 동의어 확장 (§E-2 패턴 포팅) ─────────────────────────────
       let expandedTerms: string[] = []
+      // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch에서만 검색(ilike 재조회 없음)
+      let tokenVariantTerms: string[] = []
       try {
         const synonymGroups = await loadSynonymGroups()
-        expandedTerms = expandQueryWithConfirmedSynonyms(q, synonymGroups)
+        const expansion = expandQueryByTokens(q, synonymGroups)
+        expandedTerms = expansion.whole
+        tokenVariantTerms = expansion.tokenVariants
 
         for (const expandedQ of expandedTerms) {
           if (finalItems.length >= limit) break
@@ -218,8 +222,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
         try {
           const index = await getProductSearchIndex()
 
-          // 원래 쿼리 + 확장어 전부 MiniSearch에서 검색 (§E-2 패턴과 동일)
-          for (const qItem of [q, ...expandedTerms]) {
+          // 단어 치환 변형을 원문보다 먼저 검색(원문이 limit을 먼저 채워 밀려나는 것 방지). 변형이 없으면 기존 순서 [q, ...확장어]
+          for (const qItem of [...tokenVariantTerms, q, ...expandedTerms]) {
             if (finalItems.length >= limit) break
 
             const naturalResults = index.search(qItem, {

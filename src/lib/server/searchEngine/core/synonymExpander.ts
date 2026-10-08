@@ -73,3 +73,57 @@ export function expandQueryWithConfirmedSynonyms(
 
   return Array.from(expanded)
 }
+
+// ── 단어 단위 치환 (2026-10-08) ──────────────────────────────────────────────
+
+/** 단어 단위 변형 기본 상한 — 고객 검색·CMS 제안은 이 값, 크레이지챗 추천은 더 크게 지정 */
+export const DEFAULT_MAX_TOKEN_VARIANTS = 3
+
+export interface QueryTokenExpansion {
+  /** 검색어 전체가 동의어와 일치해 만든 대체어 — expandQueryWithConfirmedSynonyms(query, groups)와 동일 */
+  whole: string[]
+  /** 여러 단어 검색어에서 단어 하나만 확정 동의어로 바꾼 변형 검색어(나머지 단어는 그대로) */
+  tokenVariants: string[]
+}
+
+/**
+ * 검색어를 동의어로 확장합니다 — 전체 일치 확장(whole) + 단어 단위 치환 변형(tokenVariants).
+ *
+ * expandQueryWithConfirmedSynonyms는 "검색어 전체"가 동의어와 정확히 같을 때만 확장하므로
+ * "소니 카메라"처럼 여러 단어로 된 검색어는 확장되지 않는다. 이 함수는 단어 하나씩 동의어로 바꾼 변형도 만든다.
+ *
+ * - 변형은 한 번에 한 단어만 바꾼다(조합 폭증 방지). 나머지 단어는 입력 그대로 유지.
+ * - 대소문자 무시로 원문·whole·변형끼리 중복을 제거하고, 변형은 maxVariants개까지만 만든다.
+ * - 그룹이 없거나 단어가 하나뿐이거나 일치하는 단어가 없으면 tokenVariants는 빈 배열 → 기존 동작과 동일.
+ *
+ * @example
+ * const groups = [{ canonicalTerm: '소니', confirmedTerms: ['소니', 'Sony'] }]
+ * expandQueryByTokens('소니 카메라', groups) // → { whole: [], tokenVariants: ['Sony 카메라'] }
+ * expandQueryByTokens('소니', groups)        // → { whole: ['Sony'], tokenVariants: [] }
+ */
+export function expandQueryByTokens(
+  query: string,
+  groups: readonly SynonymGroup[],
+  opts: { tokens?: readonly string[]; maxVariants?: number } = {},
+): QueryTokenExpansion {
+  const mutableGroups = [...groups]
+  const whole = expandQueryWithConfirmedSynonyms(query, mutableGroups)
+  const max = Math.max(0, Math.floor(opts.maxVariants ?? DEFAULT_MAX_TOKEN_VARIANTS))
+  const tokens = (opts.tokens ?? (query ? query.trim().split(/\s+/) : [])).filter((t) => t !== '')
+  if (!query || groups.length === 0 || max === 0 || tokens.length < 2) return { whole, tokenVariants: [] }
+
+  const seen = new Set<string>([query.toLowerCase(), ...whole.map((w) => w.toLowerCase())])
+  const tokenVariants: string[] = []
+  for (const [i, token] of tokens.entries()) {
+    if (tokenVariants.length >= max) break
+    for (const syn of expandQueryWithConfirmedSynonyms(token, mutableGroups)) {
+      if (tokenVariants.length >= max) break
+      const variant = tokens.map((t, j) => (j === i ? syn : t)).join(' ').trim()
+      const key = variant.toLowerCase()
+      if (!variant || seen.has(key)) continue
+      seen.add(key)
+      tokenVariants.push(variant)
+    }
+  }
+  return { whole, tokenVariants }
+}
