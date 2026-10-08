@@ -64,6 +64,9 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/chat/coupon-gift/direct-send',
       'src/routes/api/cms/chat/identity-request/direct-send',
       'src/routes/api/cms/chat/pending-inquiries',
+      // 크레이지챗 접수 큐(2026-10-07, S3)
+      'src/routes/api/cms/chat/agent-requests',
+      'src/routes/api/cms/chat/agent-requests/[id]/resolve',
       'src/routes/api/cms/chat/sms-status/[messageId]',
       // 2-A(Stephen 확정 Q0 2026-10-06): 상담 고객패널 전용 조회는 상담 단독
       'src/routes/api/cms/customers/[id]/coupons',
@@ -80,6 +83,16 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/canned-responses/bulk-import',
       'src/routes/api/cms/synonyms/backfill-cross-lingual',
       'src/routes/api/cms/synonyms/scan-reformulations',
+    ],
+  },
+  // 크레이지챗 설정·관찰 검토 화면 전용(2026-10-07, S5) — 매니저 이상 메뉴(requiresSettingsAccess)
+  'consulting.crazychat': {
+    phase: '1b',
+    dirs: [
+      'src/routes/api/cms/chat/crazychat/settings',
+      'src/routes/api/cms/chat/crazychat/stats',
+      'src/routes/api/cms/chat/crazychat/drafts',
+      'src/routes/api/cms/chat/crazychat/drafts/[id]/feedback',
     ],
   },
   // 1c — 예약대여현황: 예약 상세 패널 API 전부 + QR 전이 + 대시보드 간트 데이터. 패널(RentalDetailPanel)이 대시보드·채팅·모바일에도

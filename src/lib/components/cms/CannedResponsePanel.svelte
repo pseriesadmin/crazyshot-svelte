@@ -237,11 +237,11 @@
       {/if}
     </div>
 
-    <!-- 고객 매칭 키워드 (단축키와 분리 — 자동답변이 고객 메시지를 판단할 때 쓰는 값) -->
+    <!-- 고객 매칭 키워드 (단축키와 분리 — 크레이지챗·빠른답변이 고객 메시지를 판단할 때 쓰는 값) -->
     <div class="field">
       <label class="field-label" for="cr-kw-input">
         매칭 키워드
-        <span class="field-hint">(자동답변이 이 단어를 보면 이 답변을 보냅니다)</span>
+        <span class="field-hint">(크레이지챗이 이 단어를 보면 이 답변을 보냅니다)</span>
       </label>
       <div class="kw-tag-list" role="group" aria-label="매칭 키워드 (최대 10개)">
         {#each localKeywords as kw (kw)}

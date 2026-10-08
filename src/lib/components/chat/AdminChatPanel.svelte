@@ -152,7 +152,7 @@
 
   let { initialSessions = [], initialSessionId = null }: Props = $props()
 
-  // 자동답변 상태 표시 pill (sessions-header)
+  // 크레이지챗 · 빠른답변 상태 표시 pill (sessions-header) — 기존 빠른답변 자동매칭 스위치(auto_reply_settings)
   let autoReplyEnabled = $state<boolean | null>(null)
   $effect(() => {
     fetch('/api/cms/auto-reply-settings')
@@ -181,11 +181,67 @@
   }
   $effect(() => { loadPendingInquiries() })
 
+  // 크레이지챗 접수 요청(2026-10-07, S3) — 에이전트가 고객의 예약 시간 변경·연장 요청을 접수하면 세션 목록 최상단에
+  // 카드로 노출한다(chat_messages와 무관한 CMS 전용 UI — 관리자 전용 알림은 고객 채팅창에 넣지 않는다, service-operations.md §17).
+  // 관리자가 기존 화면(예약변경 등)에서 직접 처리한 뒤 [처리 완료] 또는 [반려]로 닫는다. 에이전트는 예약·결제·계약을 바꾸지 않는다.
+  interface AgentRequestCard {
+    id: string
+    kind: 'time_change' | 'extend'
+    kind_label: string
+    reservation_code: string | null
+    created_at: string
+    session_id: string
+    customer_name: string
+    reservation_stage: string | null
+    reservation_closed: boolean
+  }
+  const AGENT_STAGE_LABEL: Record<string, string> = {
+    pending: '예약 접수', hold: '예약 신청', confirmed: '계약 완료', shipped: '반출 중', in_use: '대여 중',
+    return_requested: '반납 접수', returned: '반납 완료', completed: '대여 종료', cancelled: '취소', expired: '만료',
+  }
+  let agentRequests = $state<AgentRequestCard[]>([])
+  let resolvingAgentRequestId = $state<string | null>(null)
+  async function loadAgentRequests(): Promise<void> {
+    try {
+      const res = await fetch('/api/cms/chat/agent-requests')
+      if (!res.ok) return
+      const d = await res.json() as { requests?: AgentRequestCard[] }
+      agentRequests = d.requests ?? []
+    } catch {
+      // 조회 실패는 조용히 무시 — 접수 카드는 부가 UI, 세션 목록 자체를 막지 않음
+    }
+  }
+  $effect(() => { loadAgentRequests() })
+
+  async function handleResolveAgentRequest(e: MouseEvent, id: string, status: 'done' | 'rejected'): Promise<void> {
+    e.stopPropagation()
+    if (resolvingAgentRequestId) return
+    resolvingAgentRequestId = id
+    try {
+      const res = await fetch(`/api/cms/chat/agent-requests/${id}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        csToast.error(d.error ?? '요청 처리에 실패했습니다.')
+      } else {
+        csToast.success(status === 'done' ? '처리 완료로 표시했습니다.' : '반려로 표시했습니다.')
+      }
+      await loadAgentRequests()
+    } catch {
+      csToast.error('요청 처리 중 오류가 발생했습니다.')
+    } finally {
+      resolvingAgentRequestId = null
+    }
+  }
+
   // 답변등록(add_cs_reply)은 status를 open→in_progress/resolved로 항상 바꾸므로(Migration 157),
   // 다음 조회 시점부터 이 카드는 자동으로 목록에서 빠진다 — 별도의 "대기/종료" 이동 UI는 없음
   // (2026-09-02, Stephen 확정: 처리되면 그냥 사라지면 됨). 30초 주기로 이 사실을 실제 반영한다.
   $effect(() => {
-    const timer = setInterval(() => { loadPendingInquiries() }, 30 * 1000)
+    const timer = setInterval(() => { loadPendingInquiries(); loadAgentRequests() }, 30 * 1000)
     return () => clearInterval(timer)
   })
 
@@ -386,7 +442,7 @@
     goto(url)
   }
 
-  // GSD-8: 세션별 자동응답 수동전환
+  // GSD-8: 세션별 크레이지챗 답변 수동전환
   let sessionManualMode = $state(false)
 
   // GSD-7: 중요 카드만 보기 필터
@@ -570,7 +626,13 @@
               ((m.action_payload as { type?: string } | null)?.type) ?? ''
             )
         )
-      : messages.filter((m) => m.sender_type !== 'ai' || m.message_type === 'action_card')
+      : messages.filter(
+          (m) =>
+            m.sender_type !== 'ai' ||
+            m.message_type === 'action_card' ||
+            // 크레이지챗이 보낸 답변은 관리자가 고객이 받은 안내를 그대로 볼 수 있도록 기본 뷰에 노출(로고 배지로 구분)
+            (m.action_payload as { type?: string } | null)?.type === 'crazychat_reply'
+        )
   )
 
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
@@ -721,7 +783,7 @@
     })
   }
 
-  // GSD-8: 세션 자동응답 수동/자동 전환
+  // GSD-8: 세션 크레이지챗 답변 수동/자동 전환
   // 2026-09-08(버튼 재점검, Stephen 지시): 기존엔 fetch 성공/실패와 무관하게 무조건
   // sessionManualMode·로컬 스토어를 낙관적으로 갱신했다 — PATCH가 401/500 등으로 실패해도
   // 버튼은 "수동"으로 전환된 것처럼 보이지만 실제 DB(chat_sessions.manual_mode)는 그대로라,
@@ -738,7 +800,7 @@
     }).catch(() => null)
 
     if (!res || !res.ok) {
-      csToast.error('자동응답 모드 전환에 실패했습니다.')
+      csToast.error('크레이지챗 답변 모드 전환에 실패했습니다.')
       return
     }
 
@@ -1017,6 +1079,7 @@
     const { sessions } = await loadAdminSessions()
     setSessions(sessions)
     loadPendingInquiries()
+    loadAgentRequests()
   }
 
   function handleSelectInquiry(postId: string): void {
@@ -1094,9 +1157,9 @@
           href="/cms/chat/qna"
           class="ar-pill"
           class:ar-pill--on={autoReplyEnabled}
-          title="자동답변 설정 바로가기"
-          aria-label="자동답변 {autoReplyEnabled ? 'ON' : 'OFF'} — QnA 설정으로 이동"
-        >자동답변 {autoReplyEnabled ? 'ON' : 'OFF'}</a>
+          title="크레이지챗 · 빠른답변 설정 바로가기"
+          aria-label="크레이지챗 · 빠른답변 {autoReplyEnabled ? 'ON' : 'OFF'} — 빠른답변 설정으로 이동"
+        >크레이지챗 · 빠른답변 {autoReplyEnabled ? 'ON' : 'OFF'}</a>
       {/if}
       <button class="refresh-btn" onclick={handleRefresh} aria-label="새로고침">↻</button>
     </div>
@@ -1118,6 +1181,36 @@
 
     <ul class="session-list" role="listbox" aria-label="채팅 세션 목록">
       {#if filterTab === 'open'}
+        {#each agentRequests as req (req.id)}
+          <li>
+            <div
+              class="session-card agent-request-card"
+              onclick={() => handleSelectSession(req.session_id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleSelectSession(req.session_id) }}
+              role="option"
+              tabindex="0"
+              aria-selected={selectedSessionId === req.session_id}
+            >
+              <div class="agent-request-top">
+                <span class="agent-request-badge">크레이지챗 접수</span>
+                <span class="agent-request-kind">{req.kind_label}</span>
+                <span class="inquiry-time">{formatDateTime(req.created_at)}</span>
+              </div>
+              <div class="agent-request-meta">
+                <span class="agent-request-who">{req.customer_name}{req.reservation_code ? ` · ${req.reservation_code}` : ''}</span>
+                {#if req.reservation_stage}
+                  <span class="agent-request-stage" class:closed={req.reservation_closed}>
+                    {req.reservation_closed ? `이미 ${AGENT_STAGE_LABEL[req.reservation_stage] ?? '종료'} 상태` : (AGENT_STAGE_LABEL[req.reservation_stage] ?? req.reservation_stage)}
+                  </span>
+                {/if}
+              </div>
+              <div class="agent-request-actions">
+                <button type="button" class="btn-agent-small" disabled={resolvingAgentRequestId === req.id} onclick={(e) => handleResolveAgentRequest(e, req.id, 'done')}>처리 완료</button>
+                <button type="button" class="btn-agent-small" disabled={resolvingAgentRequestId === req.id} onclick={(e) => handleResolveAgentRequest(e, req.id, 'rejected')}>반려</button>
+              </div>
+            </div>
+          </li>
+        {/each}
         {#each pendingInquiries as inquiry (inquiry.id)}
           <li>
             <div
@@ -1136,7 +1229,7 @@
         {/each}
       {/if}
       {#if filteredSessions.length === 0}
-        {#if pendingInquiries.length === 0 || filterTab !== 'open'}
+        {#if (pendingInquiries.length === 0 && agentRequests.length === 0) || filterTab !== 'open'}
           <li class="empty-sessions">세션 없음</li>
         {/if}
       {:else}
@@ -1247,12 +1340,12 @@
 
         <!-- GSD-7/8/12: 헤더 툴바 — 수동전환·중요카드·북마크·상태변경 -->
         <div class="header-toolbar">
-          <!-- GSD-8: 자동응답 수동전환 토글 -->
+          <!-- GSD-8: 크레이지챗 답변 수동전환 토글 -->
           <button
             class="toolbar-btn"
             class:toolbar-btn--active={sessionManualMode}
             onclick={handleToggleManualMode}
-            title={sessionManualMode ? '수동모드 ON — 자동응답 꺼짐' : '자동모드 — 클릭 시 수동전환'}
+            title={sessionManualMode ? '수동모드 ON — 크레이지챗 답변 꺼짐' : '자동모드 — 클릭 시 수동전환'}
             aria-pressed={sessionManualMode}
           >{sessionManualMode ? '수동 대화' : '자동 대화'}</button>
 
@@ -1550,7 +1643,7 @@
     margin: 0;
   }
 
-  /* 자동답변 ON/OFF 상태 pill */
+  /* 크레이지챗 · 빠른답변 ON/OFF 상태 pill */
   .ar-pill {
     position: absolute;
     left: 50%;
@@ -1716,6 +1809,77 @@
     font: var(--text-m-script-12);
     color: var(--cs-text-light);
   }
+
+  /* 크레이지챗 접수 요청 카드(2026-10-07, S3) — cms bds: 배경·배지는 --cs-* 토큰, 버튼은 §0-10-C 초소형 라운드 버튼형(border/outline/shadow 없음, 호버는 BG·글자색 반전만) */
+  .agent-request-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px 14px;
+    background: var(--cs-purple-op10);
+  }
+  .agent-request-card:hover { background: var(--cs-lilac); }
+  .agent-request-top,
+  .agent-request-meta,
+  .agent-request-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .agent-request-actions { justify-content: flex-end; }
+  .agent-request-badge {
+    flex-shrink: 0;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.5;
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+  }
+  .agent-request-kind {
+    flex: 1;
+    min-width: 0;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .agent-request-who {
+    flex: 1;
+    min-width: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .agent-request-stage {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-purple);
+  }
+  .agent-request-stage.closed { color: var(--cs-red-badge); }
+  .btn-agent-small {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-agent-small:hover:not(:disabled) {
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
+  }
+  .btn-agent-small:disabled { opacity: 0.5; cursor: default; }
 
   @keyframes session-card-flash {
     0%, 100% {

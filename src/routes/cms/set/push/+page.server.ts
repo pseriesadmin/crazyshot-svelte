@@ -26,6 +26,7 @@ export interface AdminNotifyRow {
   admin_notify_new_session: boolean
   admin_notify_urgent_chat_message: boolean
   admin_notify_identity_review: boolean
+  admin_notify_crazychat_request: boolean
 }
 
 export interface PushLogRow {
@@ -40,7 +41,7 @@ export interface PushLogRow {
 }
 
 const LOGS_PER_PAGE = 20
-const ADMIN_EVENT_KEYS = ['new_reservation', 'contract_signed', 'payment_completed', 'new_session', 'urgent_chat_message', 'identity_review'] as const
+const ADMIN_EVENT_KEYS = ['new_reservation', 'contract_signed', 'payment_completed', 'new_session', 'urgent_chat_message', 'identity_review', 'crazychat_request'] as const
 
 function admin() {
   return createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -74,7 +75,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled').order('id'),
     sb
       .from('user_profiles')
-      .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review')
+      .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review, admin_notify_crazychat_request')
       .not('cms_role', 'is', null)
       .order('cms_role', { ascending: false })
       .order('full_name'),

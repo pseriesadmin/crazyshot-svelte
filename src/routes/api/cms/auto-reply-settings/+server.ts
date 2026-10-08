@@ -1,4 +1,4 @@
-// GET/PATCH /api/cms/auto-reply-settings — 자동답변 전역 스위치
+// GET/PATCH /api/cms/auto-reply-settings — 크레이지챗 · 빠른답변(자동 매칭) 전역 스위치
 // GET  : 전체 CMS 사용자 가능 (파트너 포함)
 // PATCH: 매니저 이상만 (hasSettingsAccess)
 
@@ -40,9 +40,9 @@ export const PATCH: RequestHandler = async ({ locals, request }) => {
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: '권한 없음' }, { status: 401 })
 
-  // 자동답변 스위치 조작은 매니저 이상만
+  // 빠른답변 스위치 조작은 매니저 이상만
   if (!hasSettingsAccess(cmsRole)) {
-    return json({ error: '매니저 이상만 자동답변 스위치를 변경할 수 있습니다.' }, { status: 403 })
+    return json({ error: '매니저 이상만 크레이지챗 · 빠른답변 스위치를 변경할 수 있습니다.' }, { status: 403 })
   }
 
   const { session } = await locals.safeGetSession()
@@ -64,7 +64,7 @@ export const PATCH: RequestHandler = async ({ locals, request }) => {
 
   if (!existing?.id) {
     // 마이그레이션 미적용 — 404 반환(클라이언트가 gracefully 처리)
-    return json({ error: '자동답변 설정 테이블이 아직 준비되지 않았습니다.' }, { status: 404 })
+    return json({ error: '크레이지챗 · 빠른답변 설정 테이블이 아직 준비되지 않았습니다.' }, { status: 404 })
   }
 
   const { data, error } = await admin

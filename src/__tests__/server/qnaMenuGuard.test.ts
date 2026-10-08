@@ -37,6 +37,8 @@ const CHAT: Target[] = [
   { file: 'src/routes/api/cms/chat/coupon-gift/direct-send/+server', methods: ['POST'] },
   { file: 'src/routes/api/cms/chat/identity-request/direct-send/+server', methods: ['POST'] },
   { file: 'src/routes/api/cms/chat/pending-inquiries/+server', methods: ['GET'] },
+  { file: 'src/routes/api/cms/chat/agent-requests/+server', methods: ['GET'] },
+  { file: 'src/routes/api/cms/chat/agent-requests/[id]/resolve/+server', methods: ['POST'] },
   { file: 'src/routes/api/cms/chat/sms-status/[messageId]/+server', methods: ['GET'] },
 ]
 const QNA: Target[] = [
