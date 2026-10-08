@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { scheduleArchiveNow } from '$lib/server/contractArchive/archiveNow'
 import type { ApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 
 /**
@@ -40,4 +41,8 @@ export async function sendApprovalNotifications(
 
   // 고객 푸시 — 채팅카드가 실제로 발송된 경우(not hold)에만 § 15 동기화 원칙 준수
   await sendReservationLifecyclePush(admin, reservationId, 'reservation_approval')
+
+  // 서명+결제가 모두 끝난(승인 확정) 직후 최종본 PDF 즉시 생성(2026-10-08, Stephen 지시) — 서명 API 직후 호출이 실패·누락됐어도 여기서 다시 요청한다.
+  // 이미 보관된 건은 멱등이라 중복 생성되지 않고, 실패해도 흐름에 영향이 없다(10분 크론이 처리).
+  scheduleArchiveNow(reservationId)
 }
