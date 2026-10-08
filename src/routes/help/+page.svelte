@@ -254,7 +254,9 @@
   width: 100%;
   max-width: 1240px;
   margin: 0 auto;
-  padding: var(--layout-mob-gnb-offset) 16px 24px;
+  /* 모바일 하단 100px(2026-10-09, 기존 24px에서 확대) — 하단 탭바(70px)가 스크롤 끝에서 다시 나타나도 마지막 FAQ가 가려지지 않게 하는
+     탭바 기준 여백(70px + 30px, 내정보 계열 화면과 동일 값). 768px 이상은 아래 min-width 규칙이 덮어쓴다 */
+  padding: var(--layout-mob-gnb-offset) 16px 100px;
   display: flex;
   flex-direction: column;
   gap: 24px;
