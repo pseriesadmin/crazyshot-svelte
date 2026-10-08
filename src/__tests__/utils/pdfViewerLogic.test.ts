@@ -12,6 +12,8 @@ import {
   clampPage,
   thumbnailScale,
   isIosDevice,
+  pickLoadErrorMessage,
+  SERVER_MESSAGE_STATUSES,
 } from '$lib/utils/pdfViewerLogic'
 
 describe('pdfViewerLogic — 줌', () => {
@@ -108,5 +110,32 @@ describe('pdfViewerLogic — 기타', () => {
     expect(isIosDevice('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 5)).toBe(true) // 아이패드 데스크톱 모드(터치 지점 있음)
     expect(isIosDevice('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 0)).toBe(false)
     expect(isIosDevice('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120', 0)).toBe(false)
+  })
+})
+
+describe('pickLoadErrorMessage — PDF 불러오기 실패 문구', () => {
+  it('401·403은 로그인 안내, 404는 준비 중 안내', () => {
+    expect(pickLoadErrorMessage(401, null)).toContain('로그인')
+    expect(pickLoadErrorMessage(403, '내부')).toContain('로그인')
+    expect(pickLoadErrorMessage(404, '무시')).toContain('준비 중')
+  })
+
+  it('서버가 안내 문구를 주는 상태(409·422·429)는 그 문구를 그대로 보여 준다', () => {
+    expect(SERVER_MESSAGE_STATUSES).toEqual([409, 422, 429])
+    expect(pickLoadErrorMessage(422, "이전 작성 방식이라 미리보기를 만들 수 없어요. '보기' 버튼으로 확인해 주세요.")).toContain('보기')
+    expect(pickLoadErrorMessage(429, '  요청이 너무 많아요. 잠시 후 다시 시도해 주세요.  ')).toBe('요청이 너무 많아요. 잠시 후 다시 시도해 주세요.')
+    expect(pickLoadErrorMessage(409, '서명이 완료된 계약서만 미리볼 수 있습니다.')).toBe('서명이 완료된 계약서만 미리볼 수 있습니다.')
+  })
+
+  it('500 등 그 외 상태의 서버 문구는 내부 오류 노출을 막기 위해 쓰지 않고 일반 문구를 쓴다', () => {
+    for (const status of [400, 500, 502, 503]) {
+      expect(pickLoadErrorMessage(status, 'duplicate key value violates unique constraint')).toBe('계약서를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.')
+    }
+  })
+
+  it('안내 문구가 없거나 비어 있거나 문자열이 아니거나 너무 길면 일반 문구', () => {
+    const generic = '계약서를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'
+    for (const bad of [null, undefined, '', '   ', 42, { a: 1 }, 'x'.repeat(201)]) expect(pickLoadErrorMessage(422, bad)).toBe(generic)
+    expect(pickLoadErrorMessage(422, 'x'.repeat(200))).toBe('x'.repeat(200))
   })
 })

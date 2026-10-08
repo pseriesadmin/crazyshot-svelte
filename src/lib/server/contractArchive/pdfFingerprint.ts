@@ -87,6 +87,11 @@ export function parsePageMap(raw: unknown): PageMap | null {
  */
 export async function extractPageTexts(bytes: Uint8Array): Promise<PageText[]> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  // 서버(Node)에서 pdf.js는 "가짜 워커"를 `import(workerSrc)`로 동적으로 불러오는데, 경로가 변수라 Vercel 번들 추적(nft)이 pdf.worker.mjs를 함수에 넣지 못한다
+  // → 배포 환경에서만 getDocument가 실패해 쪽별 지도가 빈 값으로 봉인되던 결함(2026-10-08 Production 실측, 로컬은 node_modules가 있어 통과).
+  // 리터럴 경로로 직접 불러(번들에 포함) globalThis.pdfjsWorker에 등록하면 pdf.js가 동적 import 없이 그 핸들러를 쓴다(pdf.js 공식 번들러 안내 방식).
+  const g = globalThis as unknown as { pdfjsWorker?: { WorkerMessageHandler?: unknown } }
+  if (!g.pdfjsWorker?.WorkerMessageHandler) g.pdfjsWorker = await import('pdfjs-dist/legacy/build/pdf.worker.mjs')
   // pdf.js는 넘긴 버퍼를 소유권 이전(detach)하므로 복사본을 넘긴다
   const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, isEvalSupported: false, disableFontFace: true, verbosity: 0 }).promise
   try {

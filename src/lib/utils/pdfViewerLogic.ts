@@ -86,6 +86,21 @@ export function thumbnailScale(pageWidthPt: number, targetWidthPx: number): numb
   return targetWidthPx / pageWidthPt
 }
 
+/** 서버가 사용자에게 보여 줘도 되는 안내 문구를 JSON `error`로 주는 응답 상태 — 이 상태에서만 그 문구를 그대로 쓴다(그 외 500 등 내부 오류 문구는 노출하지 않는다) */
+export const SERVER_MESSAGE_STATUSES = [409, 422, 429] as const
+const MAX_SERVER_MESSAGE_CHARS = 200
+
+/** PDF를 가져오는 응답이 실패했을 때 화면에 보여 줄 문구 */
+export function pickLoadErrorMessage(status: number, serverError: unknown): string {
+  if (status === 401 || status === 403) return '로그인이 필요해요. 다시 로그인한 뒤 열어 주세요.'
+  if (status === 404) return '계약서 사본(PDF)을 준비 중이에요. 잠시 후 다시 열어 주세요.'
+  if ((SERVER_MESSAGE_STATUSES as readonly number[]).includes(status) && typeof serverError === 'string') {
+    const msg = serverError.trim()
+    if (msg.length > 0 && msg.length <= MAX_SERVER_MESSAGE_CHARS) return msg
+  }
+  return '계약서를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'
+}
+
 /** iOS(아이폰·아이패드, 데스크톱 모드 아이패드 포함) — 숨은 iframe 인쇄가 불안정해 새 탭으로 대체한다. */
 export function isIosDevice(userAgent: string, maxTouchPoints: number): boolean {
   if (/iPhone|iPad|iPod/i.test(userAgent)) return true

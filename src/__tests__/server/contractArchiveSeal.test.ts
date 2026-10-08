@@ -238,3 +238,32 @@ describe('변경 위치는 관리자 전용', () => {
     expect(src).not.toMatch(/seal:\s*result\.seal/)
   })
 })
+
+describe('배포 환경 pdf.js 워커 번들 — 쪽별 지도가 배포에서만 비던 결함 재발 방지', () => {
+  const read = (p: string) => readFileSync(p, 'utf8')
+
+  it('extractPageTexts가 pdf.worker.mjs를 리터럴 경로로 직접 불러 globalThis.pdfjsWorker에 등록한다(번들 추적 대상)', () => {
+    const src = read('src/lib/server/contractArchive/pdfFingerprint.ts')
+    expect(src).toContain("await import('pdfjs-dist/legacy/build/pdf.worker.mjs')")
+    expect(src).toMatch(/g\.pdfjsWorker = await import\('pdfjs-dist\/legacy\/build\/pdf\.worker\.mjs'\)/)
+  })
+
+  it('추출 실패는 서버 로그에 남는다(조용히 삼키지 않음)', () => {
+    expect(read('src/lib/server/contractArchive/sealArchive.ts')).toContain("console.error('[contractArchive] 쪽별 지문 지도 추출 실패(빈 지도로 진행):'")
+  })
+
+  it('compare-file은 봉인된 지도가 비어 있으면 보관 파일에서 다시 만들어 기준으로 쓴다', () => {
+    const src = read('src/routes/api/cms/contracts/[id]/compare-file/+server.ts')
+    expect(src).toContain('recorded.pages.length === 0')
+    expect(src).toContain('rebuilt.extracted ? rebuilt.map : null')
+  })
+
+  it('워커 등록 후에도 실제 PDF에서 쪽별 텍스트를 뽑는다(전역 등록 상태에서 재실행해도 동작)', async () => {
+    const pdf = miniPdf([['Fee 100'], ['Gear A']])
+    const first = await extractPageTexts(pdf)
+    const second = await extractPageTexts(pdf)
+    expect(first.map((p) => p.lines.join(''))).toEqual(['Fee 100', 'Gear A'])
+    expect(second).toEqual(first)
+    expect((globalThis as unknown as { pdfjsWorker?: { WorkerMessageHandler?: unknown } }).pdfjsWorker?.WorkerMessageHandler).toBeTruthy()
+  })
+})

@@ -80,7 +80,9 @@ export type SealResult = { ok: true; alreadySealed: boolean; markerRecorded?: bo
 export async function buildPageMapFromPdf(bytes: Uint8Array): Promise<{ map: PageMap; extracted: boolean }> {
   try {
     return { map: await buildPageMap(await extractPageTexts(bytes)), extracted: true }
-  } catch {
+  } catch (e) {
+    // 조용히 삼키지 않는다 — 배포 환경에서만 실패하던 결함(pdf.worker 번들 누락)이 오래 눈에 안 띄었다. 봉인은 빈 지도로라도 만든다(변경 위치 분석만 불가).
+    console.error('[contractArchive] 쪽별 지문 지도 추출 실패(빈 지도로 진행):', e instanceof Error ? e.message : e)
     return { map: await buildPageMap([]), extracted: false }
   }
 }

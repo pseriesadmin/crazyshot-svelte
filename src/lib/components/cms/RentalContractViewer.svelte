@@ -65,6 +65,27 @@
   // (위쪽 배너·발행 목록 높이와 아래 액션 버튼 높이를 뺀 값), 창 크기·패널 크기가 바뀌면 다시 계산한다.
   // 본문 스크롤 영역(.panel-body)을 찾지 못하면 기본 높이(360px)를 유지한다.
   const PDF_MIN_HEIGHT = 360
+  // 최종본이 아직 없는 서명 완료 계약서도 PDF 뷰어를 열어 둔다(서명 직후 생성 대기·서명 증적 도입 전 서명 건) — 서버가 서명된 계약서를 즉석에서 PDF로 만들어 준다(임시 미리보기, 저장 안 함)
+  const previewPdfUrl = $derived(contractId ? `/api/cms/contracts/${contractId}/preview-pdf` : null)
+
+  // 서명 완료인데 최종본이 없는 계약서의 안내 문구를 가른다 — pending(서명 증적 있음: 곧 생성) / legacy(서명 증적 없음: 최종본이 자동으로 만들어지지 않음)
+  let finalPdfState = $state<'loading' | 'ready' | 'pending' | 'legacy' | 'unsigned'>('loading')
+  $effect(() => {
+    const id = contractId
+    const needed = !!customerSignedAt && !contractPdfUrl
+    if (!browser || !id || !needed) return
+    let cancelled = false
+    finalPdfState = 'loading'
+    fetch(`/api/cms/contracts/${id}/final-pdf-status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { state?: string } | null) => {
+        if (cancelled) return
+        const s = j?.state
+        finalPdfState = s === 'ready' || s === 'legacy' || s === 'unsigned' ? s : 'pending'
+      })
+      .catch(() => { if (!cancelled) finalPdfState = 'pending' })
+    return () => { cancelled = true }
+  })
   let pdfWrapEl: HTMLDivElement | null = $state(null)
   let pdfHeight: number | null = $state(null)
 
@@ -443,20 +464,35 @@
   {/if}
 
   <!-- 서명 직후 최종본 PDF 생성 대기: 서명·결제 직후 즉시 생성(보통 1분 안), 실패 시 10분 크론이 만들기 전까지 안내만 표시한다 -->
-  {#if customerSignedAt && !contractPdfUrl}
-    <div class="banner banner-sent" role="status">최종본 PDF를 준비 중입니다. 서명 완료 후 보통 1분 안에 표시됩니다. 잠시 후 다시 열어 주세요.</div>
+  {#if customerSignedAt && !contractPdfUrl && finalPdfState !== 'loading'}
+    {#if finalPdfState === 'legacy'}
+      <div class="banner banner-sent" role="status">이 계약서는 서명 증적이 기록되지 않은 서명 건(서명 증적·최종본 PDF 보관 도입 전 서명 등)이라 최종본 PDF가 자동으로 만들어지지 않습니다. 아래는 서명된 계약서의 임시 미리보기이며 법적 증빙 최종본이 아닙니다.</div>
+    {:else}
+      <div class="banner banner-sent" role="status">최종본 PDF(서명 증적·약관 사본 포함)를 준비 중입니다. 서명 완료 후 보통 1분 안에 표시됩니다. 아래는 서명된 계약서의 임시 미리보기이며 법적 증빙 최종본이 아닙니다. 잠시 후 다시 열면 최종본이 표시됩니다.</div>
+    {/if}
   {/if}
 
-  <!-- PDF 미리보기·다운로드: 서명 완료 후에만 표시 -->
-  {#if contractPdfUrl && customerSignedAt}
+  <!-- PDF 뷰어 영역: 항상 표시(서명 전에는 빈 캔버스 + 안내, 서명 후에는 최종본 또는 임시 미리보기) -->
+  {#if !customerSignedAt}
     <div class="pdf-wrap" bind:this={pdfWrapEl} style:height={pdfHeight != null ? `${pdfHeight}px` : undefined}>
-      <!-- 브라우저 내장 뷰어 대신 자체 뷰어(PdfViewer) — 고객 계약서 화면과 같은 도구줄·동작 -->
-      <PdfViewer
-        src={contractPdfUrl}
-        title={`전자계약서_${reservationId}.pdf`}
-        downloadUrl={`${contractPdfUrl}${contractPdfUrl.includes('?') ? '&' : '?'}download=1`}
-        downloadFilename={`crazyshot-contract-${reservationId}.pdf`}
-      />
+      <!-- 서명 전: 같은 자체 뷰어의 도구줄·캔버스를 빈 상태로 보여 준다(PDF 요청 없음, 버튼 비활성) -->
+      <PdfViewer src={null} title="전자계약서.pdf" emptyMessage="고객이 서명을 완료하면 이곳에 계약서 PDF가 표시됩니다." />
+    </div>
+  {:else if contractPdfUrl || previewPdfUrl}
+    <div class="pdf-wrap" bind:this={pdfWrapEl} style:height={pdfHeight != null ? `${pdfHeight}px` : undefined}>
+      <!-- 브라우저 내장 뷰어 대신 자체 뷰어(PdfViewer) — 고객 계약서 화면과 같은 도구줄·동작. 최종본이 없으면 임시 미리보기(내려받기 없음), 최종본이 생기면 다시 열 때 교체 -->
+      {#key contractPdfUrl ?? 'preview'}
+        {#if contractPdfUrl}
+          <PdfViewer
+            src={contractPdfUrl}
+            title={`전자계약서_${reservationId}.pdf`}
+            downloadUrl={`${contractPdfUrl}${contractPdfUrl.includes('?') ? '&' : '?'}download=1`}
+            downloadFilename={`crazyshot-contract-${reservationId}.pdf`}
+          />
+        {:else if previewPdfUrl}
+          <PdfViewer src={previewPdfUrl} title={`전자계약서_미리보기_${reservationId}.pdf`} />
+        {/if}
+      {/key}
     </div>
   {/if}
 
