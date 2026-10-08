@@ -428,7 +428,9 @@
     localKeywords = parseKeywords(product)
     // 새 에디터는 마운트 이후 prop 변경을 따라가지 않으므로 서버값 재동기화는 {#key}로 재마운트한다
     // (+= 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행해 무한 루프가 된다)
-    untrack(() => { contentEditorKey += 1 })
+    // 첫 실행은 초기값과 같으므로 재마운트하지 않는다(편집기가 마운트 직후 한 번 더 만들어지는 낭비 방지)
+    if (contentEditorSynced) untrack(() => { contentEditorKey += 1 })
+    contentEditorSynced = true
   })
 
   // 탭 전환: 미저장 변경 존재 시 경고 토스트
@@ -992,6 +994,7 @@
   let localKeywords = $state<string[]>(parseKeywords(product))
   let isSavingContent = $state(false)
   let contentEditorKey = $state(0)
+  let contentEditorSynced = false // 비반응형 — 재동기화 $effect의 첫 실행 구분용
   let contentEditorRef = $state<RichContentEditor | undefined>()
   const isDirtyContent = $derived(
     JSON.stringify(localContentBlocks) !== JSON.stringify(parseContentBlocks(product)) ||

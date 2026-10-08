@@ -542,6 +542,29 @@ describe('RichContentEditor — mount', () => {
     })
   })
 
+  describe('원본 HTML 변환 확인 체크박스', () => {
+    it('Enter는 무시되고(바깥 폼 암묵 제출 방지), 다른 키는 막지 않는다', async () => {
+      mountEditor([{ type: 'html', content: '<p>가</p><noscript>대체문구</noscript>' }], { variant: 'cms' })
+      await ready()
+      const pm = target.querySelector<HTMLElement>('.ProseMirror')!
+      const editor = (pm as unknown as { editor: import('@tiptap/core').Editor }).editor
+      let pos = -1
+      editor.state.doc.descendants((n, p) => { if (n.type.name === 'legacyHtml' && pos < 0) pos = p })
+      editor.commands.setNodeSelection(pos)
+      await wait(50)
+      ;[...target.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('새 서식으로 변환'))!.click()
+      await wait(300)
+      const box = target.querySelector<HTMLInputElement>('.rc-modal input[type=checkbox]')!
+      expect(box, '변환하면 내용이 달라지는 원본이라 확인 체크박스가 있어야 한다').toBeTruthy()
+      const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      box.dispatchEvent(enter)
+      expect(enter.defaultPrevented).toBe(true)
+      const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+      box.dispatchEvent(space)
+      expect(space.defaultPrevented).toBe(false)
+    })
+  })
+
   describe('언마운트 시 대기 중인 입력 보존', () => {
     it('편집 직후(250ms 이내) 편집기가 사라져도 마지막 입력이 바인딩된 blocks에 반영된다', async () => {
       let bound: ContentBlock[] = [{ type: 'text', html: '<p>처음</p>' }]

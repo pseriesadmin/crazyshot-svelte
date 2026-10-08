@@ -99,6 +99,7 @@
   let localContentKeywords = $state<string[]>([])
   // 새 에디터는 마운트 이후 prop 변경을 따라가지 않는 단일 진실 원천 — 저장·플랜 전환 후 서버값 재동기화는 {#key}로 재마운트
   let contentEditorKey = $state(0)
+  let contentEditorSynced = false // 비반응형 — 재동기화 $effect의 첫 실행 구분용
   let contentEditorRef = $state<RichContentEditor | undefined>()
 
   const isDirtyContent = $derived(
@@ -171,7 +172,10 @@
     localPricing = { monthly_price: plan.monthly_price }
     localContentBlocks = (plan.content_blocks ?? []).map((b) => ({ ...b }))
     localContentKeywords = []
-    untrack(() => { contentEditorKey += 1 }) // += 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행(무한 루프)한다
+    // 첫 실행은 초기값과 같으므로 재마운트하지 않는다(편집기가 마운트 직후 한 번 더 만들어지는 낭비 방지)
+    // += 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행(무한 루프)한다
+    if (contentEditorSynced) untrack(() => { contentEditorKey += 1 })
+    contentEditorSynced = true
     imageUploadError = null
     localSpecs = plan.features.map((f) => ({ ...f }))
     localBenefits = buildLocalBenefits()

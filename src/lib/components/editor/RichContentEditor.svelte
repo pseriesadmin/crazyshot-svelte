@@ -1330,7 +1330,8 @@
           <p class="rc-ok" role="status">글자가 모두 같아요. 안전하게 변환할 수 있어요.</p>
         {:else}
           <p class="rc-err" role="alert">변환하면 일부 글자·요소가 사라져요. 원본을 그대로 두는 것을 권장해요.</p>
-          <label class="rc-label"><input type="checkbox" bind:checked={legacyDlg.ack} /> 내용이 달라지는 것을 확인했어요</label>
+          <!-- 체크박스에서 Enter는 바깥 <form>(상품 신규등록)의 암묵 제출을 일으키므로 막는다 — 선택은 스페이스/클릭 -->
+          <label class="rc-label"><input type="checkbox" bind:checked={legacyDlg.ack} onkeydown={(e) => { if (e.key === 'Enter') e.preventDefault() }} /> 내용이 달라지는 것을 확인했어요</label>
         {/if}
         <div class="rc-form-row">
           <button type="button" class="rc-chipbtn" onclick={closeLegacyDialog}>취소</button>
