@@ -1422,15 +1422,18 @@
   .bottom-dock.dock-on {
     display: block;
     position: fixed;
-    left: 0; right: 0; bottom: 0;
+    /* 하단 앵커(bottom:0) 대신 상단 앵커(top:100% = 뷰포트 바로 아래)로 두고 transform으로 끌어올린다 — iOS 26 Safari는 화면에 보이는
+       bottom:0 고정 요소가 있으면 뷰포트 하단을 안쪽으로 줄여 본문이 잘리고 빈 띠가 생겼다(2026-10-09 실기기 캡처: 도크 노출 시에만 발생).
+       보이는 위치는 기존과 동일(노출 30%·확장 100%·탭바 위 lift)하다. 임의로 bottom:0으로 되돌리지 말 것. */
+    left: 0; right: 0; top: 100%;
     z-index: 40;
     overflow: hidden;
     max-height: 85vh;
     background: var(--cs-lilac);
     border-radius: var(--dr) var(--dr) 0 0;   /* PC 50px(card 대) / 모바일 30px(card 대 Mobile) — front-uiux.md §4 */
     box-shadow: 0 -6px 28px rgba(16, 11, 50, 0.28);   /* 상단 바깥 그림자로 입체감 — PC·모바일 공통(기존 0.10보다 짙게, 2026-09-29) */
-    /* 전체가 아니라 상단 30%만 노출 — 목록을 가리는 면적 최소화 */
-    transform: translateY(100%);
+    /* 전체가 아니라 상단 30%만 노출 — 목록을 가리는 면적 최소화(숨김 상태는 뷰포트 바로 아래 = translateY(0)) */
+    transform: translateY(0);
     opacity: 0;
     /* 위치는 transform 하나로만 제어(bottom 전환 없음) — iOS Safari가 스크롤 중 고정 요소의 bottom 변경을 늦게 반영해
        탭바가 사라진 자리가 빈 띠로 남던 문제 방지 */
@@ -1441,13 +1444,13 @@
   /* 모바일: BottomTabBar(높이 70px, z-index 50)가 노출 중이면 그 위로 배치 — PC는 탭바가 없어 @media에서 해제 */
   .bottom-dock.dock-on.dock-above-tab { --dock-lift: 70px; }
   .bottom-dock.dock-on.dock-visible {
-    transform: translateY(calc(70% - var(--dock-lift, 0px)));
+    transform: translateY(calc(-30% - var(--dock-lift, 0px)));   /* 상단 30%만 노출(탭바 위로 lift만큼 더) */
     opacity: 1;
     pointer-events: auto;
     cursor: pointer;
   }
   .bottom-dock.dock-on.dock-visible.dock-expanded {
-    transform: translateY(calc(0px - var(--dock-lift, 0px)));
+    transform: translateY(calc(-100% - var(--dock-lift, 0px)));   /* 전체 노출 */
     overflow-y: auto;
     cursor: auto;
   }
