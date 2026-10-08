@@ -18,6 +18,9 @@
  * - L-1(2026-10-08): 공개 상품 후기(product_reviews) 텍스트 색인 합류 — 상품당 최신 20개·2000자, boost 0.5
  *   (이름·브랜드·키워드보다 항상 약함), 검색 결과 객체(storeFields)에는 싣지 않음. 작성자 정보는 조회하지 않는다.
  *   실패 시 빈 맵 폴백(검색 중단 금지). 인덱스 빌드 통계는 getLastIndexBuildStats()로 정기 점검 cron이 읽는다.
+ * - L-2(2026-10-08): 한글 분류어 검색 품질 — 설정·문서 변환 등 순수 로직은 productSearchDocs.ts로 분리했다.
+ *   새 검색 칸 compound_heads(붙임말 끝말)·category_label(CMS 코드설정 그룹 이름, 이 파일이 code_mapping_groups를 읽는다)을
+ *   더했고, 반환 객체에 분류 우선 검색 메서드 searchWithCategoryIntent(크레이지챗 추천 전용)를 붙였다. 기존 search()는 불변.
  *
  * ⚠️ 이 파일은 crazyshot 전용 import 포함 가능 (adapters/ 계층)
  */
@@ -27,161 +30,39 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { supabase } from '$lib/services/supabase'
 import { createIndex } from '../core/createIndex'
-import type { NaturalSearchProvider, SearchDocument } from '../core/types'
+import type { NaturalSearchProvider, SearchOptions, SearchResult } from '../core/types'
+import {
+  PRODUCT_INDEX_CONFIG,
+  MAX_REVIEW_CHARS_PER_PRODUCT,
+  buildCategoryLabelMap,
+  buildProductDocs,
+  buildReviewsTextMap,
+  createCategoryIntentSearch,
+  extractContentBlocksText,
+  extractJsonbKeyValues,
+  type ProductDoc,
+  type ReviewsTextEntry,
+} from './productSearchDocs'
 
-// ── 문서 타입 ────────────────────────────────────────────────────────────────
-
-export interface ProductDoc extends SearchDocument {
-  id: string
-  name: string
-  brand: string
-  category: string
-  slug: string
-  /** product_caption (TEXT) */
-  caption: string
-  /** keywords TEXT[] → space-joined 문자열 */
-  keywords_text: string
-  /** content_blocks JSONB → 텍스트 노드만 추출, space-joined */
-  content_text: string
-  /** H-1: components JSONB(key-value) → "키 값" 형태 텍스트 */
-  components_text: string
-  /** H-1: specifications JSONB(key-value) → "키 값" 형태 텍스트 */
-  specs_text: string
-  /** L-1: 공개 후기 제목+본문 텍스트(상품당 최신 20개·2000자). 검색 전용 — 결과 객체에는 싣지 않음 */
-  reviews_text: string
+// 기존 import 경로 호환: 순수 로직은 productSearchDocs.ts로 옮겼지만 이 파일에서도 같은 이름으로 내보낸다
+export {
+  MAX_REVIEW_CHARS_PER_PRODUCT,
+  buildReviewsTextMap,
+  extractContentBlocksText,
+  extractJsonbKeyValues,
 }
+export type { ProductDoc, ReviewsTextEntry }
 
-// ── 인덱스 설정 ───────────────────────────────────────────────────────────────
-
-const PRODUCT_INDEX_CONFIG = {
-  searchFields: [
-    'name', 'brand', 'caption', 'keywords_text',
-    'content_text', 'category',
-    'components_text', 'specs_text',  // H-1: 구성품·사양 추가
-    'reviews_text',                   // L-1: 공개 후기 (가장 약한 가중치)
-  ] as const,
-  storeFields: ['id', 'name', 'brand', 'category', 'slug', 'caption', 'keywords_text'] as const,
-  boost: {
-    name: 5,
-    brand: 3,
-    caption: 3,
-    keywords_text: 3,
-    components_text: 3,  // H-1: keywords_text와 동급 — 구성품 이름/수량이 검색에서 중요
-    specs_text: 3,       // H-1: keywords_text와 동급 — 사양 키워드(화소수, 배터리 등)
-    content_text: 1,
-    category: 1,
-    reviews_text: 0.5,   // L-1: 상품명·키워드 일치가 항상 우선 — 후기는 보조 근거
-  },
-  defaultFuzzy: 0.2 as const,
-  defaultPrefix: true,
-}
-
-// ── HTML 태그 제거 (순수 텍스트 추출) ────────────────────────────────────────
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&[a-z]+;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-// ── content_blocks JSONB → 텍스트 추출 ───────────────────────────────────────
-
-type ContentBlockRaw = {
-  type: string
-  html?: string
-  content?: string
-  text?: string
-}
-
-export function extractContentBlocksText(blocks: unknown): string {
-  if (!Array.isArray(blocks)) return ''
-  const textParts: string[] = []
-  for (const block of blocks as ContentBlockRaw[]) {
-    if (!block || typeof block !== 'object') continue
-    // TextBlock: { type: 'text', html: '...' }
-    if (block.type === 'text' && typeof block.html === 'string') {
-      textParts.push(stripHtml(block.html))
-    }
-    // HtmlBlock: { type: 'html', content: '...' }
-    if (block.type === 'html' && typeof block.content === 'string') {
-      textParts.push(stripHtml(block.content))
-    }
-    // LinkEntryBlock: { type: 'link-entry', text: '...' }
-    if (block.type === 'link-entry' && typeof block.text === 'string') {
-      textParts.push(block.text)
-    }
-  }
-  return textParts.join(' ').trim()
-}
-
-// ── JSONB key-value 객체 → "키 값" 텍스트 추출 (H-1) ────────────────────────
-// components·specifications 컬럼 형식: {"배터리": "1개", "충전케이블": "1개"} 등
-// 검색 시 "배터리", "1개", "배터리 1개" 등으로 매칭 가능하도록 변환
-export function extractJsonbKeyValues(jsonb: unknown): string {
-  if (Array.isArray(jsonb)) {
-    // 2026-09-27: 순서 보존 배열 [{key,value}] 지원
-    const parts: string[] = []
-    for (const el of jsonb) {
-      if (!el || typeof el !== 'object' || Array.isArray(el)) continue
-      const { key, value } = el as Record<string, unknown>
-      if (key !== null && key !== undefined && String(key)) parts.push(String(key))
-      if (value !== null && value !== undefined) parts.push(String(value))
-    }
-    return parts.join(' ').trim()
-  }
-  if (!jsonb || typeof jsonb !== 'object') return ''
-  const parts: string[] = []
-  for (const [key, value] of Object.entries(jsonb as Record<string, unknown>)) {
-    if (key) parts.push(key)
-    if (value !== null && value !== undefined) parts.push(String(value))
-  }
-  return parts.join(' ').trim()
-}
-
-// ── L-1: 후기 RPC 결과 → 상품별 후기 텍스트 맵 (순수 함수) ──────────────────
-// get_product_review_search_texts(Migration 670) 응답 행: { product_id, review_count, review_text }
-// · 배열이 아니거나 형식이 잘못된 행은 건너뛴다(검색을 막지 않는다)
-// · 같은 product_id가 중복되면 텍스트를 공백으로 이어붙이고 건수를 합산한다
-// · 상품당 텍스트는 MAX_REVIEW_CHARS_PER_PRODUCT(2000자)에서 절단한다
-
-export const MAX_REVIEW_CHARS_PER_PRODUCT = 2000
-
-export interface ReviewsTextEntry {
-  text: string
-  count: number
-}
-
-export function buildReviewsTextMap(rows: unknown): Map<string, ReviewsTextEntry> {
-  const map = new Map<string, ReviewsTextEntry>()
-  if (!Array.isArray(rows)) return map
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue
-    const { product_id, review_text, review_count } = row as Record<string, unknown>
-    if (typeof product_id !== 'string' || product_id === '') continue
-    if (typeof review_text !== 'string') continue
-    const text = review_text.trim()
-    if (text === '') continue
-    const count =
-      typeof review_count === 'number' && Number.isFinite(review_count) && review_count > 0
-        ? Math.floor(review_count)
-        : 1
-    const prev = map.get(product_id)
-    const joined = prev ? `${prev.text} ${text}` : text
-    map.set(product_id, {
-      text: joined.slice(0, MAX_REVIEW_CHARS_PER_PRODUCT),
-      count: (prev?.count ?? 0) + count,
-    })
-  }
-  return map
+/** getProductSearchIndex()가 돌려주는 검색 객체 — 기존 search()에 분류 우선 검색(크레이지챗 추천 전용)을 더한 형태 */
+export type ProductSearchProvider = NaturalSearchProvider<ProductDoc> & {
+  searchWithCategoryIntent: (query: string, opts?: SearchOptions) => SearchResult<ProductDoc>[]
 }
 
 // ── 모듈 스코프 캐시 (TTL 60초) ──────────────────────────────────────────────
 
 const CACHE_TTL_MS = 60_000
 
-let cachedIndex: NaturalSearchProvider<ProductDoc> | null = null
+let cachedIndex: ProductSearchProvider | null = null
 let cachedAt = 0
 
 function isCacheValid(): boolean {
@@ -295,6 +176,36 @@ async function loadReviewSearchTerms(): Promise<Map<string, ReviewsTextEntry>> {
   }
 }
 
+// ── L-2: 한글 분류 이름 로드 (code_mapping_groups: name ↔ default_category, service_role 전용) ──
+// 정본은 CMS 코드설정의 그룹 이름이다(/cms/products 목록도 같은 값을 쓴다). 하드코딩 맵 없음.
+// 실패 시 빈 맵(검색 중단 금지) → 분류 이름 칸이 비고 분류 우선 정렬이 꺼져 기존과 같은 결과가 된다.
+// ⚠ CMS에서 그룹 이름을 바꾸면 인덱스 TTL(60초) 뒤 반영된다.
+async function loadCategoryLabels(): Promise<Map<string, string[]>> {
+  try {
+    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const { data, error } = await admin
+      .from('code_mapping_groups')
+      .select('name, default_category')
+      .not('default_category', 'is', null)
+    if (error) {
+      console.error('[productSearchIndex] 분류 이름 조회 실패:', error.message)
+      return new Map()
+    }
+    return buildCategoryLabelMap(data)
+  } catch (e) {
+    console.error('[productSearchIndex] 분류 이름 조회 오류:', e instanceof Error ? e.message : String(e))
+    return new Map()
+  }
+}
+
+/** 인덱스에 분류 우선 검색 메서드를 붙인다(기존 search()는 그대로) */
+function withCategoryIntent(
+  index: NaturalSearchProvider<ProductDoc>,
+  labels: ReadonlyMap<string, string[]>,
+): ProductSearchProvider {
+  return Object.assign(index, { searchWithCategoryIntent: createCategoryIntentSearch(index, labels) })
+}
+
 // ── L-1: 인덱스 빌드 통계 (정기 점검 cron이 읽음 — 숫자만, 상품명·후기 문구 없음) ──
 
 export interface IndexBuildStats {
@@ -325,15 +236,17 @@ export function getLastIndexBuildStats(): IndexBuildStats | null {
  * I-4: cms_admin_product_search_confirmations에서 status='confirmed'인 신호를 함께 로드해
  * 동일 keywords_text 병합 라인에서 J-2 학습 키워드와 합산(저장 분리 / 소비 시점 병합).
  *
- * @returns 즉시 search() 호출 가능한 NaturalSearchProvider
+ * L-2: 한글 분류 이름(code_mapping_groups)을 함께 읽어 category_label 칸과 분류 우선 검색(searchWithCategoryIntent)에 쓴다.
+ *
+ * @returns 즉시 search() 호출 가능한 검색 객체(+ 분류 우선 검색 메서드)
  */
-export async function getProductSearchIndex(): Promise<NaturalSearchProvider<ProductDoc>> {
+export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
   if (isCacheValid()) return cachedIndex!
 
   const buildStartedAt = Date.now()
 
-  // J-2 + I-4 + L-1: 상품 조회 · promote_threshold · 관리자 확인 신호 · 공개 후기를 병렬 실행
-  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts] = await Promise.all([
+  // J-2 + I-4 + L-1 + L-2: 상품 조회 · promote_threshold · 관리자 확인 신호 · 공개 후기 · 분류 이름을 병렬 실행
+  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts, categoryLabels] = await Promise.all([
     supabase
       .from('products')
       .select(
@@ -346,6 +259,7 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
     loadPromoteThreshold(),
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
     loadReviewSearchTerms(),           // L-1: 공개 후기 텍스트 (fail-safe: 실패 시 빈 맵)
+    loadCategoryLabels(),              // L-2: 한글 분류 이름 (fail-safe: 실패 시 빈 맵)
   ])
 
   const { data, error } = productResult
@@ -357,38 +271,21 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
       indexedProducts: 0, reviewedProducts: 0, reviewRows: 0, weakProducts: 0,
       buildMs: Date.now() - buildStartedAt, status: 'error', builtAt: Date.now(),
     }
-    return createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, [])
+    return withCategoryIntent(createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, []), new Map())
   }
 
   // J-2: 학습된 검색어 로드 (product_search_stats, anon client)
   const learnedTerms = await loadLearnedSearchTerms(promoteThreshold)
 
-  const docs: ProductDoc[] = (data as Record<string, unknown>[]).map((row) => {
-    const productId = String(row['id'] ?? '')
-    const baseKeywords = Array.isArray(row['keywords'])
-      ? (row['keywords'] as string[]).join(' ')
-      : ''
-    // J-2 + I-4: 고객 학습 키워드 + 관리자 확인 신호를 같은 병합 라인에서 join
-    const learned        = learnedTerms.get(productId) ?? []
-    const adminConfirmed = adminConfirmedTerms.get(productId) ?? []
-    const keywords_text  = [baseKeywords, ...learned, ...adminConfirmed].filter(Boolean).join(' ')
-
-    return {
-      id: productId,
-      name: String(row['name'] ?? ''),
-      brand: String(row['brand'] ?? ''),
-      category: String(row['category'] ?? ''),
-      slug: String(row['slug'] ?? ''),
-      caption: String(row['product_caption'] ?? ''),
-      keywords_text,
-      content_text: extractContentBlocksText(row['content_blocks']),
-      components_text: extractJsonbKeyValues(row['components']), // H-1: 구성품
-      specs_text: extractJsonbKeyValues(row['specifications']), // H-1: 사양
-      reviews_text: reviewTexts.get(productId)?.text ?? '',      // L-1: 공개 후기(보조 근거)
-    }
+  // 문서 변환은 순수 모듈(productSearchDocs.buildProductDocs)이 한다 — J-2 학습·I-4 관리자 확인·L-1 후기·L-2 분류 이름 병합
+  const docs: ProductDoc[] = buildProductDocs(data as Record<string, unknown>[], {
+    learnedTerms,
+    adminConfirmedTerms,
+    reviewTexts,
+    categoryLabels,
   })
 
-  cachedIndex = createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, docs)
+  cachedIndex = withCategoryIntent(createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, docs), categoryLabels)
   cachedAt = Date.now()
 
   // L-1: 정기 점검용 빌드 통계 (숫자만)

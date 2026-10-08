@@ -1,12 +1,14 @@
 /**
  * TDD: synonymTokenExpansionDb.test.ts — 동의어 단어 단위 치환 실DB 검증 (Stage 전용, N-6)
- * 핵심: 확정 동의어로 연결된 한글 별칭 + 일반 단어("별칭 카메라") 검색이 고객 검색 API·CMS 검색 제안 양쪽에서
+ * 핵심: 확정 동의어로 연결된 한글 별칭 + 일반 단어("별칭 일반단어") 검색이 고객 검색 API·CMS 검색 제안 양쪽에서
  *       영문 상품을 찾고 / 변형어로 검색 RPC를 다시 부르지 않아 search_logs에 변형 문자열이 쌓이지 않으며 /
  *       동의어가 없으면 찾지 못한다.
  * 동의어 그룹은 테스트가 만든 합성 데이터를 주입(loadSynonymGroups 모킹)하고, 상품·인덱스·검색 RPC·로그는 실제 Stage를 쓴다.
  * 검색 RPC가 남기는 search_logs 행은 이 테스트가 만든 고유 검색어 것만 스스로 정리한다(기존 Stage 데이터 삭제 금지).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
+// 주의(2026-10-08): 일반 단어로 "카메라" 같은 분류 이름을 쓰면 안 된다 — 분류 이름 칸(L-2) 도입 뒤 "카메라"가 카메라 분류 상품을 직접 잡아
+// "동의어가 없으면 못 찾는다"는 전제가 깨진다. 일반 단어는 어떤 상품에도 없는 임의 단어(nonce)를 쓴다.
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public'
@@ -71,8 +73,9 @@ describe.skipIf(!isStage)('동의어 단어 단위 치환 — 실DB (고객 검�
   it('고객 검색 API: "별칭 + 일반 단어"가 영문 상품을 찾고, 변형어는 검색 로그에 쌓이지 않는다', async () => {
     const p = await pickLatinProduct()
     const alias = `큐에이별칭${rand()}`
-    const q = `${alias} 카메라`
-    const variant = `${p.latin} 카메라`
+    const generic = `일반${rand()}`
+    const q = `${alias} ${generic}`
+    const variant = `${p.latin} ${generic}`
     mockGroups = [{ canonicalTerm: alias, confirmedTerms: [alias, p.latin] }]
     cleanups.push(async () => { await admin.from('search_logs').delete().in('query', [q, variant]) })
     const before = await logRowsFor(variant)
@@ -90,7 +93,7 @@ describe.skipIf(!isStage)('동의어 단어 단위 치환 — 실DB (고객 검�
   it('CMS 검색 제안: "별칭 + 일반 단어"가 영문 상품을 찾는다(동의어 없으면 못 찾음)', async () => {
     const p = await pickLatinProduct()
     const alias = `큐에이별칭${rand()}`
-    const q = `${alias} 카메라`
+    const q = `${alias} 일반${rand()}`
     mockGroups = [{ canonicalTerm: alias, confirmedTerms: [alias, p.latin] }]
     expect(await cmsSearch(q)).toContain(p.id)
 
