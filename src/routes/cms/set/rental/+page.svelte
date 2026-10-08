@@ -79,8 +79,11 @@
   // 2026-09-23 30자로 상향). 문자 종류 제한
   // (한글·영문·숫자만)은 2026-09-21 같은 날 후속 지시로 해제됨 — 공백·콜론 등 특수문자
   // 입력 허용(기존 "19:00 마감" 형식도 그대로 재현 가능해짐). 길이 제한 자체는 유지.
-  function filterMethodDeadlineInput(raw: string): string {
-    return raw.slice(0, 30)
+  // 기존 방식 수정 아코디언(수령방식·반납방식 안내문구)은 80자까지 허용(2026-10-06, Stephen 요청 +50자).
+  // 신규 추가 입력칸은 기존 30자 유지.
+  const METHOD_DEADLINE_EDIT_MAX = 80
+  function filterMethodDeadlineInput(raw: string, max = 30): string {
+    return raw.slice(0, max)
   }
 
   let usedMethodKeys = $derived(new Set(methods.map((m) => m.method_key).filter(Boolean)))
@@ -132,6 +135,11 @@
   let shippingGuide    = $state(data.shippingSettings?.shipping_guide      ?? '')
   let maxRentalDays    = $state<number | ''>(data.shippingSettings?.max_rental_days ?? 15)
   let shippingLoading  = $state(false)
+  // 무인보관함 안내문(Migration #659) — 배송 설정 폼과 별도 폼·저장 버튼
+  let lockerGuide      = $state(data.shippingSettings?.locker_guide_text ?? '')
+  let lockerGuideLoading = $state(false)
+  let lockerGuideCount = $derived(lockerGuide.length)
+  let lockerGuideIsDirty = $derived.by(() => lockerGuide.trim() !== (data.shippingSettings?.locker_guide_text ?? '').trim())
   let shippingFormEl = $state<HTMLFormElement | undefined>(undefined)
   let shippingGuideCount = $derived(shippingGuide.length)
   // "안내문 저장" 버튼 — 요금 토글/입력은 전부 자동저장돼 이 버튼은 배송 안내문 전용이므로,
@@ -159,6 +167,7 @@
     returnFee       = data.shippingSettings?.return_fee          ?? ''
     shippingGuide   = data.shippingSettings?.shipping_guide      ?? ''
     maxRentalDays   = data.shippingSettings?.max_rental_days     ?? 15
+    lockerGuide     = data.shippingSettings?.locker_guide_text   ?? ''
   })
 
   // ─── 택배 휴무일 캘린더 제어 ───
@@ -606,8 +615,8 @@
                       name="deadline_time"
                       class="mk-deadline-edit-input"
                       value={editingDeadlineValue}
-                      maxlength="30"
-                      placeholder="안내문구 (예: 19시마감, 30자)"
+                      maxlength="80"
+                      placeholder="안내문구 (예: 19시마감, 80자)"
                       aria-label="수령방식 안내문구 수정"
                       disabled={deadlineEditLoading}
                       use:focusOnMount
@@ -615,7 +624,7 @@
                         if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
                       }}
                       oninput={(e) => {
-                        editingDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
+                        editingDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value, METHOD_DEADLINE_EDIT_MAX)
                         e.currentTarget.value = editingDeadlineValue
                       }}
                     />
@@ -631,15 +640,15 @@
                       name="return_deadline_time"
                       class="mk-deadline-edit-input"
                       value={editingReturnDeadlineValue}
-                      maxlength="30"
-                      placeholder="안내문구 (예: 19시마감, 30자)"
+                      maxlength="80"
+                      placeholder="안내문구 (예: 19시마감, 80자)"
                       aria-label="반납방식 안내문구 수정"
                       disabled={deadlineEditLoading}
                       onkeydown={(e) => {
                         if (e.key === 'Escape') { e.preventDefault(); cancelEditDeadline() }
                       }}
                       oninput={(e) => {
-                        editingReturnDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value)
+                        editingReturnDeadlineValue = filterMethodDeadlineInput(e.currentTarget.value, METHOD_DEADLINE_EDIT_MAX)
                         e.currentTarget.value = editingReturnDeadlineValue
                       }}
                     />
@@ -832,6 +841,55 @@
             ></textarea>
             <span class="char-count" class:char-count--warn={shippingGuideCount > 180}
               >{shippingGuideCount} / 200</span
+            >
+          </div>
+        </div>
+      </form>
+
+      <!-- 무인보관함 안내문(200자, Migration #659) — /cart 방문대여·방문반납에서 영업외시간
+           (무인보관함 시간대) 선택 시 노출되는 빨간 안내문. 배송 안내문과 동일한 섹션 헤더·
+           인라인 저장 버튼·textarea 표준 재사용. 요금 폼과 분리된 별도 폼. -->
+      <form
+        method="POST"
+        action="?/saveLockerGuide"
+        class="shipping-form"
+        use:enhance={() => {
+          lockerGuideLoading = true
+          return async ({ result, update }) => {
+            lockerGuideLoading = false
+            if (result.type === 'success') {
+              csToast.success('무인보관함 안내문이 저장되었습니다.')
+              await update({ reset: false })
+            } else if (result.type === 'failure') {
+              csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
+            }
+          }
+        }}
+      >
+        <div class="subsection shipping-guide-sub shipping-guide-sub--spaced">
+          <div class="subsection-head subsection-head--between">
+            <h3 class="subsection-title">무인보관함 안내문</h3>
+            <button
+              type="submit"
+              class="btn-save-inline"
+              class:dirty={lockerGuideIsDirty}
+              disabled={lockerGuideLoading || !lockerGuideIsDirty}
+            >
+              {lockerGuideLoading ? '저장 중...' : '안내문 저장'}
+            </button>
+          </div>
+          <div class="textarea-wrap">
+            <textarea
+              name="locker_guide_text"
+              class="guide-textarea"
+              maxlength="200"
+              rows="3"
+              bind:value={lockerGuide}
+              placeholder="무인보관함 시간대 선택 시 고객에게 표시될 안내문을 입력하세요. {'{방식}'}은 방문대여/방문반납으로 자동 바뀝니다. (200자 이내)"
+              aria-label="무인보관함 안내문"
+            ></textarea>
+            <span class="char-count" class:char-count--warn={lockerGuideCount > 180}
+              >{lockerGuideCount} / 200</span
             >
           </div>
         </div>

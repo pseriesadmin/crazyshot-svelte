@@ -88,6 +88,7 @@ export interface RentalShippingSettings {
   enable_return: boolean
   return_fee: number | null
   shipping_guide: string
+  locker_guide_text: string  // 무인보관함 안내문({방식} 토큰 = 방문대여/방문반납)
   max_rental_days: number | null  // [11] 최대 대여일수 (기본값 15일)
 }
 
@@ -148,7 +149,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_shipping_settings')
-      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, max_rental_days')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, locker_guide_text, max_rental_days')
       .limit(1)
       .single(),
 
@@ -315,11 +316,11 @@ export const actions: Actions = {
 
     if (!id) return fail(400, { error: '잘못된 요청입니다.' })
     if (!name) return fail(400, { error: '대여방식명이 비어있습니다.' })
-    if (deadlineTime && deadlineTime.length > 30) {
-      return fail(400, { error: '수령방식 안내문구는 최대 30자까지 입력 가능합니다.' })
+    if (deadlineTime && deadlineTime.length > 80) {
+      return fail(400, { error: '수령방식 안내문구는 최대 80자까지 입력 가능합니다.' })
     }
-    if (returnDeadlineTime && returnDeadlineTime.length > 30) {
-      return fail(400, { error: '반납방식 안내문구는 최대 30자까지 입력 가능합니다.' })
+    if (returnDeadlineTime && returnDeadlineTime.length > 80) {
+      return fail(400, { error: '반납방식 안내문구는 최대 80자까지 입력 가능합니다.' })
     }
 
     const { error } = await untypedRpc(locals.supabase, 'upsert_rental_method_option', {
@@ -506,6 +507,25 @@ export const actions: Actions = {
       p_return_fee:        returnFee,
       p_shipping_guide:    shippingGuide,
       p_max_rental_days:   maxRentalDays,
+    })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 무인보관함 안내문 ─────────────────────────
+  // /cart 방문대여·방문반납 영업외시간(무인보관함) 선택 시 노출되는 빨간 안내문(Migration #659).
+  // 배송 설정 폼과 별도 폼·전용 RPC — 요금 자동저장과 섞이지 않게 분리.
+  saveLockerGuide: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const lockerGuideText = ((data.get('locker_guide_text') as string | null) ?? '').trim()
+    if (lockerGuideText.length > 200) return fail(400, { error: '무인보관함 안내문은 최대 200자까지 입력 가능합니다.' })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_locker_guide_text', {
+      p_locker_guide_text: lockerGuideText,
     })
     if (error) return fail(500, { error: error.message })
     return { success: true }
