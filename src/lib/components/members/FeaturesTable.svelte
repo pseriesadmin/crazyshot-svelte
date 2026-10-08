@@ -350,6 +350,7 @@
     justify-content: center;
     gap: 6px;
     padding: 11px 4px 10px;
+    min-height: 44px; /* 2026-10-09: 모바일 터치타겟 44px 기준(글자 14px 확대로 43.4px가 되어 미달 → 보정) */
     border: none;
     border-radius: 16px;
     background: transparent;
