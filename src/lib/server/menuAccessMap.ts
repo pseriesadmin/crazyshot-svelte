@@ -118,6 +118,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/dhero/return',
       'src/routes/api/cms/reservations/[id]/init-contract',
       'src/routes/api/cms/reservations/[id]/locker-password',
+      'src/routes/api/cms/reservations/[id]/locker-password/test-send',
       'src/routes/api/cms/reservations/[id]/options',
       'src/routes/api/cms/reservations/[id]/options/assets',
       'src/routes/api/cms/reservations/[id]/options/assets/available',

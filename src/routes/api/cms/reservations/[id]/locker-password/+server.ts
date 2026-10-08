@@ -57,10 +57,10 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const body = await request.json() as { locker_password?: string | null }
   const lockerPassword = (body.locker_password ?? '').trim() || null
 
-  // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (숫자 4~6자리)
+  // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (숫자 4~10자리)
   if (lockerPassword !== null) {
-    if (!/^\d{4,6}$/.test(lockerPassword)) {
-      throw error(400, '보관함 비밀번호는 숫자 4~6자리이어야 합니다.')
+    if (!/^\d{4,10}$/.test(lockerPassword)) {
+      throw error(400, '보관함 비밀번호는 숫자 4~10자리이어야 합니다.')
     }
   }
 
@@ -73,7 +73,12 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     p_password:       lockerPassword,
   })
 
-  if (rpcErr) throw error(500, '비밀번호 저장 중 오류가 발생했습니다.')
+  if (rpcErr) {
+    if (rpcErr.message.includes('not allowed for status')) {
+      throw error(409, '취소·만료된 예약에는 비밀번호를 저장할 수 없습니다.')
+    }
+    throw error(500, '비밀번호 저장 중 오류가 발생했습니다.')
+  }
 
   return json({ success: true, locker_password: lockerPassword })
 }
