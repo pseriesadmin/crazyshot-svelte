@@ -59,6 +59,12 @@ function makeLocals(
   }
 }
 
+// 2026-09 '서비스 기본 정보' 작업으로 루트 레이아웃이 세션 유무와 무관하게 get_service_info_settings RPC를 항상 1회 호출한다.
+// 이 테스트의 관심사는 탈퇴 자동복구 RPC뿐이므로 해당 RPC 호출만 따로 센다.
+function restoreCalls(rpc: ReturnType<typeof vi.fn>): unknown[][] {
+  return rpc.mock.calls.filter((c: unknown[]) => c[0] === 'restore_withdrawn_account')
+}
+
 describe('+layout.server load — 탈퇴 자동복구 통합 지점', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -71,7 +77,7 @@ describe('+layout.server load — 탈퇴 자동복구 통합 지점', () => {
 
     expect(result).toBeDefined()
     expect(locals._mockFrom).not.toHaveBeenCalled()
-    expect(locals._mockRpc).not.toHaveBeenCalled()
+    expect(restoreCalls(locals._mockRpc)).toHaveLength(0)
   })
 
   it('② withdrawal_status=requested: restore_withdrawn_account RPC가 호출됨', async () => {
@@ -80,7 +86,7 @@ describe('+layout.server load — 탈퇴 자동복구 통합 지점', () => {
     await (load as LoadFn)({ locals })
 
     expect(locals._mockRpc).toHaveBeenCalledWith('restore_withdrawn_account')
-    expect(locals._mockRpc).toHaveBeenCalledTimes(1)
+    expect(restoreCalls(locals._mockRpc)).toHaveLength(1)
   })
 
   it('③ withdrawal_status=none: RPC 호출 없음 (불필요한 호출 방지)', async () => {
@@ -89,6 +95,6 @@ describe('+layout.server load — 탈퇴 자동복구 통합 지점', () => {
     await (load as LoadFn)({ locals })
 
     expect(locals._mockFrom).toHaveBeenCalled() // user_profiles 조회는 하지만
-    expect(locals._mockRpc).not.toHaveBeenCalled() // RPC는 호출 안 함
+    expect(restoreCalls(locals._mockRpc)).toHaveLength(0) // 복구 RPC는 호출 안 함
   })
 })

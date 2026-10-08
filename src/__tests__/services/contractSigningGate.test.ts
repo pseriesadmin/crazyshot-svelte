@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
+import { createTestProduct, type TestProduct } from '../helpers/createTestProduct';
 import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+server';
 
 /**
@@ -24,6 +25,10 @@ import { POST as signContract } from '../../routes/api/contracts/[token]/sign/+s
  */
 
 const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// 이 파일의 각 테스트는 서명 API(PDF 보관본 생성·알림 포함)와 결제 API를 실제로 호출해 한 건당 3~6초가 걸린다(실측).
+// 기본 5초 제한에 걸려 간헐 실패하므로 이 파일에만 넉넉한 제한을 둔다.
+vi.setConfig({ testTimeout: 30000 });
 
 let testProductId: string;
 
@@ -186,11 +191,17 @@ async function countApprovalCards(sessionId: string): Promise<number> {
   ).length;
 }
 
+// 임의 상품(limit(1))은 누수 예약과 날짜가 겹칠 수 있어 이 파일 전용 상품을 만들고 끝나면 삭제한다.
+let fixture: TestProduct;
+
 beforeAll(async () => {
-  const { data, error } = await admin.from('products').select('id').limit(1).single();
-  if (error || !data) throw new Error(`테스트용 product 조회 실패: ${error?.message}`);
-  testProductId = data.id as string;
-});
+  fixture = await createTestProduct(admin, 'SIGNGATE', 1);
+  testProductId = fixture.childId;
+}, 60000);
+
+afterAll(async () => {
+  await fixture?.cleanup();
+}, 60000);
 
 const cleanups: Cleanup[] = [];
 
@@ -358,25 +369,21 @@ describe('reservation-rental-execution.md §0-4 #7 — 묶음주문 서명완료
       await admin.from('orders').delete().eq('id', orderId);
     });
 
-    // A 먼저 결제+서명 완료 (B는 아직) → hold 모드, 알림 없음(위 테스트와 동일 선행 상태)
+    // 계약서는 주문당 1건(Migration 397, init-contract 정책) — 두 상품 모두 결제완료 후 대표 예약(A)의 계약 하나가 서명되면
+    // 같은 주문 전체가 한 번에 confirmed로 전환되고(try_confirm_reservation_order), 알림은 통합 카드 1건이어야 한다.
     await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationA });
+    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationB });
+    expect(await getReservationStatus(reservationA)).toBe('hold'); // 서명 전이라 아직 hold
+    expect(await getReservationStatus(reservationB)).toBe('hold');
+
     const signA = await createContractWithSigning(userId, reservationA);
     cleanups.push(async () => {
       await admin.from('contract_signings').delete().eq('id', signA.signingId);
       await admin.from('contracts').delete().eq('id', signA.contractId);
     });
-    await callSign(signA.token);
-    expect(await getReservationStatus(reservationA)).toBe('confirmed');
-
-    // B도 결제+서명 완료 → 이제 형제 전체가 confirmed → batch 분기로 통합 카드 1건 발송
-    await admin.rpc('mark_reservation_payment_confirmed', { p_reservation_id: reservationB });
-    const signB = await createContractWithSigning(userId, reservationB);
-    cleanups.push(async () => {
-      await admin.from('contract_signings').delete().eq('id', signB.signingId);
-      await admin.from('contracts').delete().eq('id', signB.contractId);
-    });
-    const { status } = await callSign(signB.token);
+    const { status } = await callSign(signA.token);
     expect(status).toBe(200);
+    expect(await getReservationStatus(reservationA)).toBe('confirmed');
     expect(await getReservationStatus(reservationB)).toBe('confirmed');
 
     const sessionId = await findGeneralSessionId(userId);

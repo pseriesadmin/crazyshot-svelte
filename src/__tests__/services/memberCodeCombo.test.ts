@@ -171,6 +171,7 @@ describe('bulk_reissue_member_codes — 기존 고객 일괄 재발급', () => {
     expect(nullResult?.success).toBe(false);
   });
 
+  // 순번은 최소 3자리이고 999를 넘으면 절단 없이 자릿수가 늘어난다(migration 277) — 누적 카운터가 커진 Stage에서도 통과하도록 \d{3,}
   it('GREEN: 유효한 접두어로 실행하면 대상 고객 전원의 member_code가 새 형식으로 갱신된다', async () => {
     const { data, error } = await callBulkReissue('RS');
     expect(error).toBeNull();
@@ -182,7 +183,7 @@ describe('bulk_reissue_member_codes — 기존 고객 일괄 재발급', () => {
       .select('id, member_code')
       .in('id', testUserIds);
     for (const row of rows as { id: string; member_code: string | null }[]) {
-      expect(row.member_code).toMatch(/^CSRS\d{4}\d{3}$/);
+      expect(row.member_code).toMatch(/^CSRS\d{4}\d{3,}$/);
       expect(row.member_code).not.toBe(originalCodes[row.id]);
     }
   });
@@ -201,7 +202,7 @@ describe('bulk_reissue_member_codes — 기존 고객 일괄 재발급', () => {
       );
       expect(entry).toBeTruthy();
       expect(entry?.old_code).toBe(originalCodes[uid]);
-      expect(entry?.new_code).toMatch(/^CSRS\d{4}\d{3}$/);
+      expect(entry?.new_code).toMatch(/^CSRS\d{4}\d{3,}$/);
       expect(entry?.reissued_by).toBe('vitest');
     }
   });

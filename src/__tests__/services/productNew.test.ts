@@ -301,25 +301,23 @@ describe('create action — sale_only=true 상품 등록 (TDD-SALEONLY-1)', () =
     expect(result).toBeNull(); // fail() 반환이 아님
   });
 
-  it('sale_only=false 시 price_24h 없으면 fail(400) 반환 (회귀 방지)', async () => {
+  it('sale_only=false 이고 price_24h가 없어도 등록된다 — 24시간 가격은 선택 입력 (products.md §2-9, 2026-09-28 필수 폐기)', async () => {
     const admin = makeAdminStub();
     createClientMock.mockReturnValue(admin);
 
-    // sale_only=false + price_24h 없음 → 기존대로 차단되어야 함
+    // sale_only=false + price_24h 없음 → 과거엔 차단, 현재는 허용(24h 필수 폐기)
     const fd = new FormData();
     fd.append('name', 'Normal Product');
     fd.append('slug', 'normal-product');
     fd.append('category', 'camera');
     fd.append('is_active', 'true');
     fd.append('sale_only', 'false');
-    // price_24h 미포함 — 기존 차단 로직 유지 확인
+    // price_24h 미포함
     const request = { formData: async () => fd } as Request;
 
     const { result, redirectLocation } = await callCreate({ request });
 
-    expect(redirectLocation).toBeNull();
-    expect(result).not.toBeNull();
-    const r = result as { status?: number };
-    expect(r.status).toBe(400);
+    expect(redirectLocation).toContain('/cms/products?selected=test-product-id');
+    expect(result).toBeNull(); // fail() 반환이 아님
   });
 });

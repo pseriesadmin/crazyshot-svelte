@@ -193,7 +193,9 @@ describe('verify_and_update_phone — 탈퇴유예중 계정 휴대폰 충돌 �
     expect(profileB?.phone).not.toBe('01011110001');
   });
 
-  it('② 동일 휴대폰이지만 상대(A)가 정상 회원(none) → ok:true (회귀 없음)', async () => {
+  it('② 동일 휴대폰이지만 상대(A)가 정상 회원(none) → 탈퇴유예 차단이 아니라 일반 중복 차단(phone_duplicate)', async () => {
+    // 2026-09-02(Migration 418)부터 활성 회원끼리 같은 휴대폰 번호는 쓸 수 없다(phone_duplicate).
+    // 이 테스트의 의도는 "정상 회원 상대에게는 탈퇴유예용 withdrawal_conflict가 걸리지 않는다"는 구분이다.
     // 계정 A: 정상 회원, phone = '01022220002'
     const sessionA = await createEphemeralSession();
     cleanups.push(sessionA.cleanup);
@@ -211,18 +213,18 @@ describe('verify_and_update_phone — 탈퇴유예중 계정 휴대폰 충돌 �
       'T6CODE2',
     );
 
-    // withdrawal_conflict 차단 없이 기존 동작 그대로 통과해야 함
     expect(error).toBeNull();
-    expect(data?.ok).toBe(true);
-    expect(data?.error_code).toBeUndefined();
+    expect(data?.ok).toBe(false);
+    expect(data?.error_code).toBe('phone_duplicate');
+    expect(data?.error_code).not.toBe('withdrawal_conflict');
 
-    // B의 phone이 정상 업데이트됐는지 확인
+    // B의 phone은 바뀌지 않아야 한다
     const { data: profileB } = await admin
       .from('user_profiles')
       .select('phone')
       .eq('id', sessionB.userId)
       .single();
-    expect(profileB?.phone).toBe('01022220002');
+    expect(profileB?.phone).not.toBe('01022220002');
   });
 
   it('③ 휴대폰 중복 없는 정상 케이스 → ok:true (회귀 없음)', async () => {

@@ -19,6 +19,8 @@ export default defineConfig({
 		// 재귀 탐색해 이 경로의 구버전 테스트 파일까지 함께 실행시켜, 동일 테스트가 여러 번
 		// 중복 실행되고 그 워크트리의 stale 코드 기준으로 실패하는 노이즈가 세션 내내 반복
 		// 발생했다(CMS 전역 정밀검증 v3 STAGE 2 발견). 실제 프로젝트 코드는 항상 src/ 기준.
-		exclude: ['**/node_modules/**', '**/.git/**', '**/.claude/worktrees/**']
+		// *.mount.test.ts는 jsdom 컴포넌트 전용 설정(vitest.component.config.ts, `npm run test:component`)으로만 실행한다.
+		// 기본 설정에서는 Svelte가 서버 빌드로 해석돼 mount()가 실패하므로 제외한다.
+		exclude: ['**/node_modules/**', '**/.git/**', '**/.claude/worktrees/**', '**/*.mount.test.ts']
 	}
 });
