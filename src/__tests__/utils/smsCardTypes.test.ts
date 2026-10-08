@@ -3,10 +3,14 @@ import { smsNotifyTypesForCard } from '$lib/utils/smsCardTypes'
 
 // send_rental_chat_notification(Migration 494)이 저장하는 action_payload.type 기준 매핑 검증
 describe('smsNotifyTypesForCard — 대화카드 type → SMS notify_type 후보', () => {
-  it('notify_type을 그대로 type으로 저장하는 6종은 자기 자신', () => {
-    for (const t of ['contract_link', 'contract_signed', 'reservation_approval', 'shipment_notify', 'tracking_notify', 'return_remind']) {
+  it('notify_type을 그대로 type으로 저장하는 5종은 자기 자신', () => {
+    for (const t of ['contract_link', 'reservation_approval', 'shipment_notify', 'tracking_notify', 'return_remind']) {
       expect(smsNotifyTypesForCard(t)).toEqual([t])
     }
+  })
+
+  it('contract_signed 카드는 서명 완료(contract_signed)와 재공유(contract_reshare) SMS 로그를 모두 후보로 본다', () => {
+    expect(smsNotifyTypesForCard('contract_signed')).toEqual(['contract_signed', 'contract_reshare'])
   })
 
   it('RETURN_REGISTRATION_CARD → return_registration (BLOCKING 회귀 방지)', () => {

@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * 허브는 고객 푸시를 시도하고(실패해도 무관) 대상 타입이면 SMS를 항상 같이 보낸다.
  *   (용어: '묶음 주문'은 폐기된 옛 구조 — 지금은 장바구니 1주문 = 예약코드 1개에 상품·옵션 여러 개)
  *   SMS 대상 7종(허브 경유): reservation_approval · shipment_notify · tracking_notify · dhero_place_guide · return_registration · return_remind · reservation_cancelled
- *   계약서 2종(contract_link·contract_signed)은 허브를 거치지 않고 sendCardSms로 직접 — contractSendDispatch.test.ts에서 검증.
+ *   계약서 3종(contract_link·contract_signed·재공유 contract_reshare)은 허브를 거치지 않고 sendCardSms로 직접 — contractSendDispatch.test.ts에서 검증.
  *   SMS 비대상: rental_confirm · rental_complete · damage_claimed · hold_expired · reservation_hold · payment_cancelled_reissue · locker_guide
  */
 
@@ -226,6 +226,6 @@ describe('호출부 배선 — 채팅카드 발송 지점마다 허브 호출이
 
   it('SMS 대상 notify_type 문구 목록이 허브 테스트의 대상(7종+계약 2종)과 일치한다', async () => {
     const { LIFECYCLE_SMS_COPY } = await import('$lib/server/sms')
-    expect(Object.keys(LIFECYCLE_SMS_COPY).sort()).toEqual([...SMS_TYPES, 'contract_link', 'contract_signed'].sort())
+    expect(Object.keys(LIFECYCLE_SMS_COPY).sort()).toEqual([...SMS_TYPES, 'contract_link', 'contract_signed', 'contract_reshare'].sort())
   })
 })

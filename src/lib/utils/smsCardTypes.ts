@@ -9,7 +9,6 @@
  */
 const DIRECT_TYPES = [
   'contract_link',
-  'contract_signed',
   'reservation_approval',
   'shipment_notify',
   'tracking_notify',
@@ -18,6 +17,8 @@ const DIRECT_TYPES = [
 
 export function smsNotifyTypesForCard(cardType: string | null | undefined): string[] {
   if (!cardType) return []
+  // 완료 계약서 재공유 카드는 같은 contract_signed 카드 type이지만 SMS는 재공유 전용 notify_type(contract_reshare)로 나간다(2026-10-08)
+  if (cardType === 'contract_signed') return ['contract_signed', 'contract_reshare']
   if ((DIRECT_TYPES as readonly string[]).includes(cardType)) return [cardType]
   if (cardType === 'RETURN_REGISTRATION_CARD') return ['return_registration']
   // RESERVATION_STATUS_CARD는 여러 notify_type이 공유 — SMS 대상인 것만 후보로 본다
