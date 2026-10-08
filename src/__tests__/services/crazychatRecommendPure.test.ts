@@ -134,6 +134,12 @@ describe('buildRecommendSearchTerms', () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 
+  it('검색어 전체가 동의어일 때 대소문자만 다른 확장어(Sony/SONY)는 하나만 남긴다(상한 칸 낭비 방지)', () => {
+    const upper = { canonicalTerm: '소니', confirmedTerms: ['소니', 'Sony', 'SONY'] }
+    const terms = buildRecommendSearchTerms('소니', ['소니'], [upper])
+    expect(terms.map((t) => t.q)).toEqual(['소니', 'Sony'])
+  })
+
   it('원문 가중치는 항상 1이고 변형보다 크다', () => {
     const terms = buildRecommendSearchTerms('소니 카메라', ['소니', '카메라'], [sony])
     expect(terms[0].weight).toBe(1)

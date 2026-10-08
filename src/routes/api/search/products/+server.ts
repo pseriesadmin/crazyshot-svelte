@@ -27,7 +27,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { supabase } from '$lib/services/supabase'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
-import { expandQueryWithConfirmedSynonyms } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { getPriceMinForProducts } from '$lib/server/getPriceMinForProducts'
 import { getPrice12hForProducts } from '$lib/server/getPrice12hForProducts'
@@ -137,9 +137,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   // 동의어 그룹 1회 로드 — 확장 RPC 재조회 + MiniSearch 폴백 두 곳에서 재사용
   let expandedTerms: string[] = []
+  // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch(메모리)에서만 검색한다.
+  // 검색 RPC를 다시 부르면 호출마다 search_logs가 쌓여 인기 검색어(get_trending_keywords)에 변형어가 섞이기 때문.
+  let tokenVariantTerms: string[] = []
   try {
     const synonymGroups = await loadSynonymGroups()
-    expandedTerms = expandQueryWithConfirmedSynonyms(q, synonymGroups)
+    const expansion = expandQueryByTokens(q, synonymGroups)
+    expandedTerms = expansion.whole
+    tokenVariantTerms = expansion.tokenVariants
 
     // 각 확장어로 search_products RPC 재조회 (세션 개인화 학습 제외)
     for (const expandedQ of expandedTerms) {
@@ -171,8 +176,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   try {
     const index = await getProductSearchIndex()
 
-    // 원래 쿼리 + 확장어 전부 MiniSearch에서 검색 (순서 유지)
-    for (const qItem of [q, ...expandedTerms]) {
+    // 단어 치환 변형(두 단어를 모두 포함하는 더 구체적인 검색)을 원문보다 먼저 검색한다 — 원문(OR 매칭)이 limit을
+    // 먼저 채워 변형 결과가 밀려나는 것을 막는다. 변형이 없으면(동의어 없음/단어 하나) 기존 순서 [q, ...확장어] 그대로.
+    for (const qItem of [...tokenVariantTerms, q, ...expandedTerms]) {
       if (mergedResults.length >= limit) break
       const results = index.search(qItem, {
         fuzzy: 0.2,

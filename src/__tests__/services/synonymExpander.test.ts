@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  DEFAULT_MAX_TOKEN_VARIANTS,
+  expandQueryByTokens,
   expandQueryWithConfirmedSynonyms,
   type SynonymGroup,
 } from '$lib/server/searchEngine/core/synonymExpander'
@@ -98,5 +100,84 @@ describe('expandQueryWithConfirmedSynonyms — 핵심 매핑', () => {
     const result = expandQueryWithConfirmedSynonyms('Nikon', GROUPS)
     expect(result).toContain('니콘')
     expect(result).not.toContain('Nikon')
+  })
+})
+
+/**
+ * expandQueryByTokens (2026-10-08) — 검색어 전체 일치 확장(whole) + 단어 단위 치환 변형(tokenVariants)
+ * 핵심: whole은 기존 함수와 동일 / 변형은 한 번에 한 단어만 / 그룹·일치 없음이면 기존 동작과 동일(빈 배열)
+ */
+describe('expandQueryByTokens', () => {
+  const LENS: SynonymGroup = { canonicalTerm: '렌즈', confirmedTerms: ['렌즈', 'lens'] }
+
+  it('단일 단어 검색어는 변형 없이 whole만 돌려준다(기존 함수와 동일)', () => {
+    const r = expandQueryByTokens('소니', GROUPS)
+    expect(r.whole).toEqual(expandQueryWithConfirmedSynonyms('소니', GROUPS))
+    expect(r.whole).toEqual(['Sony', 'SONY'])
+    expect(r.tokenVariants).toEqual([])
+  })
+
+  it('여러 단어 검색어는 동의어가 있는 단어만 바꾼 변형을 만든다(나머지 단어 유지)', () => {
+    const r = expandQueryByTokens('소니 카메라', GROUPS)
+    expect(r.whole).toEqual([])
+    // 'Sony'와 'SONY'는 대소문자만 다른 중복이라 하나만 남는다(MiniSearch는 대소문자를 구분하지 않음)
+    expect(r.tokenVariants).toEqual(['Sony 카메라'])
+  })
+
+  it('영문 → 한글 방향도 치환하고 대소문자를 구분하지 않고 매칭한다', () => {
+    const r = expandQueryByTokens('SONY 카메라', GROUPS)
+    expect(r.tokenVariants).toEqual(['소니 카메라'])
+  })
+
+  it('동의어가 있는 단어가 둘이면 한 번에 하나씩만 바꾼다(조합 폭증 방지)', () => {
+    const r = expandQueryByTokens('소니 렌즈', [...GROUPS, LENS])
+    expect(r.tokenVariants).toEqual(['Sony 렌즈', '소니 lens'])
+    expect(r.tokenVariants.some((v) => /sony.*lens/i.test(v))).toBe(false)
+  })
+
+  it('일치하는 단어가 없으면 빈 배열(기존 동작 유지)', () => {
+    const r = expandQueryByTokens('후지 카메라', GROUPS)
+    expect(r).toEqual({ whole: [], tokenVariants: [] })
+  })
+
+  it('그룹이 없거나 검색어가 비어 있으면 빈 배열', () => {
+    expect(expandQueryByTokens('소니 카메라', [])).toEqual({ whole: [], tokenVariants: [] })
+    expect(expandQueryByTokens('', GROUPS)).toEqual({ whole: [], tokenVariants: [] })
+    expect(expandQueryByTokens('   ', GROUPS).tokenVariants).toEqual([])
+  })
+
+  it('변형 상한을 지킨다 — 기본값과 지정값', () => {
+    const many: SynonymGroup = { canonicalTerm: '소니', confirmedTerms: ['소니', ...Array.from({ length: 20 }, (_, i) => `brand${i}`)] }
+    expect(expandQueryByTokens('소니 카메라', [many]).tokenVariants).toHaveLength(DEFAULT_MAX_TOKEN_VARIANTS)
+    expect(expandQueryByTokens('소니 카메라', [many], { maxVariants: 5 }).tokenVariants).toHaveLength(5)
+    expect(expandQueryByTokens('소니 카메라', [many], { maxVariants: 0 }).tokenVariants).toEqual([])
+  })
+
+  it('대소문자만 다른 변형은 중복으로 보고 한 번만 남긴다', () => {
+    const dup: SynonymGroup = { canonicalTerm: '소니', confirmedTerms: ['소니', 'Sony', 'sony'] }
+    const r = expandQueryByTokens('소니 카메라', [dup])
+    expect(r.tokenVariants).toHaveLength(1)
+  })
+
+  it('원문과 같은 변형은 만들지 않는다', () => {
+    const r = expandQueryByTokens('sony 카메라', [{ canonicalTerm: '소니', confirmedTerms: ['소니', 'Sony'] }])
+    expect(r.tokenVariants).toEqual(['소니 카메라'])
+  })
+
+  it('tokens를 직접 지정하면 그 단어 목록으로 치환한다', () => {
+    const r = expandQueryByTokens('소니 카메라', GROUPS, { tokens: ['소니', '카메라'], maxVariants: 1 })
+    expect(r.tokenVariants).toEqual(['Sony 카메라'])
+  })
+
+  it('검색어 전체가 동의어면 whole에 담기고 단어가 하나라 변형은 없다', () => {
+    const r = expandQueryByTokens('Canon', GROUPS)
+    expect(r.whole).toEqual(['캐논'])
+    expect(r.tokenVariants).toEqual([])
+  })
+
+  it('입력 그룹 배열을 변경하지 않는다', () => {
+    const copy = JSON.parse(JSON.stringify(GROUPS))
+    expandQueryByTokens('소니 카메라', GROUPS)
+    expect(GROUPS).toEqual(copy)
   })
 })

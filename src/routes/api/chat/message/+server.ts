@@ -24,6 +24,7 @@ import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymS
 import { sendPushToUser, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 import { runCrazychatAgent } from '$lib/server/crazychat/agent'
+import { isAdminEngaged } from '$lib/server/crazychat/engagement'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -305,7 +306,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       sessionId: body.session_id,
       messageId: (userMessage as { id: string }).id,
       content: body.content.trim(),
-      adminEngaged: (chatSession as { admin_id?: string | null }).admin_id != null,
+      // "관리자 응대 중" = 배정 이력이 있고 마지막 관리자 답변이 30분 이내(2026-10-08 — 예전엔 admin_id가 있으면 영구 응대 중으로 봐 크레이지챗이 끼어들지 못했다)
+      adminEngaged: await isAdminEngaged(admin, body.session_id, (chatSession as { admin_id?: string | null }).admin_id),
     })
     if (crazy.handled) {
       return json(

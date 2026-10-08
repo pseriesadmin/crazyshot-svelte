@@ -54,7 +54,8 @@ const USER_ID = 'customer-uid'
 const SESSION_ID = 'session-1'
 const CANNED = { id: 'canned-1', title: '보증금은 얼마인가요?', content: '보증금 제도는 없습니다', category: 'payment', shortcut: null, match_keywords: ['보증금'], usage_count: 0 }
 
-interface Opts { cannedEnabled?: boolean; cannedAnswer?: boolean; manual?: boolean; adminId?: string | null }
+interface Opts { cannedEnabled?: boolean; cannedAnswer?: boolean; manual?: boolean; adminId?: string | null; lastAdminAt?: string | null }
+const minutesAgoIso = (m: number): string => new Date(Date.now() - m * 60_000).toISOString()
 let mockAdmin: { from: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> }
 let mockDb: { from: ReturnType<typeof vi.fn> }
 
@@ -69,7 +70,8 @@ function setup(o: Opts = {}) {
     from: vi.fn((table: string) => {
       if (table === 'auto_reply_settings') return makeChain(table, { data: { enabled: !!o.cannedEnabled, observe_mode: false } })
       if (table === 'canned_responses') return makeChain(table, { data: [CANNED] })
-      if (table === 'chat_messages') return makeChain(table, { data: { id: 'new-msg-id' } }, { data: [] })
+      // created_at = "마지막 관리자 답변 시각"(관리자 응대 여부 판정용 조회), 없으면 null
+      if (table === 'chat_messages') return makeChain(table, { data: { id: 'new-msg-id', created_at: o.lastAdminAt ?? null } }, { data: [] })
       return makeChain(table, { data: null })
     }),
     rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -128,12 +130,28 @@ describe('크레이지챗 연결', () => {
     expect(ctx).toEqual({ userId: USER_ID, sessionId: SESSION_ID, messageId: 'user-msg-id', content: '서류 승인됐나요?', adminEngaged: false })
   })
 
-  it('관리자가 이미 응대한 세션이면 adminEngaged=true로 전달한다', async () => {
-    setup({ adminId: 'admin-uid' })
+  it('관리자가 30분 이내에 답한 세션이면 adminEngaged=true로 전달한다', async () => {
+    setup({ adminId: 'admin-uid', lastAdminAt: minutesAgoIso(10) })
     mockRunQuery.mockResolvedValue({ handled: false })
     await run()
     const [, ctx] = mockRunQuery.mock.calls[0] as [unknown, Record<string, unknown>]
     expect(ctx.adminEngaged).toBe(true)
+  })
+
+  it('관리자 배정 이력은 있어도 마지막 답변이 30분을 넘었으면 adminEngaged=false(크레이지챗이 응대 가능)', async () => {
+    setup({ adminId: 'admin-uid', lastAdminAt: minutesAgoIso(60 * 24 * 4) })
+    mockRunQuery.mockResolvedValue({ handled: false })
+    await run()
+    const [, ctx] = mockRunQuery.mock.calls[0] as [unknown, Record<string, unknown>]
+    expect(ctx.adminEngaged).toBe(false)
+  })
+
+  it('배정 이력은 있는데 관리자 답변이 없으면 adminEngaged=false', async () => {
+    setup({ adminId: 'admin-uid', lastAdminAt: null })
+    mockRunQuery.mockResolvedValue({ handled: false })
+    await run()
+    const [, ctx] = mockRunQuery.mock.calls[0] as [unknown, Record<string, unknown>]
+    expect(ctx.adminEngaged).toBe(false)
   })
 
   it('빠른답변이 답하면 조회형은 호출되지 않는다(빠른답변 우선)', async () => {
