@@ -13,6 +13,7 @@
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
+  import PdfViewer from '$lib/components/common/PdfViewer.svelte'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -133,6 +134,35 @@
     window.location.href = `/api/account/rental/${reservation.id}/contract-pdf`
   }
 
+  // 서명 완료본(보관 PDF가 준비된 경우)은 PDF 뷰어로 바로 표시 — ?view=1은 inline 응답 + 열람(viewed) 기록
+  const showPdf = $derived(!!contract && !!data.finalPdfReady)
+  const pdfViewUrl = $derived(`/api/account/rental/${reservation.id}/contract-pdf?view=1`)
+  const pdfDownloadUrl = $derived(`/api/account/rental/${reservation.id}/contract-pdf`)
+
+  // 원본 무결성 확인 — 보관 시점 해시와 현재 보관 PDF 해시를 서버가 대조
+  let verifying = $state(false)
+  let verifyResult = $state<{ match: boolean; recordedSha256: string | null; actualSha256: string } | null>(null)
+  async function handleVerifyPdf(): Promise<void> {
+    if (data.finalPdfUnavailable) {
+      csToast.info('이 계약서는 PDF 사본이 없어 원본 확인을 할 수 없어요.')
+      return
+    }
+    if (!data.finalPdfReady) {
+      csToast.info('계약서 사본(PDF)을 준비 중입니다. 잠시 후 다시 시도해 주세요.')
+      return
+    }
+    verifying = true
+    try {
+      const res = await fetch(`/api/account/rental/${reservation.id}/contract-pdf?verify=1`)
+      if (!res.ok) throw new Error('verify_failed')
+      verifyResult = await res.json()
+    } catch {
+      csToast.error('원본 확인에 실패했어요. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      verifying = false
+    }
+  }
+
   function handlePrint(): void {
     if (browser) window.print()
   }
@@ -250,13 +280,35 @@
     </svg>
     {#if contract}
       <div class="header-actions">
-        <button type="button" class="print-btn" onclick={handleDownloadPdf}>사본(PDF) 받기</button>
-        <button type="button" class="print-btn" onclick={handlePrint}>인쇄하기</button>
+        <button type="button" class="print-btn" onclick={handleDownloadPdf}>PDF 받기</button>
       </div>
     {/if}
   </header>
 
   <main class="contract-main">
+    {#if contract}
+      <!-- 보조 기능 — 헤더는 PDF 받기만 두고 원본 확인(·웹 화면 인쇄)은 본문 상단 텍스트 링크로. PDF 표시 중 인쇄는 PDF 뷰어의 인쇄를 쓴다 -->
+      <div class="sub-tools">
+        {#if !showPdf}
+          <button type="button" class="sub-tool-btn" onclick={handlePrint}>인쇄하기</button>
+        {/if}
+        <button type="button" class="sub-tool-btn" onclick={handleVerifyPdf} disabled={verifying}>{verifying ? '확인 중…' : '원본 일치 확인'}</button>
+        <!-- 내가 받아 둔 PDF 파일이 원본인지 — 파일 지문을 서버 기록과 대조(수정·AI 재생성 파일 판별). 파일은 서버로 보내지 않는다 -->
+        <a class="sub-tool-btn" href="/contract-verify" target="_blank" rel="noopener noreferrer">내 PDF 파일 확인</a>
+      </div>
+    {/if}
+    {#if verifyResult}
+      <div class="verify-box" class:verify-ok={verifyResult.match} class:verify-ng={!verifyResult.match} role="status">
+        <div class="verify-head">
+          <strong>{verifyResult.match ? '서명 당시 보관된 원본과 일치합니다' : '보관 기록과 일치하지 않습니다. 고객센터로 문의해 주세요'}</strong>
+          <button type="button" class="verify-close" aria-label="닫기" onclick={() => (verifyResult = null)}>✕</button>
+        </div>
+        <dl class="verify-hash">
+          <dt>보관 시점 해시(SHA-256)</dt><dd>{verifyResult.recordedSha256 ?? '기록 없음'}</dd>
+          <dt>현재 보관본 해시(SHA-256)</dt><dd>{verifyResult.actualSha256}</dd>
+        </dl>
+      </div>
+    {/if}
     {#if !contract}
       <div class="pdf-placeholder">
         <p>서명된 계약서를 찾을 수 없습니다. 계약서가 아직 발송되지 않았거나 서명이 완료되지 않았을 수 있어요.</p>
@@ -293,6 +345,18 @@
         {/if}
       </div>
 
+      {#if showPdf}
+        <!-- 서명 완료본은 보관 PDF를 그대로 보여준다(웹 화면과 이중 구조 없음). 브라우저 내장 뷰어 대신 자체 뷰어(PdfViewer) —
+             모든 환경에서 같은 화면·도구줄을 보이고, 이후 복호화·원본 비교 기능을 붙일 수 있다(PdfViewer.svelte 상단 주석 참고). -->
+        <div class="pdf-viewer">
+          <PdfViewer
+            src={pdfViewUrl}
+            title={`전자계약서_${reservation?.reservation_code ?? reservation.id}.pdf`}
+            downloadUrl={pdfDownloadUrl}
+            downloadFilename={`crazyshot-contract-${reservation.id}.pdf`}
+          />
+        </div>
+      {:else}
       <!-- 계약서 본문 — canvas / spreadsheet / flow 모드 분기 (서명 필드는 읽기 전용 이미지) -->
       {#if isCanvasMode && canvasDoc}
         <div class="doc-section canvas-doc-section">
@@ -457,6 +521,7 @@
           {/if}
         </div>
       {/if}
+      {/if}
     {/if}
   </main>
 </div>
@@ -484,7 +549,33 @@
     display: block;
   }
 
-  .header-actions { display: flex; gap: 8px; }
+  .header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .pdf-viewer { width: 100%; height: calc(100dvh - 180px); min-height: 480px; }
+  .sub-tools { display: flex; justify-content: flex-end; gap: 4px; margin-bottom: 8px; }
+  .sub-tool-btn {
+    min-height: 44px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-md, 15px);
+    background: transparent;
+    color: var(--cs-text-mid, #666);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .sub-tool-btn { display: inline-flex; align-items: center; text-decoration: none; }
+  .sub-tool-btn:hover { background: rgba(16, 11, 50, 0.06); }
+  .sub-tool-btn:disabled { opacity: 0.5; cursor: default; }
+  .print-btn:disabled { opacity: 0.5; cursor: default; }
+
+  .verify-box { border-radius: 20px; padding: 16px 20px; margin-bottom: 16px; font-size: 14px; color: var(--cs-text, #100B32); }
+  .verify-ok { background: var(--cs-surface-gray, #f6f6f6); }
+  .verify-ng { background: var(--cs-red-xlight, #fdeaea); }
+  .verify-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .verify-close { width: 28px; height: 28px; border: none; background: transparent; color: var(--cs-text-mid, #666); cursor: pointer; }
+  .verify-hash { margin: 10px 0 0; font-size: 12px; word-break: break-all; }
+  .verify-hash dt { font-weight: 700; margin-top: 6px; }
+  .verify-hash dd { margin: 2px 0 0; }
 
   .print-btn {
     height: 36px;
@@ -680,6 +771,7 @@
   @media print {
     :global(body) { background: white !important; }
     .contract-header { display: none !important; }
+    .sub-tools, .verify-box, .pdf-viewer { display: none !important; }
     .contract-main { max-width: none; padding: 0; }
     .summary-card { display: none !important; }
     .doc-section { border-radius: 0; box-shadow: none; padding: 0; break-inside: avoid; }

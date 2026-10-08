@@ -25,9 +25,11 @@ import { ARCHIVE_FONT_CSS } from './fontCss'
 import { inlineStorageImages, type ImageFetcher } from './inlineImages'
 import { renderHtmlToPdf } from './renderPdf'
 import { sanitizeArchiveHtml } from './sanitizeArchiveHtml'
+import { sealFinalDocument } from './sealArchive'
+import type { SealKey } from './seal'
 
 export const ARCHIVE_BUCKET = 'contract-archives'
-export const ARCHIVE_GENERATOR_VERSION = 'archive-v1/chromium-153'
+export const ARCHIVE_GENERATOR_VERSION = 'archive-v2/chromium-153' // v2: 증적 쪽에 진위 확인 안내 문구 추가
 const MARKER = '<!--CUSTOMER_SIGNATURE-->'
 
 export interface EvidenceRecord {
@@ -68,6 +70,8 @@ export interface ArchiveDeps {
   render?: (html: string) => Promise<{ pdf: Uint8Array }>
   fetchImage?: ImageFetcher
   now?: () => Date
+  /** 서명 봉인 키 — 없으면 봉인을 만들지 않는다(크론의 sealPending이 나중에 채운다) */
+  sealKey?: SealKey | null
 }
 
 async function sha256Bytes(bytes: Uint8Array): Promise<string> {
@@ -209,6 +213,15 @@ export async function archiveEvidence(admin: SupabaseClient, ev: EvidenceRecord,
       throw new Error(`final_document_insert_failed: ${insErr.message}`)
     }
     const finalDocumentId = (inserted as { id: string }).id
+
+    // 서명 봉인(Ed25519) — 실패해도 보관 자체는 완료. 못 만든 봉인은 크론(sealPendingDocuments)이 이어서 만든다
+    if (deps.sealKey) {
+      const sealed = await sealFinalDocument(admin, {
+        finalDocumentId, contractId: ev.contract_id, evidenceId: ev.id, signingId: ev.signing_id,
+        signedAt: ev.signed_at, pdfSha256: await sha256Bytes(bytes), source: doc.source,
+      }, bytes, deps.sealKey)
+      if (!sealed.ok) console.error('[contractArchive] 봉인 실패(fail-soft):', finalDocumentId, sealed.reason)
+    }
 
     // 뷰어가 쓰는 주소(안정적인 내부 경로) — 실패해도 보관 자체는 완료된 것으로 본다
     const { error: urlErr } = await admin.from('contracts').update({ document_url: `/api/cms/contracts/${ev.contract_id}/final-pdf` }).eq('id', ev.contract_id)

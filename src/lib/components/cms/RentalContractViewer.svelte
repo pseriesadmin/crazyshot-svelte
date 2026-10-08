@@ -5,6 +5,7 @@
   import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
   import ContractEditorModal from '$lib/components/cms/ContractEditorModal.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
+  import PdfViewer from '$lib/components/common/PdfViewer.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
 
@@ -93,6 +94,89 @@
       window.removeEventListener('resize', fit)
     }
   })
+
+  // ── 받은 PDF 진위 확인(관리자 전용) ─────────────────────────────────────────
+  // 고객·제3자가 제시한 PDF를 올리면 보관 원본과 대조해 진위(파일 지문)·서명 봉인·변경 위치(쪽·바뀐 줄)를 보여준다.
+  // 변경 위치는 참고 분석이며 진본 판정은 파일 지문과 서명 봉인으로만 한다. 변경 위치는 이 관리자 화면에서만 제공한다.
+  interface CompareResult {
+    status: 'authentic' | 'superseded' | 'modified' | 'not_found'
+    archiveIntact: boolean | null
+    seal: 'valid' | 'invalid' | 'unsealed' | 'unknown' | 'no_key'
+    comparison: {
+      recordedPages: number
+      submittedPages: number
+      textIdentical: boolean
+      pages: { page: number; status: 'same' | 'changed' | 'added' | 'missing'; changedLines: string[]; missingLineCount: number }[]
+    } | null
+    comparisonNote: string | null
+  }
+  let compareInput: HTMLInputElement | null = $state(null)
+  let comparing = $state(false)
+  let compareResult: CompareResult | null = $state(null)
+
+  const VERDICT_TEXT: Record<CompareResult['status'], string> = {
+    authentic: '진본입니다 — 보관된 최종본과 한 글자도 다르지 않습니다.',
+    superseded: '효력 없는 이전 본입니다 — 서명 당시 발급된 파일이지만 발행 취소·재서명으로 현재는 유효하지 않습니다.',
+    modified: '진본이 아닙니다 — 보관된 최종본과 다른 파일입니다(수정·재생성·다시 저장됐을 수 있습니다).',
+    not_found: '확인할 보관본이 없습니다.',
+  }
+  const SEAL_TEXT: Record<CompareResult['seal'], string> = {
+    valid: '서명 봉인 정상',
+    invalid: '서명 봉인 이상 — 보관 기록이 봉인 이후 바뀌었을 수 있습니다. 즉시 확인이 필요합니다.',
+    unsealed: '서명 봉인 없음(봉인 도입 전 또는 생성 대기)',
+    unknown: '서명 봉인 상태를 확인하지 못했습니다(일시 오류일 수 있어요) — 잠시 후 다시 확인해 주세요.',
+    no_key: '서명 봉인 확인 불가(서버 키 설정 점검 필요)',
+  }
+  const PAGE_STATUS_TEXT = { same: '동일', changed: '변경됨', added: '제출 파일에만 있는 쪽', missing: '제출 파일에 없는 쪽' } as const
+
+  // 서명 봉인 확인 — 봉인이 없으면(키 도입 전 보관본 등) 매니저 이상은 확인 후 직접 봉인할 수 있다
+  let sealChecking = $state(false)
+  async function checkSealStatus(): Promise<void> {
+    if (!contractId) return
+    sealChecking = true
+    try {
+      const res = await fetch(`/api/cms/contracts/${contractId}/seal`)
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) { csToast.error(json.error ?? '봉인 확인에 실패했습니다.'); return }
+      const status = json.status as CompareResult['seal']
+      if (status === 'unsealed') {
+        if (!confirm('이 보관본에는 서명 봉인이 없습니다. 지금 보관 파일을 확인하고 봉인할까요? (매니저 이상)')) return
+        const post = await fetch(`/api/cms/contracts/${contractId}/seal`, { method: 'POST' })
+        const pj = await post.json().catch(() => ({}))
+        if (!post.ok) { csToast.error(pj.error ?? '봉인에 실패했습니다.'); return }
+        if (pj.markerRecorded === false) csToast.warning('서명 봉인은 만들었지만 봉인 표식 기록에 실패했습니다. 개발자 확인이 필요합니다.')
+        else csToast.success('서명 봉인을 만들었습니다.')
+        return
+      }
+      if (status === 'valid') csToast.success(SEAL_TEXT.valid)
+      else csToast.error(SEAL_TEXT[status])
+    } catch {
+      csToast.error('봉인 확인 중 오류가 발생했습니다.')
+    } finally {
+      sealChecking = false
+    }
+  }
+
+  async function compareFile(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file || !contractId) return
+    comparing = true
+    compareResult = null
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      const res = await fetch(`/api/cms/contracts/${contractId}/compare-file`, { method: 'POST', body })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) { csToast.error(json.error ?? '진위 확인에 실패했습니다.'); return }
+      compareResult = json as CompareResult
+    } catch {
+      csToast.error('진위 확인 중 오류가 발생했습니다.')
+    } finally {
+      comparing = false
+    }
+  }
 
   const PICKUP_LABELS: Record<string, string> = {
     crazydelivery: '크레이지샷 배송',
@@ -358,14 +442,21 @@
     </div>
   {/if}
 
+  <!-- 서명 직후 최종본 PDF 생성 대기: 크론(10분 간격)이 만들기 전까지 안내만 표시한다 -->
+  {#if customerSignedAt && !contractPdfUrl}
+    <div class="banner banner-sent" role="status">최종본 PDF를 준비 중입니다. 서명 완료 후 보통 10분 안에 표시됩니다. 잠시 후 다시 열어 주세요.</div>
+  {/if}
+
   <!-- PDF 미리보기·다운로드: 서명 완료 후에만 표시 -->
   {#if contractPdfUrl && customerSignedAt}
     <div class="pdf-wrap" bind:this={pdfWrapEl} style:height={pdfHeight != null ? `${pdfHeight}px` : undefined}>
-      <iframe
+      <!-- 브라우저 내장 뷰어 대신 자체 뷰어(PdfViewer) — 고객 계약서 화면과 같은 도구줄·동작 -->
+      <PdfViewer
         src={contractPdfUrl}
-        title="계약서 미리보기"
-        class="pdf-frame"
-      ></iframe>
+        title={`전자계약서_${reservationId}.pdf`}
+        downloadUrl={`${contractPdfUrl}${contractPdfUrl.includes('?') ? '&' : '?'}download=1`}
+        downloadFilename={`crazyshot-contract-${reservationId}.pdf`}
+      />
     </div>
   {/if}
 
@@ -378,12 +469,50 @@
         rel="noopener noreferrer"
         class="btn-secondary"
       >PDF 다운로드</a>
+      <input type="file" accept="application/pdf" class="compare-input" bind:this={compareInput} onchange={compareFile} />
+      <button type="button" class="btn-secondary" disabled={comparing} onclick={() => compareInput?.click()}>
+        {comparing ? '확인 중…' : '받은 PDF 진위 확인'}
+      </button>
+      <button type="button" class="btn-secondary" disabled={sealChecking} onclick={checkSealStatus}>
+        {sealChecking ? '확인 중…' : '서명 봉인 확인'}
+      </button>
     {/if}
     <!-- 2026-09-08: "서명 링크 확인" 버튼은 "발행 목록" 카드의 액션 행 안으로 이관됐다
          (레이아웃 통일감). 여기 남아있던 원본을 지우지 않아 "발송됨+미서명" 상태에서
          동일 링크가 카드 안/밖 두 곳에 중복 렌더링되던 결함을 sp3-qa-agent가 발견 —
          이관이 아니라 복제가 돼 있었음. 이 블록에서 완전히 제거해 카드 쪽 1곳만 남김. -->
   </div>
+
+  {#if compareResult}
+    <div class="compare-box" role="status">
+      <p class="compare-verdict" class:compare-bad={compareResult.status !== 'authentic'}>{VERDICT_TEXT[compareResult.status]}</p>
+      <p class="compare-line" class:compare-bad={compareResult.seal === 'invalid'}>{SEAL_TEXT[compareResult.seal]}</p>
+      {#if compareResult.archiveIntact === false}
+        <p class="compare-line compare-bad">서버 보관 파일이 기록된 지문과 다릅니다 — 보관본 훼손이 의심됩니다.</p>
+      {/if}
+      {#if compareResult.comparison}
+        {#if compareResult.comparison.textIdentical}
+          <p class="compare-line">모든 쪽의 글자 내용이 같습니다 — 내용 변경 없이 파일만 다시 저장됐을 가능성이 높습니다(인쇄 후 PDF 저장 등).</p>
+        {:else}
+          <p class="compare-line">변경 위치 분석(참고용 — 보관 {compareResult.comparison.recordedPages}쪽 / 제출 {compareResult.comparison.submittedPages}쪽)</p>
+          <ul class="compare-pages">
+            {#each compareResult.comparison.pages.filter((p) => p.status !== 'same') as p (p.page)}
+              <li>
+                <strong>{p.page}쪽 · {PAGE_STATUS_TEXT[p.status]}</strong>
+                {#if p.missingLineCount > 0}<span class="compare-sub"> (기록에 있던 {p.missingLineCount}줄이 제출 파일에 없음)</span>{/if}
+                {#if p.changedLines.length > 0}
+                  <ul>{#each p.changedLines as line, i (i)}<li>{line}</li>{/each}</ul>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {:else if compareResult.comparisonNote}
+        <p class="compare-line">{compareResult.comparisonNote}</p>
+      {/if}
+      <p class="compare-sub">위 변경 위치는 글자 기준 참고 분석이며, 서명·직인 그림만 바뀐 경우는 찾지 못합니다. 진위는 첫 줄의 지문 대조와 서명 봉인으로 판단합니다.</p>
+    </div>
+  {/if}
 </div>
 
 {#if editorOpen && (editorContractId ?? contractId)}
@@ -454,12 +583,6 @@
     height: 360px; /* 기본값 — 패널 높이를 측정하면 style로 덮어쓴다(위 fit) */
     min-height: 360px;
   }
-  .pdf-frame {
-    width: 100%;
-    height: 100%;
-    border: none;
-    display: block;
-  }
   /* 액션 버튼 */
   .contract-actions {
     display: flex;
@@ -483,6 +606,24 @@
     text-decoration: none;
   }
   .btn-secondary:hover { background: rgba(59,47,138,0.06); }
+
+
+  /* 받은 PDF 진위 확인(관리자) */
+  .compare-input { display: none; }
+  .compare-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--cms-radius-sm);
+  }
+  .compare-verdict { margin: 0; font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-success-light); }
+  .compare-line { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .compare-sub { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .compare-bad { color: var(--cs-error); }
+  .compare-pages { margin: 0; padding-left: 18px; font: var(--text-pc-script-12); color: var(--cs-text); }
+  .compare-pages ul { margin: 4px 0 6px; padding-left: 16px; color: var(--cs-text-mid); }
 
   /* 계약서 양식 목록 */
   .tpl-section {

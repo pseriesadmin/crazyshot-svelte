@@ -9,6 +9,8 @@ export interface ArchivedPdf {
   finalDocumentId: string
   contractId: string
   source: 'original' | 'regenerated'
+  /** 보관 시점에 기록된 PDF 바이트의 SHA-256(무결성 대조용) */
+  recordedSha256: string | null
   bytes: Uint8Array
 }
 
@@ -16,6 +18,7 @@ export interface CurrentFinalDocument {
   id: string
   contract_id: string
   pdf_path: string
+  pdf_sha256: string | null
   source: 'original' | 'regenerated'
 }
 
@@ -29,7 +32,7 @@ export async function findCurrentFinalDocument(admin: SupabaseClient, contractId
   if (contractIds.length === 0) return null
   const [{ data: signings }, { data: docs }] = await Promise.all([
     admin.from('contract_signings').select('contract_id, signed_at').in('contract_id', contractIds).not('signed_at', 'is', null),
-    admin.from('contract_final_documents').select('id, contract_id, evidence_id, pdf_path, source').in('contract_id', contractIds).order('generated_at', { ascending: false }).limit(50),
+    admin.from('contract_final_documents').select('id, contract_id, evidence_id, pdf_path, pdf_sha256, source').in('contract_id', contractIds).order('generated_at', { ascending: false }).limit(50),
   ])
   const docRows = (docs ?? []) as (CurrentFinalDocument & { evidence_id: string })[]
   if (docRows.length === 0) return null
@@ -44,7 +47,7 @@ export async function loadLatestArchivedPdf(admin: SupabaseClient, contractIds: 
   if (!row) return null
   const dl = await admin.storage.from(ARCHIVE_BUCKET).download(row.pdf_path)
   if (dl.error || !dl.data) return null
-  return { finalDocumentId: row.id, contractId: row.contract_id, source: row.source, bytes: new Uint8Array(await dl.data.arrayBuffer()) }
+  return { finalDocumentId: row.id, contractId: row.contract_id, source: row.source, recordedSha256: row.pdf_sha256 ?? null, bytes: new Uint8Array(await dl.data.arrayBuffer()) }
 }
 
 export function pdfResponse(pdf: ArchivedPdf, filename: string, disposition: 'inline' | 'attachment'): Response {
@@ -56,4 +59,10 @@ export function pdfResponse(pdf: ArchivedPdf, filename: string, disposition: 'in
       'x-content-type-options': 'nosniff',
     },
   })
+}
+
+/** 보관 PDF 바이트의 SHA-256(hex) — 보관 시점 기록값과 대조해 변조 여부를 확인한다 */
+export async function sha256OfBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
