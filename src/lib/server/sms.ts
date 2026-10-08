@@ -50,13 +50,16 @@ export function buildLockerGuideSms(productName: string | null | undefined, pass
 //  2. 블랙리스트·allow_rental_alert 무관 — 대여 관련 SMS는 항상 발송
 //  3. phone 없음·탈퇴(requested/purged)·미대상 타입·개발환경 → 스킵
 //  4. 같은 날(KST) 동일 (reservation_id, notify_type) 중복 → 스킵
-//     단, force=true 또는 contract_link 타입은 항상 발송
+//     단, force=true 또는 contract_link 타입은 항상 발송(재공유 contract_reshare는 호출부가 force=true로 보낸다)
 
 export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: string) => string> = {
   contract_link: (p, link) =>
     `[크레이지샷] ${p} 전자계약서가 도착했어요. 서명을 완료해 주세요.\n${link ?? 'crazyshot.kr'}`,
   contract_signed: (p, link) =>
     `[크레이지샷] ${p} 계약서 서명이 완료됐어요.\n${link ?? 'crazyshot.kr'}`,
+  // 완료 전자계약서 재공유(share-chat, 2026-10-08) — 서명 완료 문구와 구분되는 별도 문구
+  contract_reshare: (p, link) =>
+    `[크레이지샷] ${p} 전자계약서를 다시 확인해주세요.\n${link ?? 'crazyshot.kr'}`,
   reservation_approval: (p) =>
     `[크레이지샷] ${p} 예약이 승인됐어요! 수령 안내는 crazyshot.kr에서 확인해 주세요.`,
   shipment_notify: (p) =>
@@ -90,6 +93,7 @@ function defaultLinkPath(notifyType: string, reservationId: number): string {
   switch (notifyType) {
     case 'return_remind':    return `/account/rental/${reservationId}/history`
     case 'contract_signed':  return `/account/rental/${reservationId}/contract`
+    case 'contract_reshare': return `/account/rental/${reservationId}/contract`
     default:                 return '/account/rental'
   }
 }

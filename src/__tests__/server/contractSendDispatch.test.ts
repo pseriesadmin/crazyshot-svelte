@@ -227,8 +227,14 @@ describe('서명 완료(contract_signed)·재공유 — 동시 발송 배선 점
     expect(sms).toBeGreaterThan(push)
   })
 
-  it('[알려진 공백] 완료 계약서 재공유(share-chat)는 채팅카드만 보내고 푸시·SMS는 보내지 않는다 — 정책 결정 필요', () => {
+  it('완료 계약서 재공유(share-chat)도 채팅카드 저장 뒤에 푸시와 SMS(재공유 전용 contract_reshare, force)를 같이 보낸다 — 실제 동작은 contractShareDispatch.test.ts', () => {
     const src = read('src/routes/api/cms/contracts/[id]/share-chat/+server.ts')
-    expect(src).not.toMatch(/sendCardSms|sendPushToUser|sendReservationLifecyclePush/)
+    const chat = src.indexOf(".from('chat_messages')")
+    const push = src.indexOf("sendPushToUser(contract.user_id, 'contract_signed_customer'")
+    const sms = src.indexOf("notifyType: 'contract_reshare'")
+    expect(chat).toBeGreaterThan(-1)
+    expect(push).toBeGreaterThan(chat)
+    expect(sms).toBeGreaterThan(push)
+    expect(src).toMatch(/notifyType: 'contract_reshare',[\s\S]*force: true/)
   })
 })

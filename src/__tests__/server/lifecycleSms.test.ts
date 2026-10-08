@@ -116,10 +116,11 @@ describe('sendLifecycleSms — 예약·대여 라이프사이클 SMS 동시 발�
   // ──────────────────────────────────────────────────────────────────────────
   // TC-1: LIFECYCLE_SMS_COPY 에 9종이 등록돼 있어야 하고 locker_guide 는 제외
   // ──────────────────────────────────────────────────────────────────────────
-  it('TC-1: LIFECYCLE_SMS_COPY가 9종을 포함하고 locker_guide는 제외함', () => {
+  it('TC-1: LIFECYCLE_SMS_COPY가 10종(재공유 contract_reshare 포함)을 포함하고 locker_guide는 제외함', () => {
     const expectedTypes = [
       'contract_link',
       'contract_signed',
+      'contract_reshare',
       'reservation_approval',
       'shipment_notify',
       'tracking_notify',

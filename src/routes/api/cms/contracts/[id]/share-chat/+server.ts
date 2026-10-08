@@ -10,6 +10,10 @@
  * 별도의 가벼운 경로다 — contract_signings.sent_at/expires_at은 전혀 건드리지 않고
  * (서명 요청 상태가 아니므로), sign/+server.ts가 서명 완료 시점에 자동 발송하는
  * contract_signed 카드와 동일한 payload를 재사용해 "전자계약완료" 카드를 다시 보낸다.
+ *
+ * 알림(2026-10-08, Stephen 지시): 채팅카드와 함께 고객 푸시·SMS(재공유 전용 문구 contract_reshare)도 동시 발송한다 — 서명 완료 시점 발송(sign API)과
+ * 같은 3축 체계(service-operations.md §15). 관리자가 명시적으로 누른 재공유라 SMS는 같은 날 중복 판정을 우회한다(force).
+ * 푸시·SMS 실패는 채팅 재공유 결과에 영향을 주지 않는다(fail-soft 헬퍼).
  */
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
@@ -19,6 +23,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { sendCardSms, sendPushToUser } from '$lib/server/push'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
@@ -87,6 +92,23 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   if (msgErr) {
     return json({ error: '메시지 발송 실패' }, { status: 500 })
   }
+
+  // 고객 푸시 — 채팅카드와 독립(실패해도 위 결과에 영향 없음). 서명 완료 알림과 같은 수신 설정 키(contract_signed_customer)를 쓴다.
+  const accountContractLink = contract.reservation_id != null ? `/account/rental/${contract.reservation_id}/contract` : '/account/rental'
+  await sendPushToUser(contract.user_id, 'contract_signed_customer', {
+    title: '완료된 전자계약서를 다시 보내드렸어요',
+    body: '계약서를 확인해 주세요.',
+    link: accountContractLink,
+  })
+
+  // SMS 동시 발송 — 관리자가 직접 누른 재공유라 같은 날 중복 판정을 우회(force)
+  await sendCardSms(admin, {
+    userId: contract.user_id,
+    reservationId: contract.reservation_id,
+    notifyType: 'contract_reshare', // 재공유 전용 SMS 문구("전자계약서를 다시 확인해주세요.")
+    link: accountContractLink,
+    force: true,
+  })
 
   return json({ ok: true })
 }
