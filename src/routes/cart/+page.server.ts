@@ -83,7 +83,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 감사(RSC-C3)로 발견 — rental_method_options의 fee_amount/is_free_for_top_grade select·
   // 사용을 완전히 제거하고 이 테이블(rental_shipping_settings)만으로 배송비를 계산.
   const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
-    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, max_rental_days')
+    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, locker_guide_text, max_rental_days')
     .limit(1)
     .single()
   const shippingSettings = shippingSettingsData as {
@@ -95,6 +95,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     return_fee: number | null
     shipping_guide: string | null
     max_rental_days: number | null
+    locker_guide_text: string | null
   } | null
 
   // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대

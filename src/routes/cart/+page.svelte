@@ -585,6 +585,9 @@
   }
 
   // 시간선택 노출 범위 — 24시간 전체로 확대(2026-08-20, Stephen 확정).
+  // 무인보관함 안내문 — CMS 값(rental_shipping_settings.locker_guide_text, Migration #659)이 비어 있을 때만 쓰는 기본문구
+  const DEFAULT_LOCKER_GUIDE = "선택한 {방식} 시간은 고객센터 '무인보관함' 이용만 가능하며 1시간 전 비밀번호를 채팅서비스로 발송해 드립니다."
+
   // 09:00~22:00=방문배송 정상영업시간 / 23:00~08:00=영업외시간(방문대여 선택 시 무인보관함
   // 인계로 부분 반영 — isLockerHour()는 $lib/utils/lockerTimeRange 공유 유틸(CMS와 동일 로직
   // 재사용, 드리프트 방지). pickup_method/return_method DB 값은 그대로 'visit' 유지.
@@ -1462,6 +1465,7 @@
     enable_return: boolean;     return_fee: number | null
     shipping_guide: string | null
     max_rental_days: number | null  // [11] 최대 대여일수
+    locker_guide_text: string | null  // 무인보관함 안내문({방식} 토큰)
   } | null | undefined) ?? null)
 
   // [11] 최대 반납일 = 수령일 + max_rental_days (DB 설정값, 기본 15일)
@@ -4161,10 +4165,7 @@
         </div>
         {/if}
         {#if isVisit && props.selectedTime && isLockerHour(props.selectedTime)}
-          <p class="form-note form-note-locker">
-            선택한 {props.type === 'rental' ? '방문대여' : '방문반납'} 시간은 고객센터
-            '무인보관함' 이용만 가능하며 1시간 전 비밀번호를 채팅서비스로 발송해 드립니다.
-          </p>
+          <p class="form-note form-note-locker">{(sdShippingSettings?.locker_guide_text?.trim() || DEFAULT_LOCKER_GUIDE).replaceAll('{방식}', props.type === 'rental' ? '방문대여' : '방문반납')}</p>
         {:else if locked && sdShippingSettings?.shipping_guide}
           <p class="form-note">{sdShippingSettings.shipping_guide}</p>
         {/if}
