@@ -15,6 +15,9 @@
  * - I-4(2026-08-26): cms_admin_product_search_confirmations 관리자 확인 신호 소비 — status='confirmed'인
  *   (product_id, search_term)을 J-2 학습 키워드와 같은 라인에서 keywords_text에 병합
  *   (저장 분리 / 소비 시점 병합 — service-operations.md §14 원칙과 동일)
+ * - L-1(2026-10-08): 공개 상품 후기(product_reviews) 텍스트 색인 합류 — 상품당 최신 20개·2000자, boost 0.5
+ *   (이름·브랜드·키워드보다 항상 약함), 검색 결과 객체(storeFields)에는 싣지 않음. 작성자 정보는 조회하지 않는다.
+ *   실패 시 빈 맵 폴백(검색 중단 금지). 인덱스 빌드 통계는 getLastIndexBuildStats()로 정기 점검 cron이 읽는다.
  *
  * ⚠️ 이 파일은 crazyshot 전용 import 포함 가능 (adapters/ 계층)
  */
@@ -44,6 +47,8 @@ export interface ProductDoc extends SearchDocument {
   components_text: string
   /** H-1: specifications JSONB(key-value) → "키 값" 형태 텍스트 */
   specs_text: string
+  /** L-1: 공개 후기 제목+본문 텍스트(상품당 최신 20개·2000자). 검색 전용 — 결과 객체에는 싣지 않음 */
+  reviews_text: string
 }
 
 // ── 인덱스 설정 ───────────────────────────────────────────────────────────────
@@ -53,6 +58,7 @@ const PRODUCT_INDEX_CONFIG = {
     'name', 'brand', 'caption', 'keywords_text',
     'content_text', 'category',
     'components_text', 'specs_text',  // H-1: 구성품·사양 추가
+    'reviews_text',                   // L-1: 공개 후기 (가장 약한 가중치)
   ] as const,
   storeFields: ['id', 'name', 'brand', 'category', 'slug', 'caption', 'keywords_text'] as const,
   boost: {
@@ -64,6 +70,7 @@ const PRODUCT_INDEX_CONFIG = {
     specs_text: 3,       // H-1: keywords_text와 동급 — 사양 키워드(화소수, 배터리 등)
     content_text: 1,
     category: 1,
+    reviews_text: 0.5,   // L-1: 상품명·키워드 일치가 항상 우선 — 후기는 보조 근거
   },
   defaultFuzzy: 0.2 as const,
   defaultPrefix: true,
@@ -131,6 +138,43 @@ export function extractJsonbKeyValues(jsonb: unknown): string {
     if (value !== null && value !== undefined) parts.push(String(value))
   }
   return parts.join(' ').trim()
+}
+
+// ── L-1: 후기 RPC 결과 → 상품별 후기 텍스트 맵 (순수 함수) ──────────────────
+// get_product_review_search_texts(Migration 670) 응답 행: { product_id, review_count, review_text }
+// · 배열이 아니거나 형식이 잘못된 행은 건너뛴다(검색을 막지 않는다)
+// · 같은 product_id가 중복되면 텍스트를 공백으로 이어붙이고 건수를 합산한다
+// · 상품당 텍스트는 MAX_REVIEW_CHARS_PER_PRODUCT(2000자)에서 절단한다
+
+export const MAX_REVIEW_CHARS_PER_PRODUCT = 2000
+
+export interface ReviewsTextEntry {
+  text: string
+  count: number
+}
+
+export function buildReviewsTextMap(rows: unknown): Map<string, ReviewsTextEntry> {
+  const map = new Map<string, ReviewsTextEntry>()
+  if (!Array.isArray(rows)) return map
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    const { product_id, review_text, review_count } = row as Record<string, unknown>
+    if (typeof product_id !== 'string' || product_id === '') continue
+    if (typeof review_text !== 'string') continue
+    const text = review_text.trim()
+    if (text === '') continue
+    const count =
+      typeof review_count === 'number' && Number.isFinite(review_count) && review_count > 0
+        ? Math.floor(review_count)
+        : 1
+    const prev = map.get(product_id)
+    const joined = prev ? `${prev.text} ${text}` : text
+    map.set(product_id, {
+      text: joined.slice(0, MAX_REVIEW_CHARS_PER_PRODUCT),
+      count: (prev?.count ?? 0) + count,
+    })
+  }
+  return map
 }
 
 // ── 모듈 스코프 캐시 (TTL 60초) ──────────────────────────────────────────────
@@ -231,6 +275,44 @@ async function loadAdminConfirmedSearchTerms(): Promise<Map<string, string[]>> {
   }
 }
 
+// ── L-1: 공개 후기 텍스트 로드 (get_product_review_search_texts, service_role 전용 RPC) ──
+// 작성자 정보(user_id·author_name)는 RPC가 반환하지 않는다. 실패 시 빈 맵(검색 중단 금지, EC-3).
+async function loadReviewSearchTerms(): Promise<Map<string, ReviewsTextEntry>> {
+  try {
+    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const { data, error } = await admin.rpc('get_product_review_search_texts', {
+      p_per_product: 20,
+      p_max_chars: MAX_REVIEW_CHARS_PER_PRODUCT,
+    })
+    if (error) {
+      console.error('[productSearchIndex] 후기 텍스트 조회 실패:', error.message)
+      return new Map()
+    }
+    return buildReviewsTextMap(data)
+  } catch (e) {
+    console.error('[productSearchIndex] 후기 텍스트 조회 오류:', e instanceof Error ? e.message : String(e))
+    return new Map()
+  }
+}
+
+// ── L-1: 인덱스 빌드 통계 (정기 점검 cron이 읽음 — 숫자만, 상품명·후기 문구 없음) ──
+
+export interface IndexBuildStats {
+  indexedProducts: number
+  reviewedProducts: number
+  reviewRows: number
+  weakProducts: number
+  buildMs: number
+  status: 'ok' | 'error'
+  builtAt: number
+}
+
+let lastBuildStats: IndexBuildStats | null = null
+
+export function getLastIndexBuildStats(): IndexBuildStats | null {
+  return lastBuildStats
+}
+
 // ── 내보내기 함수 ─────────────────────────────────────────────────────────────
 
 /**
@@ -248,8 +330,10 @@ async function loadAdminConfirmedSearchTerms(): Promise<Map<string, string[]>> {
 export async function getProductSearchIndex(): Promise<NaturalSearchProvider<ProductDoc>> {
   if (isCacheValid()) return cachedIndex!
 
-  // J-2 + I-4: 상품 조회 · promote_threshold · 관리자 확인 신호를 병렬 실행
-  const [productResult, promoteThreshold, adminConfirmedTerms] = await Promise.all([
+  const buildStartedAt = Date.now()
+
+  // J-2 + I-4 + L-1: 상품 조회 · promote_threshold · 관리자 확인 신호 · 공개 후기를 병렬 실행
+  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts] = await Promise.all([
     supabase
       .from('products')
       .select(
@@ -261,6 +345,7 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
       .is('deleted_at', null),
     loadPromoteThreshold(),
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
+    loadReviewSearchTerms(),           // L-1: 공개 후기 텍스트 (fail-safe: 실패 시 빈 맵)
   ])
 
   const { data, error } = productResult
@@ -268,6 +353,10 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
   if (error || !data) {
     // 조회 실패 시 빈 인덱스 반환 (검색 없이 RPC 결과만 사용하는 폴백)
     console.error('[productSearchIndex] 상품 조회 실패:', error?.message)
+    lastBuildStats = {
+      indexedProducts: 0, reviewedProducts: 0, reviewRows: 0, weakProducts: 0,
+      buildMs: Date.now() - buildStartedAt, status: 'error', builtAt: Date.now(),
+    }
     return createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, [])
   }
 
@@ -295,11 +384,29 @@ export async function getProductSearchIndex(): Promise<NaturalSearchProvider<Pro
       content_text: extractContentBlocksText(row['content_blocks']),
       components_text: extractJsonbKeyValues(row['components']), // H-1: 구성품
       specs_text: extractJsonbKeyValues(row['specifications']), // H-1: 사양
+      reviews_text: reviewTexts.get(productId)?.text ?? '',      // L-1: 공개 후기(보조 근거)
     }
   })
 
   cachedIndex = createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, docs)
   cachedAt = Date.now()
+
+  // L-1: 정기 점검용 빌드 통계 (숫자만)
+  let reviewedProducts = 0
+  let reviewRows = 0
+  let weakProducts = 0
+  for (const d of docs) {
+    const entry = reviewTexts.get(d.id)
+    if (entry) {
+      reviewedProducts++
+      reviewRows += entry.count
+    }
+    if (d.keywords_text === '' && d.caption === '') weakProducts++
+  }
+  lastBuildStats = {
+    indexedProducts: docs.length, reviewedProducts, reviewRows, weakProducts,
+    buildMs: Date.now() - buildStartedAt, status: 'ok', builtAt: Date.now(),
+  }
   return cachedIndex
 }
 
