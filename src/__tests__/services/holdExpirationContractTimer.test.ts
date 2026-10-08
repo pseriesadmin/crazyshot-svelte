@@ -9,16 +9,16 @@ import { ensure24hPriceRule } from '../helpers/ensure24hPriceRule'
  * Harness Flow v3.2 — RED → GREEN → REFACTOR
  *
  * 대상: release_reservation_hold() — Migration 453 (2026-09-07, Stephen 확정 — "생성 후 30분"
- * 타이머 자체를 없애고 "계약 발송 시각(sent_at) 기준 30분"만 남김)
+ * 타이머 자체를 없애고 "계약 발송 시각(sent_at) 기준 30분"만 남김) — 2026-10-08 Migration 670으로 제한 시간 1시간으로 변경
  *
  * 정합기준(GATE B Q6, EC-5 — 2026-09-07 정책 반전에 맞춰 갱신):
  *   EC-5a: 계약서 미발송 hold — created_at이 아무리 오래돼도 만료되지 않는다(타이머 자체 없음,
  *          이전 정책의 "생성 후 30분 만료"를 완전히 반전).
- *   EC-5b: 계약서가 발송(sent_at)되고 그 시각 기준 30분 초과 → expired 전환.
+ *   EC-5b: 계약서가 발송(sent_at)되고 그 시각 기준 1시간 초과 → expired 전환(2026-10-08 30분→1시간).
  *          (이 케이스를 실제로 검증하려면 release_reservation_hold()의 D-1 서브쿼리가 요구하는
  *           order_items 연결이 반드시 있어야 한다 — 연결이 없으면 계약을 아예 "발견"하지
  *           못해 검증 자체가 무의미해지므로 create_reservation_order RPC로 명시적으로 연결한다.)
- *   EC-5b-edge: 계약서 발송 후 30분 이내 → hold 유지(경계값).
+ *   EC-5b-edge: 계약서 발송 후 1시간 이내(45분 전) → hold 유지(경계값).
  *   EC-5c: payment_confirmed_at IS NOT NULL → D-3 예외 유지, 만료 안 됨(변경 없음).
  *
  * 핵심 불변식:
@@ -184,34 +184,34 @@ describe('release_reservation_hold — D-1(계약발송 타이머, 유일한 시
     expect(await getStatus(reservationId)).toBe('hold')
   })
 
-  // ── EC-5b: 계약서 발송 1시간 전 → sent_at 기준 30분 초과 → expired ─────────
-  it('EC-5b: 계약서 발송(sent_at) 1시간 전 → 30분 초과로 expired 전환', async () => {
+  // ── EC-5b: 계약서 발송 90분 전 → sent_at 기준 1시간 초과 → expired (제한 시간 30분→1시간, Migration 670) ─────────
+  it('EC-5b: 계약서 발송(sent_at) 90분 전 → 1시간 초과로 expired 전환', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
-    const twoHoursAgo = new Date(Date.now() - 120 * 60 * 1000)
-    const oneHourAgo  = new Date(Date.now() -  60 * 60 * 1000)
+    const threeHoursAgo = new Date(Date.now() - 180 * 60 * 1000)
+    const ninetyMinAgo  = new Date(Date.now() -  90 * 60 * 1000)
 
-    const reservationId = await createHoldReservation(userId, twoHoursAgo)
+    const reservationId = await createHoldReservation(userId, threeHoursAgo)
     cleanups.push(async () => {
       await admin.from('rental_reservations').delete().eq('id', reservationId)
     })
 
     await linkToOrder(userId, reservationId)
-    await createContractWithSigning(reservationId, userId, oneHourAgo)
+    await createContractWithSigning(reservationId, userId, ninetyMinAgo)
 
     await admin.rpc('release_reservation_hold', {})
 
     expect(await getStatus(reservationId)).toBe('expired')
   })
 
-  // ── 경계값: 계약서 발송 15분 전 → 30분 이내 → 생존 ──────────────────────────
-  it('EC-5b-edge: 계약서 발송(sent_at) 15분 전 → 30분 이내 → hold 유지', async () => {
+  // ── 경계값: 계약서 발송 45분 전 → 1시간 이내(옛 30분 제한이었다면 만료) → 생존 ──────────────────────────
+  it('EC-5b-edge: 계약서 발송(sent_at) 45분 전 → 1시간 이내(구 30분 기준이면 만료였을 시각) → hold 유지', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
     const fortyMinAgo  = new Date(Date.now() - 40 * 60 * 1000)
-    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000)
+    const fifteenMinAgo = new Date(Date.now() - 45 * 60 * 1000) // 변수명은 유지(45분 전)
 
     const reservationId = await createHoldReservation(userId, fortyMinAgo)
     cleanups.push(async () => {
@@ -234,12 +234,12 @@ describe('release_reservation_hold — D-1(계약발송 타이머, 유일한 시
   // 아예 없으면 이 예약 자기 자신의 계약 발송 사실조차 찾지 못해 타이머가 영원히
   // 시작되지 않던 결함(EC-5b/EC-5b-edge는 linkToOrder를 호출해 이 결함을 우회하고
   // 있었음 — 그래서 지금까지 발견되지 않았다).
-  it('EC-6: order_items 미연결(체크아웃 제출 전) + 계약서 발송 1시간 전 → self-join이 자기 자신을 찾아 정상 expired 전환된다', async () => {
+  it('EC-6: order_items 미연결(체크아웃 제출 전) + 계약서 발송 90분 전 → self-join이 자기 자신을 찾아 정상 expired 전환된다', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
-    const twoHoursAgo = new Date(Date.now() - 120 * 60 * 1000)
-    const oneHourAgo  = new Date(Date.now() -  60 * 60 * 1000)
+    const twoHoursAgo = new Date(Date.now() - 180 * 60 * 1000)
+    const oneHourAgo  = new Date(Date.now() -  90 * 60 * 1000) // 변수명 유지(90분 전 — 제한 시간 1시간 경계에 걸리지 않게)
 
     const reservationId = await createHoldReservation(userId, twoHoursAgo)
     cleanups.push(async () => {
@@ -254,13 +254,13 @@ describe('release_reservation_hold — D-1(계약발송 타이머, 유일한 시
     expect(await getStatus(reservationId)).toBe('expired')
   })
 
-  // ── EC-6-edge(회귀): order_items 미연결 + 계약서 발송 15분 전 → 30분 이내 → 생존 ──
-  it('EC-6-edge: order_items 미연결 + 계약서 발송 15분 전 → 30분 이내라 hold 유지(회귀)', async () => {
+  // ── EC-6-edge(회귀): order_items 미연결 + 계약서 발송 45분 전 → 1시간 이내 → 생존 ──
+  it('EC-6-edge: order_items 미연결 + 계약서 발송 45분 전 → 1시간 이내라 hold 유지(회귀)', async () => {
     const userId = await createEphemeralUser()
     cleanups.push(() => deleteEphemeralUser(userId))
 
     const fortyMinAgo   = new Date(Date.now() - 40 * 60 * 1000)
-    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000)
+    const fifteenMinAgo = new Date(Date.now() - 45 * 60 * 1000) // 변수명은 유지(45분 전)
 
     const reservationId = await createHoldReservation(userId, fortyMinAgo)
     cleanups.push(async () => {

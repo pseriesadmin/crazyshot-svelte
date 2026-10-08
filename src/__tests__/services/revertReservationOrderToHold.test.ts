@@ -160,7 +160,7 @@ async function linkToOrder(userId: string, reservationIds: number[]): Promise<vo
 
 /**
  * contract + contract_signing 생성 (sent_at 포함)
- * EC-3용: sent_at을 1시간 전으로 설정 → D-1 조건(30분 초과) 이미 충족되어 위험한 상태
+ * EC-3용: sent_at을 2시간 전으로 설정 → D-1 조건(1시간 초과) 이미 충족되어 위험한 상태
  */
 async function createContractWithSigning(
   reservationId: number,
@@ -252,7 +252,7 @@ describe('revert_reservation_order_to_hold — 예약변경 RPC (Migration #492)
     await markConfirmed(res2)
 
     // 계약 발송 시뮬레이션
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    const oneHourAgo = new Date(Date.now() - 120 * 60 * 1000) // 변수명 유지(2시간 전 — 제한 시간 1시간, Migration 670)
     const { signingId } = await createContractWithSigning(res1, userId, {
       sentAt:   oneHourAgo,
       signedAt: oneHourAgo,
@@ -315,9 +315,9 @@ describe('revert_reservation_order_to_hold — 예약변경 RPC (Migration #492)
     await linkToOrder(userId, [res1])
     await markConfirmed(res1)
 
-    // sent_at을 1시간 전으로 설정 — D-1 조건(30분 초과)을 이미 충족하는 위험한 값.
+    // sent_at을 2시간 전으로 설정 — D-1 조건(1시간 초과)을 이미 충족하는 위험한 값.
     // revert RPC가 이 값을 NULL로 리셋하지 않으면 다음 cron 틱에서 즉시 expired 전환됨.
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    const oneHourAgo = new Date(Date.now() - 120 * 60 * 1000) // 변수명 유지(2시간 전 — 제한 시간 1시간, Migration 670)
     const { signingId } = await createContractWithSigning(res1, userId, {
       sentAt:   oneHourAgo,
       signedAt: oneHourAgo,
@@ -333,7 +333,7 @@ describe('revert_reservation_order_to_hold — 예약변경 RPC (Migration #492)
 
     // 🔑 가장 중요한 검증:
     // cron 함수(release_reservation_hold)를 직접 호출해도 expired가 되지 않아야 한다.
-    // sent_at = NULL → D-1 조건(sent_at < NOW() - INTERVAL '30 minutes')이 FALSE(3치논리)
+    // sent_at = NULL → D-1 조건(sent_at < NOW() - INTERVAL '1 hour')이 FALSE(3치논리)
     // → 이 reservation은 만료 후보에서 자동 제외됨.
     await admin.rpc('release_reservation_hold', {})
 

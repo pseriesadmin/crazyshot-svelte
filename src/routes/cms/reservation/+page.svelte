@@ -5,6 +5,7 @@
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ReservationRentalTabBar from '$lib/components/cms/ReservationRentalTabBar.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import { contractSignRemainingSeconds, formatCountdown, isContractSignUrgent } from '$lib/utils/holdContractTimer'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
 
@@ -140,6 +141,15 @@
     syncSelectedUrl(`/cms/reservation?${params.toString()}`)
   }
 
+  // 계약 발송 후 서명·결제 제한 시간 잔여(분) 표시용 현재 시각 — 마운트 후에만 값이 생기고(서버 렌더 시점 시각으로 잘못 표시되는 것 방지)
+  // 1초마다 갱신해 남은 시간이 실시간으로 줄어든다(분:초). 제한 시간은 DB release_reservation_hold(Migration 676, 1시간)와 같다(holdContractTimer.ts).
+  let nowMs = $state<number | null>(null)
+  $effect(() => {
+    nowMs = Date.now()
+    const timer = setInterval(() => { nowMs = Date.now() }, 1000)
+    return () => clearInterval(timer)
+  })
+
   function formatDate(dt: string | null): string {
     if (!dt) return '-'
     return dt.slice(0, 10)
@@ -244,6 +254,8 @@
             {#each data.rentals as row (row.reservation_id)}
               {@const st = STATUS_STYLE[row.status] ?? STATUS_STYLE['pending']}
               {@const cb = contractBadge(row)}
+              <!-- 계약 발송 후 서명·결제 제한 시간 잔여(초) — 관리자 목록 전용. 타이머가 없거나 종료되면 null이라 가린다. -->
+              {@const remainSec = nowMs !== null ? contractSignRemainingSeconds(row, nowMs) : null}
               <tr
                 class:selected={selectedId === row.reservation_id}
                 onclick={() => selectRow(row)}
@@ -278,9 +290,9 @@
                          unsigned) 이 배지만 계속 발송 상태로 보여 관리자가 "왜 계약대기
                          목록에 없지?"라고 오인하게 했다. 우측 "계약" 컬럼(contractBadge())과
                          동일한 판정 기준으로 통일. -->
-                    <span class="status-badge" style="background:rgba(56,142,60,0.12);color:var(--cs-success);margin-left:4px;">서명완료</span>
+                    <span class="status-badge" style="background:rgba(56,142,60,0.12);color:var(--cs-success);margin-left:4px;">서명완료{#if remainSec !== null}<span class="badge-remain" class:badge-remain-urgent={isContractSignUrgent(remainSec)} role="timer" title="계약 발송 후 서명·결제 제한 시간 — {formatCountdown(remainSec)} 남음(지나면 예약신청이 자동 만료됩니다)">{formatCountdown(remainSec)}</span>{/if}</span>
                   {:else if row.status === 'hold' && row.signing_sent_at}
-                    <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info);margin-left:4px;">계약발송</span>
+                    <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info);margin-left:4px;">계약발송{#if remainSec !== null}<span class="badge-remain" class:badge-remain-urgent={isContractSignUrgent(remainSec)} role="timer" title="계약 발송 후 서명·결제 제한 시간 — {formatCountdown(remainSec)} 남음(지나면 예약신청이 자동 만료됩니다)">{formatCountdown(remainSec)}</span>{/if}</span>
                   {/if}
                 </td>
                 <td class="col-hide">
@@ -510,6 +522,10 @@
     font-weight: 700;
     white-space: nowrap;
   }
+  /* 배지 안 우측 잔여 시간 — 배지 글자(12px)보다 한 단계 작은 토큰(--text-pc-tag-11, 11px)에 굵기·농도를 낮추고 배지 글자색을 그대로 쓴다. 숫자 폭이 일정해 줄어들 때 배지 폭이 흔들리지 않게 tabular-nums */
+  /* 잔여 10분 이하 임박 — 가장 진한 레드 토큰(--cs-red, #CF0000, red-100)으로 강조, 농도 제한 해제. 연한 하늘색 배지 위 11px 글자의 대비 확보용 */
+  .badge-remain-urgent { color: var(--cs-red); opacity: 1; }
+  .badge-remain { margin-left: 6px; font: var(--text-pc-tag-11); font-weight: 400; opacity: 0.75; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .rsv-code {
     font: var(--text-pc-script-12);
     font-family: monospace;
