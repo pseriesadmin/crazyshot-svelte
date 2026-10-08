@@ -27,6 +27,43 @@ export function isRecommendQuestion(message: string | null | undefined): boolean
   return true
 }
 
+// ── 상품을 찾는 질문 (2026-10-08) ─────────────────────────────────────────────────
+// "소니 A7M4 있어요?", "FX3 대여료 얼마예요", "삼각대 빌릴 수 있나요"처럼 "추천해 주세요"가 없어도 상품을 찾는 질문.
+// 정책·절차 질문("배송비 얼마예요", "보증금 있나요")과 구분하려고, 검색어에 상품 쪽 단어가 하나라도 있어야 하고
+// 호출부는 추천 요청보다 높은 검색 확실도 하한을 쓴다(recommend-runner RECOMMEND_SEEKING_MIN_SCORE).
+const SEEKING_CUE_RE = /있(나요|어요|을까요|습니까|는지|죠)|빌[릴려리]|대여\s?(할|가능|되나|해|하고)|렌탈\s?(할|가능|되나|해)|재고|대여료|가격|요금|얼마|구할|구해|찾[고아는]/
+// 상품이 아니라 서비스 정책·절차를 가리키는 단어 — 이 단어들만 있으면 상품 질문이 아니다
+const POLICY_TOKENS = new Set([
+  '배송', '배송비', '배송료', '택배', '퀵', '결제', '보증금', '취소', '환불', '반납', '연장', '쿠폰', '포인트', '적립', '예약', '계약', '계약서', '서류', '신분증',
+  '영업', '영업시간', '운영', '운영시간', '연락', '연락처', '수령', '픽업', '장소', '위치', '주소', '할인', '멤버십', '구독', '회원', '가입', '로그인', '비밀번호',
+  '연체', '지연', '수수료', '위약금', '세금계산서', '영수증', '부가세', '기간', '시간', '날짜', '일정', '가능', '문의', '방법', '절차', '비용', '요금', '가격',
+  '얼마', '얼마나', '몇시', '몇', '언제', '어디', '무엇', '뭐', '있나요', '있어요', '있을까요', '가능한가요',
+])
+
+// 질문의 "찾는 말투" 자체인 단어(얼마예요·있나요·빌릴·대여료…)는 상품 단어가 아니다
+const CUE_TOKEN_RE = /^(얼마|있|가능|빌|대여|렌탈|재고|가격|요금|구할|구해|찾)/
+// 용언 어미로 끝나는 말(쌓여요·되나요·해요…)은 상품 이름이 아니다
+const VERBAL_END_RE = /(요|다|죠|까|네)$/
+
+/** "찾는 질문"의 검색어: 추천 검색어에서 찾는 말투(있어요·빌릴·얼마예요…)와 용언형 단어를 한 번 더 뺀다 */
+export function extractSeekingQuery(message: string): RecommendQuery {
+  const base = extractRecommendQuery(message)
+  const tokens = base.tokens.filter((t) => !CUE_TOKEN_RE.test(t) && !VERBAL_END_RE.test(t))
+  return { query: tokens.join(' '), tokens }
+}
+
+/** 상품을 찾는 질문인지(추천 요청·사람 전용·예약 조회/접수 질문은 제외 — 각자 기존 경로가 있다) */
+export function isProductSeekingQuestion(message: string | null | undefined): boolean {
+  if (typeof message !== 'string') return false
+  const m = message.trim()
+  if (m.length < 2 || m.length > Math.min(MAX_QUESTION_LENGTH, 200)) return false
+  if (!SEEKING_CUE_RE.test(m) || RECOMMEND_RE.test(m)) return false
+  if (detectHumanOnlyTopic(m)) return false
+  if (classifyQueryIntent(m) || classifyActionIntent(m)) return false
+  const { tokens } = extractRecommendQuery(m)
+  return tokens.some((t) => !CUE_TOKEN_RE.test(t) && !VERBAL_END_RE.test(t) && !POLICY_TOKENS.has(t) && !POLICY_TOKENS.has(t.replace(/(은|는|이|가|을|를|도)$/, '')))
+}
+
 // 검색어에서 빼는 "추천 요청 표현"과 군더더기 — 토큰 단위로 비교한다(단어 중간을 자르지 않음: "저조도"·"저렴한"은 그대로 둔다)
 const STRIP_PREFIX_RE = /^(추천|아무|찍|부탁|알려|골라|제안|괜찮|해주|좋(아|은|을|나|겠|네|다)|쓰려|하려|싶)/
 const FILLER_TOKENS = new Set([
@@ -175,6 +212,8 @@ export function pickRecommendCards(
 export const RECOMMEND_REPLY = {
   // 카드 수는 문구에 넣지 않는다(일부 저장 실패 시 안내와 실제 카드 수가 어긋나지 않도록)
   intro: '질문과 관련된 대여 상품을 찾아 보았어요. 카드를 눌러 상세 정보와 대여 가능 날짜를 확인해 보세요.',
+  // 용도·종류를 말하지 않은 추천 요청에 인기 상품 카드를 함께 보낼 때의 안내(최근 예약이 많은 상품 — 지식 저장소 집계)
+  popularIntro: '요즘 많이 찾으시는 대여 상품이에요. 어떤 촬영에 쓰실지(예: 브이로그, 행사, 인터뷰) 알려 주시면 더 맞는 상품을 찾아 드릴게요.',
   needDetail:
     '어떤 촬영에 쓰실지(예: 브이로그, 행사, 인터뷰)와 원하는 종류(카메라, 렌즈, 조명 등)를 알려 주시면 맞는 상품을 찾아 드릴게요.',
 } as const

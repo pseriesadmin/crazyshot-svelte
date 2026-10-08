@@ -7,9 +7,11 @@
 
 // 한글 단어 안의 "퀵"(예: 스퀵)이나 이미 복합어(퀵배송·퀵서비스·퀵비용·퀵기사·퀵수령·퀵배달)는 건드리지 않는다.
 const SINGLE_QUICK_RE = /(?<![가-힣])퀵(?!배송|서비스|비용|기사|수령|배달)/g
+// 띄어 쓴 "퀵 비용"·"퀵 서비스"는 붙여서 복합어로 만든다(키워드가 "퀵비용"처럼 붙여 쓰기 때문)
+const SPACED_QUICK_COMPOUND_RE = /(?<![가-힣])퀵\s+(비용|서비스|기사|수령|배달)/g
 const KOREAN_HOUR_QUESTION_RE = /몇\s+시/g
 
 export function normalizeQuestion(message: string): string {
   if (!message) return message
-  return message.replace(KOREAN_HOUR_QUESTION_RE, '몇시').replace(SINGLE_QUICK_RE, '퀵배송')
+  return message.replace(KOREAN_HOUR_QUESTION_RE, '몇시').replace(SPACED_QUICK_COMPOUND_RE, '퀵$1').replace(SINGLE_QUICK_RE, '퀵배송')
 }

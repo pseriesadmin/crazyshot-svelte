@@ -81,6 +81,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/canned-responses',
       'src/routes/api/cms/canned-responses/[id]',
       'src/routes/api/cms/canned-responses/bulk-import',
+      'src/routes/api/cms/canned-categories',
       'src/routes/api/cms/synonyms/backfill-cross-lingual',
       'src/routes/api/cms/synonyms/scan-reformulations',
     ],
@@ -93,6 +94,9 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/chat/crazychat/stats',
       'src/routes/api/cms/chat/crazychat/drafts',
       'src/routes/api/cms/chat/crazychat/drafts/[id]/feedback',
+      'src/routes/api/cms/chat/crazychat/assist',
+      'src/routes/api/cms/chat/crazychat/knowledge',
+      'src/routes/api/cms/chat/crazychat/assist/[runId]/rollback',
     ],
   },
   // 1c — 예약대여현황: 예약 상세 패널 API 전부 + QR 전이 + 대시보드 간트 데이터. 패널(RentalDetailPanel)이 대시보드·채팅·모바일에도

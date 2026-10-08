@@ -13,8 +13,8 @@ const parse = (b: unknown) => parseSettingsChange(b)
 
 describe('parseSettingsChange', () => {
   it('정상 값', () => {
-    expect(parse({ agent_enabled: true, query: 'observe', ai_fallback: 'off', ai_allowed_categories: [' Reservation ', 'return', 'return'] }))
-      .toEqual({ ok: true, change: { agent_enabled: true, query: 'observe', ai_fallback: 'off', ai_allowed_categories: ['reservation', 'return'] } })
+    expect(parse({ agent_enabled: true, query: 'observe', ai_fallback: 'off' }))
+      .toEqual({ ok: true, change: { agent_enabled: true, query: 'observe', ai_fallback: 'off' } })
   })
   it('추천형(recommend) 단계도 저장 요청으로 받아들인다', () => {
     expect(parse({ recommend: 'observe' })).toEqual({ ok: true, change: { recommend: 'observe' } })
@@ -22,18 +22,14 @@ describe('parseSettingsChange', () => {
     expect(parse({ recommend: 'maybe' }).ok).toBe(false)
   })
   it('빈 요청·모르는 키·잘못된 값 거부', () => {
-    for (const b of [null, [], 'x', {}, { foo: 1 }, { query: 'maybe' }, { query: 1 }, { agent_enabled: 'yes' }, { ai_allowed_categories: 'a' }, { ai_allowed_categories: [1] }]) {
+    for (const b of [null, [], 'x', {}, { foo: 1 }, { query: 'maybe' }, { query: 1 }, { agent_enabled: 'yes' }, { ai_allowed_categories: 'a' }, { ai_allowed_categories: [1] }, { ai_allowed_categories: ['return'] }, { ai_allowed_categories: [] }]) {
       expect(parse(b).ok, JSON.stringify(b)).toBe(false)
     }
   })
-  it('사람 전용 주제·잘못된 형식·너무 많은 분류는 거부', () => {
-    for (const c of ['damage', 'REFUND', ' cancel ', 'personal_info', 'legal', 'lost', 'cs', 'payment_error']) {
-      expect(parse({ ai_allowed_categories: [c] }).ok, c).toBe(false)
-    }
-    expect(parse({ ai_allowed_categories: ['한글'] }).ok).toBe(false)
-    expect(parse({ ai_allowed_categories: ['a b'] }).ok).toBe(false)
-    expect(parse({ ai_allowed_categories: Array.from({ length: 21 }, (_, i) => `c${i}`) }).ok).toBe(false)
-    expect(parse({ ai_allowed_categories: [] }).ok).toBe(true)
+  it('AI 허용 분류는 이 설정으로 바꿀 수 없다(빠른답변 분류 설정이 정본)', () => {
+    const r = parse({ ai_allowed_categories: ['return'] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('분류 설정')
   })
 })
 

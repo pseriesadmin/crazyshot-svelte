@@ -7,7 +7,7 @@
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
   import { isValidCtaUrl } from '$lib/utils/ctaUrl'
-  import { CANNED_RESPONSE_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+  import { DEFAULT_CANNED_CATEGORIES, sortCategories, type CannedCategory } from '$lib/constants/cannedResponseCategories'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙)
   interface CannedResponseRow {
@@ -32,9 +32,11 @@
     item: CannedResponseRow | null
     onclose?: () => void
     oncreated?: (id: string) => void
+    /** 분류 목록(설정에서 추가한 분류 포함). 없으면 기본 6개 */
+    categories?: readonly CannedCategory[]
   }
 
-  let { item, onclose, oncreated }: Props = $props()
+  let { item, onclose, oncreated, categories = DEFAULT_CANNED_CATEGORIES }: Props = $props()
 
   const isNew = $derived(item === null)
 
@@ -200,7 +202,7 @@
           class:active={localCategory === null}
           onclick={() => localCategory = null}
         >전체</button>
-        {#each CANNED_RESPONSE_CATEGORIES as cat}
+        {#each sortCategories(categories, { activeOnly: true }).concat(categories.filter((c) => !c.is_active && c.value === localCategory)) as cat (cat.value)}
           <button
             type="button"
             class="cat-pill"

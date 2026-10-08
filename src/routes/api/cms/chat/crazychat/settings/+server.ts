@@ -7,6 +7,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { loadCannedCategories } from '$lib/server/cannedCategories'
+import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
+import { loadCrazychatSettings } from '$lib/server/crazychat/settings'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { getRoleLevel, hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import {
@@ -41,8 +44,23 @@ export const GET: RequestHandler = async ({ locals }) => {
     return json({ error: '설정을 읽지 못했습니다.' }, { status: 500 })
   }
   const row = data as unknown as Row
+  // AI 허용 분류의 정본은 빠른답변 분류 설정 — 화면에는 실제로 적용되는 분류를 이름과 함께 보여준다(읽기 전용)
+  let allowedView: { value: string; label: string }[] = []
+  try {
+    const cats = await loadCannedCategories(admin)
+    const live = await loadCrazychatSettings(admin as never)
+    allowedView = live.aiAllowedCategories.map((v) => ({ value: v, label: getCategoryLabel(v, cats) }))
+  } catch { /* 표시용 — 실패해도 설정 조회는 계속 */ }
+  // 빠른답변(기존 자동답변) 스위치 — 전체 현황 요약용(읽기 전용)
+  let quickReply: { enabled: boolean; observe_mode: boolean } | null = null
+  try {
+    const { data: ar } = await admin.from('auto_reply_settings').select('enabled, observe_mode').limit(1).maybeSingle()
+    if (ar) quickReply = { enabled: (ar as { enabled?: boolean }).enabled === true, observe_mode: (ar as { observe_mode?: boolean }).observe_mode === true }
+  } catch { /* 요약 표시용 */ }
   return json({
     settings: rowToLevels(row),
+    quick_reply: quickReply,
+    ai_allowed_view: allowedView,
     updated_at: row.updated_at,
     updated_by_name: await updatedByName(admin, row.updated_by),
     can_enable_live: getRoleLevel(cmsRole) >= getRoleLevel('superadmin'),

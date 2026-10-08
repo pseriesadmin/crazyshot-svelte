@@ -10,7 +10,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
-import { VALID_CATEGORIES } from '$lib/constants/cannedResponseCategories'
+import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
 
 export interface CannedResponse {
@@ -87,7 +87,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (!title)   return json({ error: '제목을 입력해주세요.' }, { status: 400 })
   if (!content) return json({ error: '내용을 입력해주세요.' }, { status: 400 })
 
-  if (category && !VALID_CATEGORIES.includes(category)) {
+  if (category && !isAssignableCategory(category, await loadCannedCategories(createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)))) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })
   }
 

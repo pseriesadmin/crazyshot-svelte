@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { csToast } from '$lib/utils/toast'
+  import CmsStateButton from '$lib/components/cms/CmsStateButton.svelte'
   import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
   import type { FeatureLevel, SettingsLevels } from '$lib/server/crazychat/settings-update'
+  import { buildReplyPipeline } from '$lib/utils/replyPipeline'
   import type { AiSummary, QuerySummary } from '$lib/server/crazychat/stats'
 
   type FeatureKey = 'query' | 'action' | 'recommend' | 'ai_fallback'
@@ -31,7 +33,6 @@
     { value: 'observe', label: '관찰' },
     { value: 'on', label: '켜짐' },
   ]
-  const CATEGORY_CHOICES = ['reservation', 'return', 'payment', 'general'] as const
   const CATEGORY_LABEL: Record<string, string> = { reservation: '예약', return: '반납', payment: '결제', general: '일반' }
   const RANGE_OPTIONS: { value: Range; label: string }[] = [
     { value: 'today', label: '오늘' },
@@ -58,8 +59,12 @@
   let draftFilter = $state<'pending' | 'reviewed'>('pending')
   let draftBusy = $state<string | null>(null)
 
-  let draftCategories = $state<string[]>([])
+  let quickReply = $state<{ enabled: boolean; observe_mode: boolean } | null>(null)
+  const STATE_LABEL: Record<string, string> = { on: '켜짐', observe: '관찰', off: '꺼짐', stopped: '정지', unknown: '확인 불가' }
+  let allowedView = $state<{ value: string; label: string }[]>([])
+  const pipeline = $derived(buildReplyPipeline(quickReply, settings, allowedView.length))
   let confirmAi = $state(false)
+
 
   function fmt(iso: string | null): string {
     if (!iso) return '-'
@@ -74,10 +79,11 @@
   }
 
   async function loadSettings(): Promise<void> {
-    const r = await api<{ settings: SettingsLevels; updated_at: string | null; updated_by_name: string | null; can_enable_live: boolean }>('/api/cms/chat/crazychat/settings')
+    const r = await api<{ quick_reply?: { enabled: boolean; observe_mode: boolean } | null; ai_allowed_view?: { value: string; label: string }[]; settings: SettingsLevels; updated_at: string | null; updated_by_name: string | null; can_enable_live: boolean }>('/api/cms/chat/crazychat/settings')
     if (!r.ok) { loadError = r.data.error ?? '설정을 불러오지 못했습니다.'; return }
     settings = r.data.settings
-    draftCategories = [...r.data.settings.ai_allowed_categories]
+    allowedView = r.data.ai_allowed_view ?? []
+    quickReply = r.data.quick_reply ?? null
     updatedAt = r.data.updated_at
     updatedByName = r.data.updated_by_name
     canEnableLive = r.data.can_enable_live
@@ -123,13 +129,6 @@
     void saveChange({ agent_enabled: next })
   }
 
-  function toggleCategory(c: string): void {
-    draftCategories = draftCategories.includes(c) ? draftCategories.filter((x) => x !== c) : [...draftCategories, c]
-  }
-  const categoriesDirty = $derived(
-    settings !== null &&
-      (draftCategories.length !== settings.ai_allowed_categories.length || draftCategories.some((c) => !settings!.ai_allowed_categories.includes(c))),
-  )
   const liveLocked = $derived(!canEnableLive)
 
   async function sendFeedback(d: Draft, fb: 1 | 0 | null): Promise<void> {
@@ -165,12 +164,28 @@
 <div class="page-wrap">
   <div class="page-header">
     <h1 class="page-title">크레이지챗</h1>
-    <p class="page-sub">채팅 에이전트의 스위치와 관찰 결과를 관리합니다. 마스터를 끄면 모든 기능이 즉시 멈추고 기존 빠른답변·대기 안내만 동작합니다.</p>
   </div>
 
   {#if loadError}
     <p class="notice-error" role="alert">{loadError}</p>
   {/if}
+
+  <section class="setting-section">
+    <div class="section-head">
+      <h2 class="section-title">자동답변 현황</h2>
+    </div>
+    <p class="section-desc">고객 메시지가 거치는 순서입니다. 앞 단계가 답하면 뒤 단계는 실행되지 않고, 상담원이 최근 30분 안에 답한 대화는 크레이지챗 기능을 건너뜁니다. 빠른답변 스위치는 빠른답변 화면에서, 나머지는 아래 '스위치'에서 바꿉니다.</p>
+    <ol class="pipe">
+      {#each pipeline as st, i (st.key)}
+        <li class="pipe-step pipe-step--{st.state}" title={st.note}>
+          <span class="pipe-no">{i + 1}</span>
+          <span class="pipe-label">{st.label}</span>
+          <span class="pipe-state">{STATE_LABEL[st.state]}</span>
+        </li>
+      {/each}
+    </ol>
+    <p class="hint">{pipeline.filter((s) => s.state === 'stopped').length ? '마스터가 꺼져 있어 크레이지챗 기능이 정지 중입니다. ' : ''}모두 답하지 못하면 대기 안내 후 상담원이 이어받습니다.</p>
+  </section>
 
   <section class="setting-section">
     <div class="section-head">
@@ -188,31 +203,29 @@
             <span class="row-label">마스터 스위치 (킬스위치)</span>
             <span class="row-desc">꺼두면 아래 기능이 켜져 있어도 전부 정지합니다. 켜는 것은 슈퍼마스터만 할 수 있습니다.</span>
           </div>
-          <div class="chips">
-            <button type="button" class="mk-chip" class:mk-chip--on={!settings.agent_enabled} disabled={saving} aria-pressed={!settings.agent_enabled} onclick={() => toggleMaster(false)}>꺼짐</button>
-            <button type="button" class="mk-chip" class:mk-chip--on={settings.agent_enabled} disabled={saving || (liveLocked && !settings.agent_enabled)} title={liveLocked ? '슈퍼마스터만 켤 수 있습니다.' : undefined} aria-pressed={settings.agent_enabled} onclick={() => toggleMaster(true)}>켜짐</button>
-          </div>
+          <CmsStateButton
+            ariaLabel="마스터 스위치"
+            value={settings.agent_enabled ? 'on' : 'off'}
+            disabled={saving}
+            options={[{ value: 'off', label: '꺼짐' }, { value: 'on', label: '켜짐', disabled: liveLocked && !settings.agent_enabled, title: liveLocked ? '슈퍼마스터만 켤 수 있습니다.' : undefined }]}
+            onchange={(v) => toggleMaster(v === 'on')}
+          />
         </div>
 
         {#each FEATURE_ROWS as f (f.key)}
+          {@const cur = settings[f.key]}
           <div class="row" class:row--muted={!settings.agent_enabled}>
             <div class="row-text">
               <span class="row-label">{f.label}</span>
               <span class="row-desc">{f.desc}</span>
             </div>
-            <div class="chips">
-              {#each LEVEL_OPTIONS as opt (opt.value)}
-                <button
-                  type="button"
-                  class="mk-chip"
-                  class:mk-chip--on={settings[f.key] === opt.value}
-                  disabled={saving || (f.key === 'ai_fallback' && opt.value === 'on' && liveLocked && settings[f.key] !== 'on')}
-                  title={f.key === 'ai_fallback' && opt.value === 'on' && liveLocked ? '슈퍼마스터만 켤 수 있습니다.' : undefined}
-                  aria-pressed={settings[f.key] === opt.value}
-                  onclick={() => chooseLevel(f.key, opt.value)}
-                >{opt.label}</button>
-              {/each}
-            </div>
+            <CmsStateButton
+              ariaLabel="{f.label} 단계"
+              value={settings[f.key]}
+              disabled={saving}
+              options={LEVEL_OPTIONS.map((opt) => ({ ...opt, disabled: f.key === 'ai_fallback' && opt.value === 'on' && liveLocked && cur !== 'on', title: f.key === 'ai_fallback' && opt.value === 'on' && liveLocked ? '슈퍼마스터만 켤 수 있습니다.' : undefined }))}
+              onchange={(v) => chooseLevel(f.key, v)}
+            />
           </div>
         {/each}
       </div>
@@ -222,16 +235,14 @@
 
       <div class="sub-block">
         <h3 class="sub-title">AI가 답해도 되는 분류</h3>
-        <p class="row-desc">'켜짐' 단계에서 선택한 분류의 근거로만 고객에게 발송합니다. 파손·분실·환불·취소 같은 사람 전용 주제는 선택할 수 없습니다.</p>
+        <p class="row-desc">'켜짐' 단계에서 아래 분류의 근거로만 고객에게 발송합니다. 분류는 <a href="/cms/chat/qna">빠른답변 → 분류 설정</a>의 'AI 허용'에서 바꿉니다(켜기는 슈퍼마스터 전용). 파손·분실·환불·취소 같은 사람 전용 주제는 허용할 수 없습니다.</p>
         <div class="chips chips--wrap">
-          {#each CATEGORY_CHOICES as c (c)}
-            <button type="button" class="mk-chip" class:mk-chip--on={draftCategories.includes(c)} disabled={saving} aria-pressed={draftCategories.includes(c)} onclick={() => toggleCategory(c)}>{CATEGORY_LABEL[c]}</button>
+          {#each allowedView as c (c.value)}
+            <span class="mk-chip mk-chip--on">{c.label}</span>
+          {:else}
+            <span class="hint">허용된 분류가 없습니다.</span>
           {/each}
-          <button type="button" class="btn-save" disabled={saving || !categoriesDirty || (liveLocked && settings.ai_fallback === 'on')} onclick={() => saveChange({ ai_allowed_categories: draftCategories })}>분류 저장</button>
         </div>
-        {#if liveLocked && settings.ai_fallback === 'on'}
-          <p class="hint">AI가 켜짐인 동안 허용 분류 변경은 슈퍼마스터만 할 수 있습니다.</p>
-        {/if}
       </div>
     {:else if !loadError}
       <p class="hint">불러오는 중…</p>
@@ -329,12 +340,19 @@
   .page-wrap { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 24px; }
   .page-header { margin-bottom: 0; }
   .page-title { font: var(--text-pc-menu-kr-20); color: var(--cs-text); margin: 0 0 4px; }
-  .page-sub { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
   .notice-error { font: var(--text-pc-body-14); color: var(--cs-error); margin: 0; }
 
   .setting-section { background: var(--cs-white); border-radius: var(--cms-radius-lg); padding: 34px 32px; display: flex; flex-direction: column; gap: 14px; }
   .section-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
   .section-title { font: var(--text-pc-menu-kr-20); color: var(--cs-dark); margin: 0; }
+  .pipe { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .pipe-step { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: var(--radius-full); background: var(--cs-surface-gray); color: var(--cs-text-mid); font: var(--text-pc-body-14); }
+  .pipe-no { width: 20px; height: 20px; border-radius: 50%; background: var(--cs-lilac); color: var(--cs-purple); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .pipe-label { font-weight: 700; color: var(--cs-text); }
+  .pipe-step--on { background: var(--cs-purple); color: var(--cs-white); }
+  .pipe-step--on .pipe-label { color: var(--cs-white); }
+  .pipe-step--observe { background: var(--cs-lilac); color: var(--cs-purple); }
+  .pipe-step--stopped { background: var(--cs-red-xlight); color: var(--cs-red-badge); }
   .section-badge { background: var(--cs-lilac); color: var(--cs-purple); font: var(--text-pc-body-14); font-weight: 700; padding: 2px 10px; border-radius: var(--radius-full); white-space: nowrap; }
   .section-desc { font: var(--text-pc-body-14); color: var(--cs-text-mid); margin: 0; }
   .sub-title { font: var(--text-pc-title-16); color: var(--cs-text); margin: 6px 0 0; }
@@ -343,7 +361,8 @@
 
   .row-list { display: flex; flex-direction: column; gap: 12px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 18px; background: var(--cs-surface-gray); border-radius: var(--cms-radius-sm); }
-  .row--muted { opacity: 0.6; }
+  /* 마스터 꺼짐: 설명 글만 흐리게 — 콤보버튼은 켜짐·꺼짐 모두 같은 색 규칙을 유지한다(cms-uiux.md §14 선택 상태 색 유지) */
+  .row--muted .row-text { opacity: 0.6; }
   .row-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .row-label { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
   .row-desc { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
@@ -358,7 +377,8 @@
   }
   .mk-chip--on { background: var(--cs-purple); color: var(--cs-white); border-color: var(--cs-purple); }
   .mk-chip:not(.mk-chip--on):hover:not(:disabled) { border-color: var(--cs-purple); color: var(--cs-purple); }
-  .mk-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+  .mk-chip:disabled:not(.mk-chip--on) { opacity: 0.38; cursor: not-allowed; }
+  .mk-chip--on:disabled { opacity: 1; cursor: default; }
 
   /* cms-uiux.md §0-10-G DetailPanel 전용 버튼 — 대형(44px) */
   .btn-save {

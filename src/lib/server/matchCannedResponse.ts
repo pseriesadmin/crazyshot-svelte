@@ -125,6 +125,14 @@ const STOP_TOKENS = new Set([
   '해주세요', '주세요', '부탁', '부탁드려요', '부탁드립니다', '알려주세요', '알려', '알고싶어요', '궁금', '궁금해요', '궁금합니다',
   '알려줘', '알려줘요', '알려달라고', '알려줄래', '알려줄래요', '알려주실래요', '해줘', '해줘요', '해줄래요', '부탁해', '부탁해요', '부탁합니다', '할께요', '할게요', '하고싶어요', '하고싶은데',
   '문의', '질문', '확인', '요청', '안내', '싶어요', '싶어', '싶습니다', '갑니다', '합니다', '같아요', '오늘', '내일', '어제', '지금',
+  // 의문·되묻기 말투(2026-10-08) — 주제를 가리키지 않는 말만 추가한다. 명사 주제어("장소"·"위치"·"비용" 등)는 절대 넣지 않는다.
+  '어디예요', '어디에요', '어딘가요', '어디인가요', '어디인지', '어딘지', '어디로', '어디에', '어디쯤', '어디있나요', '어디에있나요',
+  '얼마에요', '얼마인지', '얼마정도', '얼마쯤', '얼마죠', '얼마입니까', '얼마인데요', '얼마나요', '얼마나와요', '나와요',
+  '뭐예요', '뭐에요', '뭔가요', '뭔지', '뭐', '뭘', '무슨', '무엇', '무엇인가요',
+  '언제예요', '언제인가요', '언제쯤', '언제까지', '언제부터', '언제인지',
+  '어떤걸', '어떤건가요', '어떤지', '어떻게든',
+  '가야', '가면', '올려야', '내야', '내요', '돼요', '되어', '되어있나요', '알고', '알고싶습니다', '좀',
+  '직접', '바로', '다음에', '가도', '보내요', '받을', '받아요', '주시나요', '필요한가요', '없이', '채로', '신청해야', '쉬는', '날에',
 ])
 // 문의·질문·궁금·부탁 등 + 흔한 어미 조합("문의드려요", "궁금한데요")
 const STOP_ROOT_ENDING_RE = /^(문의|질문|궁금|부탁|관련|확인|요청|알려|알고|감사|죄송)(드려요|드립니다|드려|해요|합니다|해주세요|주세요|해서|한데요|하는데|합니다만|했어요|했는데|싶어요|싶어|싶습니다)?$/
@@ -133,7 +141,7 @@ const NUMERIC_TOKEN_RE = /^\d+(일|시|월|개|명|원|%|박|대|번|주|분|달
 // 업종 일반어 — 설명 근거로는 약하고(단독 채택 불가), 질문에서 비중도 낮게 본다
 const DOMAIN_GENERIC = new Set(['카메라', '렌즈', '장비', '상품', '제품', '물건', '대여', '렌탈', '렌트', '고객', '서비스', '이용', '방법', '빌리', '처리', '신청'])
 // 어간 뒤 흔한 용언 어미 — 커버리지는 어간 기준으로 계산("고장났어요" → 어간 "고장")
-const VERB_ENDING_RE = /(쳐서|려서|와서|가서|어서|아서|여서|았는데요|었는데요|았는데|었는데|았어요|었어요|았습니다|었습니다|났는데요|났어요|했는데요|했어요|했습니다|했는데|하는데|해서요|하고|해서|하면|해요|합니다|되요|돼요|됩니다|인데요|인데|이에요|예요|네요|는데요|은데|는데|습니다|세요|까요|한가요|인가요|나요|할)$/
+const VERB_ENDING_RE = /(쳐서|려서|와서|가서|어서|아서|여서|았는데요|었는데요|았는데|었는데|았어요|었어요|았습니다|었습니다|났는데요|났어요|했는데요|했어요|했습니다|했는데|하는데|해서요|하려면|하려고|하러|하고|해서|하면|해요|합니다|되요|돼요|됩니다|인데요|인데|이에요|예요|네요|는데요|은데|는데|습니다|세요|까요|한가요|인가요|나요|할)$/
 // 어간 끝의 포괄 접미어("파손처리" → "파손") — 커버리지 분모에서 제외
 const GENERIC_SUFFIX_RE = /(처리|문제|관련|방법|문의|접수)$/
 
@@ -352,6 +360,34 @@ function scoreCandidate(
         for (let c = start; c < start + term.term.length && c < tokens[i].stemLen; c++) tokenCovered[i].add(c)
       }
       if (!term.generic && !tokens[i].generic) tokenNonGeneric[i] = true
+      if (term.curated && !term.generic) {
+        curatedHit = true
+        curatedKeys.add(term.key)
+      }
+      if (term.source === 'shortcut') shortcutHit = true
+      if (term.term.length > maxTermLen) maxTermLen = term.term.length
+    }
+  }
+
+  // 복합 키워드(2026-10-08): 키워드는 "반납장소"처럼 붙여 쓰지만 질문은 "반납 장소"로 띄어 오는 경우가 많다.
+  // 이웃한 두 단어를 붙인 말이 키워드와 같거나 그 키워드로 시작하면(exact/prefix) 두 단어를 함께 설명된 것으로 본다.
+  // 순서가 뒤바뀌거나 이웃하지 않은 단어는 합치지 않는다.
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    const a = tokens[i]
+    const b = tokens[i + 1]
+    if (!a.hangul || !b.hangul) continue
+    const joined = a.text + b.text
+    for (const term of terms) {
+      if (term.term.length < 4) continue
+      const kind = hitKind(term.term, joined)
+      if (kind !== 'exact' && kind !== 'prefix') continue
+      const value = term.base * kindFactor(kind, term.term.length)
+      if (value > (conceptBest.get(term.key) ?? 0)) conceptBest.set(term.key, value)
+      for (const idx of [i, i + 1]) {
+        if (value > tokenBest[idx]) tokenBest[idx] = value
+        for (let c = 0; c < tokens[idx].stemLen; c++) tokenCovered[idx].add(c)
+        if (!term.generic && !tokens[idx].generic) tokenNonGeneric[idx] = true
+      }
       if (term.curated && !term.generic) {
         curatedHit = true
         curatedKeys.add(term.key)

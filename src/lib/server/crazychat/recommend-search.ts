@@ -28,6 +28,36 @@ const loadConfirmedSynonymGroups: SynonymGroupLoader = async () => {
   }
 }
 
+/** 카드 후보 id → 대여 가능한 부모 상품 행 + 24시간 대여가격. 판매전용·옵션전용·비노출·삭제 상품은 행에서 빠진다 */
+export async function fetchCardData(admin: AdminClient, ids: readonly string[]): Promise<{ rows: RecommendProductRow[]; prices: Record<string, number> }> {
+  if (ids.length === 0) return { rows: [], prices: {} }
+  const { data: rowData, error: rowErr } = await admin
+    .from('products')
+    .select('id, name, slug, image_urls, sale_only, is_active, option_only, deleted_at')
+    .in('id', ids)
+    .is('parent_product_id', null)
+    .is('deleted_at', null)
+    .eq('is_active', true)
+    .eq('sale_only', false)
+    .eq('option_only', false)
+  if (rowErr) throw new Error(rowErr.message)
+
+  // 대여가격: 24시간(1일) 기준 가격만 쓴다 — 카드가 '원/일'로 표시하므로 12시간 요금은 쓰지 않는다(24시간 가격이 없는 상품은 카드 제외)
+  const { data: priceData, error: priceErr } = await admin
+    .from('price_rules')
+    .select('product_id, duration_type, price')
+    .in('product_id', ids)
+    .eq('duration_type', '24h')
+    .eq('is_active', true)
+    .is('deleted_at', null)
+  if (priceErr) throw new Error(priceErr.message)
+  const prices: Record<string, number> = {}
+  for (const p of (priceData ?? []) as Array<{ product_id: string; duration_type: string; price: number }>) {
+    if (Number(p.price) > 0 && prices[p.product_id] === undefined) prices[p.product_id] = Number(p.price)
+  }
+  return { rows: (rowData ?? []) as RecommendProductRow[], prices }
+}
+
 /** 동의어 그룹 로더를 바꿔 끼울 수 있는 추천 검색기 생성기(테스트·라이브 검증용). 기본 검색기는 아래 defaultRecommendSearcher */
 export function createRecommendSearcher(loadGroups: SynonymGroupLoader = loadConfirmedSynonymGroups): RecommendSearcher {
   return async (admin, query, tokens) => {
@@ -51,33 +81,8 @@ export function createRecommendSearcher(loadGroups: SynonymGroupLoader = loadCon
     if (merged.size < 3 && tokens.length > 1) for (const t of tokens) add(t, 0.6)
     const hits: RecommendHit[] = [...merged.entries()].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score).slice(0, 15)
     if (hits.length === 0) return { hits: [], rows: [], prices: {}, usedExpansion }
-    const ids = hits.map((h) => h.id)
-
-    const { data: rowData, error: rowErr } = await admin
-      .from('products')
-      .select('id, name, slug, image_urls, sale_only, is_active, option_only, deleted_at')
-      .in('id', ids)
-      .is('parent_product_id', null)
-      .is('deleted_at', null)
-      .eq('is_active', true)
-      .eq('sale_only', false)
-      .eq('option_only', false)
-    if (rowErr) throw new Error(rowErr.message)
-
-    // 대여가격: 24시간(1일) 기준 가격만 쓴다 — 카드가 '원/일'로 표시하므로 12시간 요금은 쓰지 않는다(24시간 가격이 없는 상품은 카드 제외)
-    const { data: priceData, error: priceErr } = await admin
-      .from('price_rules')
-      .select('product_id, duration_type, price')
-      .in('product_id', ids)
-      .eq('duration_type', '24h')
-      .eq('is_active', true)
-      .is('deleted_at', null)
-    if (priceErr) throw new Error(priceErr.message)
-    const prices: Record<string, number> = {}
-    for (const p of (priceData ?? []) as Array<{ product_id: string; duration_type: string; price: number }>) {
-      if (Number(p.price) > 0 && prices[p.product_id] === undefined) prices[p.product_id] = Number(p.price)
-    }
-    return { hits, rows: (rowData ?? []) as RecommendProductRow[], prices, usedExpansion }
+    const { rows, prices } = await fetchCardData(admin, hits.map((h) => h.id))
+    return { hits, rows, prices, usedExpansion }
   }
 }
 

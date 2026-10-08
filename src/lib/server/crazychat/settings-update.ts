@@ -2,14 +2,12 @@
 // 정책(Stephen 확정 2026-10-07): 마스터 ON·AI '켜짐'(고객 발송)은 슈퍼마스터 전용, 나머지 변경은 매니저 이상. 마스터 OFF는 언제나 허용(비상 정지).
 // 단계 표현: off(꺼짐) / observe(관찰 — 판정·기록만, 고객 발송 없음) / on(켜짐).
 
-import { HUMAN_ONLY_TOPICS, isHumanOnlyTopic } from './settings'
+import { HUMAN_ONLY_TOPICS } from './settings'
 
 export type FeatureLevel = 'off' | 'observe' | 'on'
 export type SettingsFeature = 'query' | 'action' | 'recommend' | 'ai_fallback'
 export const FEATURES: readonly SettingsFeature[] = ['query', 'action', 'recommend', 'ai_fallback']
 const LEVELS: readonly FeatureLevel[] = ['off', 'observe', 'on']
-export const MAX_CATEGORIES = 20
-const CATEGORY_RE = /^[a-z][a-z0-9_]{0,39}$/
 
 /** crazychat_settings 행(변경 판정에 쓰는 열) */
 export interface SettingsRow {
@@ -61,7 +59,7 @@ export function rowToLevels(row: SettingsRow): SettingsLevels {
   }
 }
 
-const KEYS = new Set<string>(['agent_enabled', 'query', 'action', 'recommend', 'ai_fallback', 'ai_allowed_categories'])
+const KEYS = new Set<string>(['agent_enabled', 'query', 'action', 'recommend', 'ai_fallback'])
 
 export type ParseResult = { ok: true; change: SettingsChange } | { ok: false; error: string }
 
@@ -71,6 +69,7 @@ export function parseSettingsChange(body: unknown): ParseResult {
   const o = body as Record<string, unknown>
   const keys = Object.keys(o)
   if (keys.length === 0) return { ok: false, error: '변경할 내용이 없습니다.' }
+  if (keys.includes('ai_allowed_categories')) return { ok: false, error: 'AI가 답해도 되는 분류는 빠른답변 "분류 설정"에서 바꿉니다.' }
   for (const k of keys) if (!KEYS.has(k)) return { ok: false, error: `알 수 없는 항목입니다: ${k}` }
   const change: SettingsChange = {}
   if ('agent_enabled' in o) {
@@ -83,17 +82,6 @@ export function parseSettingsChange(body: unknown): ParseResult {
       if (typeof v !== 'string' || !LEVELS.includes(v as FeatureLevel)) return { ok: false, error: `${f} 단계 값이 올바르지 않습니다.` }
       change[f] = v as FeatureLevel
     }
-  }
-  if ('ai_allowed_categories' in o) {
-    const raw = o.ai_allowed_categories
-    if (!Array.isArray(raw) || raw.some((c) => typeof c !== 'string')) return { ok: false, error: '허용 분류 값이 올바르지 않습니다.' }
-    const cats = [...new Set((raw as string[]).map((c) => c.trim().toLowerCase()))]
-    if (cats.length > MAX_CATEGORIES) return { ok: false, error: `허용 분류는 최대 ${MAX_CATEGORIES}개입니다.` }
-    for (const c of cats) {
-      if (!CATEGORY_RE.test(c)) return { ok: false, error: `허용 분류 형식이 올바르지 않습니다: ${c}` }
-      if (isHumanOnlyTopic(c)) return { ok: false, error: `사람이 직접 답해야 하는 주제는 AI 허용 분류에 넣을 수 없습니다: ${c}` }
-    }
-    change.ai_allowed_categories = cats
   }
   return { ok: true, change }
 }

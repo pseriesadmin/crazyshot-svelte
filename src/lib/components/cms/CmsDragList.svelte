@@ -1,5 +1,6 @@
 <script lang="ts" generics="T">
   import type { Snippet } from 'svelte'
+  import { createHandleGate } from '$lib/utils/dragHandleGate'
 
   interface Props {
     items: T[]
@@ -17,13 +18,20 @@
   // 드래그 시작이 실제로 손잡이(.drag-handle)에서 일어난 경우에만 정렬을 시작한다 —
   // draggable="true"가 카드 전체에 걸려 있어, 카드 안 입력창에서 텍스트를 드래그
   // 선택하면 그 제스처가 카드째로 dragstart로 잡혀 화면이 함께 딸려 움직이던 버그 수정
-  // (2026-09-30). 원인: 손잡이 아이콘은 시각적 표시일 뿐 실제 드래그 가능 영역이 아니었음.
+  // (2026-09-30).
+  // 2026-10-08 회귀 수정: dragstart의 e.target은 눌린 손잡이가 아니라 draggable 항목 자체라서
+  // target.closest('.drag-handle')가 항상 null이었고 모든 목록이 끌리지 않았다 →
+  // 드래그 직전 pointerdown 대상이 손잡이였는지를 게이트에 기록해 dragstart에서 확인한다.
+  const gate = createHandleGate()
+
   function onDragStart(e: DragEvent, i: number) {
-    const target = e.target as HTMLElement | null
-    if (!target?.closest('.drag-handle')) {
+    if (!gate.allowDragStart()) {
       e.preventDefault()
       return
     }
+    // 일부 브라우저는 dataTransfer가 비어 있으면 드래그를 시작하지 않는다
+    e.dataTransfer?.setData('text/plain', String(i))
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
     dragIdx = i
   }
 
@@ -33,6 +41,7 @@
   }
 
   function onDragEnd() {
+    gate.release()
     if (dragIdx !== null && overIdx !== null && dragIdx !== overIdx) {
       const arr = [...items]
       const [moved] = arr.splice(dragIdx, 1)
@@ -53,6 +62,9 @@
       class:drag-list-item--dragging={dragIdx === i}
       class:drag-list-item--over={overIdx === i && dragIdx !== i}
       draggable="true"
+      onpointerdown={(e) => gate.press(e.target)}
+      onpointerup={() => gate.release()}
+      onpointercancel={() => gate.release()}
       ondragstart={(e) => onDragStart(e, i)}
       ondragover={(e) => onDragOver(e, i)}
       ondragend={onDragEnd}

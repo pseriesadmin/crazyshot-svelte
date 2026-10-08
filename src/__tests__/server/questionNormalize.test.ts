@@ -17,6 +17,12 @@ describe('normalizeQuestion', () => {
     expect(normalizeQuestion('퀵 가능해요?')).toBe('퀵배송 가능해요?')
     expect(normalizeQuestion('반납은 퀵이 편해요')).toBe('반납은 퀵배송이 편해요')
   })
+  it('띄어 쓴 "퀵 비용"류는 붙여서 복합어로 만든다(2026-10-08)', () => {
+    expect(normalizeQuestion('퀵 비용은 누가 내요')).toBe('퀵비용은 누가 내요')
+    expect(normalizeQuestion('퀵   서비스 되나요')).toBe('퀵서비스 되나요')
+    expect(normalizeQuestion('퀵 기사님 연락')).toBe('퀵기사님 연락')
+    expect(normalizeQuestion('스퀵 비용')).toBe('스퀵 비용')
+  })
   it('이미 복합어면 건드리지 않는다', () => {
     for (const t of ['퀵배송 비용이 얼마예요', '퀵서비스 되나요', '퀵비용은요', '퀵기사님 연락', '퀵수령 가능해요', '퀵배달로 보내주세요']) expect(normalizeQuestion(t)).toBe(t)
   })
