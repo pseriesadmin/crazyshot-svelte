@@ -26,6 +26,7 @@
     fitWidthZoom,
     isIosDevice,
     normalizeRotation,
+    pickLoadErrorMessage,
     pdfScale,
     stepZoom,
     thumbnailScale,
@@ -35,7 +36,9 @@
 
   interface Props {
     /** PDF를 가져올 주소(같은 출처 — 로그인 쿠키로 인증) */
-    src: string
+    src: string | null
+    /** src가 없을 때(아직 PDF가 없는 상태) 빈 캔버스에 보여 줄 안내 — 도구줄은 그대로 보이고 버튼은 비활성 */
+    emptyMessage?: string
     /** 도구줄에 표시할 파일 이름 */
     title?: string
     /** 내려받기 주소(서버가 attachment로 내려주는 주소 — 교부 증빙 기록용) */
@@ -51,6 +54,7 @@
 
   let {
     src,
+    emptyMessage = 'PDF가 아직 없습니다.',
     title = '전자계약서.pdf',
     downloadUrl,
     downloadFilename,
@@ -66,7 +70,7 @@
   /** 고객에게 그대로 보여 줘도 되는 불러오기 실패 안내 */
   class ViewerLoadError extends Error {}
 
-  type Status = 'loading' | 'ready' | 'error'
+  type Status = 'loading' | 'ready' | 'error' | 'empty'
   let status = $state<Status>('loading')
   let errorMessage = $state('')
   let pageCount = $state(0)
@@ -111,22 +115,23 @@
     const controller = new AbortController()
     let cancelled = false
 
-    status = 'loading'
     errorMessage = ''
     pageCount = 0
     baseSizes = []
+    if (!url) {
+      status = 'empty'
+      return
+    }
+    status = 'loading'
 
     ;(async () => {
       try {
         const res = await fetch(url, { credentials: 'same-origin', signal: controller.signal })
         if (!res.ok) {
-          throw new ViewerLoadError(
-            res.status === 401 || res.status === 403
-              ? '로그인이 필요해요. 다시 로그인한 뒤 열어 주세요.'
-              : res.status === 404
-                ? '계약서 사본(PDF)을 준비 중이에요. 잠시 후 다시 열어 주세요.'
-                : '계약서를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.',
-          )
+          // 서버가 안내 문구를 준 상태(409·422·429)에서만 그 문구를 쓴다 — 예: "이전 작성 방식이라 미리보기를 만들 수 없어요. '보기' 버튼으로 확인해 주세요."
+          let serverError: unknown = null
+          try { serverError = ((await res.json()) as { error?: unknown } | null)?.error } catch { serverError = null }
+          throw new ViewerLoadError(pickLoadErrorMessage(res.status, serverError))
         }
         let bytes: Uint8Array = new Uint8Array(await res.arrayBuffer())
         if (prepareBytes) bytes = await prepareBytes(bytes)
@@ -553,7 +558,9 @@
     {/if}
 
     <div class="pv-scroll" bind:this={scrollEl} onscroll={handleScroll}>
-      {#if status === 'loading'}
+      {#if status === 'empty'}
+        <p class="pv-message" role="status">{emptyMessage}</p>
+      {:else if status === 'loading'}
         <p class="pv-message" role="status">계약서를 불러오는 중이에요…</p>
       {:else if status === 'error'}
         <div class="pv-message" role="alert">

@@ -61,7 +61,11 @@ export const POST: RequestHandler = async ({ params, locals, request, getClientA
     try {
       // 기준 지도: 봉인이 유효하면 봉인된 지도, 아니면 보관 파일이 기록과 같을 때만 보관 파일에서 즉석 추출(훼손된 기준으로 비교하지 않는다)
       let recorded = seal.status === 'valid' ? parsePageMap(seal.pageMap) : null
-      if (!recorded && verdict.archiveIntact !== false) recorded = (await buildPageMapFromPdf(pdf.bytes)).map
+      // 봉인 당시 쪽 추출이 실패해 빈 지도로 봉인된 경우(pages 0)도 "기준 없음"으로 보고 보관 파일에서 다시 만든다(보관 파일이 기록과 같을 때만)
+      if ((!recorded || recorded.pages.length === 0) && verdict.archiveIntact !== false) {
+        const rebuilt = await buildPageMapFromPdf(pdf.bytes)
+        recorded = rebuilt.extracted ? rebuilt.map : null
+      }
       if (!recorded) {
         comparisonNote = '기준이 되는 보관본의 무결성을 확인할 수 없어 변경 위치를 분석하지 않았습니다.'
       } else {

@@ -177,6 +177,7 @@ export const MENU_GUARDED_SHARED_ENDPOINTS: { menuKeys: string[]; dirs: string[]
     menuKeys: ['consulting.chat', 'consulting.qna'],
     dirs: [
       'src/routes/api/cms/canned-responses', // GET 목록(채팅 '/' 드롭다운 + 빠른답변 화면)
+      'src/routes/api/cms/canned-categories', // GET 분류 목록(채팅 '/' 드롭다운 + 빠른답변 화면) — 쓰기는 consulting.qna
       'src/routes/api/cms/canned-responses/[id]/use', // 전송 시 사용횟수 집계(채팅)
       'src/routes/api/cms/auto-reply-settings', // 자동답변 스위치(채팅 헤더 + 빠른답변 화면)
     ],

@@ -99,7 +99,7 @@ interface SourceDocument {
 }
 
 /** 서명 합성본 HTML을 확정한다. 확정할 수 없으면 사유 문자열을 던진다(호출부가 ok:false로 변환). */
-async function resolveSourceDocument(admin: SupabaseClient, ev: EvidenceRecord): Promise<SourceDocument> {
+export async function resolveSourceDocument(admin: SupabaseClient, ev: EvidenceRecord): Promise<SourceDocument> {
   const [{ data: contract }, { data: signing }] = await Promise.all([
     admin.from('contracts').select('authoring_mode, html_document').eq('id', ev.contract_id).maybeSingle(),
     admin.from('contract_signings').select('signed_at, signature_data, signed_content_snapshot').eq('id', ev.signing_id).maybeSingle(),

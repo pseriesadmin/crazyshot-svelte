@@ -88,6 +88,38 @@ function policySection(title: string, text: string | null): string {
   return `<h3>${esc(title)}</h3><p class="archive-policy">${body}</p>`
 }
 
+/**
+ * 임시 미리보기 PDF용 HTML — 서명이 합성된 계약서 본문만(증적 요약·약관 부록 없음). 최종본이 아직 없을 때 관리자 화면 뷰어에 잠시 보여 주는 용도이며
+ * 어디에도 저장하지 않는다. 본문은 가공하지 않는다.
+ */
+export const PREVIEW_WATERMARK_TEXT = '임시 미리보기 · 최종본 아님'
+export const PREVIEW_FOOTER_TEXT = '이 문서는 최종본 PDF 생성 전 임시 미리보기이며 법적 증빙 최종본(서명 증적·약관 사본 포함)이 아닙니다.'
+
+// 모든 쪽에 반복 표시(position: fixed는 인쇄 시 쪽마다 반복된다) — 저장·인쇄한 사본이 최종본으로 오인되지 않게 한다. 본문(서명·직인 포함)은 가리지 않도록 옅게.
+const PREVIEW_CSS = `
+  .preview-watermark { position: fixed; top: 46%; left: 50%; transform: translate(-50%, -50%) rotate(-28deg); font-size: 46px; font-weight: 700; color: rgba(200, 0, 0, 0.13); white-space: nowrap; pointer-events: none; z-index: 9999; }
+  .preview-footer { position: fixed; left: 0; right: 0; bottom: 3mm; text-align: center; font-size: 9px; color: #c00000; pointer-events: none; z-index: 9999; }
+`
+const PREVIEW_FONT_FORCE_CSS = `.preview-watermark, .preview-footer { font-family: 'Archive KR', sans-serif !important; }`
+
+export function buildPreviewHtml(args: { contractHtml: string; fontCss?: string }): string {
+  const { contractHtml, fontCss } = args
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; base-uri 'none'">
+<title>전자계약서 미리보기</title>
+<style>${fontCss ?? ''}${ARCHIVE_CSS}${fontCss ? FONT_FORCE_CSS : ''}${PREVIEW_CSS}${fontCss ? PREVIEW_FONT_FORCE_CSS : ''}</style>
+</head>
+<body>
+<div class="preview-watermark" aria-hidden="true">${PREVIEW_WATERMARK_TEXT}</div>
+<div class="preview-footer" aria-hidden="true">${PREVIEW_FOOTER_TEXT}</div>
+${contractHtml}
+</body>
+</html>`
+}
+
 export function buildArchiveHtml(args: {
   contractHtml: string
   evidence: ArchiveEvidenceSummary
