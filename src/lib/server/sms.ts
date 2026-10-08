@@ -38,8 +38,16 @@ export async function sendSms(to: string, message: string): Promise<void> {
 }
 
 // 무인보관함 안내 문자 본문 — 크론(/api/cron/locker-guide)과 CMS "시범 발송"이 같은 문구를 쓰도록 한 곳에서 만든다.
-export function buildLockerGuideSms(productName: string | null | undefined, password: string): string {
-  return `[크레이지샷] ${productName ?? '상품'} 무인보관함 이용 비밀번호: ${password}`
+// 형식: [크레이지샷] 상품명 대여예약 무인보관함 이용정보 No {무인함 번호} / {비밀번호} (2026-10-08, Stephen 확정).
+// 무인함 번호가 없는 옛 데이터(번호 도입 전 저장분)는 "No … /" 부분 없이 비밀번호만 안내한다.
+export function buildLockerGuideSms(
+  productName: string | null | undefined,
+  lockerNumber: string | null | undefined,
+  password: string,
+): string {
+  const head = `[크레이지샷] ${productName ?? '상품'} 대여예약 무인보관함 이용정보`
+  const no = (lockerNumber ?? '').trim()
+  return no ? `${head} No ${no} / ${password}` : `${head} ${password}`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

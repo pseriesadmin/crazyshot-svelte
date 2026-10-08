@@ -16,7 +16,7 @@ vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'http://localh
 vi.mock('$lib/server/push', () => ({ sendReservationLifecyclePush: (...a: unknown[]) => pushMock(...(a as [])) }))
 vi.mock('$lib/server/sms', () => ({
   sendSms: (...a: unknown[]) => sendSmsMock(...a),
-  buildLockerGuideSms: (n: string | null, p: string) => `[크레이지샷] ${n ?? '상품'} 무인보관함 이용 비밀번호: ${p}`,
+  buildLockerGuideSms: (n: string | null, no: string | null, p: string) => `[크레이지샷] ${n ?? '상품'} 대여예약 무인보관함 이용정보 No ${no} / ${p}`,
 }))
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
@@ -31,7 +31,7 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { GET } from '../../routes/api/cron/locker-guide/+server'
 
-const row = (id: number, phone: string | null) => ({ reservation_id: id, leg: 'pickup', phone, password: '1234', product_name: '카메라' })
+const row = (id: number, phone: string | null) => ({ reservation_id: id, leg: 'pickup', phone, password: '1234', locker_number: '5', product_name: '카메라' })
 const call = async (): Promise<{ processed: number; succeeded: number; failed: number; retryScheduled: number }> => {
   const res = await GET({ request: new Request('http://x', { headers: { authorization: 'Bearer s3cret' } }) } as unknown as Parameters<typeof GET>[0])
   return res.json()
@@ -50,7 +50,7 @@ describe('locker-guide cron', () => {
   it('C1: 문자 성공 → 채팅·푸시 발송, 되돌리지 않음', async () => {
     claimQueue = [[row(1, '010-1111-2222')]]
     const r = await call()
-    expect(sendSmsMock).toHaveBeenCalledWith('010-1111-2222', '[크레이지샷] 카메라 무인보관함 이용 비밀번호: 1234')
+    expect(sendSmsMock).toHaveBeenCalledWith('010-1111-2222', '[크레이지샷] 카메라 대여예약 무인보관함 이용정보 No 5 / 1234')
     expect(pushMock).toHaveBeenCalledTimes(1)
     expect(r.succeeded).toBe(1)
     expect(released()).toEqual([])

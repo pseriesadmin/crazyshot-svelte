@@ -53,10 +53,10 @@ async function newReservation(): Promise<number> {
   return row.reservation_id
 }
 
-async function claimedIds(): Promise<Array<{ reservation_id: number; leg: string }>> {
+async function claimedIds(): Promise<Array<{ reservation_id: number; leg: string; locker_number?: string | null }>> {
   const { data, error } = await admin.rpc('claim_reservations_due_for_locker_guide', { p_limit: 500 })
   if (error) throw new Error(error.message)
-  return (data ?? []) as Array<{ reservation_id: number; leg: string }>
+  return (data ?? []) as Array<{ reservation_id: number; leg: string; locker_number?: string | null }>
 }
 
 async function setup(id: number, patch: Record<string, unknown>): Promise<void> {
@@ -68,9 +68,11 @@ describe('무인보관함 안내 대상 선정 — 영업외시간 제한 없음
   it('W1: 방문 수령 + 30분 뒤(시간대 무관) + 계약완료 + 비밀번호 → 수령 안내 대상', async () => {
     const id = await newReservation()
     const t = kstAfter(30)
-    await setup(id, { status: 'confirmed', pickup_method: 'visit', start_date: t.date, end_date: t.date, pickup_time: t.time, locker_password: '123456' })
+    await setup(id, { status: 'confirmed', pickup_method: 'visit', start_date: t.date, end_date: t.date, pickup_time: t.time, locker_password: '123456', locker_number: '7' })
     const got = await claimedIds()
-    expect(got.some(r => r.reservation_id === id && r.leg === 'pickup')).toBe(true)
+    const hit = got.find(r => r.reservation_id === id && r.leg === 'pickup')
+    expect(hit).toBeTruthy()
+    expect(hit?.locker_number).toBe('7')
   })
 
   it('W2: 퀵서비스 수령도 대상', async () => {

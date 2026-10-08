@@ -60,13 +60,13 @@ async function hold(s: { client: SupabaseClient; productId: string; reservationI
   return row.reservation_id
 }
 
-async function lockerOf(id: number): Promise<{ locker_password: string | null; locker_guide_sent_pickup_at: string | null }> {
-  const { data } = await admin.from('rental_reservations').select('locker_password, locker_guide_sent_pickup_at').eq('id', id).single()
-  return data as { locker_password: string | null; locker_guide_sent_pickup_at: string | null }
+async function lockerOf(id: number): Promise<{ locker_password: string | null; locker_number: string | null; locker_guide_sent_pickup_at: string | null }> {
+  const { data } = await admin.from('rental_reservations').select('locker_password, locker_number, locker_guide_sent_pickup_at').eq('id', id).single()
+  return data as { locker_password: string | null; locker_number: string | null; locker_guide_sent_pickup_at: string | null }
 }
 
 async function savePw(id: number, pw: string | null): Promise<void> {
-  const { error } = await admin.from('rental_reservations').update({ locker_password: pw, locker_guide_sent_pickup_at: pw ? new Date().toISOString() : null }).eq('id', id)
+  const { error } = await admin.from('rental_reservations').update({ locker_password: pw, locker_number: pw ? '3' : null, locker_guide_sent_pickup_at: pw ? new Date().toISOString() : null }).eq('id', id)
   if (error) throw new Error(error.message)
 }
 
@@ -78,6 +78,7 @@ describe('무인보관함 비밀번호 폐기 (Migration 673)', () => {
     await admin.from('rental_reservations').update({ status: 'cancelled' }).eq('id', id)
     const r = await lockerOf(id)
     expect(r.locker_password).toBeNull()
+    expect(r.locker_number).toBeNull()
     expect(r.locker_guide_sent_pickup_at).toBeNull()
   })
 
@@ -102,6 +103,7 @@ describe('무인보관함 비밀번호 폐기 (Migration 673)', () => {
     expect(rErr).toBeNull()
     expect((await lockerOf(a)).locker_password).toBeNull()
     expect((await lockerOf(b)).locker_password).toBeNull()
+    expect((await lockerOf(b)).locker_number).toBeNull()
   })
 
   it('D4: 계약이 발송된 적 없거나 취소가 아닌 변경에서는 유지된다(hold·confirmed 입력 가능)', async () => {
