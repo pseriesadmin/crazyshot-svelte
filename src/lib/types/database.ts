@@ -285,6 +285,7 @@ export interface RentalReservation {
   courier_code: string | null;
   tracking_number: string | null;
   locker_password: string | null;
+  locker_number?: string | null;     // 무인함 번호(Migration 678) — 비밀번호와 함께 저장·안내
   locker_guide_sent_pickup_at: string | null;
   locker_guide_sent_return_at: string | null;
   payment_confirmed_at: string | null; // 결제 확인 시각 — confirmed 전환 게이팅(계약서명과 AND)에 사용,

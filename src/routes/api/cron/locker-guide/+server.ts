@@ -14,6 +14,7 @@ interface ClaimedLockerGuide {
   leg: 'pickup' | 'return'
   phone: string | null
   password: string | null
+  locker_number: string | null
   product_name: string | null
 }
 
@@ -66,7 +67,7 @@ export const GET: RequestHandler = async ({ request }) => {
         const canSms = !!(row.phone && row.password)
         if (canSms) {
           try {
-            await sendSms(row.phone as string, buildLockerGuideSms(row.product_name, row.password as string))
+            await sendSms(row.phone as string, buildLockerGuideSms(row.product_name, row.locker_number, row.password as string))
           } catch (smsErr) {
             toRelease.push({ reservationId: row.reservation_id, leg: row.leg })
             throw smsErr

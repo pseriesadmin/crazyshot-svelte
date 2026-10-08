@@ -3,7 +3,7 @@
  *
  * 실제 고객 번호가 아니라 회사 테스트폰(SMS_TEST_PHONE, 미설정 시 Solapi에 등록된 회사 발신번호 SMS_SENDER_PHONE)으로
  * 자동 발송과 같은 문구를 실제로 보낸다. 고객에게는 아무것도 가지 않는다.
- * 본문: 요청 본문의 locker_password(입력 중인 값) → 없으면 저장된 값. 숫자 4~10자리.
+ * 본문: 요청 본문의 locker_number·locker_password(입력 중인 값) → 없으면 저장된 값. 무인함 번호 1~10자 + 비밀번호 4~10자(둘 다 숫자·특수문자만, 둘 다 필수).
  * 응답: { message, sent_at, to_masked } — 화면이 발송 문구와 시각을 그대로 보여준다.
  */
 import { json } from '@sveltejs/kit'
@@ -16,9 +16,9 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { sendSms, buildLockerGuideSms } from '$lib/server/sms'
+import { isValidLockerNumber, isValidLockerPassword, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
-const PASSWORD_RE = /^\d{4,10}$/
 
 // 문자 비용 남용 방지 — 같은 예약은 10초에 1회만(서버 인스턴스 단위 간이 제한, 더블클릭·연타 차단용)
 const COOLDOWN_MS = 10_000
@@ -40,9 +40,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) return json({ error: '유효하지 않은 예약 ID입니다.' }, { status: 400 })
 
-  let body: { locker_password?: string | null } = {}
+  let body: { locker_password?: string | null; locker_number?: string | null } = {}
   try {
-    body = await request.json() as { locker_password?: string | null }
+    body = await request.json() as { locker_password?: string | null; locker_number?: string | null }
   } catch {
     body = {}
   }
@@ -50,7 +50,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const { data: row, error: rowErr } = await admin
     .from('rental_reservations')
-    .select('locker_password, status, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+    .select('locker_password, locker_number, status, products!rental_reservations_product_id_fkey(name, parent_product_id)')
     .eq('id', reservationId)
     .maybeSingle()
   if (rowErr || !row) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
@@ -64,8 +64,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const typed = (body.locker_password ?? '').toString().trim()
   const password = typed || ((row as { locker_password: string | null }).locker_password ?? '')
-  if (!password) return json({ error: '발송할 비밀번호가 없습니다. 비밀번호를 입력해 주세요.' }, { status: 400 })
-  if (!PASSWORD_RE.test(password)) return json({ error: '보관함 비밀번호는 숫자 4~10자리이어야 합니다.' }, { status: 400 })
+  const typedNo = (body.locker_number ?? '').toString().trim()
+  const lockerNumber = typedNo || ((row as { locker_number: string | null }).locker_number ?? '')
+  if (!password || !lockerNumber) return json({ error: '무인함 번호와 비밀번호를 모두 입력해 주세요.' }, { status: 400 })
+  if (!isValidLockerPassword(password)) return json({ error: LOCKER_PASSWORD_ERROR }, { status: 400 })
+  if (!isValidLockerNumber(lockerNumber)) return json({ error: LOCKER_NUMBER_ERROR }, { status: 400 })
 
   // sendSms는 Solapi 키 미설정 시 조용히 건너뛴다 — "보냈다"고 거짓 보고하지 않도록 먼저 확인
   if (!env.SOLAPI_API_KEY || !env.SOLAPI_API_SECRET || !env.SMS_SENDER_PHONE) {
@@ -82,7 +85,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const emb = (row as unknown as { products: { name?: string } | { name?: string }[] | null }).products
   const productName = (Array.isArray(emb) ? emb[0]?.name : emb?.name) ?? null
-  const message = buildLockerGuideSms(productName, password)
+  const message = buildLockerGuideSms(productName, lockerNumber, password)
 
   try {
     await sendSms(testPhone, message)

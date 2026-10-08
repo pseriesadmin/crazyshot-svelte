@@ -16,6 +16,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { isValidLockerNumber, isValidLockerPassword, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -32,14 +33,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const { data, error: resErr } = await admin
     .from('rental_reservations')
-    .select('locker_password')
+    .select('locker_password, locker_number')
     .eq('id', reservationId)
     .maybeSingle()
 
   if (resErr || !data) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
-  const r = data as { locker_password: string | null }
-  return json({ locker_password: r.locker_password ?? null })
+  const r = data as { locker_password: string | null; locker_number: string | null }
+  return json({ locker_password: r.locker_password ?? null, locker_number: r.locker_number ?? null })
 }
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -54,13 +55,23 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) throw error(400, '유효하지 않은 예약 ID입니다.')
 
-  const body = await request.json() as { locker_password?: string | null }
+  const body = await request.json() as { locker_password?: string | null; locker_number?: string | null }
   const lockerPassword = (body.locker_password ?? '').trim() || null
+  const lockerNumber = (body.locker_number ?? '').trim() || null
 
-  // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (숫자 4~10자리)
+  // 무인함 번호와 비밀번호는 둘 다 입력하거나 둘 다 비워야 한다(둘 다 필수 — 둘 다 비우면 삭제)
+  if ((lockerPassword === null) !== (lockerNumber === null)) {
+    throw error(400, '무인함 번호와 비밀번호를 모두 입력해 주세요.')
+  }
+  // 무인함 번호 형식: 1~10자, 숫자·특수문자만
+  if (lockerNumber !== null && !isValidLockerNumber(lockerNumber)) {
+    throw error(400, LOCKER_NUMBER_ERROR)
+  }
+
+  // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (4~10자, 숫자·특수문자만 — 2026-10-08 영문·한글 불가로 변경)
   if (lockerPassword !== null) {
-    if (!/^\d{4,10}$/.test(lockerPassword)) {
-      throw error(400, '보관함 비밀번호는 숫자 4~10자리이어야 합니다.')
+    if (!isValidLockerPassword(lockerPassword)) {
+      throw error(400, LOCKER_PASSWORD_ERROR)
     }
   }
 
@@ -71,6 +82,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   ) => Promise<{ data: unknown; error: { message: string } | null }>)('update_reservation_locker_password', {
     p_reservation_id: reservationId,
     p_password:       lockerPassword,
+    p_locker_number:  lockerNumber,
   })
 
   if (rpcErr) {
@@ -80,5 +92,5 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     throw error(500, '비밀번호 저장 중 오류가 발생했습니다.')
   }
 
-  return json({ success: true, locker_password: lockerPassword })
+  return json({ success: true, locker_password: lockerPassword, locker_number: lockerNumber })
 }

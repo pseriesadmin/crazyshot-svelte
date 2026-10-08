@@ -2,6 +2,7 @@
   import { enhance } from '$app/forms'
   import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import { sanitizeLockerInput } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
@@ -1523,6 +1524,7 @@
   // ── 무인보관함 비밀번호 (lazy-fetch, rental 탭 오픈 시 조회, manager 이상만) ──────────
   let lockerPwFetchedForId = $state<number | null>(null)
   let lockerPassword       = $state('')
+  let lockerNumber         = $state('')   // 무인함 번호(Migration 678) — 비밀번호와 함께 필수
   let lockerPwLoading      = $state(false)
   let lockerPwSaving       = $state(false)
   let lockerPwError        = $state<string | null>(null)
@@ -1536,14 +1538,16 @@
     const id = row.reservation_id
     lockerPwFetchedForId = id
     lockerPassword       = ''
+    lockerNumber         = ''
     lockerPwError        = null
     lockerPwLoading      = true
 
     fetch(`/api/cms/reservations/${id}/locker-password`)
       .then(r => r.json())
-      .then((d: { locker_password: string | null }) => {
+      .then((d: { locker_password: string | null; locker_number?: string | null }) => {
         if (lockerPwFetchedForId === id) {
           lockerPassword  = d.locker_password ?? ''
+          lockerNumber    = d.locker_number ?? ''
           lockerPwLoading = false
         }
       })
@@ -1562,7 +1566,7 @@
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password`, {
         method:  'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ locker_password: lockerPassword || null }),
+        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null }),
       })
       if (!res.ok) {
         // SvelteKit error()는 {message}로, json({error})는 {error}로 응답 — 둘 다 읽어 실제 사유(예: 숫자 4~6자리)를 보여준다
@@ -1592,7 +1596,7 @@
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password/test-send`, {
         method:  'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ locker_password: lockerPassword || null }),
+        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null }),
       })
       const d = await res.json().catch(() => ({})) as { error?: string; message?: string; sent_at?: string; to_masked?: string }
       if (!res.ok || !d.message || !d.sent_at) {
@@ -2260,7 +2264,8 @@
         </div>
       </div>
 
-      <!-- 대여 방법 -->
+      <!-- 대여 방법 — 제목 + 박스를 하나의 그룹으로 묶음(레이아웃 그룹핑만, 스타일 변경 없음, 2026-10-08) -->
+      <div class="rental-method-group">
       <div class="section-title">대여 방법</div>
       <div class="info-section">
         <div class="info-row">
@@ -2282,12 +2287,15 @@
           <span class="info-value">{formatDate(row.rental_end)}{row.return_time ? ' ' + row.return_time : ''}</span>
         </div>
       </div>
+      </div>
 
       <!-- 무인보관함 비밀번호 — 방문대여(visit)+영업외시간(23:00~08:59) 조합일 때만, manager 이상 전용
            (rental-lifecycle.md·service-operations.md 정책 참고 — 2026-08-20 신설) -->
       {#if showLockerPasswordField}
+        <!-- 제목 줄 + 입력 박스(+ 시범 발송 결과)를 하나의 그룹으로 묶음(레이아웃 그룹핑만 — 스타일 변경 없음, 2026-10-08) -->
+        <div class="locker-group">
         <div class="section-title-row">
-          <span class="section-title">무인보관함 비밀번호</span>
+          <span class="section-title">무인보관함 배정정보</span>
           <div class="section-title-btns">
             {#if lockerPwError}
               <span class="tracking-error-msg">{lockerPwError}</span>
@@ -2296,8 +2304,8 @@
               type="button"
               class="btn-tracking-save btn-tracking-save--sm"
               onclick={saveLockerPassword}
-              disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || lockerPwLoading}
-            >{lockerPwSaving ? '저장 중...' : '비밀번호 확정'}</button>
+              disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || !lockerNumber.trim() || lockerPwLoading}
+            >{lockerPwSaving ? '저장 중...' : '배정 확정'}</button>
           </div>
         </div>
         {#if lockerPwLoading}
@@ -2305,12 +2313,25 @@
         {:else}
           <div class="info-section">
             <div class="info-row">
-              <span class="info-label">비밀번호</span>
+              <span class="info-label">무인함 정보</span>
               <input
-                class="tracking-input"
+                class="tracking-input locker-input locker-no-input"
+                type="text"
+                placeholder="무인함 번호 입력"
+                maxlength="10"
+                value={lockerNumber}
+                oninput={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
+                oncompositionend={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
+                disabled={lockerPwClosed}
+              />
+              <input
+                class="tracking-input locker-input"
                 type="text"
                 placeholder="무인보관함 비밀번호 입력"
-                bind:value={lockerPassword}
+                maxlength="10"
+                value={lockerPassword}
+                oninput={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
+                oncompositionend={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
                 disabled={lockerPwClosed}
               />
               <button
@@ -2334,6 +2355,7 @@
             </div>
           {/if}
         {/if}
+        </div>
       {/if}
 
       <!-- 운송장/배송 정보 + 상태 액션 + 알림 발송 — 하나의 그룹으로 묶음 (2026-08-25 Stephen 요청) -->
@@ -2452,6 +2474,8 @@
         {/if}
       {:else}
         <!-- ── 일반 수동 운송장 입력 뷰 (quick/epost/locker/visit 등) ────── -->
+        <!-- 제목 줄 + 입력 박스(+ 오류 문구)를 하나의 그룹으로 묶음(레이아웃 그룹핑만 — 스타일 변경 없음, 2026-10-08) -->
+        <div class="tracking-group">
         <div class="section-title-row">
           <span class="section-title">운송장 정보</span>
           <div class="section-title-btns">
@@ -2492,6 +2516,7 @@
             </div>
           {/if}
         {/if}
+        </div>
       {/if}
 
       <!-- 상태 액션 버튼 -->
@@ -3184,6 +3209,10 @@
   .section-title-row .section-title { padding: 4px 0 2px; }
   /* 운송장 정보 제목행(저장 버튼 포함)과 아래 입력 박스(.info-section) 사이 분리 여백 — 이 그룹에만 적용 */
   .rental-shipping-group .section-title-row { margin-bottom: 12px; }
+  /* 대여 방법 · 무인보관함 배정정보 · 운송장 정보 그룹 간 세로 여백 공통(20px) — 기본 .panel-body > * + *(10px)보다 우선 */
+  .panel-body > .rental-method-group,
+  .panel-body > .locker-group,
+  .panel-body > .rental-shipping-group { margin-top: 20px; }
 
   .section-title-btns {
     display: flex;
@@ -3861,6 +3890,13 @@
     cursor: pointer;
     transition: background 0.12s;
   }
+  /* 대여 방법 · 무인보관함 배정정보 · 운송장 정보 그룹 간 세로 여백 공통(2026-10-08) */
+  .rental-method-group,
+  .locker-group,
+  .tracking-group { margin-top: 24px; }
+  .locker-no-input { flex: 0 0 130px; }
+  /* 입력 가이드(placeholder) — 강조 없이 본문보다 한 단계 작은 폰트 토큰(12px), 굵기 보통 */
+  .locker-input::placeholder { font: var(--text-pc-script-12); font-weight: 400; }
   .locker-test-result { margin-top: 8px; }
   .locker-test-msg { white-space: pre-wrap; word-break: break-all; }
   .btn-tracking-save:hover:not(:disabled)    { background: var(--crazy-shot-purple-80); }
