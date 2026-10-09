@@ -135,6 +135,8 @@ export interface ChatSession {
   // 동일하게 updated_at과 분리). 세션 목록 시간 표시는 이 값을 우선 사용한다.
   last_message_at: string | null
   closed_at: string | null
+  // 고객이 대화목록을 삭제한 시각(Migration 688) — 고객 화면은 이 시각 이후 메시지만 표시, 관리자 화면은 무관
+  customer_cleared_at?: string | null
   // 조인 데이터 (클라이언트 렌더링용)
   user_name?: string
   user_handle?: string

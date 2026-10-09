@@ -71,6 +71,13 @@
       : null
   )
 
+  // 상품 이미지를 못 불러오는 경우(주소 없음·삭제된 파일·네트워크 오류) — 빈 회색 칸 대신 크레이지샷 엠블럼을 대체 이미지로 표시(2026-10-09, Stephen 지시)
+  let imageFailed = $state(false)
+  $effect(() => {
+    void imageUrl
+    imageFailed = false
+  })
+
   // CTA 버튼 레이블 + 색상 결정
   let ctaLabel = $derived(payload.button_label ?? ctaDefaults(payload.type).label)
   let ctaColor = $derived(payload.button_color ?? ctaDefaults(payload.type).color)
@@ -489,7 +496,7 @@
   <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
   {#if payload.type === 'product_link'}
     <div class="product-link-card">
-      {#if imageUrl}
+      {#if imageUrl && !imageFailed}
         <img
           class="product-img"
           src={imageUrl}
@@ -497,9 +504,13 @@
           width="64"
           height="64"
           loading="lazy"
+          onerror={() => (imageFailed = true)}
         />
       {:else}
-        <div class="product-img product-img--placeholder" aria-hidden="true"></div>
+        <!-- 대체 이미지: 크레이지샷 엠블럼(/crazychat-badge.svg와 같은 원형 마크) -->
+        <div class="product-img product-img--placeholder" aria-hidden="true">
+          <img class="product-img-emblem" src="/crazychat-badge.svg" alt="" width="40" height="40" />
+        </div>
       {/if}
       <div class="product-meta">
         <p class="product-link-badge">상품 안내</p>
@@ -540,7 +551,7 @@
   <!-- 상품 정보 행 (이미지 + 메타) -->
   {:else if payload.product_name || imageUrl}
     <div class="product-row">
-      {#if imageUrl}
+      {#if imageUrl && !imageFailed}
         <img
           class="product-img"
           src={imageUrl}
@@ -548,9 +559,13 @@
           width="64"
           height="64"
           loading="lazy"
+          onerror={() => (imageFailed = true)}
         />
       {:else}
-        <div class="product-img product-img--placeholder" aria-hidden="true"></div>
+        <!-- 대체 이미지: 크레이지샷 엠블럼(/crazychat-badge.svg와 같은 원형 마크) -->
+        <div class="product-img product-img--placeholder" aria-hidden="true">
+          <img class="product-img-emblem" src="/crazychat-badge.svg" alt="" width="40" height="40" />
+        </div>
       {/if}
       <div class="product-meta">
         <!-- 통합 예약승인 카드(Migration 275) — 체크아웃 배치로 2건 이상 동시 승인된 경우
@@ -738,6 +753,17 @@
   .product-img--placeholder {
     background: var(--cs-lilac);
     border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 대체 이미지(엠블럼) — 64px 칸 안에 40px */
+  .product-img-emblem {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    display: block;
   }
 
   .product-meta {
@@ -824,6 +850,20 @@
     cursor: pointer;
     transition: filter 0.15s;
     margin-top: 5px;
+  }
+
+  /* 모바일(<640px) — 2026-10-09(Stephen 지시): 사용자 화면 버튼 반경 30px(--radius-xl, front-uiux.md §5)로 더 둥글게, 글자 토큰 한 단계 작게
+     (16px Bold → --text-m-script-14B 14px Bold). 높이 44px(min-height)는 그대로 */
+  @media (max-width: 639px) {
+    .cta-btn {
+      border-radius: var(--radius-xl);
+      font: var(--text-m-script-14B);
+      padding: 4px 8px; /* 기존 5px 10px에서 가로·세로 20% 축소(2026-10-09 Stephen 지시) */
+      /* 버튼 높이 44px → 35px(20% 축소, Stephen 지시 "20% 더 줄여") — 높이를 정하는 건 min-height라 padding 축소만으로는 보이는 변화가 없었음.
+         ⚠️ 모바일 터치 기준 44px 미달(Stephen 확정 예외). 글자 줄높이 200%(28px)면 최소 높이가 36px가 돼 35px에 못 미치므로 1.5로 낮춘다 */
+      min-height: 35px;
+      line-height: 1.5;
+    }
   }
 
   .cta-btn:hover:not(:disabled) {

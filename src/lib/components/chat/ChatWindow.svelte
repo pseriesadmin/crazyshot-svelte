@@ -17,6 +17,7 @@
     deleteMessage,
     subscribeToChatMessages,
     markMessagesRead,
+    clearMyChatHistory,
   } from '$lib/services/chatService'
   import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead, markMessageSendFailed } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
@@ -139,7 +140,7 @@
     }
 
     // 기존 메시지 로드 (2026-08-15: 전체 히스토리 무조건 로드 → 최근 20개만 우선 로드로 변경)
-    const { messages: hist, hasMore } = await loadMessages(existing.id)
+    const { messages: hist, hasMore } = await loadMessages(existing.id, { clearedAt: existing.customer_cleared_at })
     setMessages(hist)
     chatStore.hasMoreOlderMessages = hasMore
 
@@ -181,13 +182,22 @@
 
     chatStore.isLoadingOlderMessages = true
     try {
-      const { messages: older, hasMore } = await loadMessages(sid, { beforeCreatedAt: oldest.created_at })
+      const { messages: older, hasMore } = await loadMessages(sid, { beforeCreatedAt: oldest.created_at, clearedAt: session?.customer_cleared_at })
       if (session?.id !== sid) return // 로딩 중 세션이 바뀌었으면 결과 버림(stale)
       prependMessages(older)
       chatStore.hasMoreOlderMessages = hasMore
     } finally {
       chatStore.isLoadingOlderMessages = false
     }
+  }
+
+  // 내 대화목록 삭제 — 고객 화면에서만 숨기고(관리자 상담 히스토리 보존) 이후 새 메시지는 같은 세션에 이어서 쌓인다
+  async function handleClearHistory(): Promise<void> {
+    const { error } = await clearMyChatHistory()
+    if (error) throw new Error(error)
+    if (session) session = { ...session, customer_cleared_at: new Date().toISOString() }
+    setMessages([])
+    chatStore.hasMoreOlderMessages = false
   }
 
   // ── 메시지 전송 ──
@@ -315,6 +325,10 @@
     if (!error) removeMessage(messageId)
   }
 
+  // 모바일: 헤더·입력 영역이 대화 목록 위에 반투명하게 덮인다(2026-10-09, Stephen 지시) — 목록이 그 뒤로 지나가도록 목록 위·아래 여백을 두 영역의 실제 높이로 맞춘다
+  let overlayTopH = $state(0)
+  let overlayBottomH = $state(0)
+
   // ── 액션 카드 핸들러 ──
   function handleAction(payload: ActionPayload) {
     void payload
@@ -322,9 +336,15 @@
 </script>
 
 <!-- Figma node 2497:8691: bg #E1DEF3, border-radius 30px, flex-col -->
-<div class="chat-window">
-  <!-- 헤더 -->
-  <ChatHeader {userId} {userName} userHandle={displayHandle} {guestMode} onGuestInfo={setGuestInfo} {onclose} />
+<div
+  class="chat-window"
+  style:--chat-overlay-top={overlayTopH ? `${overlayTopH}px` : undefined}
+  style:--chat-overlay-bottom={overlayBottomH ? `${overlayBottomH}px` : undefined}
+>
+  <!-- 헤더 (모바일: 대화 목록 위에 겹치는 반투명 영역 / PC: display: contents로 기존 배치 그대로) -->
+  <div class="overlay-top" bind:clientHeight={overlayTopH}>
+    <ChatHeader {userId} {userName} userHandle={displayHandle} {guestMode} onGuestInfo={setGuestInfo} {onclose} onclear={handleClearHistory} />
+  </div>
 
   <!-- 메시지 목록 -->
   {#if isLoading}
@@ -352,20 +372,23 @@
     />
   {/if}
 
-  <!-- 입력 바 -->
-  <ChatInput
-    disabled={isSending || isLoading || isUploading || !session}
-    placeholder={isUploading ? '업로드 중...' : isSending ? '응답 중...' : '메시지를 입력하세요...'}
-    onsend={handleSend}
-    onattach={handleAttach}
-    oninputstart={setGuestInfo}
-  />
+  <!-- 입력 바 (모바일: 대화 목록 위에 겹치는 반투명 영역) -->
+  <div class="overlay-bottom" bind:clientHeight={overlayBottomH}>
+    <ChatInput
+      disabled={isSending || isLoading || isUploading || !session}
+      placeholder={isUploading ? '업로드 중...' : isSending ? '응답 중...' : '메시지를 입력하세요...'}
+      onsend={handleSend}
+      onattach={handleAttach}
+      oninputstart={setGuestInfo}
+    />
+  </div>
 </div>
 
 <style>
   /* Figma node 2497:8691 — 00-1.chat: px-20 py-30 gap-30 */
   .chat-window {
-    background: #e1def3; /* Figma: purple-op-10% — CSS 변수 미등록 색상 */
+    --chat-bg: #e1def3; /* 아래 오버레이 영역과 같은 색을 공유 */
+    background: var(--chat-bg); /* Figma: purple-op-10% — CSS 변수 미등록 색상 */
     border-radius: var(--radius-xl); /* 30px */
     display: flex;
     flex-direction: column;
@@ -375,6 +398,35 @@
     width: 100%;
     height: 100%;
     box-sizing: border-box;
+  }
+
+  /* PC·기본: 래퍼는 레이아웃에 참여하지 않는다(기존 배치 그대로) */
+  .overlay-top,
+  .overlay-bottom {
+    display: contents;
+  }
+
+  /* 모바일(<640px) — 헤더·입력 영역을 대화 목록 위에 겹치고 배경을 50% 알파로 덮어, 대화 목록이 그 뒤로 지나가는 모습이 비쳐 보이게 한다.
+     목록 자체는 시트 전체 높이를 쓰고, 위·아래 여백(--chat-overlay-top/bottom)으로 처음/마지막 말풍선이 영역에 가리지 않게 한다. */
+  @media (max-width: 639px) {
+    .chat-window {
+      position: relative;
+      padding: 0;
+      gap: 0;
+    }
+    .overlay-top,
+    .overlay-bottom {
+      display: block;
+      position: absolute;
+      left: 0;
+      right: 0;
+      z-index: 3;
+      padding: 20px;
+      box-sizing: border-box;
+      background: color-mix(in srgb, var(--chat-bg) 50%, transparent);
+    }
+    .overlay-top { top: 0; }
+    .overlay-bottom { bottom: 0; }
   }
 
   /* 로딩 닷 애니메이션 */
