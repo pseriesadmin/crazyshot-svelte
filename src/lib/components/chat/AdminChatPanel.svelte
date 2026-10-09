@@ -643,7 +643,11 @@
     customerSummary = null
     fetch(`/api/cms/customers/${uid}/summary`)
       .then((r) => r.ok ? r.json() : null)
-      .then((d: CustomerSummary | null) => { customerSummary = d })
+      .then((d: CustomerSummary | null) => {
+        customerSummary = d
+        // 블랙리스트 고객 대화를 열 때 한 번 경고(같은 고객을 연속으로 다시 열어도 세션 전환마다 1회)
+        if (d?.blacklisted) csToast.warning('블랙리스트 고객입니다. 예약 승인·계약·혜택 안내 전에 확인해 주세요.')
+      })
       .catch(() => { customerSummary = null })
   })
 
@@ -1249,6 +1253,9 @@
                 <span class="sc-name">{sessionLabel(session)}</span>
                 {#if session.is_urgent}
                   <span class="urgent-badge">긴급</span>
+                {/if}
+                {#if session.user_blacklisted}
+                  <span class="blacklist-badge" title="블랙리스트 고객">블랙리스트</span>
                 {/if}
                 {#if session.last_message_sender === 'user' || session.last_message_sender === 'ai'}
                   <span class="msg-dir-badge msg-dir-in" aria-label="수신">
@@ -1965,6 +1972,17 @@
     font: var(--text-m-script-12);
     color: var(--cs-text-light);
     flex-shrink: 0;
+  }
+  /* 블랙리스트 경고 배지 — 긴급 배지와 구분되는 연한 레드 면(CustomerDetailPanel .badge-danger와 같은 색 언어) */
+  .blacklist-badge {
+    background: var(--cs-red-xlight);
+    color: var(--cs-red-badge);
+    border-radius: var(--radius-full);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    line-height: 1.5;
   }
   .urgent-badge {
     background: var(--cs-red-badge);
