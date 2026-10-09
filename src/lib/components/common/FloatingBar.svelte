@@ -3,6 +3,7 @@
 	import ChatBottomSheet from '$lib/components/chat/ChatBottomSheet.svelte'
 	import { chatStore, toggleChat } from '$lib/stores/chat.svelte'
 	import { page } from '$app/state'
+	import { goto, preloadData } from '$app/navigation'
 
 	interface Props {
 		userId?: string
@@ -27,7 +28,7 @@
 		if (!peekMode) return
 		peekMode = false
 		bubbling = true
-		setTimeout(() => { bubbling = false }, 700)
+		setTimeout(() => { bubbling = false }, 1100)
 	}
 
 	/** 모바일(<640px) peek 중 버튼 1-touch: 펼침 + 실행(제안 A, 2026-09-28) */
@@ -42,16 +43,39 @@
 		expandFromPeek()
 	}
 
+	/** 터치하면 펼침을 시작하고 곧바로 이동한다(지연 없음).
+	 *  2026-10-09: 펼침이 끝나길 기다린 뒤 이동하는 방식(400ms 지연)은 장바구니 도착까지 체감 대기가 길어 폐기(Stephen 지시).
+	 *  전체 새로고침(window.location.href) 대신 앱 내부 이동(goto)을 써서, 다음 화면이 준비되는 동안 현재 화면의 펼침 모션이
+	 *  끊기지 않고 이어지게만 한다 — 이동 시점은 늦추지 않는다. */
+	let navigating = false
+
+	async function goAfterExpand(href: string): Promise<void> {
+		if (navigating) return
+		navigating = true
+		try {
+			beforeFabAction()
+			await goto(href)
+		} catch {
+			window.location.href = href
+		} finally {
+			navigating = false
+		}
+	}
+
+	/** 손가락이 닿는 순간(손을 떼기 전) 다음 화면 데이터를 미리 불러오기 시작한다(2026-10-09) — 터치 시작~클릭 사이 시간만큼 도착이 빨라진다.
+	 *  이동 시점은 그대로(클릭 때). 미리 불러오기 실패는 무시(이동 시 다시 불러옴). */
+	function warmUp(href: string): void {
+		void preloadData(href).catch(() => {})
+	}
+
 	function handleCartClick(e: MouseEvent): void {
 		e.stopPropagation()
-		beforeFabAction()
-		window.location.href = '/cart'
+		void goAfterExpand('/cart')
 	}
 
 	function handleSearchClick(e: MouseEvent): void {
 		e.stopPropagation()
-		beforeFabAction()
-		window.location.href = '/products/search'
+		void goAfterExpand('/products/search')
 	}
 
 	function handleChatClose() {
@@ -81,10 +105,12 @@
 	role="group"
 	aria-label="빠른 메뉴"
 >
-	<!-- 장바구니 -->
+	<!-- 장바구니 (순차 모션 1번째) -->
+	<div class="fab-item fab-item-center" style="--i: 0">
 	<button
 		class="fab-btn"
 		aria-label="장바구니"
+		onpointerdown={() => warmUp('/cart')}
 		onclick={handleCartClick}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 35 35" fill="none" aria-hidden="true">
@@ -93,11 +119,14 @@
 			<path d="M17.9562 9.10156C18.8942 9.10156 19.9275 9.43248 20.7423 10.1455C21.5869 10.8847 22.1417 11.9887 22.1417 13.3877V15.4326C22.1417 16.1229 21.582 16.6826 20.8917 16.6826C20.2447 16.6823 19.7125 16.1908 19.6486 15.5605L19.6417 15.4326V13.3877C19.6417 12.6973 19.3889 12.2829 19.0958 12.0264C18.7731 11.7441 18.3385 11.6016 17.9562 11.6016C17.5738 11.6017 17.1392 11.7441 16.8165 12.0264C16.5235 12.2829 16.2706 12.6975 16.2706 13.3877V15.4326C16.2706 16.1229 15.711 16.6826 15.0206 16.6826C14.3304 16.6825 13.7707 16.1228 13.7706 15.4326V13.3877C13.7706 11.9888 14.3256 10.8847 15.17 10.1455C15.9848 9.43242 17.0182 9.10166 17.9562 9.10156Z" fill="white"/>
 		</svg>
 	</button>
+	</div>
 
-	<!-- 검색 -->
+	<!-- 검색 (순차 모션 2번째) -->
+	<div class="fab-item fab-item-center" style="--i: 1">
 	<button
 		class="fab-btn"
 		aria-label="검색"
+		onpointerdown={() => warmUp('/products/search')}
 		onclick={handleSearchClick}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70" fill="none" aria-hidden="true">
@@ -106,9 +135,10 @@
 			<path d="M31.4945 18.2146C34.6406 17.698 37.8709 18.119 40.7761 19.4242C43.6815 20.7299 46.1337 22.8617 47.8191 25.5496C49.5042 28.2375 50.3485 31.362 50.2458 34.5265C50.199 35.9598 48.9909 37.0846 47.5471 37.0391C46.1027 36.9929 44.9697 35.792 45.0162 34.358C45.0854 32.221 44.5144 30.1109 43.3766 28.2956C42.2382 26.4801 40.5816 25.0392 38.6193 24.1573C36.6569 23.2756 34.4742 22.9925 32.3491 23.3414C30.2237 23.6906 28.2498 24.6575 26.6779 26.1199C25.1061 27.5824 24.0059 29.4743 23.5173 31.5572C23.0287 33.6403 23.1729 35.821 23.9323 37.8225C24.6917 39.824 26.0325 41.5578 27.7839 42.8032C29.5351 44.0481 31.6193 44.7509 33.772 44.8206C35.216 44.8678 36.35 46.068 36.3029 47.5017C36.2554 48.935 35.046 50.0585 33.6023 50.0123C30.4147 49.9093 27.3286 48.8703 24.7357 47.0268C22.1429 45.1831 20.1582 42.6162 19.0339 39.6532C17.91 36.6904 17.6974 33.4635 18.4206 30.38C19.1439 27.2962 20.7711 24.4939 23.0982 22.3286C25.4253 20.1635 28.348 18.7316 31.4945 18.2146Z" fill="white"/>
 		</svg>
 	</button>
+	</div>
 
-	<!-- 채팅 FAB -->
-	<div>
+	<!-- 채팅 FAB (순차 모션 3번째) -->
+	<div class="fab-item" style="--i: 2">
 		<FloatingButton
 			{userId}
 			{userName}
@@ -186,23 +216,31 @@
 	 * 감쇠율 45~50%·오버슈트 비율(+13%/-8%/+1.7%)은 표준 그대로 유지, 9단계로 세분화 */
 	@media (max-width: 639px) {
 		/* iOS Safari: transform 애니메이션(forwards)이 걸린 fixed 요소가 스크롤 중 간헐적으로 사라지는 렌더링 버그 예방 —
-		   전용 합성 레이어 승격(GNB의 translateZ(0) 처리와 같은 목적). 모바일은 이미 transform이 항상 걸려 있어
-		   fixed 자손의 containing block 동작은 달라지지 않는다(PC에는 적용하지 않음). */
+		   전용 합성 레이어 승격(GNB의 translateZ(0) 처리와 같은 목적). PC에는 적용하지 않음. */
 		.fab-bar {
 			will-change: transform;
 			-webkit-backface-visibility: hidden;
 			backface-visibility: hidden;
+			/* 2026-10-09: 막대 전체가 아니라 아이콘 3개가 각자 움직인다(순차 모션) — 막대 자체의 투명 영역이 페이지 터치를 막지 않도록 */
+			pointer-events: none;
 		}
-		.fab-bar:not(.peek) {
-			animation: fab-bar-pop-out 0.5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+		.fab-item { pointer-events: auto; }
+
+		/* 순차 모션(2026-10-09, Stephen 지시): 장바구니 → 검색 → 채팅 순으로 감춤·노출. 아이콘마다 --i × 50ms 지연.
+		   길이는 기존의 1.5배(팝아웃 0.5s→0.75s, 감춤 0.22s→0.33s), 감쇠 스프링·오버슈트 곡선은 그대로.
+		   지연 동안 시작 위치에 머물도록 fill-mode both(끝 위치 = 정지 상태와 같아 되돌림 없음). */
+		.fab-bar.peek .fab-item {
+			transform: translateX(59.5px);           /* 정지: peek(기존 막대 85% 이동량과 동일) */
+			animation: fab-bar-peek-in 0.33s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+			animation-delay: calc(var(--i) * 50ms);
 		}
-		.fab-bar.peek {
-			transform: translateX(85%);
-			animation: fab-bar-peek-in 0.22s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+		.fab-bar:not(.peek) .fab-item {
+			animation: fab-bar-pop-out 0.75s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+			animation-delay: calc(var(--i) * 50ms);
 		}
 
 		@keyframes fab-bar-pop-out {
-			0%   { transform: translateX(59.5px); }  /* peek 시작 (85%) */
+			0%   { transform: translateX(59.5px); }  /* peek 시작 */
 			26%  { transform: translateX(-21.7px); } /* 1차 오버슈트, 진폭 대비 약 -37% */
 			43%  { transform: translateX(10.3px); }  /* 직전 대비 약 48% */
 			57%  { transform: translateX(-5.1px); }  /* 49% */
@@ -218,10 +256,10 @@
 			55%  { transform: translateX(67.2px); }  /* +13% 오버슈트 */
 			78%  { transform: translateX(54.8px); }  /* -8%  언더슈트 */
 			92%  { transform: translateX(60.5px); }  /* +1.7% */
-			100% { transform: translateX(85%); }     /* 정지 (59.5px) */
+			100% { transform: translateX(59.5px); }  /* 정지 (peek) */
 		}
 
-		/* 확장 시 버블 애니메이션: 장바구니·검색 + 채팅 FAB 내부 SVG */
+		/* 확장 시 버블 애니메이션: 장바구니·검색 + 채팅 FAB 내부 SVG — 아이콘별 순차 지연에 맞춰 시작, 길이 1.5배(0.32s→0.48s) */
 		@keyframes fab-expand-bubble {
 			0%   { transform: scale(1); }
 			40%  { transform: scale(1.12); }
@@ -231,7 +269,25 @@
 
 		.fab-bar.bubbling .fab-btn svg,
 		.fab-bar.bubbling :global(.fab-btn svg) {
-			animation: fab-expand-bubble 0.32s ease-out;
+			animation: fab-expand-bubble 0.48s ease-out;
+			animation-delay: calc(var(--i, 0) * 50ms);
 		}
+
+		@media (prefers-reduced-motion: reduce) {
+			.fab-bar.peek .fab-item,
+			.fab-bar:not(.peek) .fab-item { animation-duration: 0.01ms; animation-delay: 0s; }
+			.fab-bar.bubbling .fab-btn svg,
+			.fab-bar.bubbling :global(.fab-btn svg) { animation: none; }
+		}
+	}
+
+	/* 장바구니·검색 래퍼 — 기존엔 버튼이 막대 폭(70px)에 맞춰 늘어나 아이콘이 가운데 놓였다(래퍼를 넣어도 같은 배치) */
+	.fab-item-center {
+		display: flex;
+		justify-content: center;
+	}
+	/* 버튼은 래퍼 폭(70px)을 모두 채운다 — 이전처럼 접힘(peek) 상태에서 보이는 띠 전체가 터치 영역이 되게(sp3-qa 지적 반영) */
+	.fab-item-center > .fab-btn {
+		flex: 1;
 	}
 </style>

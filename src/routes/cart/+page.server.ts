@@ -23,55 +23,87 @@ function untypedFrom(sb: SupabaseClient, table: string) {
 export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
 
+  // 2026-10-09(Stephen 지시 — 플로팅 메뉴에서 장바구니 도착이 느림): 아래 공개 설정 조회 8개와 세션 확인은 서로 의존하지 않는데
+  // 하나씩 순서대로 기다려 DB 왕복이 누적(비로그인 기준 0.56~0.76s)되고 있었다 — 동시에 시작해 가장 느린 1건 시간만 걸리게 한다.
+  // 각 결과의 가공·사용은 아래 원래 자리에서 그대로(조회 내용·옵션·결과 처리 변경 없음). 조회 실패 시 data를 무시하던 동작도 동일.
+  const [
+    deliveryOptionsRes,
+    pickupPointsRes,
+    courierClosedDates,
+    guideRes,
+    cutoffGuideRes,
+    consentItemsRes,
+    shippingSettingsRes,
+    discountTiersRes,
+    sessionRes,
+  ] = await Promise.all([
+    supabase
+      .from('rental_method_options')
+      .select('id, method_key, name, deadline_time, return_deadline_time, display_order, is_bulk_delivery, is_courier_dependent, is_delivery_type')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('display_order', { ascending: true }),
+    supabase
+      .from('pickup_points')
+      .select('id, name, address, phone')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true }),
+    loadCourierClosedDates(supabase),
+    untypedFrom(supabase, 'rental_guide_settings')
+      .select('guide_text')
+      .limit(1)
+      .single(),
+    untypedFrom(supabase, 'delivery_cutoff_settings')
+      .select('holiday_guide_text')
+      .limit(1)
+      .single(),
+    untypedFrom(supabase, 'rental_consent_items')
+      .select('id, content, display_order')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('display_order', { ascending: true }),
+    untypedFrom(supabase, 'rental_shipping_settings')
+      .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, locker_guide_text, max_rental_days')
+      .limit(1)
+      .single(),
+    untypedFrom(supabase, 'delivery_fee_discount_tiers')
+      .select('min_rental_amount, condition_types, discount_rate')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('min_rental_amount', { ascending: true }),
+    locals.safeGetSession(),
+  ])
+
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
-  const { data: deliveryOptionsData } = await supabase
-    .from('rental_method_options')
-    .select('id, method_key, name, deadline_time, return_deadline_time, display_order, is_bulk_delivery, is_courier_dependent, is_delivery_type')
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .order('display_order', { ascending: true })
+  const deliveryOptionsData = deliveryOptionsRes.data
   const deliveryOptions = (deliveryOptionsData ?? []) as DeliveryOptionRow[]
 
   // 방문대여 지점 — 세션 불필요, 모든 사용자에게 제공(deliveryOptions와 동일 패턴).
   // 상품별 허용 지점(allowed_pickup_ids) 교집합 필터링은 클라이언트에서 수행(deliveryTabs와 동일 원칙)
-  const { data: pickupPointsData } = await supabase
-    .from('pickup_points')
-    .select('id, name, address, phone')
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: true })
+  const pickupPointsData = pickupPointsRes.data
   const pickupPoints = (pickupPointsData ?? []) as PickupPointRow[]
 
   // 택배 휴무일 캘린더 제어(2026-08-24) — 마스터 토글 OFF면 완전히 스킵(빈 배열),
   // ON이면 활성 토글에 해당하는 휴무일자만 모아 courierClosedDates로 전달.
   // isDeliveryLocked(delivery/crazydelivery) 방식일 때만 클라이언트에서 실제로 적용됨.
-  const courierClosedDates = await loadCourierClosedDates(supabase)
+  // (courierClosedDates는 위 선행 동시 조회에서 이미 확보)
 
   // 공통 대여 안내문(/cms/set/rental "공통 대여 안내문") — 이용안내 모달 내용, 세션 불필요
-  const { data: guideData } = await untypedFrom(supabase, 'rental_guide_settings')
-    .select('guide_text')
-    .limit(1)
-    .single()
+  const guideData = guideRes.data
   const rentalGuideText = (guideData as { guide_text?: string } | null)?.guide_text ?? ''
 
   // 배송 휴무일 안내 스크립트(/cms/set/rental "휴무일 제어 옵션" 하위, 2026-09-16 신설) —
   // 자동연장이 발생했을 때 카트 달력 하단에 노출. rentalGuideText와 동일 패턴(세션 불필요,
   // 독립 조회). loadCourierClosedDates()(휴무일 Set 계산 전용 유틸)의 책임을 넘어서는
   // 확장이라 그 함수에 합치지 않고 여기서 별도 조회한다(싱글톤 행 조회라 비용 무시 가능).
-  const { data: cutoffGuideData } = await untypedFrom(supabase, 'delivery_cutoff_settings')
-    .select('holiday_guide_text')
-    .limit(1)
-    .single()
+  const cutoffGuideData = cutoffGuideRes.data
   const holidayGuideText = (cutoffGuideData as { holiday_guide_text?: string } | null)?.holiday_guide_text ?? ''
 
   // 필수 동의문 항목(/cms/set/rental "필수 동의문 항목") — 체크아웃 진행 전 고객이 개별로
   // 확인·체크해야 하는 항목 목록. 세션 불필요, 공개 조회(rentalGuideText와 동일 패턴).
   // 2026-08-30: 등록 UI만 있고 카트/체크아웃 어디서도 조회되지 않던 공백을 감사로 발견해 연결.
-  const { data: consentItemsData } = await untypedFrom(supabase, 'rental_consent_items')
-    .select('id, content, display_order')
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .order('display_order', { ascending: true })
+  const consentItemsData = consentItemsRes.data
   const consentItems = (consentItemsData ?? []) as Array<{ id: string; content: string; display_order: number }>
 
   // 배송비(왕복/배송/반납요금) — CMS "/cms/set/rental > 배송적용옵션"에서 설정한 전역 요금.
@@ -82,10 +114,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 2026-08-30: CMS에 fee_amount 입력 UI 자체가 없어 항상 0으로 방치되던 죽은 코드 경로를
   // 감사(RSC-C3)로 발견 — rental_method_options의 fee_amount/is_free_for_top_grade select·
   // 사용을 완전히 제거하고 이 테이블(rental_shipping_settings)만으로 배송비를 계산.
-  const { data: shippingSettingsData } = await untypedFrom(supabase, 'rental_shipping_settings')
-    .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, locker_guide_text, max_rental_days')
-    .limit(1)
-    .single()
+  const shippingSettingsData = shippingSettingsRes.data
   const shippingSettings = shippingSettingsData as {
     enable_round_trip: boolean
     round_trip_fee: number | null
@@ -100,18 +129,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대
   // 5개). 세션 무관, 공개 조회(deliveryOptions/shippingSettings와 동일 패턴).
-  const { data: discountTiersData } = await untypedFrom(supabase, 'delivery_fee_discount_tiers')
-    .select('min_rental_amount, condition_types, discount_rate')
-    .eq('is_active', true)
-    .is('deleted_at', null)
-    .order('min_rental_amount', { ascending: true })
+  const discountTiersData = discountTiersRes.data
   const discountTiers = (discountTiersData ?? []) as Array<{
     min_rental_amount: number
     condition_types: Array<'long_term_rental' | 'sale_only_purchase' | 'rental_item'>
     discount_rate: number
   }>
 
-  const { session } = await locals.safeGetSession()
+  const { session } = sessionRes
 
   // 장바구니는 가입 완료 계정만 접근 가능 (2026-08-18) — 비회원·익명세션은 /account와
   // 동일하게 로그인 화면으로 리다이렉트한다. 예약(hold/draft)이 실제로 존재하려면 이미
