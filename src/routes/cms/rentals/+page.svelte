@@ -230,16 +230,17 @@
                 aria-label="{row.customer_name} 대여 상세 보기"
               >
                 <td>
-                  <span class="status-badge" style="background:{st.bg};color:{st.color}">
-                    {STATUS_LABEL[row.status] ?? row.status}
-                  </span>
-                  {#if row.status_mixed}
+                  {#if row.cancel_pending}
+                    <!-- 고객 취소 요청/취소 후 관리자 승인 대기 — 패널 헤더 [예약취소]로 처리(환불은 요청 건에서 이 버튼이 실행) -->
+                    <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
+                  {:else}
+                    <span class="status-badge" style="background:{st.bg};color:{st.color}">
+                      {STATUS_LABEL[row.status] ?? row.status}
+                    </span>
+                  {/if}
+                  {#if row.status_mixed && !row.cancel_pending}
                     <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
                     <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info)">일부 진행</span>
-                  {/if}
-                  {#if row.cancel_pending}
-                    <!-- 고객 취소 후 관리자 취소확인 대기 — 패널 헤더 [예약취소]로 확인 -->
-                    <span class="status-badge" style="background:var(--cs-error);color:var(--cs-white)">예약취소</span>
                   {/if}
                   {#if row.dhero_status}
                     <span class="dhero-mini-badge">{row.dhero_status}</span>

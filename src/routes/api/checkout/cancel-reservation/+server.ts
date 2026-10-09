@@ -3,7 +3,7 @@
  *
  * 고객 셀프 "예약신청취소"
  *   - hold 상태: update_reservation_status(cancelled) — Toss 불필요
- *   - confirmed 상태: cancelReservationWithRefund() — Toss 실환불 + cancel_reservation_payment RPC
+ *   - confirmed 상태(서명+결제 후): 즉시 환불하지 않고 취소 요청 접수(관리자 승인·환불은 CMS [예약취소], 2026-10-09)
  *
  * 취소 가능 조건 (서버가 재계산 — 클라이언트 값 신뢰 금지):
  *   baseEligible = hold || (confirmed + 운송장 미등록)
@@ -18,7 +18,8 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { RequestHandler } from './$types'
-import { cancelReservationWithRefund } from '$lib/server/cancelReservationWithRefund'
+import { submitCancelRequest } from '$lib/server/cancelRequest'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { getCancelKind, worstCancelKind } from '$lib/utils/canCancelReservation'
 import { loadOrderSiblingKinds, ruleFromMethodRow } from '$lib/server/cancelPolicyLoader'
 import { sendReservationLifecyclePush } from '$lib/server/push'
@@ -163,26 +164,29 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     return json({ ok: true })
   }
 
-  // ─── confirmed 상태: Toss 환불 + cancel_reservation_payment RPC ──────
-  const result = await cancelReservationWithRefund({
-    reservationId,
-    callerId: session.user.id,
-    cancelReason: '고객 자가취소(예약신청취소)',
-  })
+  // ─── confirmed 상태(서명+결제 완료): 즉시 환불하지 않고 "취소 요청"으로 접수 ──────
+  // 2026-10-09 정책: 환불·취소는 관리자가 CMS [예약취소]를 실행할 때 처리(관리자 채팅에 취소 요청 카드 발송).
+  const { data: prodRow } = await admin
+    .from('rental_reservations')
+    .select('reservation_code, end_date, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+    .eq('id', reservationId)
+    .maybeSingle()
+  const pr = prodRow as { reservation_code: string | null; end_date: string | null; products: { name: string | null } | null } | null
+  if (pr) await applyParentFieldsToRowProducts([pr], ['name'], admin)
 
-  if (!result.ok) {
-    const statusMap: Record<string, number> = {
-      NOT_FOUND: 404,
-      TOSS_FAILED: 400,
-      RPC_FAILED: 500,
-    }
-    return json(
-      { ok: false, error: result.message },
-      { status: statusMap[result.code] ?? 500 },
-    )
-  }
+  const result = await submitCancelRequest(
+    admin,
+    session.user.id,
+    {
+      id: reservationId,
+      reservation_code: pr?.reservation_code ?? null,
+      productName: pr?.products?.name ?? null,
+      start_date: reservation.start_date,
+      end_date: pr?.end_date ?? null,
+    },
+    orderId ?? null,
+  )
+  if (!result.ok) return json({ ok: false, error: result.error }, { status: 500 })
 
-  await markCustomerCancelled(result.cancelledIds?.length ? result.cancelledIds : [reservationId])
-
-  return json({ ok: true })
+  return json({ ok: true, requested: true })
 }

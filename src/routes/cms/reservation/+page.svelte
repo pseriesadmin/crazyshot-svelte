@@ -271,7 +271,10 @@
                        원래 상태값인 "신청대기" 배지를 더 이상 노출하지 않는다 — 계약 진행
                        배지(서명완료/계약발송) 하나만 보여준다. 신청대기 목록 쪽은 애초에
                        p_exclude_contract_sent=true로 이런 행이 걸러지므로 영향 없음. -->
-                  {#if !(row.status === 'hold' && row.signing_sent_at)}
+                  {#if row.cancel_pending}
+                    <!-- 고객 취소 요청 대기(서명+결제 후 취소 요청) — 패널 헤더 [예약취소] 실행 시 전액 환불·취소 -->
+                    <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
+                  {:else if !(row.status === 'hold' && row.signing_sent_at)}
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
                       {STATUS_LABEL[row.status] ?? row.status}
                     </span>

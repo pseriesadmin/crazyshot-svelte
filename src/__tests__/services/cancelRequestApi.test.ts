@@ -114,12 +114,13 @@ describe('POST /api/checkout/cancel-request', () => {
     expect(mockPush).toHaveBeenCalledTimes(1)
   })
 
-  it('CR-5 ①구간(아직 즉시 취소 가능) → 409 use_cancel, 카드 미발송', async () => {
+  it('CR-5 ①구간(마감 전)도 즉시 환불 없이 취소 요청으로 접수 → 카드 발송 (2026-10-09 통합)', async () => {
     world.reservation = resv({ start_date: '2099-12-31', end_date: '2099-12-31' })
     const res = await call()
-    expect(res.status).toBe(409)
-    expect((await res.json()).code).toBe('use_cancel')
-    expect(world.inserted).toHaveLength(0)
+    expect(res.status).toBe(200)
+    expect((await res.json()).ok).toBe(true)
+    expect(world.inserted).toHaveLength(1)
+    expect(world.updated).toBe(0) // 상태·결제 변경 없음
   })
 
   it('CR-6 hold(신청대기)는 언제든 즉시 취소 가능 → 409', async () => {

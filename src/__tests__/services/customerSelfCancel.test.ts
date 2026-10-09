@@ -104,6 +104,8 @@ vi.mock('$lib/server/push', () => ({
   sendPushToAdmins: vi.fn().mockResolvedValue(undefined),
   sendReservationLifecyclePush: vi.fn().mockResolvedValue(undefined),
 }))
+const mockSubmitCancelRequest = vi.fn().mockResolvedValue({ ok: true })
+vi.mock('$lib/server/cancelRequest', () => ({ submitCancelRequest: (...a: unknown[]) => mockSubmitCancelRequest(...a) }))
 vi.mock('$lib/server/dhero', () => ({
   cancelDelivery: vi.fn().mockResolvedValue(undefined),
   DheroApiError: class extends Error {
@@ -375,11 +377,9 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
     }))
   })
 
-  it('SC-2 confirmed + 배송 + 운송장 미등록 → cancelReservationWithRefund 호출', async () => {
+  it('SC-2 confirmed + 배송 + 운송장 미등록 → 즉시 환불 없이 취소 요청 접수 (2026-10-09: 환불은 관리자 승인 시)', async () => {
     const { POST } = await import('../../routes/api/checkout/cancel-reservation/+server')
     const { cancelReservationWithRefund } = await import('$lib/server/cancelReservationWithRefund')
-    // 주문 전체 취소로 실제 전이된 예약 id(형제 포함)만 "취소중" 표식 대상 — 이전에 관리자가 취소한 형제는 제외
-    vi.mocked(cancelReservationWithRefund).mockResolvedValue({ ok: true, cancelledIds: [42, 43] })
 
     // 예약 조회: confirmed + 배송 + 운송장 없음
     mockMaybeSingle.mockResolvedValueOnce({
@@ -390,20 +390,21 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
     mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
     // rental_method_options: is_delivery_type=true
     mockMaybeSingle.mockResolvedValueOnce({ data: { is_delivery_type: true }, error: null })
+    // 요청 카드용 예약 부가정보
+    mockMaybeSingle.mockResolvedValueOnce({ data: { reservation_code: 'CS2610001', end_date: '2099-12-31', products: { name: 'Sony FX3' } }, error: null })
 
     const res = await POST({
       locals: makeLocals('user-1'),
       request: makeRequest({ reservationId: 42 }),
-    } as never) as { status: number; json: () => Promise<{ ok: boolean }> }
+    } as never) as { status: number; json: () => Promise<{ ok: boolean; requested?: boolean }> }
 
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.ok).toBe(true)
-    expect(cancelReservationWithRefund).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: 42,
-      cancelReason: '고객 자가취소(예약신청취소)',
-    }))
-    expect(mockAdminRpc).toHaveBeenCalledWith('mark_customer_cancelled', { p_reservation_ids: [42, 43] })
+    expect(body.requested).toBe(true)
+    expect(mockSubmitCancelRequest).toHaveBeenCalledTimes(1)
+    expect(cancelReservationWithRefund).not.toHaveBeenCalled()
+    expect(mockAdminRpc).not.toHaveBeenCalledWith('mark_customer_cancelled', expect.anything())
   })
 
   it('SC-4 비배송 + 방문 5시간 이내 → 403 취소불가', async () => {
