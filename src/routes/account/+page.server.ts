@@ -82,28 +82,28 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     ),
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+      .select('id, status, reservation_code, start_date, end_date, created_at:submitted_at, product_id, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
-      .order('created_at', { ascending: false })
+      .order('submitted_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
     // PC 패널용: 대여 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+      .select('id, status, reservation_code, start_date, end_date, created_at:submitted_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
       .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
-      .order('created_at', { ascending: false })
+      .order('submitted_at', { ascending: false })
       .limit(30),
     // PC 패널용: 취소 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, created_at')
+      .select('id, status, reservation_code, start_date, end_date, created_at:submitted_at')
       .eq('user_id', session.user.id)
       .in('status', ['cancelled'])
       // 취소중(고객 취소 후 관리자 확인 전)은 대여 목록에 남아 있다가 확인되면 이 목록으로 이동
       .or('customer_cancelled_at.is.null,cancel_confirmed_at.not.is.null')
-      .order('created_at', { ascending: false })
+      .order('submitted_at', { ascending: false })
       .limit(30),
     // PC 패널용: 빠른 문의 목록
     locals.supabase
