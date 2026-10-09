@@ -26,9 +26,11 @@
           'inquiry'           → PcInquiryPanel — 고객의 빠른문의 답변 목록
           'empty'             → CMS에서 보여줄 화면이 없음 안내 */
     onctamodal?: (info: CtaModalRequest) => void
+    /** 카드와 함께 보낸 안내 문구 — 카드 안에서 CTA 버튼 바로 위에 보여 준다(문구를 읽은 뒤 버튼을 누르는 순서) */
+    script?: string | null
   }
 
-  let { payload, onaction, messageId, isAdmin = false, oncouponapprove, onctamodal }: Props = $props()
+  let { payload, onaction, messageId, isAdmin = false, oncouponapprove, onctamodal, script = null }: Props = $props()
 
   // COUPON_GIFT_CARD 승인 대기 처리
   let approvalStatus = $derived(
@@ -479,6 +481,10 @@
   let ctaDisabled = $derived(isBlocked || returnRemindBlocked || isCouponPending || isCouponRejected)
 </script>
 
+{#snippet scriptText()}
+  {#if script}<p class="card-script">{script}</p>{/if}
+{/snippet}
+
 <div class="action-card" class:expired={isBlocked}>
   <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
   {#if payload.type === 'product_link'}
@@ -503,6 +509,7 @@
         {#if payload.product_price}
           <p class="product-link-price">{payload.product_price.toLocaleString()}원/일</p>
         {/if}
+        {@render scriptText()}
         {#if payload.product_slug}
           <a
             class="product-link-btn"
@@ -600,6 +607,7 @@
           <p class="late-fee-info">연체 {payload.hours_late}시간 · {payload.fee_amount.toLocaleString()}원</p>
         {/if}
 
+        {@render scriptText()}
         <!-- CTA 버튼 — Figma node 2497:8767 -->
         {#if isShipmentPending}
           <p class="shipment-pending-note">아직 배송 정보가 등록되지 않았습니다. 등록되면 알려드릴게요.</p>
@@ -641,6 +649,7 @@
         <p class="coupon-code">{payload.coupon_code}</p>
       {/if}
 
+      {@render scriptText()}
       {#if payload.type === 'coupon_duplicate_warning'}
         <!-- 경고 카드는 안내 전용 — CTA 버튼 없음 -->
       {:else if isCouponPending && isAdmin}
@@ -977,6 +986,16 @@
 
   /* SHIPMENT_TRACKING_CARD — 운송장 미등록 안내 문구 (죽은 CTA 버튼 대체) */
   /* 관리자 뷰 전용 SMS 동시 발송 결과 한 줄 */
+  /* 카드 안 안내 문구(MessageBubble .bubble-text와 같은 글꼴) */
+  .card-script {
+    font: 700 14px/1.5 'Noto Sans KR', sans-serif;
+    color: var(--cs-dark);
+    letter-spacing: -0.5px;
+    margin: 0;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+
   .sms-sent-note {
     font: 400 12px/1.5 'Noto Sans KR', sans-serif;
     color: var(--cs-text-mid, #777);

@@ -44,3 +44,11 @@ describe('upsertSession — is_urgent 보존', () => {
     expect(chatStore.sessions.find((x) => x.id === 's1')?.status).toBe('open')
   })
 })
+
+describe('upsertSession — user_blacklisted 보존(블랙리스트 배지, 2026-10-09)', () => {
+  it('Realtime UPDATE(raw row)가 와도 블랙리스트 배지 값이 유지된다', () => {
+    setSessions([session({ user_blacklisted: true })])
+    upsertSession(session({ updated_at: '2026-10-02T00:01:00.000Z' }))
+    expect(chatStore.sessions.find((x) => x.id === 's1')?.user_blacklisted).toBe(true)
+  })
+})

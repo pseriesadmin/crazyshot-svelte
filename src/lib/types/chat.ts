@@ -142,6 +142,7 @@ export interface ChatSession {
   last_message_content?: string
   last_message_sender?: string
   is_urgent?: boolean  // 마지막 고객 메시지가 CS_ESCALATE로 분류되고 이후 관리자 응답이 없는 경우
+  user_blacklisted?: boolean  // 고객이 블랙리스트(user_profiles.blacklisted) — 관리자 세션 목록 경고 배지용
   manual_mode?: boolean  // GSD-8: true면 이 세션의 자동응답(AI+캔드) 스킵 (마이그레이션 230)
 }
 

@@ -252,7 +252,7 @@
   <div class="bubble-row" class:bubble-row--own={isOwn}>
     <div class="bubble" class:bubble--own={isOwn} class:bubble--other={!isOwn}>
       {#if isActionCard && message.action_payload}
-        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} {onctamodal} />
+        <ActionCard payload={message.action_payload} {onaction} messageId={message.id} {isAdmin} {oncouponapprove} {onctamodal} script={message.content} />
       {/if}
       {#if isCrazychatBadge}
         <img class="cc-badge" src="/crazychat-badge.svg" alt="크레이지챗이 보낸 답변" width="24" height="24" />
@@ -260,7 +260,7 @@
       {#if isAutoBadge}
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
       {/if}
-      {#if message.content}
+      {#if message.content && !(isActionCard && message.action_payload)}
         <p class="bubble-text">{message.content}</p>
       {/if}
       <div class="bubble-status">

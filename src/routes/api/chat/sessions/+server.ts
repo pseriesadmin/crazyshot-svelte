@@ -161,21 +161,22 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   // 세션 유저 정보 조회 — user_profiles 우선, 없으면 auth.users email fallback
   const uniqueUserIds = [...new Set(rows.map((s: Record<string, unknown>) => s.user_id as string))]
-  const userInfoMap: Record<string, { name: string; handle: string }> = {}
+  const userInfoMap: Record<string, { name: string; handle: string; blacklisted?: boolean }> = {}
 
   if (uniqueUserIds.length > 0) {
     // user_profiles에서 full_name 조회
     const { data: profiles } = await admin
       .from('user_profiles')
-      .select('id, full_name, email')
+      .select('id, full_name, email, blacklisted')
       .in('id', uniqueUserIds)
 
-    type ProfileRow = { id: string; full_name: string | null; email: string | null }
+    type ProfileRow = { id: string; full_name: string | null; email: string | null; blacklisted?: boolean | null }
     for (const p of (profiles as ProfileRow[] ?? [])) {
       if (p.full_name || p.email) {
         userInfoMap[p.id] = {
           name: p.full_name ?? '',
           handle: p.email ? `@${p.email.split('@')[0]}` : '',
+          blacklisted: p.blacklisted === true,
         }
       }
     }
@@ -209,6 +210,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       last_message_content: lastMsg?.content ?? '',
       last_message_sender: lastMsg?.sender_type ?? '',
       is_urgent: urgentIds.has(s.id as string),
+      user_blacklisted: info?.blacklisted === true,
     }
   })
 

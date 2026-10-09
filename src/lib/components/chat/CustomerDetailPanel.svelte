@@ -114,6 +114,12 @@
     {:else if !detail && !summary}
       <div class="cdp-empty">정보를 불러올 수 없습니다.</div>
     {:else}
+      {#if summary?.blacklisted}
+        <div class="blacklist-alert" role="alert">
+          <span class="blacklist-alert-title">블랙리스트 고객</span>
+          <span class="blacklist-alert-desc">예약 승인·계약·혜택 안내 전에 확인해 주세요.</span>
+        </div>
+      {/if}
       <!-- 기본정보 -->
       <div class="section-title section-title--row">
         <span>기본정보</span>
@@ -279,6 +285,20 @@
   .panel-status.grade-pop   { background: rgba(59,47,138,0.10);   color: var(--cs-purple); }
   .panel-status.grade-crazy { background: rgba(255,69,0,0.12);    color: var(--cs-orange); }
   .panel-status.grade-admin { background: var(--cs-lilac);        color: var(--cs-purple-dark); }
+
+  /* 블랙리스트 경고 배너 — 패널 최상단 */
+  .blacklist-alert {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border-radius: var(--radius-sm);
+    background: var(--cs-red-xlight);
+    color: var(--cs-red-badge);
+  }
+  .blacklist-alert-title { font: var(--text-pc-body-14); font-weight: 700; }
+  .blacklist-alert-desc { font: var(--text-pc-script-12); }
 
   .badge-danger {
     display: inline-flex;

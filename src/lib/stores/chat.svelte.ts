@@ -194,6 +194,8 @@ export function upsertSession(session: ChatSession): void {
         unread_count: existing.unread_count,
         // is_urgent는 /api/chat/sessions GET에서만 계산되는 파생값 — Realtime UPDATE payload(raw row)에는 없어 보존하지 않으면 배지가 사라진다
         is_urgent: existing.is_urgent,
+        // user_blacklisted도 API(/api/chat/sessions)에서만 오는 파생값 — 보존하지 않으면 Realtime 갱신마다 블랙리스트 배지가 사라진다
+        user_blacklisted: existing.user_blacklisted,
         ...session,
       },
       ...chatStore.sessions.slice(idx + 1),
