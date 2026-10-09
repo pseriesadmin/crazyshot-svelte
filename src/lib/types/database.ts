@@ -284,6 +284,7 @@ export interface RentalReservation {
   notes: string | null;
   courier_code: string | null;
   tracking_number: string | null;
+  submitted_at?: string;             // 신청(체크아웃 제출) 시각 — 신청일 정본(Migration 684). created_at은 예약 행 생성(장바구니 담기) 시각
   locker_password: string | null;
   locker_number?: string | null;     // 무인함 번호(Migration 678) — 비밀번호와 함께 저장·안내
   locker_guide_sent_pickup_at: string | null;

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { csToast } from '$lib/utils/toast'
+  import { formatKstDateDot } from '$lib/utils/kstDate'
   import { substituteVariables, substituteSpreadsheetDocument, substituteHtmlDocument, findHtmlUnresolvedVariables, applyIssuerSignatureMarker, applySpecialNotesMarker, updateSpecialNotesInHtml, applyContractTermsMarker, applyPrivacyTermsMarker, updateContractTermsInHtml, updatePrivacyTermsInHtml, type AnyContentBlock } from '$lib/utils/contract-substitution'
   import { applyContractTemplate } from '$lib/utils/contract-apply-template'
   import { hasExistingContractContent } from '$lib/utils/contract-content-mode'
@@ -426,6 +427,10 @@
   ): Promise<{ contractId: string; htmlDocument?: string }> {
     if (!selectedTemplate || !subData) throw new Error('양식을 선택해 주세요.')
 
+    // 발행일은 "적용(발행 실행) 순간"의 한국시간 날짜로 — 발행 화면을 연 시점(subData)의 날짜를 쓰지 않는다(2026-10-09).
+    // html 양식은 발송(send-chat) 순간에 한 번 더 같은 값으로 다시 기록해 미리 만든 계약의 발송 지연도 보정한다.
+    const issueSubData = { ...subData, 계약서발행일: formatKstDateDot(new Date()) }
+
     const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
     const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
     const isHtml         = selectedTemplate.authoring_mode === 'html'
@@ -437,11 +442,11 @@
     // 텍스트 어디든 {{변수}} 등장 가능이라 apply-time 치환을 수행해 저장한다.
     const substitutedBlocks = (isCanvas || isSpreadsheet || isHtml)
       ? []
-      : substituteVariables(selectedTemplate.content_blocks ?? [], subData)
+      : substituteVariables(selectedTemplate.content_blocks ?? [], issueSubData)
 
     const substitutedSpreadsheetDocument =
       isSpreadsheet && isSpreadsheetDocument(selectedTemplate.spreadsheet_document)
-        ? substituteSpreadsheetDocument(selectedTemplate.spreadsheet_document, subData)
+        ? substituteSpreadsheetDocument(selectedTemplate.spreadsheet_document, issueSubData)
         : undefined
 
     const substitutedHtmlDocument =
@@ -463,7 +468,7 @@
               ),
               privacyTerms,
             ),
-            subData,
+            issueSubData,
           )
         : undefined
 

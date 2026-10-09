@@ -12,6 +12,8 @@ import { sendCardSms, sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contract-substitution'
 import { buildQrDataUrl } from '$lib/utils/qrIssue'
+import { stampIssueDateInHtml } from '$lib/utils/contractIssueDate'
+import { formatKstDateDot } from '$lib/utils/kstDate'
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
@@ -131,18 +133,28 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
   // 둔 채 보존해뒀다가, 토큰이 확정되는 이 시점(최초 발송·재발송 공통)에 QR을 생성해
   // html_document에 되구워 넣는다 — 실패해도 발송 자체는 막지 않는 fail-soft.
   if (contract.authoring_mode === 'html' && typeof contract.html_document === 'string') {
+    // 2026-10-09: 발행일을 "발송(=발행 실행) 순간"의 한국시간 날짜로 다시 기록한다(contractIssueDate.ts) — QR 되굽기와 한 번의 저장으로 처리.
+    // 발행 화면을 연 시점·특약 즉시발행 시점의 옛 날짜가 남지 않게 한다. 실패해도 발송은 막지 않는 fail-soft(QR 되굽기와 동일).
     try {
-      const qrDataUrl = await buildQrDataUrl(signingUrl, { width: 300, margin: 1 })
-      const bakedHtml = applyDocumentQrMarker(contract.html_document, qrDataUrl)
-      if (bakedHtml !== contract.html_document) {
+      let nextHtml = stampIssueDateInHtml(contract.html_document, formatKstDateDot(new Date()))
+      try {
+        const qrDataUrl = await buildQrDataUrl(signingUrl, { width: 300, margin: 1 })
+        nextHtml = applyDocumentQrMarker(nextHtml, qrDataUrl)
+      } catch (e) {
+        console.error(
+          '[contracts/send-chat] applyDocumentQrMarker 되굽기 실패(fail-soft):',
+          e instanceof Error ? e.message : e,
+        )
+      }
+      if (nextHtml !== contract.html_document) {
         await admin
           .from('contracts')
-          .update({ html_document: bakedHtml })
+          .update({ html_document: nextHtml })
           .eq('id', contractId)
       }
     } catch (e) {
       console.error(
-        '[contracts/send-chat] applyDocumentQrMarker 되굽기 실패(fail-soft):',
+        '[contracts/send-chat] 발행일 기록/문서 저장 실패(fail-soft):',
         e instanceof Error ? e.message : e,
       )
     }
