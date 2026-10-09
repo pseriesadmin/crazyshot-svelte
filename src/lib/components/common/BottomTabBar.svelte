@@ -30,7 +30,9 @@
   // iOS Safari 스크롤 끝 고무줄 되튕김(수 px 역방향)·툴바 접힘/펼침이 '스크롤 업'으로 오판돼 탭바가 깜빡이는 것을 막는 장치 3종
   const SCROLL_DELTA = 10      // ① 최소 이동량
   const EDGE_PX = 2            // ② 바닥 경계(고무줄 구간)는 판정에서 제외
-  const LOCK_MS = 350          // ③ 숨김/표시 전환(0.3s) 직후에는 레이아웃·툴바 변화로 생기는 보정 스크롤을 무시
+  const LOCK_MS = 350          // ③ 노출 전환 직후에는 레이아웃·툴바 변화로 생기는 보정 스크롤을 무시
+  // 모션은 SubGnb와 같은 값으로 맞춘다(둘이 같은 스크롤에서 함께 움직이므로 박자가 어긋나 보이지 않게): 숨김 0.5s 천천히 / 노출 0.12s 지연 후 0.4s
+  const HIDE_MS = 500          // 숨김 모션이 끝날 때까지 반대 입력 무시·레이아웃 제거 대기(CSS .hidden의 0.5s와 짝)
   let locked = false
   let lockTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -47,11 +49,11 @@
     if (next === tabBarState.hidden) return
     tabBarState.hidden = next
     locked = true
-    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
+    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, next ? HIDE_MS : LOCK_MS)
   }
 
   // iOS 26 Safari는 position:fixed; bottom:0 요소가 레이아웃에 있으면 transform으로 숨겨도 그 영역(탭바 70px+안전영역)을
-  // 뷰포트에서 예약해 본문이 잘리고 빈 띠가 남는다 → 숨김 전환(0.3s)이 끝나면 display:none으로 레이아웃에서 완전히 뺀다.
+  // 뷰포트에서 예약해 본문이 잘리고 빈 띠가 남는다 → 숨김 모션(0.5s)이 끝나면 display:none으로 레이아웃에서 완전히 뺀다.
   // 표시할 때는 먼저 레이아웃에 되돌리고(removed=false) DOM 반영 뒤 강제 리플로우로 숨김 상태를 확정한 다음 transform을 풀어
   // 슬라이드 전환을 유지한다(rAF는 백그라운드·절전 탭에서 멈춰 숨김이 풀리지 않을 수 있어 쓰지 않는다).
   let barEl = $state<HTMLDivElement | undefined>()
@@ -66,7 +68,7 @@
     const token = ++showToken
     if (wantHidden) {
       cssHidden = true
-      removeTimer = setTimeout(() => { removed = true }, 320)
+      removeTimer = setTimeout(() => { removed = true }, HIDE_MS + 20)   // 숨김 모션(0.5s)이 끝난 뒤 display:none
     } else if (untrack(() => removed)) {   // removed를 추적하면 아래에서 false로 바꾸는 순간 effect가 재실행돼 표시 작업이 취소된다
       removed = false
       void tick().then(() => {
@@ -117,7 +119,8 @@
   function handleTab(id: string) {
     poppingTab = id
     setTimeout(() => { poppingTab = null }, 700)
-    if      (id === 'Home') goto('/')
+    // 홈에서 Home 탭을 누르면 같은 주소로 이동(=맨 위로 스크롤)하지 않고 튀는 효과만 보여준다 — 홈의 기존 동작 유지
+    if      (id === 'Home') { if ($page.url.pathname !== '/') goto('/') }
     else if (id === 'All')  goto('/products')
     else if (id === 'Cart') goto('/cart')
     else if (id === 'My')   goto('/account')
@@ -186,14 +189,20 @@
     height: 70px;
     transform: translateY(0);
     will-change: transform;           /* iOS Safari: 별도 합성 레이어로 그려 숨김/표시 전환이 스크롤 중에도 즉시 반영되게 */
-    transition: transform 0.3s ease, visibility 0s linear 0s;
+    /* 노출(숨김 해제): 살짝 늦게(0.12s) 시작해 부드럽게 들어온다 — SubGnb와 같은 값 */
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.12s, visibility 0s linear 0s;
   }
 
   .tab-bar.hidden {
     transform: translateY(100%);
     visibility: hidden;               /* 전환이 끝난 뒤 완전히 감춤 — 숨겨진 바의 위쪽 그림자·잔상이 하단에 남지 않게 */
     pointer-events: none;
-    transition: transform 0.3s ease, visibility 0s linear 0.3s;
+    /* 숨김: 한 템포 느리게(0.5s) 사라지고, 끝난 뒤 visibility 해제 — SubGnb와 같은 값 */
+    transition: transform 0.5s cubic-bezier(0.45, 0, 0.2, 1), visibility 0s linear 0.5s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tab-bar,
+    .tab-bar.hidden { transition-duration: 0.01ms; transition-delay: 0s; }
   }
 
   /* 숨김 전환이 끝난 뒤 레이아웃에서 완전히 제거 — iOS 26 Safari의 하단 고정 요소 영역 예약 해제용(위 스크립트 주석 참고) */
@@ -236,6 +245,20 @@
     55%  { transform: scale(0.88); }
     75%  { transform: scale(1.12); }
     100% { transform: scale(1); }
+  }
+
+  /* 터치·호버 인터랙션 — 누르고 있는/마우스 오버 중인 탭 아이콘이 살짝 떠오르는 스프링 바운스(홈 탭바의 기존 효과를 공용으로 이관, FloatingBar 확정 곡선).
+     hover는 마우스 기기에서만(iOS는 탭 뒤 :hover가 남아 아이콘이 떠 있는 채로 굳는다), :active는 터치·마우스 모두 */
+  .tab-item svg {
+    transition: transform 0.24s cubic-bezier(0.34, 1.28, 0.64, 1);
+  }
+  .tab-item:active svg {
+    transform: translateY(-3px) scale(1.1);
+  }
+  @media (hover: hover) {
+    .tab-item:hover svg {
+      transform: translateY(-3px) scale(1.1);
+    }
   }
 
   .tab-item.popping svg {

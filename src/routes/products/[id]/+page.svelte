@@ -2,7 +2,6 @@
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { goto } from '$app/navigation';
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte';
   import { supabase } from '$lib/services/supabase';
   import { trackProductView, trackCartAdd } from '$lib/analytics/behaviorTracker';
   import ProductHero from '$lib/components/products/ProductHero.svelte';
@@ -1349,7 +1348,7 @@
   onsuccess={handleAuthModalSuccess}
 />
 
-<BottomTabBar />
+<!-- 상품 상세에서는 하단 탭바를 노출하지 않는다(2026-10-09, Stephen 지시) -->
 
 <style>
   /* ── Loading / Error */
