@@ -8,7 +8,6 @@
   import { authState } from '$lib/stores/auth'
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import ProfileCard from '$lib/components/account/ProfileCard.svelte'
   import MemberQrModal from '$lib/components/account/MemberQrModal.svelte'
@@ -337,7 +336,7 @@
   </div>
 </div>
 
-<BottomTabBar />
+<!-- 내정보에서는 하단 탭바를 노출하지 않는다(2026-10-09, Stephen 지시) -->
 
 <FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
 

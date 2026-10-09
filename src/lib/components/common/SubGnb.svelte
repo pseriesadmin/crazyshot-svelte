@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { goto } from '$app/navigation'
   import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
 
@@ -49,6 +50,156 @@
     return () => window.removeEventListener('scroll', onScroll)
   })
 
+  // ── 모바일: 위로 스크롤하면 헤더가 자동으로 다시 나타난다(아래로 스크롤하면 숨김) ──
+  // 헤더는 문서 흐름 안에 있어 스크롤하면 화면 밖으로 나간다. 위로 스크롤하는 순간 화면 상단에 고정(fixed)해 슬라이드 인하고,
+  // 아래로 스크롤하면 슬라이드 아웃 뒤 원래 자리(흐름)로 돌려놓는다.
+  // ⛔ 고정으로 바꿀 때 래퍼의 높이를 px로 고정해 문서 높이를 유지한다 — 높이가 바뀌면 바닥에서 브라우저의 scrollY 보정과
+  //    표시/숨김 판정이 되먹임 루프(반복 떨림)를 만든다(2026-10-08 /account 하단 떨림). 이 높이 고정을 지우지 말 것.
+  let wrapEl = $state<HTMLDivElement | undefined>()
+  let barEl = $state<HTMLDivElement | undefined>()
+  let stuck = $state(false)      // 화면 상단에 고정(fixed) 중
+  let mHidden = $state(false)    // 고정 상태에서의 슬라이드 아웃
+  let idleHidden = $state(false) // 숨김이 끝나 흐름으로 돌아왔는데 그 자리가 화면에 일부 걸칠 때(맨 위 근처) 갑자기 나타나지 않게 감춰 둠
+  let noAnim = $state(false)     // 고정↔흐름 전환 프레임에서는 transform 전환을 끈다(되돌아오는 애니메이션 방지)
+  let mWrapH = 0                 // 고정 전환 시 측정한 래퍼 높이(해제 직후 레이아웃 갱신 전에도 위치 계산에 사용)
+  let stuckTop = $state<string | undefined>()  // 흐름에서 바로 숨길 때 고정 헤더의 시작 top(현재 보이는 위치와 같게 해 위치가 튀지 않음), 기본은 0
+  let mLastY = 0
+  let mLocked = false
+  let mLockTimer: ReturnType<typeof setTimeout> | undefined
+  let mReleaseTimer: ReturnType<typeof setTimeout> | undefined
+  const M_DELTA = 8        // 이 이하의 미세 이동은 무시(고무줄 반동·관성 되튕김)
+  const M_EDGE_PX = 2      // 바닥 경계는 판정에서 제외
+  const M_LOCK_MS = 350    // 전환 직후 입력 무시(레이아웃·툴바 변화로 생기는 보정 스크롤)
+  // 모션(CSS와 짝): 숨김은 천천히(0.5s, 한 템포 느리게), 노출은 살짝 늦게 시작(0.12s 지연)해 0.4s로 들어온다
+  const M_HIDE_MS = 500
+
+  // 헤더의 "원래 자리"(문서 흐름 속 위치) — 일반 모드는 래퍼, floating(상품상세 히어로 위에 떠 있는 막대)은 래퍼가 높이 0이라
+  // 막대의 기준 컨테이너(히어로) 상단이 원래 자리다. PC(≥768px)처럼 숨겨져 있으면 null.
+  function measureAnchor(): { top: number; bottom: number } | null {
+    if (!wrapEl) return null
+    if (floating) {
+      const host = wrapEl.offsetParent as HTMLElement | null
+      if (!host || !barEl || barEl.offsetHeight === 0) return null
+      const r = host.getBoundingClientRect()
+      const h = stuck ? mWrapH : barEl.offsetHeight
+      return { top: r.top, bottom: r.top + h }
+    }
+    const r = wrapEl.getBoundingClientRect()
+    if (r.height === 0) return null
+    return { top: r.top, bottom: r.bottom }
+  }
+
+  function lockMobile(ms: number = M_LOCK_MS) {
+    mLocked = true
+    clearTimeout(mLockTimer)
+    mLockTimer = setTimeout(() => { mLocked = false; mLastY = window.scrollY }, ms)
+  }
+
+  function releaseMobile() {
+    clearTimeout(mReleaseTimer)
+    if (!stuck) return
+    noAnim = true
+    stuck = false
+    mHidden = false
+    stuckTop = undefined
+    if (wrapEl) {
+      const y = window.scrollY
+      const top = (measureAnchor()?.top ?? wrapEl.getBoundingClientRect().top) + y
+      wrapEl.style.height = ''
+      // 흐름으로 돌아온 자리가 화면에 일부 보이는 구간(맨 위 근처)이면 갑자기 나타나지 않게 감춰 둔다 — 다시 위로 스크롤하면 슬라이드 인
+      idleHidden = y > top + 1 && y < top + mWrapH
+    }
+    void tick().then(() => { void barEl?.offsetHeight; noAnim = false })
+  }
+
+  async function revealMobile() {
+    clearTimeout(mReleaseTimer)
+    if (!stuck) {
+      if (!wrapEl || !barEl) return
+      mWrapH = barEl.offsetHeight
+      if (!floating) wrapEl.style.height = `${mWrapH}px` // 흐름에서 빠져도 같은 높이 유지(floating은 원래 흐름 밖이라 불필요 — 넣으면 히어로 본문이 밀림)
+      idleHidden = false
+      noAnim = true                                       // 위치 전환(흐름→고정) 프레임에는 애니메이션 없이 숨김 상태로 놓고
+      mHidden = true                                      // 화면 위에서 시작
+      stuck = true
+      lockMobile()
+      await tick()
+      void barEl.offsetHeight                             // 숨김 상태를 한 번 확정한 뒤
+      noAnim = false                                      // 전환을 켜고 슬라이드 인(숨김과 같은 0.3s ease)
+      void barEl.offsetHeight
+    }
+    stuckTop = undefined                                  // 노출은 항상 화면 맨 위(top:0)에서
+    mHidden = false
+    lockMobile()
+  }
+
+  function concealMobile() {
+    mHidden = true
+    lockMobile(M_HIDE_MS)                                 // 숨김 모션이 끝날 때까지 반대 입력 무시
+    clearTimeout(mReleaseTimer)
+    mReleaseTimer = setTimeout(releaseMobile, M_HIDE_MS + 20)   // 슬라이드 아웃이 끝나면 원래 자리(흐름)로
+  }
+
+  // 흐름 속(맨 위 근처)에서 처음 아래로 스크롤할 때 — 헤더를 지금 보이는 위치 그대로 고정으로 바꾼 뒤 위로 슬라이드해 사라지게 한다.
+  // 문서 높이는 그대로(래퍼 높이 고정)이고 헤더만 움직이므로 본문은 평소처럼 스크롤된다.
+  async function concealFromFlow(top: number) {
+    if (!wrapEl || !barEl) return
+    clearTimeout(mReleaseTimer)
+    mWrapH = barEl.offsetHeight
+    if (!floating) wrapEl.style.height = `${mWrapH}px`
+    stuckTop = `${Math.round(top)}px`                     // 현재 보이는 위치에서 출발
+    idleHidden = false
+    noAnim = true
+    mHidden = false
+    stuck = true
+    lockMobile(M_HIDE_MS)
+    await tick()
+    void barEl.offsetHeight
+    noAnim = false
+    mHidden = true                                        // 위로 슬라이드 아웃(천천히)
+    clearTimeout(mReleaseTimer)
+    mReleaseTimer = setTimeout(releaseMobile, M_HIDE_MS + 20)
+  }
+
+  function onMobileScroll() {
+    if (!wrapEl || mLocked) return
+    const rect = measureAnchor()
+    if (!rect) return                                      // PC(≥768px)에서는 숨김
+    const y = window.scrollY
+    const wrapTop = rect.top + y
+    const wrapBottom = rect.bottom + y
+    if (y <= wrapTop + 1) {                                // 원래 자리에 도달 — 흐름 속 헤더 그대로(고정과 위치가 같아 끊김 없음)
+      if (stuck) releaseMobile()
+      idleHidden = false
+      mLastY = y
+      return
+    }
+    if (y > wrapBottom && idleHidden) idleHidden = false   // 헤더 자리가 화면 밖으로 나가면 감춤 해제(어차피 안 보임)
+    const max = document.documentElement.scrollHeight - window.innerHeight
+    if (y >= max - M_EDGE_PX) { mLastY = Math.max(0, Math.min(y, max)); return }
+    const dy = y - mLastY
+    if (Math.abs(dy) < M_DELTA) return
+    mLastY = y
+    if (dy < 0) {
+      if (stuck || y > wrapBottom || idleHidden) void revealMobile()   // 위로 스크롤 — 헤더가 화면 밖이거나 감춰져 있으면 상단에 나타남
+    } else if (stuck) {
+      concealMobile()                                      // 아래로 스크롤 — 다시 숨김
+    } else if (!idleHidden && rect.bottom > 0) {
+      void concealFromFlow(rect.top)                       // 헤더가 아직 화면에 보이면 — 그 자리에서 슬라이드 아웃
+    }
+  }
+
+  $effect(() => {
+    if (pcOnly) return
+    mLastY = window.scrollY
+    window.addEventListener('scroll', onMobileScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onMobileScroll)
+      clearTimeout(mLockTimer)
+      clearTimeout(mReleaseTimer)
+    }
+  })
+
   function goBack() {
     if (backHref) {
       goto(backHref, { replaceState: backReplace })
@@ -82,8 +233,8 @@
 
 <!-- ── Mobile Sub GNB (≤640px) — pcOnly 시 렌더링 안 함 ── -->
 {#if !pcOnly}
-<div class="sub-gnb-mobile-wrap" class:gnb-hidden={gnbHidden}>
-<div class="sub-gnb-mobile" class:floating class:gnb-hidden={gnbHidden}>
+<div class="sub-gnb-mobile-wrap" bind:this={wrapEl}>
+<div class="sub-gnb-mobile" class:floating class:stuck class:m-hidden={mHidden} class:idle-hidden={idleHidden} class:no-anim={noAnim} style:top={stuckTop} bind:this={barEl}>
   <div class="gnb-pill">
     <button class="back-btn" onclick={goBack} aria-label="뒤로가기">
       <svg width="15" height="10" viewBox="0 0 17 12" fill="none" aria-hidden="true">
@@ -234,8 +385,35 @@
     transform: translateY(0);
     transition: transform 0.3s ease;
   }
-  .sub-gnb-mobile.gnb-hidden {
+  /* 위로 스크롤 시 화면 상단에 고정 노출(래퍼가 같은 높이를 유지하므로 문서 높이는 변하지 않는다) */
+  .sub-gnb-mobile.stuck {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 55;
+    padding-bottom: 8px;
+  }
+  /* 모션은 도착 상태의 transition이 적용된다 — 노출(고정, 숨김 해제)은 살짝 늦게 시작해 부드럽게 들어오고(0.12s 지연·0.4s·ease-out),
+     숨김(.m-hidden)은 한 템포 느리게 천천히 사라진다(0.5s·ease-in-out). 지연은 노출에만 있어 숨김 반응이 굼뜨지 않는다. */
+  .sub-gnb-mobile.stuck {
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.12s;
+  }
+  .sub-gnb-mobile.m-hidden {
     transform: translateY(-100%);
+    transition: transform 0.5s cubic-bezier(0.45, 0, 0.2, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sub-gnb-mobile.stuck,
+    .sub-gnb-mobile.m-hidden { transition-duration: 0.01ms; transition-delay: 0s; }
+  }
+  /* 고정↔흐름 위치가 바뀌는 프레임에는 전환을 끈다(되돌아오는 애니메이션 방지) — 슬라이드 인·아웃 모션은 위 .stuck/.m-hidden 규칙 */
+  .sub-gnb-mobile.no-anim {
+    transition: none;
+  }
+  /* 숨김이 끝나 흐름으로 돌아왔는데 자리가 화면에 일부 걸치는 구간 — 갑자기 나타나지 않도록 감춘다(위로 스크롤하면 슬라이드 인) */
+  .sub-gnb-mobile.idle-hidden {
+    visibility: hidden;
   }
 
   .sub-gnb-mobile.floating {
@@ -245,6 +423,13 @@
     right: 0;
     padding: 24px 20px 0;
     z-index: 10;
+  }
+  /* floating 막대도 위로 스크롤하면 화면 상단 고정으로 나타난다(일반 모드와 같은 모션) — 위 .floating의 absolute가 .stuck의 fixed를 덮어쓰지 않게 */
+  .sub-gnb-mobile.floating.stuck {
+    position: fixed;
+    top: 0;
+    z-index: 55;
+    padding-bottom: 8px;
   }
 
   /* [GNB-BREAKPOINT-FIX 2026-08-10] 641px → 768px: 위 PC 블록과 짝 맞춤. 복원 시 641px로. */

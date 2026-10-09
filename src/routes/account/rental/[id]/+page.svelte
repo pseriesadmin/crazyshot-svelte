@@ -1,6 +1,5 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
@@ -194,7 +193,6 @@
 
   </div>
 
-  <BottomTabBar />
 </div>
 
 <style>
@@ -215,6 +213,13 @@
     margin: 0 auto;
     width: 100%;
     box-sizing: border-box;
+  }
+
+  /* 모바일 상단 여백 35px(2026-10-09, 기존 70px에서 축소) — /account/rental·/account/cancel·/account/inquiry와 동일 기준(같은 계열 화면의 중앙값).
+     하단 여백 60px(2026-10-09, 기존 100px에서 축소 — 하단 탭바 제거로 탭바 자리가 필요 없어짐, 이 화면의 PC 하단값 60px과 동일).
+     모바일 전용(767px 이하), PC(768px 이상)는 아래 별도 min-width 규칙 그대로 유지 — /account/cancel과 같은 767px 경계 */
+  @media (max-width: 767px) {
+    .content { padding-top: 35px; padding-bottom: 60px; }
   }
 
   /* 뒤로가기 버튼 */
