@@ -35,7 +35,7 @@
   const BL_OPTIONS = [
     { value: '',      label: '전체' },
     { value: 'false', label: '정상' },
-    { value: 'true',  label: '블랙리스트' },
+    { value: 'true',  label: '관리대상' },
   ]
 
   let searchInput = $state(data.search ?? '')
@@ -43,6 +43,45 @@
   // 서버 load()가 이미 조회해둔 값으로 초기 상태를 채운다(페이지네이션·필터와 무관한 단건 조회).
   let selectedUserId = $state<string | null>(data.selected ?? null)
   let selectedRow = $state<CustomerRow | null>(data.selectedCustomer ?? null)
+
+  // 관리대상 신규 등록 — 빈 패널(selected=new 같은 특수값은 딥링크 로직이 uuid를 가정하므로 쓰지 않는다)
+  let newMode = $state(false)
+  let registeredJustNow = $state(false)
+
+  const EMPTY_MANAGED_ROW: CustomerRow = {
+    user_id: '', email: '', phone: null, name: null, member_code: null, member_type: null,
+    membership_grade: 'NONE', credit_score: 70, rental_count: 0, late_return_count: 0, damage_count: 0, points: 0,
+    blacklisted: true, blacklist_reason: null, is_student: false, is_foreign: false,
+    identity_type: null, identity_doc_url: null, identity_verified_at: null,
+    foreign_doc_url: null, foreign_doc_urls: null, foreign_type: null, foreign_stay_type: null, foreign_verified_at: null,
+    password_set: false, created_at: new Date().toISOString(), total_count: 0, cms_role: null, birth_date: null,
+    withdrawal_status: 'none', withdrawal_requested_at: null, withdrawal_purge_at: null,
+    legacy_imported_at: null, legacy_claimed_at: null, legacy_source: null, legacy_signup_at: null, legacy_purchase_count: null,
+    identity_approved_at: null, foreign_approved_at: null, is_managed_person: true,
+  }
+
+  function openNewManaged() {
+    selectedUserId = null
+    selectedRow = null
+    registeredJustNow = false
+    newMode = true
+    const params = new URLSearchParams(window.location.search)
+    params.delete('selected')
+    params.delete('tab')
+    goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
+  }
+
+  // 등록 완료 → 새로 만든 관리대상 패널(QR 표시)로 전환
+  function handleRegistered(r: { id: string; member_code: string; row: unknown }) {
+    newMode = false
+    registeredJustNow = true
+    selectedUserId = r.id
+    selectedRow = { ...(r.row as CustomerRow), cms_role: null }
+    const params = new URLSearchParams(window.location.search)
+    params.set('selected', r.id)
+    params.set('tab', 'blacklist')
+    goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
+  }
 
   // invalidateAll() 후 data.customers가 갱신되면 selectedRow도 최신 데이터로 동기화
   $effect(() => {
@@ -63,7 +102,14 @@
     }
   })
 
+  // 필터·검색·페이지 이동은 목록을 보는 동작 — 열려 있던 '관리대상 등록' 빈 패널은 닫는다
+  function leaveNewMode() {
+    newMode = false
+    registeredJustNow = false
+  }
+
   function applySearch() {
+    leaveNewMode()
     const params = new URLSearchParams()
     if (searchInput.trim()) params.set('search', searchInput.trim())
     if (data.classifications.length > 0) params.set('classification', data.classifications.join(','))
@@ -72,9 +118,19 @@
     goto(`/cms/customers?${params.toString()}`, { replaceState: true })
   }
 
+  // 분류·상태 칩 선택 — 열려 있던 상세 패널(신규 등록 포함)은 모두 닫고 해당 분류 목록만 보여준다
+  function closeDetailForChip(params: URLSearchParams) {
+    leaveNewMode()
+    selectedUserId = null
+    selectedRow = null
+    params.delete('selected')
+    params.delete('tab')
+  }
+
   // 다중선택 토글 — 이미 선택된 값이면 해제, 아니면 추가
   function toggleClassification(val: string) {
     const params = new URLSearchParams(window.location.search)
+    closeDetailForChip(params)
     const next = data.classifications.includes(val)
       ? data.classifications.filter((v) => v !== val)
       : [...data.classifications, val]
@@ -85,18 +141,22 @@
 
   function setBl(val: string) {
     const params = new URLSearchParams(window.location.search)
+    closeDetailForChip(params)
     if (val) params.set('bl', val); else params.delete('bl')
     params.delete('page')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true })
   }
 
   function goPage(p: number) {
+    leaveNewMode()
     const params = new URLSearchParams(window.location.search)
     params.set('page', p.toString())
     goto(`/cms/customers?${params.toString()}`, { replaceState: true, noScroll: true })
   }
 
   function selectUser(row: CustomerRow) {
+    newMode = false
+    registeredJustNow = false
     selectedUserId = row.user_id
     selectedRow = row  // 즉시 패널 표시; $effect가 data 갱신 후 최신값으로 덮어씀
     const params = new URLSearchParams(window.location.search)
@@ -106,6 +166,8 @@
   }
 
   function closePanel() {
+    newMode = false
+    registeredJustNow = false
     selectedUserId = null
     selectedRow = null
     const params = new URLSearchParams(window.location.search)
@@ -142,7 +204,7 @@
 <div class="page-wrap">
   <div class="page-header">
     <h1 class="page-title">고객목록</h1>
-    <p class="page-sub">회원 정보·크레이지스코어·블랙리스트를 관리합니다.</p>
+    <p class="page-sub">회원 정보·크레이지스코어·관리대상을 관리합니다.</p>
   </div>
 
   <!-- 툴바 -->
@@ -182,12 +244,13 @@
 
     <div class="toolbar-right">
       <a href="/cms/customers/legacy-import" class="btn-secondary legacy-import-link">레거시 회원 일괄 등록</a>
+      <button type="button" class="btn-secondary legacy-import-link" onclick={openNewManaged}>관리대상 등록</button>
       <span class="count-badge">총 {data.totalCount ?? 0}명</span>
     </div>
   </div>
 
   <!-- 콘텐츠 영역 -->
-  <div class="content-area" class:panel-open={!!selectedUserId}>
+  <div class="content-area" class:panel-open={!!selectedUserId || newMode}>
     <!-- 테이블 -->
     <div class="table-card">
       <CmsPagination
@@ -231,7 +294,7 @@
                   {/if}
                 </td>
                 <td><span class="user-name">{row.name ?? '-'}</span></td>
-                <td><span class="user-email">{row.email}</span></td>
+                <td><span class="user-email">{row.email || '-'}</span></td>
                 <td class="col-hide">
                   {#if row.member_code}
                     <code class="member-code">{row.member_code}</code>
@@ -242,25 +305,37 @@
                 <td class="col-hide">{row.phone ?? '-'}</td>
                 <td>
                   <div class="classification-badges">
-                    {#each classificationsOf(row) as c}
-                      <span class="grade-badge grade-{c}">{classificationLabel(c)}</span>
-                    {/each}
+                    {#if row.is_managed_person}
+                      <span class="text-light">비회원</span>
+                    {:else}
+                      {#each classificationsOf(row) as c}
+                        <span class="grade-badge grade-{c}">{classificationLabel(c)}</span>
+                      {/each}
+                    {/if}
                   </div>
                 </td>
                 <td class="col-hide">
-                  <span class="score-val {getScoreClass(row.credit_score)}">
-                    {row.credit_score}점
-                  </span>
+                  {#if row.is_managed_person}
+                    <span class="text-light">-</span>
+                  {:else}
+                    <span class="score-val {getScoreClass(row.credit_score)}">
+                      {row.credit_score}점
+                    </span>
+                  {/if}
                 </td>
                 <td class="col-hide">
-                  <span class="deposit-rate">{getDepositRate(row.credit_score)}</span>
+                  {#if row.is_managed_person}
+                    <span class="text-light">-</span>
+                  {:else}
+                    <span class="deposit-rate">{getDepositRate(row.credit_score)}</span>
+                  {/if}
                 </td>
-                <td class="col-hide">{row.points.toLocaleString('ko-KR')}P</td>
+                <td class="col-hide">{row.is_managed_person ? '-' : `${row.points.toLocaleString('ko-KR')}P`}</td>
                 <td>
                   {#if row.withdrawal_status && row.withdrawal_status !== 'none'}
                     <span class="badge-withdrawn">탈회</span>
                   {:else if row.blacklisted}
-                    <span class="badge-danger">블랙리스트</span>
+                    <span class="badge-danger">관리대상</span>
                   {:else}
                     <span class="badge-normal">정상</span>
                   {/if}
@@ -286,13 +361,23 @@
     </div>
 
     <!-- 상세 패널 -->
-    {#if selectedUserId && selectedRow}
+    {#if newMode}
+      <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
+        <CustomerDetailPanel
+          row={EMPTY_MANAGED_ROW}
+          mode="new"
+          onclose={closePanel}
+          onregistered={handleRegistered}
+        />
+      </div>
+    {:else if selectedUserId && selectedRow}
       <div class="detail-panel-wrap" transition:fly={{ x: 30, duration: 220 }}>
         {#key selectedUserId}
           <CustomerDetailPanel
             row={selectedRow}
+            mode={selectedRow.is_managed_person ? 'managed' : 'member'}
             onclose={closePanel}
-            initialTab={data.selected === selectedUserId ? data.tab : null}
+            initialTab={registeredJustNow ? 'blacklist' : (data.selected === selectedUserId ? data.tab : null)}
           />
         {/key}
       </div>
