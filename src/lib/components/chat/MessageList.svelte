@@ -8,7 +8,7 @@
   import type { ChatMessage, ActionPayload, CtaModalRequest } from '$lib/types/chat'
 
   // 당일 이전 대화카드는 시간(HH:MM)만 있어 며칠 치인지 헷갈림 — 날짜가 바뀌는 지점마다
-  // 구분 배지를 끼워 넣는다(카카오톡 등과 동일한 관례). 오늘/어제는 상대 표현, 그 외는 절대 날짜.
+  // 구분 표시를 끼워 넣는다(카카오톡 등과 동일한 관례). 2026-10-09(Stephen 지시): 영어 텍스트로 Today / Yesterday / 2~6 days ago / 1 week ago(7일 전)까지 표시하고, 그보다 오래된 날짜는 절대 날짜(예: 2026년 10월 1일)로 전환한다.
   function isSameLocalDay(isoA: string, isoB: string): boolean {
     const a = new Date(isoA)
     const b = new Date(isoB)
@@ -19,8 +19,10 @@
     const d = new Date(iso)
     const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
     const diffDays = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86_400_000)
-    if (diffDays === 0) return '오늘'
-    if (diffDays === 1) return '어제'
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    if (diffDays >= 2 && diffDays <= 6) return `${diffDays} days ago`
+    if (diffDays === 7) return '1 week ago'
     return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
   }
 
@@ -236,6 +238,14 @@
   }
 
   /* 실제 버블들의 wrapper — ResizeObserver가 이 요소의 콘텐츠 크기 변화를 감지(스크립트 참고) */
+  /* 모바일 — 헤더·입력 영역이 목록 위에 반투명하게 겹치므로 목록 위·아래 여백을 그 영역 높이만큼 둔다(ChatWindow가 --chat-overlay-top/bottom 전달) */
+  @media (max-width: 639px) {
+    .message-list {
+      padding-top: var(--chat-overlay-top, 20px);
+      padding-bottom: var(--chat-overlay-bottom, 20px);
+    }
+  }
+
   .message-list-inner {
     display: flex;
     flex-direction: column;
@@ -284,16 +294,14 @@
     color: var(--cs-text-light, #aaaaaa);
   }
 
-  /* 날짜가 바뀌는 지점 구분 배지 — 카카오톡 등과 동일한 관례(오늘/어제/절대날짜) */
+  /* 날짜가 바뀌는 지점 구분 표시 — Today ~ 1 week ago 이후는 절대 날짜, 배경 없음(2026-10-09, Stephen 지시) */
   .date-divider {
     display: flex;
     justify-content: center;
   }
 
   .date-divider-badge {
-    padding: 4px 14px;
-    border-radius: var(--radius-full, 9999px);
-    background: var(--cs-surface-gray, #f6f6f6);
+    padding: 4px 0;
     color: var(--cs-text-mid, #777777);
     font: 700 12px/1.4 'Noto Sans KR', sans-serif;
   }

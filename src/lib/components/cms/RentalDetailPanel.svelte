@@ -1730,11 +1730,13 @@
               ? '출고 이후 상태에서는 예약취소가 불가합니다'
               : !canChangeOrCancelReservation
                 ? '예약변경 및 취소 권한이 없습니다'
-                : undefined}
+                : row.cancel_pending
+                  ? '고객이 취소를 요청한 예약입니다. 실행하면 결제금액이 전액 환불되고 예약이 취소됩니다'
+                  : undefined}
           >{isCancelling ? '처리 중...' : '예약취소'}</button>
         </form>
       {/if}
-      {#if row.cancel_pending}
+      {#if row.cancel_pending && row.status === 'cancelled'}
         <!-- 고객 취소 후 관리자 확인 대기 — 이 [예약취소] 실행 = 관리자 취소확인 (예약·결제는 이미 취소·환불 처리됨) -->
         <button
           type="button"

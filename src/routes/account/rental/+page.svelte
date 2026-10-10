@@ -138,6 +138,7 @@
 
   async function confirmCancel(): Promise<void> {
     if (!cancelPendingId) return
+    const targetIdForRequest = cancelPendingId
     cancelLoading  = true
     cancelErrorMsg = null
     try {
@@ -146,7 +147,7 @@
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ reservationId: Number(cancelPendingId) }),
       })
-      const json = await res.json() as { ok: boolean; error?: string }
+      const json = await res.json() as { ok: boolean; error?: string; requested?: boolean }
       if (!res.ok || !json.ok) {
         // 서버 재검증 결과 취소 불가 → Modal B로 전환
         cancelModalType = 'B'
@@ -156,6 +157,8 @@
       cancelPendingId = null
       cancelModalType = null
       await invalidateAll()
+      // 서명+결제 후 취소는 즉시 환불이 아닌 "취소 요청" 접수 — 방금 남긴 요청 카드를 바로 볼 수 있게 채팅을 연다
+      if (json.requested) openReservationChat(targetIdForRequest)
     } catch {
       cancelModalType = 'B'
       cancelErrorMsg  = '일시적인 오류가 발생했습니다. 채팅으로 문의해주세요.'
@@ -328,7 +331,7 @@
         <div class="cancel-modal-top">
           <div class="cancel-modal-icon" aria-hidden="true">⚠️</div>
           <p class="cancel-modal-title">예약신청을 취소하시겠어요?</p>
-          <p class="cancel-modal-sub">취소하면 되돌릴 수 없어요.<br>결제한 경우 전액 환불됩니다.</p>
+          <p class="cancel-modal-sub">취소하면 되돌릴 수 없어요.<br>결제한 경우 관리자 확인 후 전액 환불됩니다.</p>
         </div>
         <div class="cancel-modal-bottom">
           {#if cancelErrorMsg}

@@ -318,35 +318,63 @@
     border-radius: var(--radius-md);
     max-width: 100%;
   }
-  .bubble--own   { background: var(--cs-surface-gray); gap: 20px; }
-  .bubble--other { background: var(--cs-lilac); }
-
-  /* 상호 소통 느낌의 말풍선 꼬리 — 고객(좌측 정렬) 카드는 하단 우측,
-     관리자(우측 정렬) 카드는 하단 좌측에 배치(Stephen 확정 배치)
-     단순 3점 삼각형(clip-path polygon) 대신 radial-gradient mask로 모서리를 둥글게 깎아
-     낸 곡선형 "hook" 꼬리 — 배경색 매칭이 필요한 트릭이 아니라 실제 알파 투명도를 쓰므로
-     버블이 어떤 배경 위에 있어도(관리자/고객 화면 공용 컴포넌트) 매끄럽게 보임 */
+  /* 상대방(좌측 정렬) 말풍선 — Figma 시안(node 3372:7501, 2026-10-09 Stephen 지시)의 생각풍선형 꼬리를 좌우 반전해 하단 우측에 둔다
+     (대화 중심을 향하는 기존 배치 유지: 상대방=우하단, 내 말풍선=좌하단 — 후속 지시 "방향을 좌우로 바꿀 것"). 우하단 모서리를 반지름 11.5px 원으로 도려내고
+     그 안에 큰 원(r 6.5)·바깥에 작은 원(r 3). 시안 좌표(좌우 반전): 본체 우하단 기준 도려낸 원 중심 (오른쪽에서 1.5px, 하단에서 3.5px),
+     큰 원은 같은 중심, 작은 원 중심은 본체 오른쪽 -8px·아래 +4px. 색은 기존 버블 배경(--cs-lilac) 그대로(시안의 흰색은 시안 배경용).
+     배경 그라데이션으로 도려내므로 실제 투명 — 어떤 배경 위에서도 매끄럽다(관리자/고객 화면 공용 컴포넌트) */
+  .bubble--other {
+    border-radius: var(--radius-md) var(--radius-md) 0 var(--radius-md);
+    background:
+      radial-gradient(circle at calc(100% - 1.5px) calc(100% - 3.5px), transparent 11.4px, var(--cs-lilac) 11.5px);
+  }
+  .bubble--other::before {
+    content: '';
+    position: absolute;
+    right: -5px;
+    bottom: -3px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--cs-lilac);
+  }
   .bubble--other::after {
     content: '';
     position: absolute;
-    bottom: -1px;
-    right: -7px;
-    width: 15px;
-    height: 15px;
+    right: -11px;
+    bottom: -7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
     background: var(--cs-lilac);
-    -webkit-mask-image: radial-gradient(circle at top left, transparent 72%, black 73%);
-    mask-image: radial-gradient(circle at top left, transparent 72%, black 73%);
+  }
+  /* 내(우측 정렬) 말풍선 — 같은 Figma 시안(node 3372:7501) 도형을 시안 원래 방향(꼬리 좌하단)으로 적용(2026-10-09 Stephen 지시, 상대방 말풍선과 좌우 대칭).
+     좌하단 모서리를 반지름 11.5px 원으로 도려내고(중심: 왼쪽에서 1.5px·하단에서 3.5px) 큰 원(r 6.5)·작은 원(r 3, 본체 왼쪽 -8px·아래 +4px). 색은 기존 --cs-surface-gray 유지 */
+  .bubble--own {
+    gap: 20px;
+    border-radius: var(--radius-md) var(--radius-md) var(--radius-md) 0;
+    background:
+      radial-gradient(circle at 1.5px calc(100% - 3.5px), transparent 11.4px, var(--cs-surface-gray) 11.5px);
+  }
+  .bubble--own::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    bottom: -3px;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    background: var(--cs-surface-gray);
   }
   .bubble--own::after {
     content: '';
     position: absolute;
-    bottom: -1px;
-    left: -7px;
-    width: 15px;
-    height: 15px;
+    left: -11px;
+    bottom: -7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
     background: var(--cs-surface-gray);
-    -webkit-mask-image: radial-gradient(circle at top right, transparent 72%, black 73%);
-    mask-image: radial-gradient(circle at top right, transparent 72%, black 73%);
   }
 
   /* 첨부 버블: padding 줄임 */

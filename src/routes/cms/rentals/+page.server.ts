@@ -1,3 +1,4 @@
+import { attachCancelPending } from '$lib/server/attachCancelPending'
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -92,6 +93,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       rentals.unshift(...pending)
     }
   }
+  // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지 + 목록 상단 정렬
+  await attachCancelPending(admin, rentals)
+  rentals.sort((a, b) => Number(!!b.cancel_pending) - Number(!!a.cancel_pending))
   await attachRentalDaysLabel(admin, rentals)
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 

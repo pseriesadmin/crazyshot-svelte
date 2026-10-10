@@ -19,6 +19,7 @@ import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
+import { attachCancelPending } from '$lib/server/attachCancelPending'
 import { resolveRepresentativeReservationId } from '$lib/server/resolveOrderRepresentative'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
@@ -164,6 +165,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
 
   const rentals: RentalListRow[] = rows ?? []
+  // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지·패널 안내
+  await attachCancelPending(admin, rentals)
   await attachRentalDaysLabel(admin, rentals)
   const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))

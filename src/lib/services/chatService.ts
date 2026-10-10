@@ -76,6 +76,13 @@ export async function loadUserSession(
   return { session: data as ChatSession | null, error: null }
 }
 
+/** 고객 화면에서 내 채팅 대화목록을 모두 숨긴다(세션·메시지는 보존, 관리자 상담 히스토리 유지). 처리된 세션 수 반환 */
+export async function clearMyChatHistory(): Promise<{ count: number; error: string | null }> {
+  const { data, error } = await supabase.rpc('clear_my_chat_history')
+  if (error) return { count: 0, error: error.message }
+  return { count: (data as number) ?? 0, error: null }
+}
+
 export async function closeChatSession(
   sessionId: string
 ): Promise<{ error: string | null }> {
@@ -100,7 +107,7 @@ const DEFAULT_MESSAGE_PAGE_SIZE = 20
 
 export async function loadMessages(
   sessionId: string,
-  opts?: { limit?: number; beforeCreatedAt?: string }
+  opts?: { limit?: number; beforeCreatedAt?: string; clearedAt?: string | null }
 ): Promise<{ messages: ChatMessage[]; error: string | null; hasMore: boolean }> {
   const limit = opts?.limit ?? DEFAULT_MESSAGE_PAGE_SIZE
 
@@ -113,6 +120,10 @@ export async function loadMessages(
 
   if (opts?.beforeCreatedAt) {
     query = query.lt('created_at', opts.beforeCreatedAt)
+  }
+  // 고객이 대화목록을 삭제했다면 그 시각 이후 메시지만(관리자 화면은 clearedAt을 넘기지 않음)
+  if (opts?.clearedAt) {
+    query = query.gt('created_at', opts.clearedAt)
   }
 
   const { data, error } = await query
@@ -236,14 +247,17 @@ export async function markMessagesRead(
 // 배지가 뜨던 문제 — 마운트 시 이 함수로 기존 미읽음 건수를 즉시 복원한다).
 export async function getUnreadCount(
   sessionId: string,
-  senderTypes: ('user' | 'admin' | 'ai')[] = ['admin', 'ai']
+  senderTypes: ('user' | 'admin' | 'ai')[] = ['admin', 'ai'],
+  clearedAt?: string | null
 ): Promise<number> {
-  const { count, error } = await supabase
+  let q = supabase
     .from('chat_messages')
     .select('*', { count: 'exact', head: true })
     .eq('session_id', sessionId)
     .eq('is_read', false)
     .in('sender_type', senderTypes)
+  if (clearedAt) q = q.gt('created_at', clearedAt)
+  const { count, error } = await q
 
   if (error) return 0
   return count ?? 0

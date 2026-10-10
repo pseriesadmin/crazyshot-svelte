@@ -81,7 +81,7 @@
         // Realtime INSERT가 발생 → 이미 구독 중이면 알림 수신 가능
         if (session && !chatStore.activeSessionId) {
           setActiveSession(session.id)
-          getUnreadCount(session.id).then(setUnreadCount)
+          getUnreadCount(session.id, undefined, session.customer_cleared_at).then(setUnreadCount)
         }
       })
     })
