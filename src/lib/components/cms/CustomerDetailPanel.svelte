@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import type { SubmitFunction } from '@sveltejs/kit'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
@@ -50,6 +51,8 @@
     legacy_source?: string | null
     legacy_signup_at?: string | null
     legacy_purchase_count?: number | null
+    // 회원 가입 이력 없는 관리대상(managed_persons) 행 여부 — Migration #686
+    is_managed_person?: boolean
   }
 
   interface Subscription {
@@ -96,11 +99,15 @@
     row: CustomerRow
     onclose: () => void
     initialTab?: string | null
+    /** 'member'(기본) | 'managed'(회원 가입 이력 없는 관리대상) | 'new'(관리대상 신규 등록 — 빈 패널). managed·new는 기본정보+관리대상 탭만 노출 */
+    mode?: 'member' | 'managed' | 'new'
+    onregistered?: (r: { id: string; member_code: string; row: CustomerRow }) => void
   }
-  let { row, onclose, initialTab = null }: Props = $props()
+  let { row, onclose, initialTab = null, mode = 'member', onregistered }: Props = $props()
 
   const VALID_TABS: CustomerTabKey[] = ['info', 'score', 'subscription', 'points', 'rental', 'blacklist', 'inquiry']
-  function resolveInitialTab(tab: string | null): CustomerTabKey {
+  function resolveInitialTab(tab: string | null, m: 'member' | 'managed' | 'new'): CustomerTabKey {
+    if (m !== 'member') return tab === 'blacklist' ? 'blacklist' : 'info'
     return VALID_TABS.includes(tab as CustomerTabKey) ? (tab as CustomerTabKey) : 'info'
   }
 
@@ -165,7 +172,7 @@
     closed_at: string | null
   }
 
-  let activeTab = $state<CustomerTabKey>(resolveInitialTab(initialTab))
+  let activeTab = $state<CustomerTabKey>(resolveInitialTab(initialTab, mode))
   let subscriptions = $state<Subscription[]>([])
   let auditLog = $state<AuditEntry[]>([])
   let inquiryPosts = $state<CsPost[]>([])
@@ -558,6 +565,74 @@
 
   let isSavingInfo = $state(false)
 
+  // ─── 관리대상(회원 가입 이력 없는 인물) 편집·등록 — mode='managed'|'new' 전용 ───────────────
+  // 이 패널은 부모의 {#key}로 대상이 바뀔 때마다 재마운트되므로 row로 초기화해도 stale되지 않는다.
+  const isNewManaged = $derived(mode === 'new')
+  let mg = $state({
+    name: row.name ?? '',
+    phone: row.phone ?? '',
+    email: row.email ?? '',
+    birth_date: row.birth_date ? row.birth_date.slice(0, 10) : '',
+    reason: row.blacklist_reason ?? '',
+  })
+  let mgBusy = $state(false)
+  const isDirtyMg = $derived(
+    mode === 'managed' && (
+      mg.name !== (row.name ?? '') ||
+      mg.phone !== (row.phone ?? '') ||
+      mg.email !== (row.email ?? '') ||
+      mg.birth_date !== (row.birth_date ? row.birth_date.slice(0, 10) : '') ||
+      mg.reason !== (row.blacklist_reason ?? '')
+    )
+  )
+
+  function handleMgPhoneInput(e: Event) {
+    const target = e.target as HTMLInputElement
+    mg.phone = formatPhone(target.value)
+    target.value = mg.phone
+  }
+
+  function validateMg(): string | null {
+    if (!mg.name.trim()) return '이름을 입력하세요.'
+    if (mg.phone.replace(/\D/g, '').length < 9) return '전화번호를 정확히 입력하세요.'
+    if (!mg.reason.trim()) return '관리대상 탭에서 등록 사유를 입력하세요.'
+    return null
+  }
+
+  function buildManagedRow(id: string, code: string): CustomerRow {
+    return {
+      user_id: id, email: mg.email.trim(), phone: mg.phone, name: mg.name.trim(), member_code: code, member_type: null,
+      membership_grade: 'NONE', credit_score: 70, rental_count: 0, late_return_count: 0, damage_count: 0, points: 0,
+      blacklisted: true, blacklist_reason: mg.reason.trim(), is_student: false, is_foreign: false,
+      identity_type: null, identity_doc_url: null, identity_verified_at: null,
+      foreign_doc_url: null, foreign_doc_urls: null, foreign_type: null, foreign_stay_type: null, foreign_verified_at: null,
+      password_set: false, created_at: new Date().toISOString(), total_count: 0,
+      birth_date: mg.birth_date || null, withdrawal_status: 'none', withdrawal_requested_at: null, withdrawal_purge_at: null,
+      is_managed_person: true,
+    }
+  }
+
+  const submitManaged: SubmitFunction = ({ cancel }) => {
+    const msg = validateMg()
+    if (msg) { csToast.error(msg); cancel(); return }
+    mgBusy = true
+    return async ({ result }) => {
+      mgBusy = false
+      if (result.type === 'success') {
+        const d = result.data as { id?: string; member_code?: string } | undefined
+        if (isNewManaged && d?.id && d.member_code) {
+          csToast.success('관리대상으로 등록되었습니다. 전용 QR이 생성되었습니다.')
+          onregistered?.({ id: d.id, member_code: d.member_code, row: buildManagedRow(d.id, d.member_code) })
+        } else {
+          csToast.success('관리대상 정보가 저장되었습니다.')
+        }
+        await invalidateAll()
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { error?: string })?.error ?? '처리 실패')
+      }
+    }
+  }
+
   function formatPhone(val: string): string {
     const digits = val.replace(/\D/g, '')
     if (digits.length <= 3) return digits
@@ -670,7 +745,7 @@
     notifLoaded       = false
     consentSettings   = null
     consentLoaded     = false
-    if (activeTab === 'info') {
+    if (activeTab === 'info' && mode === 'member') {
       loadShippingAddresses(uid)
       loadProfileSettings(uid)
     }
@@ -1025,9 +1100,11 @@
   <!-- 패널 헤더 -->
   <div class="panel-header">
     <div class="panel-user">
-      <span class="panel-name">{row.name ?? row.email}</span>
+      <span class="panel-name">{isNewManaged ? '관리대상 등록' : (row.name ?? row.email)}</span>
       {#if row.member_code}
         <code class="panel-code">{row.member_code}</code>
+      {:else if isNewManaged}
+        <span class="panel-code">등록 시 전용 QR 자동 생성</span>
       {/if}
     </div>
     {#if row.member_code}
@@ -1046,6 +1123,7 @@
       class:active={activeTab === 'info'}
       onclick={() => (activeTab = 'info')}
     >기본정보</button>
+    {#if mode === 'member'}
     <button
       class="panel-tab"
       class:active={activeTab === 'score'}
@@ -1066,24 +1144,59 @@
       class:active={activeTab === 'rental'}
       onclick={() => (activeTab = 'rental')}
     >상품대여이력</button>
+    {/if}
     <button
       class="panel-tab"
       class:active={activeTab === 'blacklist'}
-      class:tab-blacklist={row.blacklisted}
+      class:tab-blacklist={row.blacklisted || mode !== 'member'}
       onclick={() => (activeTab = 'blacklist')}
-    >블랙리스트</button>
+    >관리대상</button>
+    {#if mode === 'member'}
     <button
       class="panel-tab"
       class:active={activeTab === 'inquiry'}
       onclick={() => (activeTab = 'inquiry')}
     >빠른문의</button>
+    {/if}
   </div>
 
   <!-- 탭 콘텐츠 -->
   <div class="panel-body">
 
+    <!-- 기본정보 탭 — 관리대상(회원 가입 이력 없는 인물): 기존 info-grid 레이아웃 그대로, 회원 전용 항목(서류·포인트·배송지 등) 제외 -->
+    {#if activeTab === 'info' && mode !== 'member'}
+      <div class="info-grid">
+        <div class="info-row">
+          <span class="info-label">이름</span>
+          <input class="info-input" type="text" bind:value={mg.name} placeholder="이름 (필수)" maxlength="100" />
+        </div>
+        <div class="info-row">
+          <span class="info-label">전화번호</span>
+          <input class="info-input" type="text" value={mg.phone} oninput={handleMgPhoneInput} placeholder="010-0000-0000 (필수)" />
+        </div>
+        <div class="info-row">
+          <span class="info-label">이메일</span>
+          <input class="info-input" type="email" bind:value={mg.email} placeholder="이메일 (선택)" maxlength="255" />
+        </div>
+        <div class="info-row">
+          <span class="info-label">생년월일</span>
+          <CmsDatePicker bind:value={mg.birth_date} placeholder="생년월일 선택 (선택)" disablePast={false} />
+        </div>
+        {#if !isNewManaged}
+          <div class="info-row">
+            <span class="info-label">회원코드</span>
+            <span class="info-val"><code class="panel-code">{row.member_code}</code></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">등록일</span>
+            <span class="info-val">{row.created_at ? row.created_at.slice(0, 10) : '-'}</span>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <!-- 기본정보 탭 -->
-    {#if activeTab === 'info'}
+    {#if activeTab === 'info' && mode === 'member'}
       <form
         method="POST"
         action="/cms/customers?/updateCustomerInfo"
@@ -1934,8 +2047,29 @@
       </div>
     {/if}
 
-    <!-- 블랙리스트 탭 -->
-    {#if activeTab === 'blacklist'}
+    <!-- 관리대상 탭 — 회원 가입 이력 없는 인물(managed·new): 사유 입력 후 하단 [등록]/[저장] -->
+    {#if activeTab === 'blacklist' && mode !== 'member'}
+      <div class="bl-tab-section">
+        <div class="bl-status-banner" class:bl-active={!isNewManaged}>
+          <div class="bl-status-left">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            <span class="bl-status-text">{isNewManaged ? '관리대상 등록 전 — 사유를 입력하고 [등록]을 누르세요' : '관리대상 등록 중'}</span>
+          </div>
+        </div>
+        <div class="bl-form">
+          <textarea
+            class="f-input"
+            placeholder="관리대상 등록 사유를 입력하세요 (필수)"
+            rows="4"
+            maxlength="1000"
+            bind:value={mg.reason}
+          ></textarea>
+        </div>
+      </div>
+    {/if}
+
+    <!-- 관리대상 탭 — 기존 회원 -->
+    {#if activeTab === 'blacklist' && mode === 'member'}
       <div class="bl-tab-section">
 
         <!-- 현재 상태 배너 -->
@@ -1943,7 +2077,7 @@
           <div class="bl-status-left">
             {#if row.blacklisted}
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
-              <span class="bl-status-text">블랙리스트 등록 중</span>
+              <span class="bl-status-text">관리대상 등록 중</span>
             {:else}
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               <span class="bl-status-text">정상 회원</span>
@@ -1972,7 +2106,7 @@
             use:enhance={() => {
               return async ({ result }) => {
                 if (result.type === 'success') {
-                  csToast.success(row.blacklisted ? '블랙리스트가 해제되었습니다.' : '블랙리스트에 등록되었습니다.')
+                  csToast.success(row.blacklisted ? '관리대상이 해제되었습니다.' : '관리대상으로 등록되었습니다.')
                   showBlacklistForm = false
                   blacklistReason = ''
                   await invalidateAll()
@@ -1989,7 +2123,7 @@
               <textarea
                 name="reason"
                 class="f-input"
-                placeholder="블랙리스트 등록 사유를 입력하세요 (필수)"
+                placeholder="관리대상 등록 사유를 입력하세요 (필수)"
                 rows="3"
                 bind:value={blacklistReason}
                 required
@@ -1998,11 +2132,70 @@
               <input type="hidden" name="reason" value="" />
             {/if}
             <button type="submit" class="btn-danger" disabled={!row.blacklisted && !blacklistReason.trim()}>
-              {row.blacklisted ? '블랙리스트 해제 확인' : '블랙리스트 등록'}
+              {row.blacklisted ? '관리대상 해제 확인' : '관리대상 등록'}
             </button>
           </form>
         {/if}
 
+      </div>
+    {/if}
+
+    <!-- 관리대상 하단 액션 — [관리대상 삭제] 우측에 [등록](신규) / [저장](수정) -->
+    {#if mode !== 'member' && (activeTab === 'info' || activeTab === 'blacklist')}
+      <div class="delete-account-section">
+        {#if !isNewManaged}
+          <form
+            method="POST"
+            action="/cms/customers?/deleteManagedPerson"
+            use:enhance={() => {
+              return async ({ result }) => {
+                if (result.type === 'success') {
+                  csToast.success('관리대상이 삭제되었습니다.')
+                  deleteWarnPending = false
+                  await invalidateAll()
+                  onclose()
+                } else if (result.type === 'failure') {
+                  csToast.error((result.data as { error?: string })?.error ?? '삭제 실패')
+                  deleteWarnPending = false
+                }
+              }
+            }}
+          >
+            <input type="hidden" name="id" value={row.user_id} />
+            <button
+              type={deleteWarnPending ? 'submit' : 'button'}
+              class="act-del act-del-account"
+              class:act-del--pending={deleteWarnPending}
+              aria-label="관리대상 삭제"
+              title="관리대상 삭제"
+              onclick={() => {
+                if (!deleteWarnPending) {
+                  deleteWarnPending = true
+                  csToast.warning('한번 더 선택 시 삭제됩니다.')
+                  setTimeout(() => { deleteWarnPending = false }, 4000)
+                }
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
+              관리대상 삭제
+            </button>
+          </form>
+        {/if}
+        <form
+          method="POST"
+          action={isNewManaged ? '/cms/customers?/registerManagedPerson' : '/cms/customers?/updateManagedPerson'}
+          use:enhance={submitManaged}
+        >
+          {#if !isNewManaged}<input type="hidden" name="id" value={row.user_id} />{/if}
+          <input type="hidden" name="name" value={mg.name} />
+          <input type="hidden" name="phone" value={mg.phone} />
+          <input type="hidden" name="email" value={mg.email} />
+          <input type="hidden" name="birth_date" value={mg.birth_date} />
+          <input type="hidden" name="reason" value={mg.reason} />
+          <button type="submit" class="btn-primary" disabled={mgBusy || (!isNewManaged && !isDirtyMg)}>
+            {mgBusy ? '처리 중...' : (isNewManaged ? '등록' : '저장')}
+          </button>
+        </form>
       </div>
     {/if}
 
@@ -2494,6 +2687,7 @@
     border-top: 1px solid var(--cs-lilac);
     display: flex;
     justify-content: flex-end;
+    gap: 8px;
   }
 
   .act-del {

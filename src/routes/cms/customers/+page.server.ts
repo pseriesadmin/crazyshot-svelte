@@ -48,6 +48,8 @@ export interface CustomerRow {
   legacy_source: string | null
   legacy_signup_at: string | null
   legacy_purchase_count: number | null
+  /** 회원 가입 이력 없는 관리대상(managed_persons) 행 여부 — Migration #686 */
+  is_managed_person: boolean
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -318,4 +320,101 @@ export const actions: Actions = {
     if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '삭제 실패' })
     return { ok: true, deleted: true }
   },
+
+  // ── 관리대상(회원 가입 이력 없는 인물) 등록·수정·삭제 — Migration #686 ──────────────────────────
+  // 권한: 고객목록 메뉴 + manager 이상(블랙리스트 등록과 같은 등급). RPC는 service_role 전용.
+  registerManagedPerson: async ({ request, locals }) => {
+    const guard = await guardManagedPersonAction(locals)
+    if ('failure' in guard) return guard.failure
+    const input = await readManagedPersonForm(request)
+    const { data, error } = await guard.admin.rpc('cms_register_managed_person', {
+      p_name:       input.name,
+      p_phone:      input.phone,
+      p_email:      input.email,
+      p_birth_date: input.birthDate,
+      p_reason:     input.reason,
+      p_created_by: guard.userId,
+    })
+    const result = data as { ok: boolean; id?: string; member_code?: string; error?: string; existing_id?: string } | null
+    if (!result?.ok) {
+      return fail(400, { ok: false, error: managedPersonErrorMessage(result?.error) ?? error?.message ?? '등록에 실패했습니다.', existingId: result?.existing_id ?? null })
+    }
+    return { ok: true, registered: true, id: result.id, member_code: result.member_code }
+  },
+
+  updateManagedPerson: async ({ request, locals }) => {
+    const guard = await guardManagedPersonAction(locals)
+    if ('failure' in guard) return guard.failure
+    const input = await readManagedPersonForm(request)
+    if (!input.id) return fail(400, { ok: false, error: '대상 ID 필수' })
+    const { data, error } = await guard.admin.rpc('cms_update_managed_person', {
+      p_id:         input.id,
+      p_name:       input.name,
+      p_phone:      input.phone,
+      p_email:      input.email,
+      p_birth_date: input.birthDate,
+      p_reason:     input.reason,
+    })
+    const result = data as { ok: boolean; error?: string; existing_id?: string } | null
+    if (!result?.ok) {
+      return fail(400, { ok: false, error: managedPersonErrorMessage(result?.error) ?? error?.message ?? '저장에 실패했습니다.', existingId: result?.existing_id ?? null })
+    }
+    return { ok: true, updated: true }
+  },
+
+  deleteManagedPerson: async ({ request, locals }) => {
+    const guard = await guardManagedPersonAction(locals)
+    if ('failure' in guard) return guard.failure
+    const form = await request.formData()
+    const id = String(form.get('id') ?? '').trim()
+    if (!id) return fail(400, { ok: false, error: '대상 ID 필수' })
+    const { data, error } = await guard.admin.rpc('cms_delete_managed_person', {
+      p_id:         id,
+      p_deleted_by: guard.userId,
+    })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { ok: false, error: managedPersonErrorMessage(result?.error) ?? error?.message ?? '삭제에 실패했습니다.' })
+    return { ok: true, deleted: true }
+  },
+}
+
+// ── 관리대상 액션 공통 ────────────────────────────────────────────────────────
+const MANAGED_PERSON_ERRORS: Record<string, string> = {
+  name_required:   '이름을 입력하세요.',
+  name_too_long:   '이름은 100자 이내로 입력하세요.',
+  phone_invalid:   '전화번호 형식이 올바르지 않습니다.',
+  reason_required: '관리대상 등록 사유를 입력하세요.',
+  reason_too_long: '사유는 1000자 이내로 입력하세요.',
+  email_invalid:   '이메일 형식이 올바르지 않습니다.',
+  duplicate_phone: '이미 관리대상으로 등록된 전화번호입니다.',
+  not_found:       '대상을 찾을 수 없습니다.',
+}
+
+function managedPersonErrorMessage(code: string | undefined): string | null {
+  return code ? (MANAGED_PERSON_ERRORS[code] ?? null) : null
+}
+
+async function guardManagedPersonAction(locals: App.Locals) {
+  const denied = await requireMenuAccessAction(locals, 'customers.list')
+  if (denied) return { failure: denied }
+  const { session } = await locals.safeGetSession()
+  if (!session) return { failure: fail(403, { ok: false, error: '권한 없음' }) }
+  const cmsRole = await getCmsRoleForAction(locals)
+  if (!hasSettingsAccess(cmsRole ?? '')) return { failure: fail(403, { ok: false, error: '권한 없음' }) }
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  if (!serviceRoleKey) return { failure: fail(500, { ok: false, error: '서버 설정 오류' }) }
+  return { admin: createClient(getSupabaseUrl(), serviceRoleKey), userId: session.user.id }
+}
+
+async function readManagedPersonForm(request: Request) {
+  const form = await request.formData()
+  const birth = String(form.get('birth_date') ?? '').trim()
+  return {
+    id:        String(form.get('id') ?? '').trim(),
+    name:      String(form.get('name') ?? '').trim(),
+    phone:     String(form.get('phone') ?? '').trim(),
+    email:     String(form.get('email') ?? '').trim() || null,
+    birthDate: /^\d{4}-\d{2}-\d{2}$/.test(birth) ? birth : null,
+    reason:    String(form.get('reason') ?? '').trim(),
+  }
 }

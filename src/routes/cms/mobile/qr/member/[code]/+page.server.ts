@@ -23,7 +23,20 @@ export const load: PageServerLoad = async ({ params, parent }) => {
     .is('deleted_at', null)
     .maybeSingle()
 
-  if (!data) throw error(404, '회원 QR을 확인할 수 없습니다.')
+  if (data) {
+    throw redirect(303, `/cms/customers?selected=${(data as { id: string }).id}&tab=rental`)
+  }
 
-  throw redirect(303, `/cms/customers?selected=${(data as { id: string }).id}&tab=rental`)
+  // 회원이 아니면 관리대상(회원 가입 이력 없는 인물, managed_persons — Migration #686) 조회.
+  // 같은 /qr/member/{code} 체계를 쓰되 회원 전용 대여이력 탭이 없으므로 '관리대상' 탭(blacklist)으로 보낸다.
+  const { data: managed } = await admin
+    .from('managed_persons')
+    .select('id')
+    .ilike('member_code', escapeLikePattern(params.code))
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  if (!managed) throw error(404, '회원 QR을 확인할 수 없습니다.')
+
+  throw redirect(303, `/cms/customers?selected=${(managed as { id: string }).id}&tab=blacklist`)
 }
