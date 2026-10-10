@@ -8,66 +8,21 @@
  * - 공개 게시물만 대상 (status='published' AND is_public=true) — RLS와 동일 조건, 작성자가 'AI·자동 저장'을 끈 글(allow_ai_save=false)은 제외
  * - 모듈 스코프 캐시 (TTL 60초) — Vercel Serverless 콜드스타트 시 즉시 재구축
  * - title / keywords(TEXT[]) / tags(TEXT[]) / content_blocks(JSONB → 텍스트 추출) / log_type 포함
- * - content_blocks 추출은 productSearchIndex.ts의 extractContentBlocksText() 재사용 (중복 구현 금지)
+ * - content_blocks 추출은 productSearchDocs.ts의 extractContentBlocksText() 재사용 (중복 구현 금지)
  * - 작성자명(author_name)은 user_profiles 별도 조회로 포함 — +page.server.ts와 동일 패턴
  *
- * boost 정책:
- *   title        → 5 (최고)
- *   keywords_text → 3 (중간)
- *   tags_text     → 3 (중간)
- *   content_text  → 1 (낮음)
- *   category      → 1 (낮음, log_type 매핑)
+ * 문서 타입·인덱스 설정(boost 정책)·행→문서 변환은 순수 모듈 crazylogSearchDocs.ts에 있다(이 파일은 DB 조회·캐시만).
+ * keyword_parts(2026-10-10): 붙여 쓴 키워드의 끝말("10월출시예정" → "출시예정")을 보조 칸으로 색인.
  *
  * ⚠️ 이 파일은 crazyshot 전용 import 포함 가능 (adapters/ 계층)
  */
 
 import { supabase } from '$lib/services/supabase'
 import { createIndex } from '../core/createIndex'
-import type { NaturalSearchProvider, SearchDocument } from '../core/types'
-import { extractContentBlocksText } from './productSearchIndex'
+import type { NaturalSearchProvider } from '../core/types'
+import { CRAZYLOG_INDEX_CONFIG, buildCrazylogDocs, type CrazylogDoc } from './crazylogSearchDocs'
 
-// ── 문서 타입 ────────────────────────────────────────────────────────────────
-
-export interface CrazylogDoc extends SearchDocument {
-  id: string
-  /** user_posts.title */
-  title: string
-  /** user_posts.log_type ('상품리뷰' | '일상공유' | '채널홍보') — 검색 필드 */
-  category: string
-  /** keywords TEXT[] → space-joined 문자열 */
-  keywords_text: string
-  /** tags TEXT[] → space-joined 문자열 */
-  tags_text: string
-  /** content_blocks JSONB → 텍스트 노드만 추출, space-joined */
-  content_text: string
-  /** user_profiles.full_name (저장 필드 — 결과 표시용) */
-  author_name: string
-  /** user_posts.thumbnail_url (저장 필드 — 결과 표시용) */
-  thumbnail_url: string | null
-  /** user_posts.created_at (저장 필드 — 결과 정렬/표시용) */
-  created_at: string
-  /** user_posts.user_id (저장 필드 — 역조회용) */
-  user_id: string
-}
-
-// ── 인덱스 설정 ───────────────────────────────────────────────────────────────
-
-const CRAZYLOG_INDEX_CONFIG = {
-  searchFields: ['title', 'keywords_text', 'tags_text', 'content_text', 'category'] as const,
-  storeFields: [
-    'id', 'title', 'category', 'keywords_text', 'tags_text',
-    'author_name', 'thumbnail_url', 'created_at', 'user_id',
-  ] as const,
-  boost: {
-    title:         5,
-    keywords_text: 3,
-    tags_text:     3,
-    content_text:  1,
-    category:      1,
-  },
-  defaultFuzzy: 0.2 as const,
-  defaultPrefix: true,
-}
+export type { CrazylogDoc }
 
 // ── 모듈 스코프 캐시 (TTL 60초) ──────────────────────────────────────────────
 
@@ -120,22 +75,7 @@ export async function getCrazylogSearchIndex(): Promise<NaturalSearchProvider<Cr
     }
   }
 
-  const docs: CrazylogDoc[] = posts.map((row) => ({
-    id:            String(row['id'] ?? ''),
-    title:         String(row['title'] ?? ''),
-    category:      String(row['log_type'] ?? ''),
-    keywords_text: Array.isArray(row['keywords'])
-      ? (row['keywords'] as string[]).join(' ')
-      : '',
-    tags_text: Array.isArray(row['tags'])
-      ? (row['tags'] as string[]).join(' ')
-      : '',
-    content_text:  extractContentBlocksText(row['content_blocks']),
-    author_name:   authorMap[String(row['user_id'] ?? '')] ?? '익명',
-    thumbnail_url: row['thumbnail_url'] ? String(row['thumbnail_url']) : null,
-    created_at:    String(row['created_at'] ?? ''),
-    user_id:       String(row['user_id'] ?? ''),
-  }))
+  const docs = buildCrazylogDocs(posts, authorMap)
 
   cachedIndex = createIndex<CrazylogDoc>(CRAZYLOG_INDEX_CONFIG, docs)
   cachedAt = Date.now()
