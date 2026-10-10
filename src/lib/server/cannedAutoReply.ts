@@ -19,9 +19,26 @@ import { normalizeQuestion } from './questionNormalize'
 export const activeModel: CannedMatchModel = parseModel(weights)
 
 /** 판정 불가(미매칭·애매·낮은 확률)일 때 고객에게 보내는 안내 — AI 폴백이 꺼진 동안의 고정 문구 */
-export const WAIT_REPLY = '정확한 답변을 위해 담당자가 확인 후 안내드릴게요. 잠시만 기다려 주세요.'
+export const WAIT_REPLY = '정확한 답변을 위해 담당자가 확인 후 안내드릴게요. 잠시만 기다려 주세요. 영업 시간 외인 경우 지연될 수 있습니다.'
+/** 2026-10-10 이전에 이미 저장된 대기 안내 문구(반복 억제 판정에서 같은 안내로 취급) */
+const LEGACY_WAIT_REPLY = '정확한 답변을 위해 담당자가 확인 후 안내드릴게요. 잠시만 기다려 주세요.'
 /** 같은 세션에서 이 시간(분) 안에 이미 대기 안내를 보냈다면 다시 보내지 않는다 */
 export const WAIT_SUPPRESS_MINUTES = 5
+
+/**
+ * 대기 안내 반복 억제 판정(2026-10-10): 세션의 "마지막 답변(고객이 아닌 발신)"이 WAIT_SUPPRESS_MINUTES분 이내의 대기 안내일 때만 억제한다.
+ * 그 사이 빠른답변·관리자 답변이 나갔다면 새 질문은 아직 답을 못 받은 것이므로 안내를 다시 보낸다.
+ */
+export function isWaitNoticeStillPending(
+  lastReply: { sender_type: string; content: string | null; created_at: string } | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!lastReply || lastReply.sender_type !== 'ai' || (lastReply.content !== WAIT_REPLY && lastReply.content !== LEGACY_WAIT_REPLY)) return false
+  const t = Date.parse(lastReply.created_at)
+  if (Number.isNaN(t)) return false
+  const age = now.getTime() - t
+  return age >= 0 && age < WAIT_SUPPRESS_MINUTES * 60_000
+}
 
 export type AutoReplyMode = 'observe' | 'on'
 

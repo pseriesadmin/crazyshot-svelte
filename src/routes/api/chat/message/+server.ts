@@ -16,7 +16,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent, ActionPayload } from '$lib/types/chat'
 import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
-import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, WAIT_SUPPRESS_MINUTES } from '$lib/server/cannedAutoReply'
+import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, isWaitNoticeStillPending } from '$lib/server/cannedAutoReply'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { loadSensitiveCategoryKeys } from '$lib/server/cannedCategories'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
@@ -420,16 +420,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   let suppressWait = false
   if (classified.intent === 'CS_ESCALATE' && classified.reply === WAIT_REPLY && admin) {
     try {
-      const since = new Date(Date.now() - WAIT_SUPPRESS_MINUTES * 60_000).toISOString()
-      const { data: recentWait } = await admin
+      // 세션의 마지막 비고객 메시지(빠른답변·관리자·AI 포함)가 최근 대기 안내일 때만 억제 — 그 사이 다른 답변이 나갔다면 새 질문에는 안내를 다시 보낸다
+      const { data: lastReply } = await admin
         .from('chat_messages')
-        .select('id')
+        .select('sender_type, content, created_at')
         .eq('session_id', body.session_id)
-        .eq('sender_type', 'ai')
-        .eq('content', WAIT_REPLY)
-        .gte('created_at', since)
+        .neq('sender_type', 'user')
+        .order('created_at', { ascending: false })
         .limit(1)
-      suppressWait = ((recentWait as { id: string }[] | null)?.length ?? 0) > 0
+        .maybeSingle()
+      suppressWait = isWaitNoticeStillPending(lastReply as { sender_type: string; content: string | null; created_at: string } | null)
     } catch (err) {
       // 조회 실패 시에는 억제하지 않고 안내를 보낸다(응답 누락보다 중복 안내가 낫다)
       console.error('[chat/message] 대기 안내 중복 조회 실패(fail-soft):', err instanceof Error ? err.message : err)
