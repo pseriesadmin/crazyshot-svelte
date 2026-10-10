@@ -41,7 +41,7 @@ let inserts: Insert[]
 
 function makeChain(table: string, single: Result, thenResult?: Result) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'gte']) chain[m] = vi.fn(() => chain)
+  for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'gte', 'neq']) chain[m] = vi.fn(() => chain)
   chain.insert = vi.fn((row: Record<string, unknown>) => {
     inserts.push({ table, row })
     return chain
@@ -60,7 +60,8 @@ interface Opts {
   enabled: boolean
   observe: boolean
   answer: typeof CANNED | null
-  recentWait?: { id: string }[]
+  /** 세션의 마지막 비고객 메시지(대기 안내 반복 억제 판정용) */
+  lastReply?: { sender_type: string; content: string; created_at: string } | null
   observationInsertError?: { message: string; code: string }
 }
 
@@ -81,7 +82,12 @@ function setup(o: Opts) {
     from: vi.fn((table: string) => {
       if (table === 'auto_reply_settings') return makeChain(table, { data: { enabled: o.enabled, observe_mode: o.observe } })
       if (table === 'canned_responses') return makeChain(table, { data: [CANNED] })
-      if (table === 'chat_messages') return makeChain(table, { data: { id: 'new-msg-id' } }, { data: o.recentWait ?? [] })
+      if (table === 'chat_messages') {
+        const c = makeChain(table, { data: { id: 'new-msg-id' } }, { data: [] })
+        // 마지막 비고객 메시지 조회(.maybeSingle) — INSERT 결과(.single)와 분리
+        c.maybeSingle = vi.fn().mockResolvedValue({ data: o.lastReply ?? null })
+        return c
+      }
       if (table === 'canned_match_observations') {
         return makeChain(table, { data: null }, { data: null, error: o.observationInsertError })
       }
@@ -180,8 +186,8 @@ describe('켜짐(enabled=true)', () => {
 describe('대기 안내 반복 억제(5분)', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('5분 안에 같은 안내를 이미 보냈다면 다시 보내지 않는다(응답 ai_message=null, 고객 푸시 없음)', async () => {
-    setup({ enabled: true, observe: false, answer: null, recentWait: [{ id: 'old-wait' }] })
+  it('마지막 답변이 5분 안의 대기 안내라면 다시 보내지 않는다(응답 ai_message=null, 고객 푸시 없음)', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'ai', content: WAIT_REPLY, created_at: new Date().toISOString() } })
     const res = await run()
     expect(res.status).toBe(201)
     expect(res.data.ai_message).toBeNull()
@@ -192,8 +198,15 @@ describe('대기 안내 반복 억제(5분)', () => {
     expect(mockUrgentPush).toHaveBeenCalledTimes(1)
   })
 
+  it('그 사이 빠른답변·관리자 답변이 나갔다면 새 질문에는 안내를 다시 보낸다(2026-10-10 사고 재현)', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'admin', content: '📌 예약 취소·환불 안내', created_at: new Date().toISOString() } })
+    const res = await run()
+    expect(res.data.ai_message).not.toBeNull()
+    expect(insertsOf('chat_messages').find((r) => r.sender_type === 'ai')?.content).toBe(WAIT_REPLY)
+  })
+
   it('최근 안내가 없으면 보낸다(응답에 ai_message 포함, 고객 푸시 발송)', async () => {
-    setup({ enabled: true, observe: false, answer: null, recentWait: [] })
+    setup({ enabled: true, observe: false, answer: null, lastReply: null })
     const res = await run()
     expect(res.data.ai_message).not.toBeNull()
     expect(mockSendPushToUser).toHaveBeenCalledTimes(1)
@@ -210,7 +223,7 @@ describe('대기 안내 중복 조회 실패(fail-soft)', () => {
     mockAdmin.from.mockImplementation((table: string) => {
       const chain = (baseFrom ? baseFrom(table) : {}) as Record<string, unknown>
       if (table === 'chat_messages') {
-        chain.gte = vi.fn(() => { throw new Error('network down') })
+        chain.maybeSingle = vi.fn(() => { throw new Error('network down') })
       }
       return chain
     })
