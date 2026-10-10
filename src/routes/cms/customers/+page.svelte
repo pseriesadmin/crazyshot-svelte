@@ -34,7 +34,6 @@
 
   const BL_OPTIONS = [
     { value: '',      label: '전체' },
-    { value: 'false', label: '정상' },
     { value: 'true',  label: '관리대상' },
   ]
 
@@ -142,7 +141,7 @@
   function setBl(val: string) {
     const params = new URLSearchParams(window.location.search)
     closeDetailForChip(params)
-    if (val) params.set('bl', val); else params.delete('bl')
+    if (val) params.set('bl', val); else { params.delete('bl'); params.delete('classification') }
     params.delete('page')
     goto(`/cms/customers?${params.toString()}`, { replaceState: true })
   }
@@ -221,7 +220,7 @@
         <button class="btn-secondary" onclick={applySearch}>검색</button>
       </div>
 
-      <div class="filter-chips">
+      <div class="filter-nav" role="group" aria-label="고객 필터">
         {#each CLASSIFICATIONS as c}
           <button
             class="chip"
@@ -229,13 +228,12 @@
             onclick={() => toggleClassification(c.value)}
           >{c.label}</button>
         {/each}
-      </div>
-
-      <div class="filter-chips">
+        <span class="filter-divider" aria-hidden="true"></span>
         {#each BL_OPTIONS as opt}
           <button
             class="chip"
-            class:chip-active={(data.bl ?? '') === opt.value}
+            class:chip-all={opt.value === ''}
+            class:chip-active={opt.value === '' ? (data.bl ?? '') === '' && data.classifications.length === 0 : (data.bl ?? '') === opt.value}
             onclick={() => setBl(opt.value)}
           >{opt.label}</button>
         {/each}
@@ -438,33 +436,27 @@
     border-color: var(--cs-purple);
   }
 
-  /* 필터 칩 */
-  .filter-chips {
-    display: flex;
-    gap: 4px;
-  }
+  /* 필터 칩 — 예약목록(/cms/reservation) 알약형과 동일 */
+  .filter-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .filter-divider { width: 1px; height: 18px; background: var(--cs-lilac); margin: 0 2px; flex-shrink: 0; }
   .chip {
     display: inline-flex;
     align-items: center;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    padding: 5px 10px;
+    gap: 8px;
+    border-radius: var(--radius-xl);
+    padding: 5px 26px;
     font: var(--text-pc-script-12);
-    font-weight: 400;
+    font-weight: 700;
     white-space: nowrap;
     cursor: pointer;
-    border: 1px solid #ECEBF4;
-    background: var(--cs-white);
+    border: none;
+    background: var(--cs-purple-op10);
     color: var(--cs-text);
-    transition: background 0.12s, color 0.12s;
+    transition: background 0.15s, color 0.15s;
   }
-  .chip:hover     { background: rgba(59,47,138,0.06); }
-  .chip-active    { background: var(--cs-purple-dark); color: var(--cs-white); border-color: var(--cs-purple-dark); }
-  .chip:focus-visible {
-    outline: 2px solid var(--cs-purple);
-    outline-offset: -2px;
-    border-color: var(--cs-purple);
-  }
+  .chip:hover:not(.chip-active) { color: var(--cs-purple); }
+  .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  .chip-all:not(.chip-active) { background: transparent; }
 
   .count-badge {
     font: var(--text-pc-script-12);
