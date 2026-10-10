@@ -180,11 +180,16 @@
   let loadingAudit = $state(false)
   let loadingInquiries = $state(false)
   let inquiryPostsLoaded = $state(false)
-  let inquiryExpandedId = $state<string | null>(null)
   let rentals = $state<RentalRow[]>([])
   let loadingRentals = $state(false)
   let chatSessions = $state<CustomerChatSession[]>([])
   let loadingChatSessions = $state(false)
+  const inquiryFeed = $derived(
+    [
+      ...chatSessions.map((session) => ({ kind: 'chat' as const, id: session.id, at: session.updated_at, session })),
+      ...inquiryPosts.map((post) => ({ kind: 'post' as const, id: post.id, at: post.created_at, post })),
+    ].sort((x, y) => (x.at < y.at ? 1 : x.at > y.at ? -1 : 0))
+  )
   let chatSessionsLoaded = $state(false)
   let subscriptionsLoaded = $state(false)
   let auditLoaded = $state(false)
@@ -394,9 +399,6 @@
     }
   }
 
-  function toggleInquiry(id: string) {
-    inquiryExpandedId = inquiryExpandedId === id ? null : id
-  }
 
   const INQUIRY_STATUS_LABEL: Record<string, string> = {
     open:        '답변대기',
@@ -538,7 +540,7 @@
   let localInfo = $state({
     name: row.name ?? '',
     email: row.email,
-    phone: row.phone ?? '',
+    phone: formatPhone(row.phone ?? ''),
     birth_date: row.birth_date ? row.birth_date.slice(0, 10) : '',
     member_type: row.member_type ?? 'B2C',
     created_at_date: row.created_at ? row.created_at.slice(0, 10) : '',
@@ -548,7 +550,7 @@
   $effect(() => {
     localInfo.name = row.name ?? ''
     localInfo.email = row.email
-    localInfo.phone = row.phone ?? ''
+    localInfo.phone = formatPhone(row.phone ?? '')
     localInfo.birth_date = row.birth_date ? row.birth_date.slice(0, 10) : ''
     localInfo.member_type = row.member_type ?? 'B2C'
     localInfo.created_at_date = row.created_at ? row.created_at.slice(0, 10) : ''
@@ -557,7 +559,7 @@
   const isDirtyInfo = $derived(
     localInfo.name !== (row.name ?? '') ||
     localInfo.email !== row.email ||
-    localInfo.phone !== (row.phone ?? '') ||
+    localInfo.phone !== formatPhone(row.phone ?? '') ||
     localInfo.birth_date !== (row.birth_date ? row.birth_date.slice(0, 10) : '') ||
     localInfo.member_type !== (row.member_type ?? 'B2C') ||
     localInfo.created_at_date !== (row.created_at ? row.created_at.slice(0, 10) : '')
@@ -2207,86 +2209,42 @@
         {:else if inquiryPosts.length === 0 && chatSessions.length === 0}
           <div class="inq-empty">등록된 문의 및 상담 내역이 없습니다.</div>
         {:else}
-          <!-- 채팅 상담 목록 -->
-          {#each chatSessions as cs (cs.id)}
-            {@const csSt = CHAT_STATUS_STYLE[cs.status] ?? CHAT_STATUS_STYLE['closed']}
-            <a
-              class="chat-card"
-              href="/cms/chat?session={cs.id}"
-              target="_blank"
-              rel="noopener"
-            >
-              <div class="chat-card-top">
-                <span class="inq-chip" style="background:{csSt.bg};color:{csSt.color}">
-                  {CHAT_STATUS_LABEL[cs.status] ?? cs.status}
-                </span>
-                <span class="chat-source-badge">채팅상담</span>
-                <span class="chat-date">{cs.updated_at.slice(0,10)}</span>
-              </div>
-              <div class="chat-context">
-                {CONTEXT_TYPE_LABEL[cs.context_type] ?? cs.context_type}
-              </div>
-            </a>
-          {/each}
-
-          <!-- 빠른문의(cs_posts) 목록 -->
-          {#each inquiryPosts as post (post.id)}
-            {@const st = INQUIRY_STATUS_STYLE[post.status] ?? INQUIRY_STATUS_STYLE['open']}
-            {@const isOpen = inquiryExpandedId === post.id}
-            {@const replyCount = post.cs_inquiries?.length ?? 0}
-            <div class="inq-card" class:inq-open={isOpen}>
-              <button
-                class="inq-head"
-                onclick={() => toggleInquiry(post.id)}
-                aria-expanded={isOpen}
-              >
-                <span class="inq-chip" style="background:{st.bg};color:{st.color}">
-                  {INQUIRY_STATUS_LABEL[post.status] ?? post.status}
-                </span>
-                <div class="inq-summary">
-                  <div class="inq-title-row">
-                    <span class="inq-title">{post.title}</span>
-                    <span class="chat-source-badge inq-source-badge">빠른문의</span>
-                  </div>
-                  <span class="inq-meta">
-                    <span>{INQUIRY_CATEGORY_LABEL[post.category] ?? post.category}</span>
-                    <span>{post.created_at.slice(0,10)}</span>
-                    {#if replyCount > 0}
-                      <span class="inq-reply-badge">답변 {replyCount}</span>
-                    {/if}
+          <!-- 채팅 상담 + 빠른문의 통합 목록(최신순) -->
+          {#each inquiryFeed as item (item.kind + item.id)}
+            {#if item.kind === 'chat'}
+              {@const cs = item.session}
+              {@const csSt = CHAT_STATUS_STYLE[cs.status] ?? CHAT_STATUS_STYLE['closed']}
+              <a class="chat-card" href="/cms/chat?session={cs.id}" target="_blank" rel="noopener">
+                <div class="chat-card-top">
+                  <span class="inq-chip" style="background:{csSt.bg};color:{csSt.color}">
+                    {CHAT_STATUS_LABEL[cs.status] ?? cs.status}
                   </span>
+                  <span class="chat-source-badge">채팅상담</span>
+                  <span class="chat-date">{cs.updated_at.slice(0,10)}</span>
                 </div>
-                <span class="inq-chevron" class:rotated={isOpen}>
-                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                    <path d="M2 5L7 9L12 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </span>
-              </button>
-
-              {#if isOpen}
-                <div class="inq-body">
-                  <div class="inq-section-label">고객 문의</div>
-                  <div class="inq-content">{post.content}</div>
-
-                  {#if post.cs_inquiries?.length > 0}
-                    <div class="inq-section-label inq-reply-label">관리자 답변</div>
-                    {#each post.cs_inquiries as reply (reply.id)}
-                      <div class="inq-reply">
-                        <div class="inq-reply-text">{reply.response}</div>
-                        <div class="inq-reply-meta">
-                          {#if reply.is_resolution}
-                            <span class="inq-resolved-tag">종결 답변</span>
-                          {/if}
-                          <span>{reply.created_at.slice(0,10)}</span>
-                        </div>
-                      </div>
-                    {/each}
-                  {:else}
-                    <div class="inq-no-reply">아직 답변이 등록되지 않았습니다.</div>
-                  {/if}
+                <div class="chat-context">
+                  {CONTEXT_TYPE_LABEL[cs.context_type] ?? cs.context_type}
                 </div>
-              {/if}
-            </div>
+              </a>
+            {:else}
+              {@const post = item.post}
+              {@const st = INQUIRY_STATUS_STYLE[post.status] ?? INQUIRY_STATUS_STYLE['open']}
+              {@const replyCount = post.cs_inquiries?.length ?? 0}
+              <a class="chat-card" href="/cms/customers/inquiry?post={post.id}" target="_blank" rel="noopener">
+                <div class="chat-card-top">
+                  <span class="inq-chip" style="background:{st.bg};color:{st.color}">
+                    {INQUIRY_STATUS_LABEL[post.status] ?? post.status}
+                  </span>
+                  <span class="chat-source-badge inq-source-badge">빠른문의</span>
+                  {#if replyCount > 0}<span class="inq-reply-badge">답변 {replyCount}</span>{/if}
+                  <span class="chat-date">{post.created_at.slice(0,10)}</span>
+                </div>
+                <div class="chat-context">
+                  {post.title}
+                  <span class="inq-meta">{INQUIRY_CATEGORY_LABEL[post.category] ?? post.category}</span>
+                </div>
+              </a>
+            {/if}
           {/each}
         {/if}
       </div>
