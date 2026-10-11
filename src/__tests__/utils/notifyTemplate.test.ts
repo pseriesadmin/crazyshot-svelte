@@ -125,4 +125,31 @@ describe('renderLockerGuideMessage — 값이 없는 부분은 문장에서 뺀�
     expect(validateNotifyMessage('locker_guide', tpl).ok).toBe(true)
     expect(getNotifySpec('locker_guide')?.sms).toBe(true)
   })
+  it('문자 대상 알림에 링크(http·www)가 있으면 저장은 되고 경고가 붙는다', () => {
+    const r = validateNotifyMessage('return_remind', '{{상품명}} 안내 https://example.com 확인')
+    expect(r.ok).toBe(true)
+    expect(r.warnings.some((w) => w.includes('링크'))).toBe(true)
+    expect(validateNotifyMessage('return_remind', '자세히 www.example.com').warnings.some((w) => w.includes('링크'))).toBe(true)
+  })
+  it('링크가 없거나 푸시 전용 알림이면 링크 경고가 없다', () => {
+    expect(validateNotifyMessage('return_remind', '{{상품명}} 반납 안내').warnings.some((w) => w.includes('링크'))).toBe(false)
+    expect(validateNotifyMessage('rental_complete', '감사합니다 https://example.com').warnings.some((w) => w.includes('링크'))).toBe(false)
+  })
+  it('http 링크는 자동 첨부 생략, 도메인·www만 있으면 자동 첨부가 한 번 더 붙는다고 각각 정확히 안내한다', () => {
+    const http = validateNotifyMessage('return_remind', '확인 https://example.com').warnings.join(' ')
+    expect(http).toContain('생략')
+    const domain = validateNotifyMessage('return_remind', '자세한 건 crazyshot.kr 에서').warnings.join(' ')
+    expect(domain).toContain('두 번')
+    expect(domain).not.toContain('생략')
+    const www = validateNotifyMessage('return_remind', '확인 www.example.com').warnings.join(' ')
+    expect(www).toContain('두 번')
+  })
+  it('대문자 HTTP는 sms.ts가 자동 링크를 붙이므로 두 번 안내(생략 아님)', () => {
+    const upper = validateNotifyMessage('return_remind', '확인 HTTP://EXAMPLE.COM').warnings.join(' ')
+    expect(upper).toContain('두 번')
+  })
+  it('무인보관함은 별도 조립이라 링크 경고 대상이 아니다', () => {
+    expect(validateNotifyMessage('locker_guide', '{{상품명}} crazyshot.kr').warnings.some((w) => w.includes('주소'))).toBe(false)
+  })
 })
+

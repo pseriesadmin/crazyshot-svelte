@@ -16,6 +16,7 @@ const mockSend = vi.hoisted(() => vi.fn())
 vi.mock('solapi', () => ({ SolapiMessageService: vi.fn().mockImplementation(function () { return { send: mockSend } }) }))
 vi.mock('firebase-admin/app', () => ({ cert: vi.fn(), getApps: () => [], initializeApp: vi.fn() }))
 vi.mock('$lib/server/crazychat/action', () => ({ AGENT_REQUEST_KIND_LABEL: {} }))
+vi.mock('$lib/server/lockerGuideMessage', () => ({ composeLockerGuideMessage: async () => null }))
 vi.mock('$lib/server/adminPushMenuFilter', () => ({ filterAdminPushRecipientsByMenu: async (_c: unknown, _k: string, ids: string[]) => ids }))
 
 // 푸시 경로용 — FCM 발송 내용을 캡처
@@ -143,3 +144,14 @@ describe('카드 문자 — 설정 유형 매핑', () => {
     expect(arg.text).toContain('전자계약서를 다시 확인해주세요.')
   })
 })
+
+describe('무인보관함 — 조립 실패 시 편집 문장을 적용하지 않는다', () => {
+  it('저장된 안내문장이 있어도 조립이 안 되면 변수 빠진 문장 대신 기존 고정 문구가 나간다', async () => {
+    cfgByType.locker_guide = { message: '{{상품명}} {{무인함번호}}번함 비밀번호 {{무인함비밀번호}}', push_enabled: true }
+    await sendReservationLifecyclePush(fakeClient(), 501, 'locker_guide', { skipSms: true })
+    const msg = fcmSend.mock.calls[0][0] as { webpush: { notification: { body: string } } }
+    expect(msg.webpush.notification.body).not.toContain('번함 비밀번호')
+    expect(msg.webpush.notification.body).toContain('무인보관함')
+  })
+})
+

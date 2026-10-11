@@ -8,7 +8,8 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { requireAccountMutationAccess } from '$lib/server/requireTrueSuperadmin'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { clearNotifyMessageCache, readMessageFromExtraConfig } from '$lib/server/notifyMessages'
-import { validateNotifyMessage } from '$lib/utils/notifyTemplate'
+import { validateNotifyMessage, NOTIFY_SPECS, NOTIFY_VARIABLES } from '$lib/utils/notifyTemplate'
+import { LIFECYCLE_SMS_COPY } from '$lib/server/sms'
 import { getLockerEntrancePassword, LOCKER_ENTRANCE_KEY } from '$lib/server/lockerEntrance'
 import { isValidLockerPassword } from '$lib/utils/lockerFields'
 
@@ -49,6 +50,33 @@ export interface PushLogRow {
 
 const LOGS_PER_PAGE = 20
 const ADMIN_EVENT_KEYS = ['new_reservation', 'contract_signed', 'payment_completed', 'new_session', 'urgent_chat_message', 'identity_review', 'crazychat_request'] as const
+
+// 설정 유형 → sms.ts 문자 유형(smsTypeToConfigType의 역방향). 문자 고정 문구가 없는 유형(예: 무인보관함은 별도 조립)은 undefined.
+function configTypeToSmsType(configType: string): string | undefined {
+  if (configType === 'contract_sent') return 'contract_link'
+  if (configType === 'contract_signed_customer') return 'contract_signed'
+  return configType in LIFECYCLE_SMS_COPY ? configType : undefined
+}
+
+/**
+ * 저장된 안내문장이 없을 때 "지금 실제로 발송되는 문자 문구"를 샘플값으로 렌더링해 화면에 보여주기 위한 값.
+ * 발송 경로(sendLifecycleSms)와 같은 규칙: 고정 문구 + 'http'가 없으면 줄바꿈 후 링크 첨부.
+ */
+function buildSmsDefaultSamples(): Record<string, string> {
+  const product = NOTIFY_VARIABLES['상품명'].sample
+  const link = 'https://crazyshot.kr/account/rental'
+  const out: Record<string, string> = {}
+  for (const spec of NOTIFY_SPECS) {
+    if (!spec.sms) continue
+    const smsType = configTypeToSmsType(spec.notifyType)
+    const fn = smsType ? LIFECYCLE_SMS_COPY[smsType] : undefined
+    if (!fn) continue
+    let msg = fn(product, link)
+    if (!msg.includes('http')) msg = `${msg}\n${link}`
+    out[spec.notifyType] = msg
+  }
+  return out
+}
 
 function admin() {
   return createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -118,6 +146,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     adminList: (adminRes.data ?? []) as AdminNotifyRow[],
     lockerEntrancePassword,
     logs,
+    smsDefaults: buildSmsDefaultSamples(),
     logPage,
     totalLogPages,
     logStatus,

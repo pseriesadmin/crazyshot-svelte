@@ -171,6 +171,8 @@ export function classifySms(bytes: number): SmsKind {
 // 제어문자(줄바꿈 제외)·방향 제어·제로폭 문자 — 푸시·문자 모두에서 깨지거나 보이지 않게 섞여 들어오는 문자
 // eslint-disable-next-line no-control-regex -- 제어문자 검출이 목적
 const INVISIBLE_PATTERN = /[\u0000-\u0009\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/
+// 링크·주소 감지: http(s) 링크, www., 도메인만 적은 주소(예: crazyshot.kr)
+const EXTERNAL_LINK_PATTERN = /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:kr|com|net|org|io|me|app|co)\b/i
 const EMOJI_PATTERN = /\p{Extended_Pictographic}|️|‍/u
 
 export const SMS_BRAND_PREFIX = '[크레이지샷] '
@@ -258,6 +260,15 @@ export function validateNotifyMessage(notifyType: string, message: string): Noti
   const warnings: string[] = []
   if (spec.sms && est.smsKind === 'LMS') {
     warnings.push(`문자 본문이 ${SMS_MAX_BYTES}바이트를 넘어 장문(LMS)으로 발송됩니다(최대 ${est.smsBytes}바이트 추정).`)
+  }
+  // 문자 대상 알림은 수신동의와 무관하게 항상 발송되는 안내라, 링크·주소가 들어가면 스팸·광고 오해가 생긴다 — 저장은 허용하되 알린다.
+  // 자동 링크 첨부 여부는 sms.ts와 같은 기준(소문자 'http' 포함 여부)으로 안내해 경고문과 실제 동작이 어긋나지 않게 한다.
+  if (spec.sms && notifyType !== 'locker_guide' && EXTERNAL_LINK_PATTERN.test(text)) {
+    warnings.push(
+      text.includes('http')
+        ? '문장에 링크(http)가 있어 자동 링크 첨부는 생략됩니다. 문자는 수신 동의와 무관하게 발송되는 안내이므로 광고·외부 링크는 넣지 않는 것이 좋습니다.'
+        : '문장에 주소(www·도메인)가 있어도 자동 링크가 한 번 더 첨부되어 주소가 두 번 나갈 수 있습니다. 광고·외부 주소는 넣지 않는 것이 좋습니다.',
+    )
   }
   return { ok: true, warnings, smsBytes: est.smsBytes, smsKind: est.smsKind }
 }
