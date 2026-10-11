@@ -349,6 +349,9 @@ describe('sync_order_after_composition_change — 재고구성 변경 후 주문
 
       const resBase = await createHoldReservation(userId, parentId, dr)
 
+      // 2026-10-04(Migration #640): 포인트는 서버가 보유 포인트로 보정해 저장하므로 사용할 포인트를 먼저 지급한다
+      await admin.from('user_profiles').update({ points: 500 }).eq('id', userId)
+
       // delivery_fee=3000, selected_points=500 으로 주문 생성
       const orderId = await linkToOrder(userId, [resBase], {
         deliveryFee:    3000,

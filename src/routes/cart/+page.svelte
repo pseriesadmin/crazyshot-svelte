@@ -10,6 +10,7 @@
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
   import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
+  import { DEFAULT_POINT_USE_RULES, normalizePointUse, maxUsablePoints, describePointUseRules, type PointUseRules } from '$lib/utils/pointUseRules';
   import { isCartFormComplete, isCartFormEmpty, isCustomerAndAddressComplete, missingCartFormFields } from '$lib/utils/cartFormCompleteness';
   import { calcStackedCouponDiscount, canAddCoupon, type StackableCoupon } from '$lib/utils/couponStacking';
   import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
@@ -584,10 +585,10 @@
     openCalId = null;
   }
 
-  // 시간선택 노출 범위 — 24시간 전체로 확대(2026-08-20, Stephen 확정).
   // 무인보관함 안내문 — CMS 값(rental_shipping_settings.locker_guide_text, Migration #659)이 비어 있을 때만 쓰는 기본문구
   const DEFAULT_LOCKER_GUIDE = "선택한 {방식} 시간은 고객센터 '무인보관함' 이용만 가능하며 1시간 전 비밀번호를 채팅서비스로 발송해 드립니다."
 
+  // 시간선택 노출 범위 — 24시간 전체로 확대(2026-08-20, Stephen 확정).
   // 09:00~22:00=방문배송 정상영업시간 / 23:00~08:00=영업외시간(방문대여 선택 시 무인보관함
   // 인계로 부분 반영 — isLockerHour()는 $lib/utils/lockerTimeRange 공유 유틸(CMS와 동일 로직
   // 재사용, 드리프트 방지). pickup_method/return_method DB 값은 그대로 'visit' 유지.
@@ -929,7 +930,7 @@
   // canonicalReservationId가 옵션·방식 저장 기준(=CartItemUiState.id와 동일).
   type CartLineGroup = { groupKey: string; canonicalReservationId: string; reservationIds: string[]; qty: number; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   type RentalConsentItemRow = { id: string; content: string; display_order: number }
-  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; availableStock: Record<string, number>; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; holidayGuideText: string; consentItems: RentalConsentItemRow[] }
+  type ServerExt = { calcTotal: number; calcDiscount: number; calcFinal: number; depositTotal: number; membershipGrade: string | null; userPoints: number; pointUseRules?: PointUseRules; userCoupons: UserCouponExt[]; cartLineItems: CartLineItem[]; cartLineGroups: CartLineGroup[]; availableStock: Record<string, number>; productPriceRules: Record<string, PriceRuleExt>; hasUserAddress: boolean; rentalGuideText: string; holidayGuideText: string; consentItems: RentalConsentItemRow[] }
   const sd = $derived(data as unknown as ServerExt)
 
   // 카트 라인아이템 — 항상 실 DB 기준 (게스트도 예약 시 익명 로그인으로 실 세션을 가지므로
@@ -1473,8 +1474,8 @@
     enable_delivery: boolean;   delivery_fee: number | null
     enable_return: boolean;     return_fee: number | null
     shipping_guide: string | null
-    max_rental_days: number | null  // [11] 최대 대여일수
     locker_guide_text: string | null  // 무인보관함 안내문({방식} 토큰)
+    max_rental_days: number | null  // [11] 최대 대여일수
   } | null | undefined) ?? null)
 
   // [11] 최대 반납일 = 수령일 + max_rental_days (DB 설정값, 기본 15일)
@@ -2110,6 +2111,8 @@
   // 쿠폰끼리 중복 허용 — 중복 불가 쿠폰이 섞이려 하면 안내창으로 확인받는다
   let stackNotice = $state<{ couponId: string; conflictLabel: string } | null>(null)
   const sdUserPoints = $derived<number>((sd as { userPoints?: number }).userPoints ?? 0)
+  // 포인트 사용 규칙(CMS 설정) — 서버(주문 저장)가 같은 규칙으로 다시 보정한다(normalize_point_use)
+  const sdPointUseRules = $derived<PointUseRules>((sd as { pointUseRules?: PointUseRules }).pointUseRules ?? DEFAULT_POINT_USE_RULES)
   // "회원정보 반영"(배송지) 체크박스 활성화 조건 — 저장된 배송지 주소가 있을 때만 사용 가능
   const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
   // "회원정보 반영" 체크박스 자동채움 원본 데이터(+page.server.ts 제공)
@@ -2212,9 +2215,11 @@
 
   // 포인트 사용 최대값 (보유 포인트 & 결제 금액 중 작은 값) — otVat은 포함가 내역 표시용일
   // 뿐 별도 가산 항목이 아니므로 더하지 않음
+  // 2026-10-04: CMS 포인트 사용 규칙(ON/OFF·최소·단위·최대 비율) 반영 — pointUseRules.ts(서버 normalize_point_use와 동일 순서)
+  const otPointPayable = $derived(Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount))
   const otMaxPoints = $derived(
     otSelectedCouponsAllowPoints
-      ? Math.min(sdUserPoints, Math.max(0, otNetBeforeVat + otDeliveryFee - otCouponDiscount))
+      ? maxUsablePoints(sdPointUseRules, sdUserPoints, otPointPayable)
       : 0
   )
 
@@ -2741,13 +2746,21 @@
                 class="f-input points-input"
                 min="0"
                 max={otMaxPoints}
+                step={sdPointUseRules.useUnit}
                 value={otPointsUsed}
-                disabled={!pricingReady || !otSelectedCouponsAllowPoints}
+                disabled={!pricingReady || !otSelectedCouponsAllowPoints || !sdPointUseRules.useEnabled}
                 oninput={(e) => {
                   const el = e.target as HTMLInputElement
                   const v = Math.min(otMaxPoints, Math.max(0, parseInt(el.value) || 0))
                   otPointsUsed = v
                   // 값이 같아 상태가 안 바뀌어도 입력칸에 보이는 숫자는 항상 실제 적용값과 일치시킨다
+                  el.value = String(v)
+                }}
+                onchange={(e) => {
+                  // 입력을 마치면 최소 사용 포인트·사용 단위 규칙까지 적용(타이핑 중에는 최대값만 제한)
+                  const el = e.target as HTMLInputElement
+                  const v = normalizePointUse(sdPointUseRules, { requested: otPointsUsed, balance: sdUserPoints, payable: otPointPayable })
+                  otPointsUsed = v
                   el.value = String(v)
                 }}
               />
@@ -2761,6 +2774,9 @@
             {#if !otSelectedCouponsAllowPoints}
               <p class="points-block-note">이 쿠폰은 포인트와 함께 사용할 수 없습니다</p>
             {/if}
+            {#each describePointUseRules(sdPointUseRules) as note (note)}
+              <p class="points-block-note">{note}</p>
+            {/each}
           </div>
 
           <!-- 대여설정 미완성 상태에서 금액 영역 진입 감지용 센티널 -->

@@ -11,6 +11,7 @@ import { groupCartLineItems } from '$lib/utils/cartLineGrouping'
 import { resolveParentProductId } from '$lib/services/reservationHelper'
 import { resolveParentProductFields, createParentReadClient, PARENT_DISPLAY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/docApproval'
+import { loadPointUseRules } from '$lib/server/pointUseSettings'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -123,8 +124,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     enable_return: boolean
     return_fee: number | null
     shipping_guide: string | null
-    max_rental_days: number | null
     locker_guide_text: string | null
+    max_rental_days: number | null
   } | null
 
   // 배송료 우대설정(/cms/set/rental "배송료 우대설정") — 조건 만족 시 배송비 할인 조합(최대
@@ -706,6 +707,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     membershipGrade: (profileResult.data as ProfileRow | null)?.membership_grade ?? null,
     crazyScore:      (profileResult.data as ProfileRow | null)?.credit_score     ?? null,
     userPoints:      (profileResult.data as ProfileRow | null)?.points           ?? 0,
+    // 포인트 사용 규칙(CMS 설정) — 입력 제한·안내용. 서버(주문 저장)가 같은 규칙으로 다시 보정한다(Migration #639·#640)
+    pointUseRules:   await loadPointUseRules(supabase),
     docGate:        getDocGateStatus(profileResult.data as ProfileRow | null),
     docLanding:     docLandingKind(profileResult.data as ProfileRow | null),
     userCoupons:     filteredCoupons as UserCouponRow[],

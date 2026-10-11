@@ -18,6 +18,7 @@
     { id: 'history',   label: '이력' },
     { id: 'balance',   label: '잔량 현황' },
     { id: 'rules',     label: '적립 규칙' },
+    { id: 'use',       label: '사용 규칙' },
   ] as const
 
   let activeTab = $state(data.tab)
@@ -81,6 +82,32 @@
   }
 
   function cancelEdit() { editingRule = null }
+
+  // ─ 사용 규칙 (Migration #639) ─
+  // prop을 $state 초기값으로 쓰지 않고 $effect로 서버값에 재동기화한다(ui-mobile.md $state(prop) 금지 규칙)
+  let useEnabled = $state(true)
+  let useMin     = $state('0')
+  let useUnit    = $state('1')
+  let useRatio   = $state('100')
+  let useSaving  = $state(false)
+
+  $effect(() => {
+    const r = data.pointUseSettings
+    if (!r) return
+    useEnabled = r.use_enabled
+    useMin     = String(r.min_use_points)
+    useUnit    = String(r.use_unit)
+    useRatio   = String(r.max_use_ratio)
+  })
+
+  const useDirty = $derived(
+    !!data.pointUseSettings && (
+      useEnabled !== data.pointUseSettings.use_enabled ||
+      Number(useMin)   !== data.pointUseSettings.min_use_points ||
+      Number(useUnit)  !== data.pointUseSettings.use_unit ||
+      Number(useRatio) !== data.pointUseSettings.max_use_ratio
+    )
+  )
 
   // ─ action 결과 ─
   $effect(() => {
@@ -432,6 +459,60 @@
         </tbody>
       </table>
     </div>
+
+  <!-- ────────────────────────────────────────────
+       탭6: 포인트 사용 규칙 — 장바구니·계약서 입력 제한 + 서버 강제(주문 저장·차감)에 공통 적용
+  ──────────────────────────────────────────── -->
+  {:else if activeTab === 'use'}
+    <div class="section-header">
+      <span class="section-title nm">포인트 사용 규칙</span>
+      <button form="use-rules-form" type="submit" class="btn-save-inline" class:dirty={useDirty}
+        disabled={!useDirty || useSaving}>저장</button>
+    </div>
+
+    <form id="use-rules-form" method="POST" action="?/saveUseSettings"
+      use:enhance={() => {
+        useSaving = true
+        return ({ update }) => { useSaving = false; update({ reset: false }) }
+      }}
+    >
+      <input type="hidden" name="use_enabled" value={String(useEnabled)} />
+      <div class="table-card use-rules-card">
+        <div class="use-rule-row">
+          <div>
+            <span class="rule-label">포인트 사용 허용</span>
+            <span class="rule-desc">끄면 고객은 어떤 주문에서도 포인트를 사용할 수 없습니다.</span>
+          </div>
+          <button type="button" class="tog" class:tog-on={useEnabled}
+            role="switch" aria-checked={useEnabled} aria-label="포인트 사용 허용"
+            onclick={() => { useEnabled = !useEnabled }}>
+            <span class="tog-thumb"></span>
+          </button>
+        </div>
+        <div class="use-rule-row">
+          <div>
+            <span class="rule-label">최소 사용 포인트 (P)</span>
+            <span class="rule-desc">이 값보다 적게는 사용할 수 없습니다. 0이면 제한 없음.</span>
+          </div>
+          <input type="number" name="min_use_points" min="0" step="1" class="f-input inline" bind:value={useMin} />
+        </div>
+        <div class="use-rule-row">
+          <div>
+            <span class="rule-label">사용 단위 (P)</span>
+            <span class="rule-desc">이 단위의 배수로만 사용할 수 있습니다. 1이면 제한 없음.</span>
+          </div>
+          <input type="number" name="use_unit" min="1" step="1" class="f-input inline" bind:value={useUnit} />
+        </div>
+        <div class="use-rule-row">
+          <div>
+            <span class="rule-label">주문당 최대 사용 비율 (%)</span>
+            <span class="rule-desc">결제 금액의 이 비율까지만 사용할 수 있습니다. 100이면 제한 없음(보유 포인트·결제 금액 한도만 적용).</span>
+          </div>
+          <input type="number" name="max_use_ratio" min="0" max="100" step="1" class="f-input inline" bind:value={useRatio} />
+        </div>
+      </div>
+    </form>
+    <p class="rule-desc use-rules-note">저장하면 즉시 적용됩니다. 이미 결제 대기 중인 주문은 다음 금액 갱신 시 새 규칙으로 보정되며, 포인트가 이미 차감된 주문은 변경되지 않습니다.</p>
   {/if}
 </div>
 
@@ -605,4 +686,36 @@ td { padding: 10px 16px; vertical-align: middle; }
 .f-input::placeholder { color: var(--cs-text-placeholder); }
 .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 .f-input.ta { resize: vertical; height: auto; }
+
+/* ─ 사용 규칙 탭 (섹션 인라인 저장 버튼: cms-uiux.md §0-10-D 정본 값) ─ */
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.btn-save-inline {
+  padding: 5px 14px;
+  border: 1.5px solid var(--cs-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cs-text-light);
+  font: var(--text-pc-script-12);
+  cursor: not-allowed;
+  min-height: 32px;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.btn-save-inline.dirty {
+  border-color: var(--cs-purple);
+  background: var(--cs-purple);
+  color: var(--cs-white);
+  cursor: pointer;
+}
+.btn-save-inline.dirty:hover { opacity: 0.85; }
+.use-rules-card { padding: 0 20px; }
+.use-rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--cs-lilac);
+}
+.use-rule-row:last-child { border-bottom: none; }
+.use-rules-note { margin-top: 12px; }
 </style>
