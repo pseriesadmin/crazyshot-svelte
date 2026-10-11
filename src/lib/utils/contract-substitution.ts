@@ -548,7 +548,7 @@ function applyHtmlItemSubstitution(
   const withItem = text.replace(/\{\{([^}]+)\}\}/g, (match, key: string) => {
     const trimmed = key.trim()
     // {{NO.}} → 1-based 순번
-    if (trimmed === 'NO.' || trimmed === 'NO') return String(index + 1)
+    if (trimmed === 'NO.' || trimmed === 'NO') return item.순번 !== undefined ? escapeHtml(item.순번) : String(index + 1)
     // ContractLineItem 필드
     const itemValue = item[trimmed as keyof ContractLineItem]
     if (itemValue !== undefined && typeof itemValue === 'string') return escapeHtml(itemValue)

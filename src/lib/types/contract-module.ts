@@ -29,6 +29,11 @@ export interface ContractLineItem {
    * contractLineItems.ts formatComponentsText()로 포맷한 값. 구성품이 없으면 '-'.
    */
   비고?: string
+  /**
+   * 번호(NO.) 표시값(2026-10-10). 있으면 {{NO.}}를 이 값으로 치환한다 — 하위 행(┖[옵션]·┖[결합])은 ''로 번호를 비우고
+   * 메인 행만 1부터 매긴다. 없으면 기존처럼 행 순번(1-based).
+   */
+  순번?: string
 }
 
 export interface ContractSubstitutionData {

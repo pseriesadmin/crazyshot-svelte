@@ -34,6 +34,16 @@
  * 수량 정책 (2026-08-28 정정 반영):
  *   - 메인상품: 그 상품(이름+품번)과 동일한 reservation 건수
  *   - 옵션상품: reservation_options.qty 실값(기존 그대로)
+ *
+ * ⛔ 2026-10-10 개편(Stephen 확정, 현장 피드백 반영) — 위 서술보다 이 절이 우선한다:
+ *   1) 자산코드(상품코드)는 계약서에 표시하지 않는다(재배정 시 번호가 바뀌어 서명본과 어긋남). 모든 행 상품코드=''.
+ *   2) 통합 기준 = 상품명(+같은 가격표기·같은 옵션 구성·같은 결합 구성). 옵션/결합이 붙은 유닛과 안 붙은 유닛은 따로 나뉜다.
+ *      옵션 수량 = 옵션 qty × 묶인 건수, 결합 수량 = 묶인 건수(패키지 1건 = 결합 1세트).
+ *   3) 표시: 옵션 행 "┖[옵션] 이름", 결합 행 "┖[결합] 이름". 번호(NO.)는 메인 행만 매기고 하위 행은 비운다.
+ *   4) 열 이름 Amount → Unit Price: 값은 합계가 아니라 1건 단가 — "Day 60,000 / 12H 50,000"
+ *      (대여 기간에 일 단위가 있으면 Day, 12시간 블록이 있으면 12H 표시).
+ *   5) 정렬: 분류 → 브랜드 → 상품명 → (옵션·결합 붙은 유닛 먼저).
+ *   6) 구성품 비고에서 "고객 옵션 선택" 후보 문구는 제외한다 — 고객이 고른 옵션은 옵션 행으로 표시된다.
  */
 
 import type { ContractLineItem } from '$lib/types/contract-module'
@@ -45,8 +55,13 @@ import { normalizeKeyValueList, formatKeyValueText } from '$lib/utils/keyValueLi
 // 필터링 규칙 재사용. 2026-09-08 — contract-data/+server.ts의 스칼라 {{구성품}} 전용
 // 헬퍼였던 것을 이 파일로 이관 + export: "대여 장비내역" 반복영역의 {{비고}}에도 동일
 // 로직으로 각 상품(메인·옵션)의 구성품 정보를 채우기 위함(로직 이원화 방지).
+// 2026-10-10: "(고객 옵션 선택)" 표기가 붙은 구성품 항목은 고객이 고르기 전의 후보 문구라 계약서 비고에서 뺀다.
+const CUSTOMER_CHOICE_RE = /고객\s*옵션\s*선택/
+
 export function formatComponentsText(raw: unknown): string {
-  const list = normalizeKeyValueList(raw)
+  const list = normalizeKeyValueList(raw).filter(
+    (e) => !CUSTOMER_CHOICE_RE.test(`${e.key} ${e.value}`),
+  )
   if (list.length === 0) return '-'
   // 2026-10-06: 계약서는 법적 문서라 구성품을 말줄임(50자 초과 시 '...') 없이 전문 표기한다.
   return formatKeyValueText(list)
@@ -66,6 +81,17 @@ export interface ReservationMainProduct {
   unit_price?: number | null
   /** products.components(구성품 JSONB, 2026-09-08 신설) — "대여 장비내역"의 {{비고}} 채움용 */
   components?: unknown
+  /** 정렬용 분류·브랜드(2026-10-10) — 화면에는 표시하지 않는다 */
+  category?: string | null
+  brand?: string | null
+  /**
+   * 단가 표기(2026-10-10): 일 단위 요금(24h/1day)·12시간 요금과, 그 예약의 대여 기간에 각각이 포함되는지.
+   * show_day/show_half 둘 다 undefined면(기간 계산 불가·월간 등) 기존 unit_price 단일 표기로 폴백한다.
+   */
+  price_day?: number | null
+  price_half?: number | null
+  show_day?: boolean
+  show_half?: boolean
 }
 
 /**
@@ -118,122 +144,128 @@ function formatKrw(amount: number): string {
   return amount.toLocaleString('ko-KR') + '원'
 }
 
+/** 메인상품 단가 표기 — "Day 60,000", "12H 50,000", "Day 60,000 / 12H 50,000" (2026-10-10). */
+function formatUnitPriceLabel(p: ReservationMainProduct): string {
+  if (p.show_day === undefined && p.show_half === undefined) {
+    return p.unit_price != null ? formatKrw(p.unit_price) : '-'
+  }
+  const parts: string[] = []
+  if (p.show_day && p.price_day != null) parts.push(`Day ${p.price_day.toLocaleString('ko-KR')}`)
+  if (p.show_half && p.price_half != null) parts.push(`12H ${p.price_half.toLocaleString('ko-KR')}`)
+  return parts.length > 0 ? parts.join(' / ') : '-'
+}
+
 /**
  * 주문에 묶인 reservation 목록으로부터 ContractLineItem 배열을 생성한다.
+ * 규칙 전체는 파일 상단 "2026-10-10 개편" 절 참고.
  *
  * @param reservations 한 주문의 reservation 목록 (빈 배열이면 빈 배열 반환)
  * @returns 평탄화된 ContractLineItem 배열
- *
- * @example
- * buildLineItems([
- *   { mainProduct: { name: '소니 FX3', product_code: 'CSLED001' }, options: [] },
- *   { mainProduct: { name: '캐논 R5', product_code: 'CSCAN001' },
- *     options: [{ option_name: '메모리카드', qty: 2, unit_price: 5000, product_code: null }] }
- * ])
- * // → [
- * //   { 상품명: '소니 FX3', 상품코드: 'CSLED001', 수량: '1', 금액: '-' },
- * //   { 상품명: '캐논 R5', 상품코드: 'CSCAN001', 수량: '1', 금액: '-' },
- * //   { 상품명: '메모리카드', 수량: '2', 금액: '10,000원' },
- * // ]
  */
 export function buildLineItems(reservations: ReservationForLineItems[]): ContractLineItem[] {
   interface MainGroup {
     name: string
-    product_code: string | null
+    category: string
+    brand: string
     count: number
-    amountSum: number
-    hasAnyPrice: boolean
-    options: ReservationOption[]
-    /** 그룹의 첫 reservation에서 채움 — 같은 상품이므로 그룹 내 값이 동일 */
+    priceLabel: string
     components?: unknown
-    /**
-     * 결합상품 목록 — 그룹 내 모든 reservation의 bundles를 모으되 중복을 제거한다.
-     * 배정 실물 품번이 있으면 실물 단위(품번)로, 없으면(레거시) 결합상품 단위(id)로 1회만 나열한다
-     * (같은 패키지 2건이면 배정 실물이 서로 다르므로 각 품번이 나열되고, 레거시는 기존처럼 1회).
-     */
+    /** 그룹 키에 옵션 구성이 포함돼 그룹 내 모든 예약의 옵션이 동일 — 첫 예약 값을 대표로 쓴다 */
+    options: ReservationOption[]
     bundles: BundleLink[]
-    bundleKeys: Set<string>
+    order: number
   }
 
-  // 메인상품을 (이름+품번) 식별키로 그룹화 — 같은 상품의 reservation은 건수·금액을 누적하고
-  // 그 reservation들의 옵션은 그룹에 순서대로 이어붙인다.
   const groups = new Map<string, MainGroup>()
-  const groupOrder: string[] = []
 
   for (const r of reservations) {
-    const key = `${r.mainProduct.name} ${r.mainProduct.product_code ?? ''}`
-    let group = groups.get(key)
-    if (!group) {
-      group = {
-        name: r.mainProduct.name,
-        product_code: r.mainProduct.product_code,
-        count: 0,
-        amountSum: 0,
-        hasAnyPrice: false,
-        options: [],
-        components: r.mainProduct.components,
-        bundles: [],
-        bundleKeys: new Set<string>(),
-      }
-      groups.set(key, group)
-      groupOrder.push(key)
+    // 한 예약 안의 같은 결합상품 중복은 1개로(배정 실물 단위로 여러 줄이 올 수 있음 — 품번은 숨김)
+    const seen = new Set<string>()
+    const bundles = (r.bundles ?? []).filter((b) => {
+      if (seen.has(b.bundle_product_id)) return false
+      seen.add(b.bundle_product_id)
+      return true
+    })
+    const priceLabel = formatUnitPriceLabel(r.mainProduct)
+    const optSig = r.options.map((o) => `${o.option_name}|${o.qty}|${o.unit_price}`).sort().join(';')
+    const bundleSig = bundles.map((b) => b.bundle_product_id).sort().join(';')
+    const key = [r.mainProduct.name, priceLabel, optSig, bundleSig].join('\u0001')
+
+    const group = groups.get(key)
+    if (group) {
+      group.count += 1
+      continue
     }
-    group.count += 1
-    if (r.mainProduct.unit_price != null) {
-      group.amountSum += r.mainProduct.unit_price
-      group.hasAnyPrice = true
-    }
-    group.options.push(...r.options)
-    for (const b of r.bundles ?? []) {
-      const dedupeKey = b.product_code ? `code:${b.product_code}` : `id:${b.bundle_product_id}`
-      if (group.bundleKeys.has(dedupeKey)) continue
-      group.bundleKeys.add(dedupeKey)
-      group.bundles.push(b)
-    }
+    groups.set(key, {
+      name: r.mainProduct.name,
+      category: r.mainProduct.category ?? '',
+      brand: r.mainProduct.brand ?? '',
+      count: 1,
+      priceLabel,
+      components: r.mainProduct.components,
+      options: r.options,
+      bundles,
+      order: groups.size,
+    })
   }
 
+  // 정렬: 분류 → 브랜드 → 상품명 → (옵션·결합이 붙은 유닛 먼저) → 최초 등장 순서.
+  // 분류·브랜드가 없는 상품은 각 단계에서 뒤로 보낸다(빈 문자열 우선순위 최하).
+  const cmpText = (a: string, b: string): number => {
+    if (a === b) return 0
+    if (!a) return 1
+    if (!b) return -1
+    return a.localeCompare(b, 'ko')
+  }
+  const sorted = [...groups.values()].sort((a, b) => {
+    const attachedA = a.options.length + a.bundles.length > 0 ? 0 : 1
+    const attachedB = b.options.length + b.bundles.length > 0 ? 0 : 1
+    return (
+      cmpText(a.category, b.category) ||
+      cmpText(a.brand, b.brand) ||
+      cmpText(a.name, b.name) ||
+      attachedA - attachedB ||
+      a.order - b.order
+    )
+  })
+
   const items: ContractLineItem[] = []
+  let no = 0
 
-  for (const key of groupOrder) {
-    const group = groups.get(key)!
-
-    const mainItem: ContractLineItem = {
+  for (const group of sorted) {
+    no += 1
+    items.push({
       상품명: group.name,
+      // 자산코드는 계약서에 표시하지 않는다(''를 명시해야 치환 로직이 최상위 {{상품코드}}로 폴백하지 않음)
+      상품코드: '',
       수량: String(group.count),
-      금액: group.hasAnyPrice ? formatKrw(group.amountSum) : '-',
+      금액: group.priceLabel,
       비고: formatComponentsText(group.components),
-    }
-    if (group.product_code) {
-      mainItem.상품코드 = group.product_code
-    }
-    items.push(mainItem)
+      순번: String(no),
+    })
 
-    // 결합상품 행 — 메인 뒤, 옵션 앞 (Phase 1, 2026-09-24)
-    // 수량·금액 = '-', 비고 = formatComponentsText(components),
-    // 상품코드 = 예약 시점 배정 실물 품번(있을 때만 — Phase 2 P2-6, Q-I)
+    // 결합상품 행 — 패키지 1건 = 결합 1세트라 수량은 묶인 건수와 같다
     for (const bundle of group.bundles) {
-      const bundleItem: ContractLineItem = {
-        상품명: bundle.bundle_name,
-        수량: '-',
+      items.push({
+        상품명: `┖[결합] ${bundle.bundle_name}`,
+        상품코드: '',
+        수량: String(group.count),
         금액: '-',
         비고: formatComponentsText(bundle.components),
-        // 품번 없으면 '' 명시 — 키 부재 시 치환 로직이 최상위 {{상품코드}}(메인 품번)로 폴백함
-        상품코드: bundle.product_code ? bundle.product_code : '',
-      }
-      items.push(bundleItem)
+        순번: '',
+      })
     }
 
-    // 옵션상품 행 (reservation_options 순서 유지 — 옵션 자체는 병합하지 않음)
+    // 옵션상품 행 — 단가(1개 기준) 표기, 수량은 옵션 qty × 묶인 건수
     for (const opt of group.options) {
-      const optItem: ContractLineItem = {
-        상품명: opt.option_name,
-        수량: String(opt.qty),
-        금액: formatKrw(opt.unit_price * opt.qty),
+      items.push({
+        상품명: `┖[옵션] ${opt.option_name}`,
+        상품코드: '',
+        수량: String(opt.qty * group.count),
+        금액: formatKrw(opt.unit_price),
         비고: formatComponentsText(opt.components),
-        // 품번 없으면 '' 명시 — 메인 품번 폴백 방지(결합상품 행과 동일)
-        상품코드: opt.product_code ? opt.product_code : '',
-      }
-      items.push(optItem)
+        순번: '',
+      })
     }
   }
 
