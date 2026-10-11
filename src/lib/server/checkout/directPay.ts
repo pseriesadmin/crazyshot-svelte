@@ -15,6 +15,7 @@ import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
 import { calcVatForCart } from '$lib/utils/cartCouponPoints'
+import { deductOrderPoints } from '$lib/server/checkout/deductOrderPoints'
 
 /** 직접결제 마감(분) — 결제창 이탈 시 미결제 hold가 이 시간 뒤 자동 만료(Migration 613) */
 export const DIRECT_PAY_WINDOW_MINUTES = 30
@@ -231,9 +232,11 @@ export async function finalizeDirectPayment(
   }
 
   if (order.selectedPoints > 0) {
-    try {
-      await admin.rpc('use_points', { p_user_id: userId, p_points: order.selectedPoints, p_order_id: order.orderId })
-    } catch { /* 포인트 실패도 독립 처리 */ }
+    // 결과를 확인하고 실패 시 관리자에게 알린다(sp3 M-2) — 결제는 이미 끝나 되돌릴 수 없다
+    await deductOrderPoints(admin, {
+      userId, orderId: order.orderId, points: order.selectedPoints,
+      source: 'directPay', alertAdminOnFailure: true,
+    })
   }
 
   return { couponError }

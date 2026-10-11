@@ -1,4 +1,7 @@
 import { redirect } from '@sveltejs/kit'
+import { createClient } from '@supabase/supabase-js'
+import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
+import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import type { PageServerLoad, Actions } from './$types'
@@ -42,6 +45,13 @@ export type EarnRule = {
   grade_multipliers: Record<string, number> | null
   description: string | null
   updated_at: string
+}
+
+export type PointUseSettingsRow = {
+  use_enabled: boolean
+  min_use_points: number
+  use_unit: number
+  max_use_ratio: number
 }
 
 export const load: PageServerLoad = async ({ parent, locals, url }) => {
@@ -107,10 +117,20 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     earnRules = (rules ?? []) as EarnRule[]
   }
 
+  // 사용 규칙 (탭6 전용) — 포인트 사용 ON/OFF·최소·단위·최대 비율 (Migration #639)
+  let pointUseSettings: PointUseSettingsRow | null = null
+  if (tab === 'use') {
+    const { data: useRules, error: useErr } = await admin.rpc('get_point_use_settings')
+    if (useErr) {
+      console.error('[cms/promotion/point] get_point_use_settings 실패:', useErr.message)
+    }
+    pointUseSettings = (useRules ?? { use_enabled: true, min_use_points: 0, use_unit: 1, max_use_ratio: 100 }) as PointUseSettingsRow
+  }
+
   return {
     tab, stats,
     txRows: (txRows ?? []) as PointTxRow[],
-    userBalances, earnRules,
+    userBalances, earnRules, pointUseSettings,
     txType, from, to,
   }
 }
@@ -201,6 +221,34 @@ export const actions: Actions = {
     if (error) return { ok: false, error: error.message }
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) return { ok: false, error: result?.error ?? '업데이트 실패' }
+    return { ok: true }
+  },
+
+  // 포인트 사용 규칙 저장 — 장바구니·계약서 화면의 입력 제한과 서버(주문 저장·차감)의 강제 규칙이 모두 이 값을 따른다
+  saveUseSettings: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return { ok: false, error: '인증 필요' }
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return { ok: false, error: '권한 없음' }
+    const form = await request.formData()
+    const use_enabled = String(form.get('use_enabled') ?? 'true') === 'true'
+    const min_use_points = Number(form.get('min_use_points') ?? 0)
+    const use_unit = Number(form.get('use_unit') ?? 1)
+    const max_use_ratio = Number(form.get('max_use_ratio') ?? 100)
+
+    if (!Number.isInteger(min_use_points) || min_use_points < 0) return { ok: false, error: '최소 사용 포인트는 0 이상의 정수여야 합니다.' }
+    if (!Number.isInteger(use_unit) || use_unit < 1) return { ok: false, error: '사용 단위는 1 이상의 정수여야 합니다.' }
+    if (!Number.isInteger(max_use_ratio) || max_use_ratio < 0 || max_use_ratio > 100) return { ok: false, error: '최대 사용 비율은 0~100 사이의 정수여야 합니다.' }
+
+    // 규칙 변경은 결제 금액에 직접 영향 → DB 함수는 service_role 전용(Migration #641). manager 이상 게이트를 통과한 이 액션만 호출한다.
+    const db = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const { error } = await db.rpc('upsert_point_use_settings', {
+      p_use_enabled: use_enabled,
+      p_min_use_points: min_use_points,
+      p_use_unit: use_unit,
+      p_max_use_ratio: max_use_ratio,
+    })
+    if (error) return { ok: false, error: error.message }
     return { ok: true }
   },
 }
