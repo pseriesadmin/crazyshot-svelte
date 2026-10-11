@@ -111,7 +111,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
               ? `${discountLabel} 쿠폰을 받으셨어요! 지금 확인해보세요.`
               : '쿠폰을 받으셨어요! 지금 확인해보세요.',
             link: '/account/profile?tab=coupon',
-          })
+          }, { vars: discountLabel ? { 할인내용: discountLabel } : {} })
         }
       }
     } catch (e) {

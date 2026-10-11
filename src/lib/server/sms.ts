@@ -2,6 +2,7 @@ import { dev } from '$app/environment'
 import { env } from '$env/dynamic/private'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SolapiMessageService } from 'solapi'
+import { SMS_BRAND_PREFIX, classifySms, smsByteLength } from '$lib/utils/notifyTemplate'
 
 // SMS 발송: Solapi SDK (HMAC 서명 인증 — IP 등록 불필요, Vercel 서버리스에 최적)
 // env 미설정 시 SMS 미전송 (graceful skip) — api/profile/send-otp에서 이동(2026-08-20,
@@ -25,10 +26,17 @@ export async function sendSms(to: string, message: string): Promise<void> {
   const fromClean = senderPhone.replace(/[^0-9]/g, '')
   if (!toClean) throw new Error('SMS 수신번호 형식 오류')
 
+  // 길이에 따라 SMS(≤90B)/LMS(≤2000B)를 명시한다 — 자동 판별에 맡기지 않아 동작이 결정적이다.
+  // 짧은 문자(OTP 등)는 이전과 동일하게 SMS로 나간다.
+  const kind = classifySms(smsByteLength(message))
+  if (kind === 'OVER') throw new Error('SMS 본문이 2000바이트를 초과합니다')
+
   const res = await service.send({
     to:   toClean,
     from: fromClean,
     text: message,
+    type: kind,
+    ...(kind === 'LMS' ? { subject: '[크레이지샷]' } : {}),
   })
 
   if (res.failedMessageList.length > 0) {
@@ -44,10 +52,14 @@ export function buildLockerGuideSms(
   productName: string | null | undefined,
   lockerNumber: string | null | undefined,
   password: string,
+  entrancePassword?: string | null,
 ): string {
   const head = `[크레이지샷] ${productName ?? '상품'} 대여예약 무인보관함 이용정보`
   const no = (lockerNumber ?? '').trim()
-  return no ? `${head} No ${no} / ${password}` : `${head} ${password}`
+  const body = no ? `${head} No ${no} / ${password}` : `${head} ${password}`
+  // 중앙현관 비밀번호(CMS 푸시알림 설정에서 수정, 2026-10-11) — 설정이 없으면 줄을 넣지 않는다
+  const entrance = (entrancePassword ?? '').trim()
+  return entrance ? `${body}\n중앙현관 비밀번호: ${entrance}` : body
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,6 +105,8 @@ export interface SendLifecycleSmsParams {
   /** 본문에 붙일 링크(절대 URL 또는 사이트 상대경로). 미지정 시 타입별 기본 경로 */
   linkOverride?: string
   force?: boolean
+  /** CMS에서 편집한 안내문장(변수 치환 완료본, 접두어 제외). 있으면 기본 문구 대신 `[크레이지샷] ` + 이 문장을 쓴다. */
+  customMessage?: string | null
 }
 
 const SITE_URL = 'https://crazyshot.kr'
@@ -125,10 +139,16 @@ async function insertSmsLog(
   admin: SupabaseClient,
   row: Record<string, unknown>,
 ): Promise<void> {
+  // 로그 저장 실패는 발송 흐름(채팅카드·푸시·SMS)에 영향을 주지 않지만 조용히 삼키지는 않는다 — supabase는 throw하지 않고 {error}를 돌려주므로 반드시 확인한다.
+  // (2026-10-08: 같은 날 두 번째 재공유 로그가 고유 인덱스 위반으로 조용히 누락돼 관리자 카드의 "SMS 발송 성공" 표시가 어긋났는데, 오류가 어디에도 남지 않아 발견이 늦었다.)
+  // 오류 문구에는 키 값이 섞일 수 있어 연속 숫자는 가려 남긴다.
   try {
-    await admin.from('sms_notification_logs').insert(row)
-  } catch {
-    // 로그 실패는 발송 흐름에 영향 없음
+    const { error } = await admin.from('sms_notification_logs').insert(row)
+    if (error) {
+      console.error('[lifecycle-sms] 발송 로그 저장 실패:', row.notify_type, row.status, maskDigits((error as { message?: string }).message ?? String(error)))
+    }
+  } catch (e) {
+    console.error('[lifecycle-sms] 발송 로그 저장 예외:', row.notify_type, row.status, maskDigits(e instanceof Error ? e.message : String(e)))
   }
 }
 
@@ -136,7 +156,7 @@ export async function sendLifecycleSms(
   admin: SupabaseClient,
   params: SendLifecycleSmsParams,
 ): Promise<{ sent: boolean; reason: string }> {
-  const { phone, userId, notifyType, productName, reservationId, linkOverride, force } = params
+  const { phone, userId, notifyType, productName, reservationId, linkOverride, force, customMessage } = params
 
   // 개발 환경: 실제 발송 없이 건너뜀(로컬에서 실번호로 문자가 나가는 사고 방지)
   if (dev) return { sent: false, reason: 'dev' }
@@ -178,7 +198,7 @@ export async function sendLifecycleSms(
     }
 
     const link = toAbsoluteUrl(linkOverride ?? defaultLinkPath(notifyType, reservationId))
-    let message = msgFn(productName, link)
+    let message = customMessage ? `${SMS_BRAND_PREFIX}${customMessage}` : msgFn(productName, link)
     if (!message.includes('http')) message = `${message}\n${link}`
 
     const phoneMasked = phone.length >= 8

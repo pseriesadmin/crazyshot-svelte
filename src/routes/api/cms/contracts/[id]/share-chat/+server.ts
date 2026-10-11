@@ -99,7 +99,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     title: '완료된 전자계약서를 다시 보내드렸어요',
     body: '계약서를 확인해 주세요.',
     link: accountContractLink,
-  })
+  }, { noOverride: true }) // 같은 설정 키(contract_signed_customer)를 쓰지만 "서명 완료" 안내문장 편집값은 재공유 문맥에 맞지 않아 적용 제외
 
   // SMS 동시 발송 — 관리자가 직접 누른 재공유라 같은 날 중복 판정을 우회(force)
   await sendCardSms(admin, {

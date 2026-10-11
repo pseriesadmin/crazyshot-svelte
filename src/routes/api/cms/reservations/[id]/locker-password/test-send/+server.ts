@@ -16,6 +16,9 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { sendSms, buildLockerGuideSms } from '$lib/server/sms'
+import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
+import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
+import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
 import { isValidLockerNumber, isValidLockerPassword, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
@@ -85,7 +88,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const emb = (row as unknown as { products: { name?: string } | { name?: string }[] | null }).products
   const productName = (Array.isArray(emb) ? emb[0]?.name : emb?.name) ?? null
-  const message = buildLockerGuideSms(productName, lockerNumber, password)
+  // 실제 발송과 같은 공통 안내문장(푸시알림 설정) — 아직 저장하지 않은 입력값(번호·비밀번호)도 반영해 조립한다
+  const composed = await composeLockerGuideMessage(admin, reservationId, { lockerNumber, lockerPassword: password })
+  const message = composed
+    ? `${SMS_BRAND_PREFIX}${composed}`
+    : buildLockerGuideSms(productName, lockerNumber, password, await getLockerEntrancePassword(admin))
 
   try {
     await sendSms(testPhone, message)

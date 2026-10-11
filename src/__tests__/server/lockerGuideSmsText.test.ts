@@ -21,6 +21,12 @@ describe('buildLockerGuideSms', () => {
     expect(buildLockerGuideSms('카메라', null, '1234')).toBe('[크레이지샷] 카메라 대여예약 무인보관함 이용정보 1234')
     expect(buildLockerGuideSms('카메라', '  ', '1234')).toBe('[크레이지샷] 카메라 대여예약 무인보관함 이용정보 1234')
   })
+  it('중앙현관 비밀번호가 있으면 다음 줄에 덧붙이고, 없거나 공백이면 줄을 넣지 않는다 (2026-10-11)', () => {
+    expect(buildLockerGuideSms('Sony PXW-Z90', '1', '*0000', '0418*'))
+      .toBe('[크레이지샷] Sony PXW-Z90 대여예약 무인보관함 이용정보 No 1 / *0000\n중앙현관 비밀번호: 0418*')
+    expect(buildLockerGuideSms('Sony PXW-Z90', '1', '*0000', null)).toBe('[크레이지샷] Sony PXW-Z90 대여예약 무인보관함 이용정보 No 1 / *0000')
+    expect(buildLockerGuideSms('Sony PXW-Z90', '1', '*0000', '  ')).toBe('[크레이지샷] Sony PXW-Z90 대여예약 무인보관함 이용정보 No 1 / *0000')
+  })
   it('상품명이 없으면 "상품"으로 표기', () => {
     expect(buildLockerGuideSms(null, '2', '1234')).toContain('[크레이지샷] 상품 대여예약')
   })
@@ -39,7 +45,7 @@ describe('무인함 번호 + 비밀번호 필수 규칙(서버·화면)', () => 
   })
   it('시범 발송 API: 번호·비밀번호 모두 필수, 같은 문구 빌더 사용', () => {
     expect(test).toContain("if (!password || !lockerNumber)")
-    expect(test).toContain('buildLockerGuideSms(productName, lockerNumber, password)')
+    expect(test).toContain('buildLockerGuideSms(productName, lockerNumber, password, await getLockerEntrancePassword(admin))')
   })
   it('화면: 번호 입력칸이 비밀번호 입력칸 왼쪽, 확정 버튼은 둘 다 입력돼야 활성', () => {
     expect(panel.indexOf('placeholder="무인함 번호 입력"')).toBeLessThan(panel.indexOf('placeholder="무인보관함 비밀번호 입력"'))

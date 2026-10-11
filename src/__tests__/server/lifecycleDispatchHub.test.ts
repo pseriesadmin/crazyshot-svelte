@@ -40,7 +40,7 @@ import { readFileSync } from 'node:fs'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 
-interface Db { phone: string | null; withdrawal: string; dupLog: boolean; productParent: string | null }
+interface Db { phone: string | null; withdrawal: string; dupLog: boolean; productParent: string | null; logError?: string | 'throw' }
 let db: Db
 const smsLogs: Record<string, unknown>[] = []
 
@@ -61,7 +61,12 @@ function fakeAdmin() {
     }
     b.maybeSingle = one
     b.single = one
-    if (table === 'sms_notification_logs') b.insert = async (row: Record<string, unknown>) => { smsLogs.push(row); return { error: null } }
+    if (table === 'sms_notification_logs') b.insert = async (row: Record<string, unknown>) => {
+      if (db.logError === 'throw') throw new Error('log insert boom 01011112222')
+      if (db.logError) return { error: { message: db.logError } }
+      smsLogs.push(row)
+      return { error: null }
+    }
     return b
   }
   return { from } as never
@@ -101,6 +106,38 @@ describe('허브 — SMS 비대상 타입은 SMS가 나가지 않는다(의도�
       expect(mockSend).not.toHaveBeenCalled()
     })
   }
+})
+
+describe('허브 — 발송 로그 저장 실패는 조용히 삼키지 않는다', () => {
+  it('로그 저장이 {error}로 실패해도 SMS 발송 결과는 유지되고 오류 로그가 남는다(연속 숫자는 가려짐)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    db.logError = 'duplicate key value violates unique constraint "sms_notification_logs_dedup_idx" Key (reservation_id)=(1234567890)'
+    await sendReservationLifecyclePush(fakeAdmin(), 501, 'reservation_approval')
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    const call = spy.mock.calls.find((c) => String(c[0]).includes('[lifecycle-sms] 발송 로그 저장 실패'))
+    expect(call).toBeTruthy()
+    expect(String(call?.[3])).toContain('sms_notification_logs_dedup_idx')
+    expect(String(call?.[3])).not.toContain('1234567890')
+    spy.mockRestore()
+  })
+
+  it('로그 저장이 예외를 던져도 흐름은 멈추지 않고 오류 로그가 남는다(번호 가림)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    db.logError = 'throw'
+    await expect(sendReservationLifecyclePush(fakeAdmin(), 501, 'shipment_notify')).resolves.toBeUndefined()
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    const call = spy.mock.calls.find((c) => String(c[0]).includes('[lifecycle-sms] 발송 로그 저장 예외'))
+    expect(call).toBeTruthy()
+    expect(String(call?.[3])).not.toContain('01011112222')
+    spy.mockRestore()
+  })
+
+  it('로그 저장이 정상이면 오류 로그를 남기지 않는다', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await sendReservationLifecyclePush(fakeAdmin(), 501, 'reservation_approval')
+    expect(spy.mock.calls.some((c) => String(c[0]).includes('[lifecycle-sms] 발송 로그 저장'))).toBe(false)
+    spy.mockRestore()
+  })
 })
 
 describe('허브 — 제외·예외 조건', () => {

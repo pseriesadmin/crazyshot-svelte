@@ -759,6 +759,11 @@ export interface UpdatePushNotificationConfigArgs {
   p_extra_config?: Json | null;
 }
 
+export interface UpdatePushNotificationMessageArgs {
+  p_notify_type: string;
+  p_message: string;
+}
+
 export interface GetAdminPushRecipientsArgs {
   p_event_key: string;
 }
@@ -941,6 +946,7 @@ export type Database = {
       register_push_token: { Args: RegisterPushTokenArgs; Returns: PushRpcResult };
       unregister_push_token: { Args: UnregisterPushTokenArgs; Returns: PushRpcResult };
       update_push_notification_config: { Args: UpdatePushNotificationConfigArgs; Returns: PushRpcResult };
+      update_push_notification_message: { Args: UpdatePushNotificationMessageArgs; Returns: PushRpcResult };
       get_admin_push_recipients: { Args: GetAdminPushRecipientsArgs; Returns: string[] };
       update_admin_notify_setting: { Args: UpdateAdminNotifySettingArgs; Returns: PushRpcResult };
       log_push_notification: { Args: LogPushNotificationArgs; Returns: string };

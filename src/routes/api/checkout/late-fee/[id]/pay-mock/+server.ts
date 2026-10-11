@@ -74,7 +74,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
       title: '연체료 결제가 완료됐어요',
       body: `연체료 ${validation.lateFee.fee_amount.toLocaleString()}원 결제가 정상 처리됐어요.`,
       link: '/',
-    })
+    }, { vars: { 연체료: `${validation.lateFee.fee_amount.toLocaleString()}원` } })
   }
 
   return json({

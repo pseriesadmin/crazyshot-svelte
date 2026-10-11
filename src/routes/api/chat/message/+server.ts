@@ -289,11 +289,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
             // 고객 브라우저 푸시 — 캔드매칭 자동응답도 관리자 수동답장과 동일하게 발송
             // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
+            const cannedPreview = match.content.length > 60 ? `${match.content.slice(0, 60)}…` : match.content
             await sendPushToUser(session.user.id, 'canned_auto_reply', {
               title: '답변이 도착했어요',
-              body: match.content.length > 60 ? `${match.content.slice(0, 60)}…` : match.content,
+              body: cannedPreview,
               link: '/',
-            })
+            }, { vars: { 답변내용: cannedPreview } })
 
             return json(
               {
@@ -509,11 +510,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // 고객 브라우저 푸시 — AI 자유응답도 캔드매칭·관리자 수동답장과 동일하게 발송
   // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
   if (!suppressWait) {
+    const aiReplyPreview = classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply
     await sendPushToUser(session.user.id, 'ai_auto_reply', {
       title: '답변이 도착했어요',
-      body: classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply,
+      body: aiReplyPreview,
       link: '/',
-    })
+    }, { vars: { 답변내용: aiReplyPreview } })
   }
 
   return json(

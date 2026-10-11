@@ -149,7 +149,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     title: '쿠폰이 도착했어요 🎁',
     body: `${discountLabel} 쿠폰을 받으셨어요! 지금 확인해보세요.`,
     link: '/account/profile?tab=coupon',
-  })
+  }, { vars: { 할인내용: discountLabel } })
 
   return json({ ok: true, message: messageRaw })
 }

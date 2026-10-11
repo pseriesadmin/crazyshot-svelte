@@ -15,7 +15,7 @@ beforeEach(() => { sendMock.mockReset().mockResolvedValue({ failedMessageList: [
 describe('sendSms 번호 정규화', () => {
   it('하이픈·방향 제어문자(U+202D/U+202C)가 섞여도 숫자만 보낸다', async () => {
     await sendSms('‭010-7334-2012‬', '본문')
-    expect(sendMock).toHaveBeenCalledWith({ to: '01073342012', from: '0212345678', text: '본문' })
+    expect(sendMock).toHaveBeenCalledWith({ to: '01073342012', from: '0212345678', text: '본문', type: 'SMS' })
   })
 
   it('숫자가 하나도 없으면 발송하지 않고 오류', async () => {

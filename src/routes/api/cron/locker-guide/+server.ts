@@ -4,6 +4,9 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { sendSms, buildLockerGuideSms } from '$lib/server/sms'
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
+import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
+import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
 import type { RequestHandler } from './$types'
 
 const BATCH_SIZE = 50
@@ -37,6 +40,8 @@ export const GET: RequestHandler = async ({ request }) => {
   if (!serviceRoleKey) return json({ error: '서버 설정 오류' }, { status: 500 })
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+  // 중앙현관 비밀번호(CMS 설정) — 실행당 1회 조회, 없으면 문자에 그 줄을 넣지 않는다
+  const entrancePassword = await getLockerEntrancePassword(admin)
 
   let processed = 0
   let succeeded = 0
@@ -63,28 +68,37 @@ export const GET: RequestHandler = async ({ request }) => {
       processed++
       // 한 건의 실패(채팅 RPC 오류·SMS 네트워크 예외)가 나머지 배치 처리를 막지 않도록 개별 격리
       try {
+        // 푸시알림 설정의 공통 안내문장이 푸시·문자·채팅카드의 정본(2026-10-11) — 조립 실패 시에만 기존 고정 문구로 되돌린다.
+        // 모든 발송 대상은 이 예약의 소유 고객 한 명이다(전화번호·푸시·채팅 모두 reservation.user_id 기준).
+        const composed = await composeLockerGuideMessage(admin, row.reservation_id)
+        const smsText = composed
+          ? `${SMS_BRAND_PREFIX}${composed}`
+          : buildLockerGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
+
         // 비밀번호가 담긴 문자를 가장 먼저 보낸다 — 실패하면 채팅·푸시를 보내지 않고(중복 방지) 이 건을 재시도 대상으로 되돌린다.
         const canSms = !!(row.phone && row.password)
         if (canSms) {
           try {
-            await sendSms(row.phone as string, buildLockerGuideSms(row.product_name, row.locker_number, row.password as string))
+            await sendSms(row.phone as string, smsText)
           } catch (smsErr) {
             toRelease.push({ reservationId: row.reservation_id, leg: row.leg })
             throw smsErr
           }
         }
 
-        const { error: notifyError } = await admin.rpc('send_rental_chat_notification', {
-          p_reservation_id: row.reservation_id,
-          p_notify_type:    'locker_guide',
-        })
+        const { error: notifyError } = composed
+          ? await admin.rpc('send_locker_guide_card', { p_reservation_id: row.reservation_id, p_content: composed })
+          : await admin.rpc('send_rental_chat_notification', {
+              p_reservation_id: row.reservation_id,
+              p_notify_type:    'locker_guide',
+            })
         if (notifyError) {
           // 문자가 이미 나갔으면 안내는 전달된 것 — 다시 보내 문자가 중복되지 않게 되돌리지 않는다. 문자 불가(번호 없음) 건만 재시도.
           if (!canSms) toRelease.push({ reservationId: row.reservation_id, leg: row.leg })
           throw new Error(notifyError.message)
         }
 
-        await sendReservationLifecyclePush(admin, row.reservation_id, 'locker_guide', { skipSms: true }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
+        await sendReservationLifecyclePush(admin, row.reservation_id, 'locker_guide', { skipSms: true, ...(composed ? { bodyOverride: composed } : {}) }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
 
         succeeded++
       } catch (err) {

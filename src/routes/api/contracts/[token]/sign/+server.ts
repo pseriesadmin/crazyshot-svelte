@@ -383,7 +383,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
             title: '전자계약 서명이 완료됐어요',
             body: reservationCode ? `${reservationCode} 예약의 서명이 정상 접수됐어요.` : '서명이 정상적으로 접수됐어요.',
             link: '/account/rental',
-          })
+          }, { vars: reservationCode ? { 예약코드: reservationCode } : {} })
 
           // SMS 동시 발송(2026-10-02) — 채팅카드 contract_signed와 같은 링크
           await sendCardSms(admin, {

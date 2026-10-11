@@ -3,6 +3,17 @@
   import { deserialize } from '$app/forms'
   import { csToast } from '$lib/utils/toast'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import {
+    NOTIFY_VARIABLES,
+    SMS_BRAND_PREFIX,
+    applyNotifyTemplate,
+    getNotifySpec,
+    validateNotifyMessage,
+    type NotifyVarKey,
+    type NotifyVars,
+  } from '$lib/utils/notifyTemplate'
+  import { isValidLockerPassword, sanitizeLockerInput } from '$lib/utils/lockerFields'
   import type { PageData } from './$types'
   import type { PushConfigRow, AdminNotifyRow, PushLogRow } from './+page.server'
 
@@ -52,6 +63,103 @@
       csToast.error('저장에 실패했습니다.')
     } finally {
       togglingConfigId = null
+    }
+  }
+
+  // ─── 알림별 안내문장 편집(아코디언) ───
+  // 푸시·문자 같은 문장을 쓴다. 비어 있으면 코드의 기본 문구를 그대로 쓴다.
+  const ANSWER_TYPES = new Set(['admin_chat_reply', 'ai_auto_reply', 'canned_auto_reply'])
+  const SAMPLE_VARS: NotifyVars = Object.fromEntries(Object.values(NOTIFY_VARIABLES).map((v) => [v.key, v.sample]))
+
+  let openType = $state<string | null>(null)
+  // 입력 중인 문장 — 행을 펼칠 때 서버값으로 채운다(prop으로 $state를 초기화하지 않고 펼침 시점에 지정)
+  let drafts = $state<Record<string, string>>({})
+  let savingType = $state<string | null>(null)
+  let textareaEl = $state<HTMLTextAreaElement | null>(null)
+
+  function draftOf(row: PushConfigRow): string {
+    return drafts[row.notify_type] ?? row.message ?? ''
+  }
+
+  function toggleOpen(row: PushConfigRow): void {
+    if (openType === row.notify_type) {
+      openType = null
+      return
+    }
+    drafts[row.notify_type] = row.message ?? ''
+    openType = row.notify_type
+  }
+
+  function isMessageDirty(row: PushConfigRow): boolean {
+    return draftOf(row).trim() !== (row.message ?? '').trim()
+  }
+
+  function insertVariable(row: PushConfigRow, key: NotifyVarKey): void {
+    const token = `{{${key}}}`
+    const cur = draftOf(row)
+    const el = textareaEl
+    const start = el?.selectionStart ?? cur.length
+    const end = el?.selectionEnd ?? start
+    drafts[row.notify_type] = cur.slice(0, start) + token + cur.slice(end)
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      const pos = start + token.length
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  function fillDefaultMessage(row: PushConfigRow): void {
+    const spec = getNotifySpec(row.notify_type)
+    if (spec) drafts[row.notify_type] = spec.defaultMessage
+  }
+
+  async function saveMessage(row: PushConfigRow, message: string): Promise<void> {
+    savingType = row.notify_type
+    const fd = new FormData()
+    fd.set('notify_type', row.notify_type)
+    fd.set('message', message)
+    try {
+      const err = await postAction('?/updatePushMessage', fd)
+      if (err) {
+        csToast.error(err)
+        return
+      }
+      drafts[row.notify_type] = message.trim()
+      csToast.success(message.trim() === '' ? `'${row.label}' 안내문장을 기본 문구로 복원했습니다.` : `'${row.label}' 안내문장을 저장했습니다.`)
+      await invalidateAll()
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      savingType = null
+    }
+  }
+
+  // ─── 무인보관함 중앙현관 비밀번호(2026-10-11) — 채팅카드·문자·푸시 변수가 같은 값을 읽는다 ───
+  let entranceDraft = $state<string | null>(null)
+  let savingEntrance = $state(false)
+  const entranceSaved = $derived(data.lockerEntrancePassword ?? '')
+  const entranceValue = $derived(entranceDraft ?? entranceSaved)
+  const entranceDirty = $derived(entranceValue.trim() !== entranceSaved.trim())
+  const entranceValid = $derived(entranceValue.trim() === '' || isValidLockerPassword(entranceValue.trim()))
+
+  async function saveEntrance(): Promise<void> {
+    savingEntrance = true
+    const fd = new FormData()
+    fd.set('password', entranceValue.trim())
+    try {
+      const err = await postAction('?/updateLockerEntrance', fd)
+      if (err) {
+        csToast.error(err)
+        return
+      }
+      entranceDraft = null
+      csToast.success(entranceValue.trim() === '' ? '중앙현관 비밀번호를 삭제했습니다.' : '중앙현관 비밀번호를 저장했습니다.')
+      await invalidateAll()
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      savingEntrance = false
     }
   }
 
@@ -148,6 +256,152 @@
   }
 </script>
 
+{#snippet pushRow(row: PushConfigRow)}
+  {@const spec = getNotifySpec(row.notify_type)}
+  {@const isOpen = openType === row.notify_type}
+  <div class="push-row" class:push-row--open={isOpen}>
+    <div class="push-row-head">
+      <button
+        type="button"
+        class="push-row-main"
+        aria-expanded={isOpen}
+        aria-controls="msg-{row.notify_type}"
+        disabled={!spec}
+        onclick={() => toggleOpen(row)}
+      >
+        <ChevronIcon direction={isOpen ? 'down' : 'right'} size={7} color="var(--cs-text-mid)" />
+        <span class="push-row-label">{row.label}</span>
+        {#if spec}
+          <span class="msg-badge" class:msg-badge--sms={spec.sms}>{spec.sms ? '푸시+문자' : '푸시 전용'}</span>
+        {/if}
+        {#if row.message}
+          <span class="msg-badge msg-badge--custom">문구 설정됨</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        class="s-chip"
+        class:s-chip--on={row.push_enabled}
+        disabled={togglingConfigId === row.id}
+        onclick={() => togglePushConfig(row)}
+      >{row.push_enabled ? '발송 ON' : '발송 OFF'}</button>
+    </div>
+
+    {#if isOpen && spec}
+      {@const draft = draftOf(row)}
+      {@const check = validateNotifyMessage(row.notify_type, draft)}
+      {@const previewBody = applyNotifyTemplate(draft.trim() === '' ? spec.defaultMessage : draft, SAMPLE_VARS)}
+      <div class="msg-panel" id="msg-{row.notify_type}">
+        <div class="msg-editor">
+          <div class="msg-editor-head">
+            <span class="msg-field-title">안내문장</span>
+            <button type="button" class="btn-text-inline" onclick={() => fillDefaultMessage(row)}>기본 문구 불러오기</button>
+          </div>
+          <textarea
+            class="msg-textarea"
+            rows="4"
+            maxlength="1000"
+            bind:this={textareaEl}
+            value={draft}
+            oninput={(e) => { drafts[row.notify_type] = e.currentTarget.value }}
+            placeholder={spec.defaultMessage}
+            aria-label="{row.label} 안내문장"
+          ></textarea>
+          <div class="msg-meta">
+            <span>{draft.length}/1000자</span>
+            {#if spec.sms && draft.trim() !== ''}
+              <span class:msg-meta--warn={check.smsKind !== 'SMS'}>문자 최대 {check.smsBytes}바이트 · {check.smsKind === 'SMS' ? '단문(SMS)' : check.smsKind === 'LMS' ? '장문(LMS)' : '2000바이트 초과'}</span>
+            {/if}
+            {#if draft.trim() === ''}<span>비워 두면 기본 문구가 발송됩니다.</span>{/if}
+          </div>
+          {#if !check.ok}
+            <p class="msg-error" role="alert">{check.error}</p>
+          {/if}
+          {#each check.warnings as w (w)}
+            <p class="msg-warn">{w}</p>
+          {/each}
+          {#if ANSWER_TYPES.has(row.notify_type)}
+            <p class="msg-warn">기본값은 실제 답변 내용({'{{답변내용}}'})입니다. 다른 문장으로 바꾸면 고객에게 답변 내용 대신 이 문장이 표시됩니다.</p>
+          {/if}
+
+          <div class="msg-preview">
+            <span class="msg-field-title">미리보기(예시값)</span>
+            <div class="msg-preview-box"><span class="msg-preview-tag">푸시</span>{previewBody}</div>
+            {#if spec.sms}
+              <div class="msg-preview-box"><span class="msg-preview-tag">문자</span>{SMS_BRAND_PREFIX}{previewBody}</div>
+            {/if}
+          </div>
+
+          {#if row.notify_type === 'locker_guide'}
+            <div class="entrance-box">
+              <span class="msg-field-title">중앙현관 비밀번호</span>
+              <p class="msg-hint">위 안내문장의 {'{{중앙현관비밀번호}}'} 변수에 들어가는 값입니다. 푸시·문자·채팅카드가 같은 값을 씁니다. 비우면 이 변수가 들어 있는 줄이 문장에서 빠집니다.</p>
+              <div class="entrance-row">
+                <input
+                  type="text"
+                  class="msg-input"
+                  maxlength="10"
+                  value={entranceValue}
+                  oninput={(e) => { entranceDraft = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = entranceDraft }}
+                  placeholder="중앙현관 비밀번호 입력"
+                  aria-label="무인보관함 중앙현관 비밀번호"
+                  disabled={savingEntrance}
+                />
+                <button
+                  type="button"
+                  class="btn-save-inline"
+                  class:dirty={entranceDirty && entranceValid}
+                  disabled={savingEntrance || !entranceDirty || !entranceValid}
+                  onclick={saveEntrance}
+                >저장</button>
+              </div>
+              {#if !entranceValid}
+                <p class="msg-error" role="alert">4~10자의 숫자·특수문자만 입력할 수 있습니다.</p>
+              {/if}
+              <p class="msg-warn">안내문장은 푸시·문자·채팅카드에 같은 문장으로 해당 예약 고객 1명에게만 발송됩니다. 비밀번호 변수는 휴대폰 잠금 화면 알림에도 그대로 보일 수 있습니다.</p>
+            </div>
+          {/if}
+
+          <div class="msg-actions">
+            <button
+              type="button"
+              class="btn-reset-inline"
+              disabled={savingType === row.notify_type || !row.message}
+              onclick={() => saveMessage(row, '')}
+            >기본 문구로 복원</button>
+            <button
+              type="button"
+              class="btn-save-inline"
+              class:dirty={isMessageDirty(row) && check.ok}
+              disabled={savingType === row.notify_type || !isMessageDirty(row) || !check.ok}
+              onclick={() => saveMessage(row, draft)}
+            >저장</button>
+          </div>
+        </div>
+
+        <div class="msg-vars">
+          <span class="msg-field-title">변수</span>
+          <p class="msg-hint">클릭하면 커서 위치에 삽입됩니다.</p>
+          <div class="msg-chips">
+            {#each spec.vars as key (key)}
+              <button
+                type="button"
+                class="var-chip"
+                onmousedown={(e) => e.preventDefault()}
+                onclick={() => insertVariable(row, key)}
+                title={`{{${key}}} 삽입`}
+              >
+                <span class="var-chip-label">{NOTIFY_VARIABLES[key].label}</span>
+                <span class="var-chip-var">{`{{${key}}}`}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
 <div class="page-wrap">
   <div class="sections">
 
@@ -159,20 +413,11 @@
         <h2 class="section-title">고객 알림 — 예약~대여~반납</h2>
         <span class="section-badge">{lifecycleRows.length}종</span>
       </div>
-      <p class="section-desc">예약 신청부터 반납 완료까지 각 단계에서 고객에게 푸시알림을 발송할지 여부를 설정합니다.</p>
+      <p class="section-desc">예약 신청부터 반납 완료까지 각 단계에서 고객에게 푸시알림을 발송할지 여부를 설정합니다. 알림 이름을 눌러 안내문장을 직접 바꿀 수 있고, 같은 문장이 푸시와 문자(해당 알림)에 함께 쓰입니다.</p>
 
       <div class="push-row-list">
         {#each lifecycleRows as row (row.id)}
-          <div class="push-row">
-            <span class="push-row-label">{row.label}</span>
-            <button
-              type="button"
-              class="s-chip"
-              class:s-chip--on={row.push_enabled}
-              disabled={togglingConfigId === row.id}
-              onclick={() => togglePushConfig(row)}
-            >{row.push_enabled ? '발송 ON' : '발송 OFF'}</button>
-          </div>
+          {@render pushRow(row)}
         {/each}
       </div>
     </section>
@@ -188,16 +433,7 @@
 
       <div class="push-row-list">
         {#each marketingRows as row (row.id)}
-          <div class="push-row">
-            <span class="push-row-label">{row.label}</span>
-            <button
-              type="button"
-              class="s-chip"
-              class:s-chip--on={row.push_enabled}
-              disabled={togglingConfigId === row.id}
-              onclick={() => togglePushConfig(row)}
-            >{row.push_enabled ? '발송 ON' : '발송 OFF'}</button>
-          </div>
+          {@render pushRow(row)}
         {/each}
       </div>
     </section>
@@ -390,17 +626,308 @@
 
   .push-row {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
     padding: 14px 18px;
     background: var(--cs-surface-gray);
     border-radius: var(--cms-radius-sm);
+  }
+
+  .push-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .push-row-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .push-row-main:disabled {
+    cursor: default;
   }
 
   .push-row-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
     color: var(--cs-text);
+  }
+
+  .msg-badge {
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+  }
+
+  .msg-badge--sms {
+    color: var(--cs-purple);
+  }
+
+  .msg-badge--custom {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+
+  /* ─── 안내문장 편집 패널 ─── */
+  .msg-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 240px;
+    gap: 20px;
+    margin-top: 14px;
+    padding-top: 16px;
+    border-top: 1px solid var(--cs-lilac);
+  }
+
+  .msg-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .msg-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .msg-field-title {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+
+  .msg-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 16px;
+    background: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    resize: vertical;
+  }
+
+  .msg-textarea::placeholder {
+    color: var(--cs-text-light);
+  }
+
+  .msg-textarea:focus {
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
+  }
+
+  .entrance-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .entrance-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .msg-input {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    height: 40px;
+    padding: 0 16px;
+    background: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+
+  .msg-input::placeholder {
+    color: var(--cs-text-light);
+  }
+
+  .msg-input:focus {
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
+  }
+
+  .msg-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
+  .msg-meta--warn {
+    color: var(--cs-purple);
+    font-weight: 700;
+  }
+
+  .msg-error {
+    margin: 0;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-red-badge);
+  }
+
+  .msg-warn {
+    margin: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
+  .msg-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .msg-preview-box {
+    padding: 10px 14px;
+    background: var(--cs-white);
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    white-space: pre-wrap;
+    word-break: keep-all;
+  }
+
+  .msg-preview-tag {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 1px 8px;
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+  }
+
+  .msg-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  /* cms-uiux.md §0-10-D 섹션 인라인 저장 버튼 — 변경사항이 있을 때만 활성 */
+  .btn-save-inline {
+    padding: 5px 14px;
+    border: 1.5px solid var(--cs-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    font: var(--text-pc-script-12);
+    cursor: not-allowed;
+    min-height: 32px;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+
+  .btn-save-inline.dirty {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    cursor: pointer;
+  }
+
+  .btn-save-inline.dirty:hover {
+    opacity: 0.85;
+  }
+
+  /* 보조 텍스트 버튼 — 면(fill)·테두리 없이 글자만, 호버는 배경색 변경만 */
+  .btn-reset-inline,
+  .btn-text-inline {
+    padding: 5px 10px;
+    min-height: 32px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .btn-reset-inline:hover:not(:disabled),
+  .btn-text-inline:hover {
+    background: var(--cs-lilac);
+  }
+
+  .btn-reset-inline:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ─── 변수 선택 패널 ─── */
+  .msg-vars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .msg-hint {
+    margin: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
+  .msg-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .var-chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 36px;
+    padding: 6px 12px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-white);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .var-chip:hover {
+    background: var(--cs-lilac);
+  }
+
+  .var-chip-label {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text);
+    white-space: nowrap;
+  }
+
+  .var-chip-var {
+    font: var(--text-pc-script-12);
+    font-family: monospace;
+    color: var(--cs-purple);
+    white-space: nowrap;
   }
 
   /* ─── on/off 칩 버튼 (rental 설정 페이지와 동일 컨벤션) ─── */
