@@ -1,4 +1,7 @@
 import { json } from '@sveltejs/kit'
+import { createClient } from '@supabase/supabase-js'
+import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
+import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ locals }) => {
@@ -7,8 +10,8 @@ export const POST: RequestHandler = async ({ locals }) => {
     return json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const admin = locals.supabase as unknown as any
+  // refresh_user_segments는 호출자 확인이 없는 서버 전용 함수(Migration #698) — cms_role 검사 후 서버 권한으로만 호출한다
+  const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
   const { data: profile } = await admin
     .from('user_profiles')

@@ -9,6 +9,9 @@
  */
 import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json, error } from '@sveltejs/kit'
+import { createClient } from '@supabase/supabase-js'
+import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
+import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import type { RequestHandler } from './$types'
 
 interface HistoryImage {
@@ -20,6 +23,10 @@ interface HistoryImage {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any
+
+// 상품 이력 DB 함수는 호출자 확인이 없어 서버 권한 전용이다(Migration #698). 메뉴 권한·cms_role 검사를 통과한 뒤에만 서버 권한으로 호출한다.
+// 작성자·수정자(p_user_id)는 항상 세션 사용자 — 요청 값은 쓰지 않는다.
+const adminClient = (): AnyClient => createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 async function requireCmsRole(sb: AnyClient, userId: string): Promise<void> {
   const { data: profile } = await sb
@@ -38,8 +45,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sb: AnyClient = locals.supabase as unknown as any
+  const sb: AnyClient = adminClient()
   await requireCmsRole(sb, session.user.id)
 
   const productIdsRaw = url.searchParams.get('product_ids')
@@ -74,8 +80,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sb: AnyClient = locals.supabase as unknown as any
+  const sb: AnyClient = adminClient()
   await requireCmsRole(sb, session.user.id)
 
   const body = await request.json() as {
@@ -109,8 +114,7 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sb: AnyClient = locals.supabase as unknown as any
+  const sb: AnyClient = adminClient()
   await requireCmsRole(sb, session.user.id)
 
   const body = await request.json() as {
@@ -144,8 +148,7 @@ export const DELETE: RequestHandler = async ({ url, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) throw error(401, '인증 필요')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sb: AnyClient = locals.supabase as unknown as any
+  const sb: AnyClient = adminClient()
   await requireCmsRole(sb, session.user.id)
 
   const id = url.searchParams.get('id')
