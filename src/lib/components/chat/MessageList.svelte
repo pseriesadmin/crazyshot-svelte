@@ -239,11 +239,9 @@
 
   /* 실제 버블들의 wrapper — ResizeObserver가 이 요소의 콘텐츠 크기 변화를 감지(스크립트 참고) */
   /* 모바일 — 헤더·입력 영역이 목록 위에 반투명하게 겹치므로 목록 위·아래 여백을 그 영역 높이만큼 둔다(ChatWindow가 --chat-overlay-top/bottom 전달) */
-  @media (max-width: 639px) {
-    .message-list {
-      padding-top: var(--chat-overlay-top, 20px);
-      padding-bottom: var(--chat-overlay-bottom, 20px);
-    }
+  .message-list {
+    padding-top: var(--chat-overlay-top, 20px);
+    padding-bottom: var(--chat-overlay-bottom, 20px);
   }
 
   .message-list-inner {

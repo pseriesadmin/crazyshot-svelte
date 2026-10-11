@@ -149,51 +149,44 @@
     width: 100%;
   }
 
-  /* PC·기본: 래퍼는 레이아웃에 참여하지 않는다(기존 배치 그대로) */
-  .info-bg {
-    display: contents;
-  }
-
-  /* 모바일(<640px) — 2026-10-09(Stephen 지시): 아바타를 배경 카드에서 분리해 좌측에 두고, 배경 카드는 이름·닫기만 담아
+  /* PC·모바일 공통(2026-10-12 Stephen 지시: PC도 모바일 레이아웃으로 통일) — 2026-10-09(Stephen 지시): 아바타를 배경 카드에서 분리해 좌측에 두고, 배경 카드는 이름·닫기만 담아
      가로·세로를 줄여 우측에 붙인다. 이름과 같은 핸들(이메일 아이디 중복)은 숨김 */
-  @media (max-width: 639px) {
-    .chat-header {
-      background: transparent;
-      border-radius: 0;
-      padding: 0;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .info-bg {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      align-self: stretch; /* 세로폭을 아바타(65px)와 같게 — 아바타가 헤더 높이를 정하므로 카드가 그 높이까지 늘어난다(2026-10-09 Stephen 지시) */
-      min-height: 65px;
-      flex: 1 1 0; /* 아바타 바로 옆(간격 12px)까지 좌측으로 확장 — 우측 끝은 그대로(2026-10-09 Stephen 지시: 159px → 240px → 아바타 근접) */
-      min-width: 0;
-      background: var(--cs-points);
-      border-radius: var(--radius-xl);
-      padding: 8px 8px 8px 20px;
-    }
-    .user-info {
-      flex: 1 1 auto; /* 넓어진 카드 안에서 이름은 좌측, ✕는 우측 끝에 고정 */
-      min-width: 0;
-    }
-    /* 이름 글자 토큰 한 단계 작게(2026-10-09 Stephen 지시): 18px → --text-m-body-16B(16px). 굵기는 기존 900 유지 */
-    .info-bg .user-name { /* 아래쪽 기본 .user-name 규칙(18px)보다 우선하도록 선택자를 한 단계 구체화 */
-      font: var(--text-m-body-16B);
-      font-weight: 900;
-    }
-    .user-name,
-    .user-handle {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .user-handle.dup {
-      display: none;
-    }
+  .chat-header {
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .info-bg {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: stretch; /* 세로폭을 아바타(65px)와 같게 — 아바타가 헤더 높이를 정하므로 카드가 그 높이까지 늘어난다(2026-10-09 Stephen 지시) */
+    min-height: 65px;
+    flex: 1 1 0; /* 아바타 바로 옆(간격 12px)까지 좌측으로 확장 — 우측 끝은 그대로(2026-10-09 Stephen 지시: 159px → 240px → 아바타 근접) */
+    min-width: 0;
+    background: var(--cs-points);
+    border-radius: var(--radius-xl);
+    padding: 8px 8px 8px 20px;
+  }
+  .user-info {
+    flex: 1 1 auto; /* 넓어진 카드 안에서 이름은 좌측, ✕는 우측 끝에 고정 */
+    min-width: 0;
+  }
+  /* 이름 글자 토큰 한 단계 작게(2026-10-09 Stephen 지시): 18px → --text-m-body-16B(16px). 굵기는 기존 900 유지 */
+  .info-bg .user-name { /* 아래쪽 기본 .user-name 규칙(18px)보다 우선하도록 선택자를 한 단계 구체화 */
+    font: var(--text-m-body-16B);
+    font-weight: 900;
+  }
+  .user-name,
+  .user-handle {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .user-handle.dup {
+    display: none;
   }
 
   /* 65px 원형 아바타 */
