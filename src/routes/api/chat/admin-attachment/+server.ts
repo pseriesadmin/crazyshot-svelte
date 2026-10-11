@@ -90,11 +90,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .eq('id', sessionId)
 
   // 고객 FCM 푸시 — 채팅 발송과 완전히 독립적으로 동작(push.ts 내부에서 절대 throw 안 함)
+  const attachmentBody = isImage ? '사진을 보냈어요.' : (fileName || '파일을 보냈어요.')
   await sendPushToUser(cs.user_id, 'admin_chat_reply', {
     title: '상담 답장이 도착했어요',
-    body: isImage ? '사진을 보냈어요.' : (fileName || '파일을 보냈어요.'),
+    body: attachmentBody,
     link: '/',
-  })
+  }, { vars: { 답변내용: attachmentBody } })
 
   return json({ message: message as ChatMessage }, { status: 201 })
 }

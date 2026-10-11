@@ -12,6 +12,9 @@ import { callTypedRpc } from '$lib/utils/rpc'
 import { sendLifecycleSms } from './sms'
 import { filterAdminPushRecipientsByMenu } from '$lib/server/adminPushMenuFilter'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
+import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
+import { applyNotifyTemplate, smsTypeToConfigType, type NotifyVars } from '$lib/utils/notifyTemplate'
+import { getNotifyMessageOverride, readMessageFromExtraConfig } from '$lib/server/notifyMessages'
 
 export interface PushPayload {
   title: string
@@ -28,10 +31,10 @@ export type PushDeliveryResult = {
   reason: 'sent' | 'opted_out' | 'disabled' | 'no_token' | 'delivery_failed' | 'error'
 }
 
-// 고객 라이프사이클 푸시 문구 — 기존 send_rental_chat_notification RPC(Migration 150/170/174)의
-// CASE 분기와 동일하게 서버 코드에 고정 문구로 보관(채팅 RPC도 SQL 내 하드코딩 방식이라 동일 패턴
-// 유지 — 문구를 관리자가 실시간 편집 가능하게 하려면 push_notification_config.extra_config 확장이
-// 필요하나 이번 범위 밖, 필요 시 별도 요청)
+// 고객 라이프사이클 푸시 기본 문구 — 코드에 고정(기존 send_rental_chat_notification RPC의 CASE 분기와 같은 패턴).
+// 2026-10-10부터 관리자가 /cms/set/push 에서 알림별 안내문장을 편집할 수 있다(push_notification_config.extra_config.message,
+// Migration #689) — 편집값이 있으면 아래 body 대신 그 문장(변수 치환 후)이 푸시·문자에 쓰이고, 비어 있으면 이 기본 문구를 그대로 쓴다.
+// 채팅카드(send_rental_chat_notification)는 DB 고정 문구라 이 편집의 대상이 아니다(service-operations.md §15).
 const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (productName: string) => string }> = {
   reservation_hold: {
     title: '예약 신청이 접수됐어요',
@@ -239,15 +242,21 @@ export async function sendPushToUser(
   userId: string,
   notifyType: string,
   payload: PushPayload,
+  options?: {
+    /** 안내문장 변수값(상품명·답변내용 등). 고객이름은 이 함수가 프로필에서 채운다. */
+    vars?: NotifyVars
+    /** true면 CMS 편집 문장을 적용하지 않고 payload.body 그대로 발송(같은 설정 키를 쓰지만 문맥이 다른 알림용) */
+    noOverride?: boolean
+  },
 ): Promise<PushDeliveryResult> {
   try {
     const supabase = getServiceClient()
 
     const { data: config } = await supabase
       .from('push_notification_config')
-      .select('push_enabled, category')
+      .select('push_enabled, category, extra_config')
       .eq('notify_type', notifyType)
-      .returns<Pick<PushNotificationConfig, 'push_enabled' | 'category'>[]>()
+      .returns<Pick<PushNotificationConfig, 'push_enabled' | 'category' | 'extra_config'>[]>()
       .maybeSingle()
 
     if (config && config.push_enabled === false) return { delivered: false, reason: 'disabled' }
@@ -255,14 +264,23 @@ export async function sendPushToUser(
     const optInColumn = config?.category === 'customer_marketing' ? 'allow_benefit_alert' : 'allow_rental_alert'
     const { data: profile } = await supabase
       .from('user_profiles')
-      .select(optInColumn)
+      .select(`${optInColumn}, full_name`)
       .eq('id', userId)
-      .returns<Record<string, boolean>[]>()
+      .returns<Record<string, unknown>[]>()
       .maybeSingle()
 
     if (profile && profile[optInColumn] === false) return { delivered: false, reason: 'opted_out' }
 
-    const { sentToUserIds, hadTokens } = await dispatch([userId], notifyType, payload)
+    // CMS에서 편집한 안내문장 — 치환 결과가 비면 기본 문구로 되돌린다(알림이 빈 본문으로 나가지 않게)
+    let finalPayload = payload
+    const override = options?.noOverride ? null : readMessageFromExtraConfig(config?.extra_config)
+    if (override) {
+      const fullName = typeof profile?.full_name === 'string' ? profile.full_name : ''
+      const body = applyNotifyTemplate(override, { ...(fullName ? { 고객이름: fullName } : {}), ...options?.vars })
+      if (body) finalPayload = { ...payload, body }
+    }
+
+    const { sentToUserIds, hadTokens } = await dispatch([userId], notifyType, finalPayload)
     if (sentToUserIds.has(userId)) return { delivered: true, reason: 'sent' }
     return { delivered: false, reason: hadTokens ? 'delivery_failed' : 'no_token' }
   } catch {
@@ -284,7 +302,7 @@ export async function sendReservationLifecyclePush(
   admin: SupabaseClient,
   reservationId: number,
   notifyType: string,
-  options?: { skipSmsFallback?: boolean; skipSms?: boolean; smsLink?: string; forceSms?: boolean },
+  options?: { skipSmsFallback?: boolean; skipSms?: boolean; smsLink?: string; forceSms?: boolean; bodyOverride?: string },
 ): Promise<void> {
   try {
     const copy = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]
@@ -292,11 +310,19 @@ export async function sendReservationLifecyclePush(
 
     const { data: resv } = await admin
       .from('rental_reservations')
-      .select('user_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+      .select('user_id, reservation_code, start_date, end_date, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, parent_product_id)')
       .eq('id', reservationId)
       .single()
 
-    const row = resv as { user_id?: string; products?: { name?: string } | { name?: string }[] | null } | null
+    const row = resv as {
+      user_id?: string
+      reservation_code?: string | null
+      start_date?: string | null
+      end_date?: string | null
+      pickup_time?: string | null
+      return_time?: string | null
+      products?: { name?: string } | { name?: string }[] | null
+    } | null
     if (!row?.user_id) return
 
     // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C)
@@ -304,11 +330,36 @@ export async function sendReservationLifecyclePush(
     const productsField = row.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
 
-    await sendPushToUser(row.user_id, notifyType, {
-      title: copy.title,
-      body: copy.body(productName),
-      link: '/account/rental',
-    })
+    const { data: userProfile } = await admin
+      .from('user_profiles')
+      .select('phone, full_name')
+      .eq('id', row.user_id)
+      .maybeSingle()
+    const profileRow = userProfile as { phone?: string | null; full_name?: string | null } | null
+
+    // 안내문장 변수(CMS 편집 문장용) — 값이 없는 항목은 비워 둔다
+    const joinDateTime = (date?: string | null, time?: string | null): string =>
+      [date ?? '', time ?? ''].filter(Boolean).join(' ')
+    const vars: NotifyVars = {
+      상품명: productName,
+      ...(profileRow?.full_name ? { 고객이름: profileRow.full_name } : {}),
+      ...(row.reservation_code ? { 예약코드: row.reservation_code } : {}),
+      ...(row.start_date ? { 수령일시: joinDateTime(row.start_date, row.pickup_time) } : {}),
+      ...(row.end_date ? { 반납일시: joinDateTime(row.end_date, row.return_time) } : {}),
+    }
+    // 무인보관함 이용 안내(2026-10-11): 푸시알림 설정의 공통 안내문장을 정본으로 이 고객 한 명에게만 보낸다.
+    // 크론이 이미 조립한 문장(bodyOverride)이 있으면 그대로, 없으면 여기서 조립한다(조립 실패 시 기존 문구).
+    let lockerBody: string | undefined
+    if (notifyType === 'locker_guide') {
+      lockerBody = options?.bodyOverride ?? (await composeLockerGuideMessage(admin, reservationId)) ?? undefined
+    }
+
+    await sendPushToUser(
+      row.user_id,
+      notifyType,
+      { title: copy.title, body: lockerBody ?? copy.body(productName), link: '/account/rental' },
+      { vars, noOverride: lockerBody !== undefined },
+    )
 
     // SMS 동시 발송(2026-10-02, Stephen 확정): 푸시 성공 여부와 무관하게 대상 타입이면 항상 SMS도
     // 발송한다. 수신동의(allow_rental_alert)·블랙리스트는 보지 않는다(예약·대여 관련 필수 안내).
@@ -316,13 +367,10 @@ export async function sendReservationLifecyclePush(
     // options.skipSms(또는 구 skipSmsFallback): 호출부가 이미 SMS를 직접 보냈거나 묶음 주문에서
     // 대표 1건만 SMS를 보낼 때 이중 발송을 막기 위해 건너뛴다.
     if (!options?.skipSms && !options?.skipSmsFallback) {
-      const { data: userProfile } = await admin
-        .from('user_profiles')
-        .select('phone')
-        .eq('id', row.user_id)
-        .maybeSingle()
-      const phone = (userProfile as { phone?: string | null } | null)?.phone
+      const phone = profileRow?.phone
       if (phone) {
+        const smsOverride = await getNotifyMessageOverride(admin, notifyType)
+        const customMessage = smsOverride ? applyNotifyTemplate(smsOverride, vars) || null : null
         await sendLifecycleSms(admin, {
           phone,
           userId: row.user_id,
@@ -331,6 +379,7 @@ export async function sendReservationLifecyclePush(
           reservationId,
           linkOverride: options?.smsLink,
           force: options?.forceSms,
+          customMessage,
         })
       }
     }
@@ -351,18 +400,32 @@ export async function sendCardSms(
   try {
     if (params.reservationId == null) return
     const [{ data: profile }, { data: resv }] = await Promise.all([
-      admin.from('user_profiles').select('phone').eq('id', params.userId).maybeSingle(),
+      admin.from('user_profiles').select('phone, full_name').eq('id', params.userId).maybeSingle(),
       admin
         .from('rental_reservations')
-        .select('products!rental_reservations_product_id_fkey(name, parent_product_id)')
+        .select('reservation_code, products!rental_reservations_product_id_fkey(name, parent_product_id)')
         .eq('id', params.reservationId)
         .maybeSingle(),
     ])
-    const phone = (profile as { phone?: string | null } | null)?.phone
+    const profileRow = profile as { phone?: string | null; full_name?: string | null } | null
+    const phone = profileRow?.phone
     if (!phone) return
     await applyParentFieldsToRowProducts([resv], ['name'], admin)
     const productsField = (resv as { products?: { name?: string } | { name?: string }[] | null } | null)?.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
+    const reservationCode = (resv as { reservation_code?: string | null } | null)?.reservation_code
+
+    // 계약서 카드는 설정 유형이 문자 유형과 다르다(contract_link→contract_sent 등) — 매핑이 없으면(재공유) 고정 문구 유지
+    const configType = smsTypeToConfigType(params.notifyType)
+    const smsOverride = configType ? await getNotifyMessageOverride(admin, configType) : null
+    const customMessage = smsOverride
+      ? applyNotifyTemplate(smsOverride, {
+          상품명: productName,
+          ...(profileRow?.full_name ? { 고객이름: profileRow.full_name } : {}),
+          ...(reservationCode ? { 예약코드: reservationCode } : {}),
+        }) || null
+      : null
+
     await sendLifecycleSms(admin, {
       phone,
       userId: params.userId,
@@ -371,6 +434,7 @@ export async function sendCardSms(
       reservationId: params.reservationId,
       linkOverride: params.link,
       force: params.force,
+      customMessage,
     })
   } catch {
     // SMS 보조 발송 실패는 호출부 흐름에 영향 없음

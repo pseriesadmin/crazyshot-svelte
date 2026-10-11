@@ -16,6 +16,7 @@ export type CmsAdminAuditActionType =
   | 'password_recovery_completed'
   | 'crazychat_setting_change' // 크레이지챗 스위치·허용 분류 변경(Migration #668)
   | 'nlsearch_setting_change' // 검색 튜닝 파라미터 변경(Migration #690)
+  | 'push_message_change' // 푸시·문자 안내문장 편집(Migration #689)
   | 'doc_view' // 고객 본인증명·외국인증명 서류 열람(서명 URL 발급) — DB CHECK 확장은 서류 비공개 전환 마이그레이션(B2)에서 함께 적용
 
 export interface CmsAdminAuditLogEntry {

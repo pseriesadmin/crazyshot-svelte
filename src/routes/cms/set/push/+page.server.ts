@@ -6,6 +6,11 @@ import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { requireAccountMutationAccess } from '$lib/server/requireTrueSuperadmin'
+import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
+import { clearNotifyMessageCache, readMessageFromExtraConfig } from '$lib/server/notifyMessages'
+import { validateNotifyMessage } from '$lib/utils/notifyTemplate'
+import { getLockerEntrancePassword, LOCKER_ENTRANCE_KEY } from '$lib/server/lockerEntrance'
+import { isValidLockerPassword } from '$lib/utils/lockerFields'
 
 export interface PushConfigRow {
   id: number
@@ -13,6 +18,8 @@ export interface PushConfigRow {
   notify_type: string
   label: string
   push_enabled: boolean
+  /** CMS에서 편집한 안내문장(없으면 null = 기본 문구 사용) */
+  message: string | null
 }
 
 export interface AdminNotifyRow {
@@ -71,8 +78,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const from = (logPage - 1) * LOGS_PER_PAGE
   logsQuery = logsQuery.range(from, from + LOGS_PER_PAGE - 1)
 
+  const lockerEntrancePassword = await getLockerEntrancePassword(sb)
+
   const [configRes, adminRes, logsRes] = await Promise.all([
-    sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled').order('id'),
+    sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled, extra_config').order('id'),
     sb
       .from('user_profiles')
       .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review, admin_notify_crazychat_request')
@@ -103,8 +112,11 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalLogPages = Math.max(1, Math.ceil(totalLogCount / LOGS_PER_PAGE))
 
   return {
-    pushConfig: (configRes.data ?? []) as PushConfigRow[],
+    pushConfig: ((configRes.data ?? []) as (Omit<PushConfigRow, 'message'> & { extra_config: unknown })[]).map(
+      ({ extra_config, ...row }): PushConfigRow => ({ ...row, message: readMessageFromExtraConfig(extra_config) }),
+    ),
     adminList: (adminRes.data ?? []) as AdminNotifyRow[],
+    lockerEntrancePassword,
     logs,
     logPage,
     totalLogPages,
@@ -134,6 +146,85 @@ export const actions: Actions = {
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '저장 실패' })
     return { ok: true, action: 'updatePushConfig' as const }
+  },
+
+  // 알림별 안내문장 저장 — 빈 문장은 기본 문구 복원. 푸시·문자 양쪽에 같은 문장이 쓰인다.
+  updatePushMessage: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const notifyType = data.get('notify_type')
+    const rawMessage = data.get('message')
+    if (typeof notifyType !== 'string' || !notifyType || typeof rawMessage !== 'string') {
+      return fail(400, { message: 'invalid request' })
+    }
+
+    // 서버 재검증 — 화면 검증과 같은 함수(허용 변수·길이·문자 규격)
+    const validation = validateNotifyMessage(notifyType, rawMessage)
+    if (!validation.ok) return fail(400, { message: validation.error ?? '문장이 올바르지 않습니다.' })
+
+    const sb = admin()
+    const { data: before } = await sb
+      .from('push_notification_config')
+      .select('extra_config')
+      .eq('notify_type', notifyType)
+      .maybeSingle()
+    const beforeMessage = readMessageFromExtraConfig((before as { extra_config?: unknown } | null)?.extra_config)
+
+    const nextMessage = rawMessage.trim() === '' ? '' : rawMessage.replace(/\r\n/g, '\n').trim()
+    const { data: result, error } = await sb.rpc('update_push_notification_message', {
+      p_notify_type: notifyType,
+      p_message: nextMessage,
+    })
+    if (error) return fail(500, { message: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { message: res?.error ?? '저장 실패' })
+
+    clearNotifyMessageCache()
+    await insertCmsAdminAuditLog(sb, {
+      actorId: session.user.id,
+      actionType: 'push_message_change',
+      targetUserId: null,
+      beforeValue: { notify_type: notifyType, message: beforeMessage },
+      afterValue: { notify_type: notifyType, message: nextMessage || null },
+    })
+    return { ok: true, action: 'updatePushMessage' as const, warnings: validation.warnings }
+  },
+
+  // 무인보관함 중앙현관 비밀번호 저장(2026-10-11) — 채팅카드·문자·푸시 변수가 이 값을 읽는다. 빈 값 = 삭제(안내에서 그 줄 생략).
+  updateLockerEntrance: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const raw = data.get('password')
+    if (typeof raw !== 'string') return fail(400, { message: 'invalid request' })
+    const password = raw.trim()
+    if (password !== '' && !isValidLockerPassword(password)) return fail(400, { message: '중앙현관 비밀번호는 4~10자의 숫자·특수문자만 입력할 수 있습니다.' })
+
+    const sb = admin()
+    const before = await getLockerEntrancePassword(sb)
+    if (password === '') {
+      const { error } = await sb.from('cms_settings').delete().eq('key', LOCKER_ENTRANCE_KEY)
+      if (error) return fail(500, { message: error.message })
+    } else {
+      const { error } = await sb.from('cms_settings').upsert({ key: LOCKER_ENTRANCE_KEY, value: { password }, updated_at: new Date().toISOString() })
+      if (error) return fail(500, { message: error.message })
+    }
+    // 비밀번호 값은 감사로그에 남기지 않는다(변경 여부만)
+    await insertCmsAdminAuditLog(sb, {
+      actorId: session.user.id,
+      actionType: 'push_message_change',
+      targetUserId: null,
+      beforeValue: { setting: LOCKER_ENTRANCE_KEY, set: before !== null },
+      afterValue: { setting: LOCKER_ENTRANCE_KEY, set: password !== '' },
+    })
+    return { ok: true, action: 'updateLockerEntrance' as const }
   },
 
   updateAdminNotify: async ({ request, locals }) => {

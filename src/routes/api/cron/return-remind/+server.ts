@@ -6,12 +6,9 @@
  *
  * 발송 내역 (순서 고정):
  *   ③ 채팅카드: send_rental_chat_notification RPC ('return_remind')
- *   ④ SMS 직접 발송: sendSms — 전화번호 보유 고객에게 항상 발송 (푸시 실패 여부 무관)
- *   ⑤ 브라우저 푸시: sendReservationLifecyclePush (skipSmsFallback: ④에서 SMS 발송 여부)
- *      → 전화번호가 있어 ④에서 SMS를 이미 보냈으면 skipSmsFallback: true로 폴백 차단
- *      → 전화번호가 없어 ④를 건너뛴 경우 skipSmsFallback: false → 폴백 허용(단, 전화번호
- *         없으면 sendReservationLifecycleSmsFallback 내부도 phone null → 미발송)
- *      고객 1인당 SMS는 정확히 1통 이하 발송 보장.
+ *   ④ 브라우저 푸시 + SMS: sendReservationLifecyclePush — 푸시와 SMS를 허브가 함께 발송(같은 안내문장,
+ *      CMS 편집값 또는 기본 문구). 같은 날 중복 방지·SMS 로그도 허브가 처리한다(2026-10-10 — 이전엔
+ *      이 크론이 별도 문구로 SMS를 직접 보내 푸시 문구와 달랐다).
  *
  * 배치 처리 (Migration 507):
  *   BATCH_SIZE × MAX_BATCHES 다중 배치 루프(locker-guide Cron과 동일 패턴).
@@ -29,14 +26,11 @@ import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
-import { sendSms } from '$lib/server/sms'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 const BATCH_SIZE = 100
 const MAX_BATCHES = 5 // 최대 500건/실행 — 하루 반납 예약 규모 기준 충분한 안전마진
-const RETURN_REMIND_SMS_COPY = (productName: string): string =>
-  `[크레이지샷] ${productName} 반납예정일이 오늘입니다. crazyshot.kr에서 반납 방법을 확인해 주세요.`
 
 interface ReturnRemindTarget {
   reservation_id: number
@@ -81,8 +75,6 @@ export const GET: RequestHandler = async ({ request }) => {
       processed++
       // 한 건 실패가 나머지 발송을 막지 않도록 개별 격리 (fail-soft)
       try {
-        const productName = row.product_name ?? '상품'
-
         // ③ 채팅카드 발송 — 이 RPC 성공 후 다음 배치 조회 시 이 예약은 dedup 조건에 걸려 제외됨
         const { error: chatErr } = await admin.rpc('send_rental_chat_notification', {
           p_reservation_id: row.reservation_id,
@@ -90,17 +82,10 @@ export const GET: RequestHandler = async ({ request }) => {
         })
         if (chatErr) throw new Error(`채팅카드 발송 실패: ${chatErr.message}`)
 
-        // ④ SMS 직접 발송 — 전화번호 보유 고객에게 항상 발송
-        const smsSentDirectly = !!row.phone
-        if (row.phone) {
-          await sendSms(row.phone, RETURN_REMIND_SMS_COPY(productName))
-        }
-
-        // ⑤ 브라우저 푸시 (fail-soft: 내부에서 예외를 catch하므로 여기서 throw 없음)
-        // skipSmsFallback: ④에서 이미 SMS를 직접 발송한 경우 push 내부 fallback SMS 중복 발송 방지
-        await sendReservationLifecyclePush(admin, row.reservation_id, 'return_remind', {
-          skipSmsFallback: smsSentDirectly,
-        })
+        // ④ 브라우저 푸시 + SMS (fail-soft: 내부에서 예외를 catch하므로 여기서 throw 없음)
+        // SMS도 이 허브가 함께 발송한다(2026-10-10) — 푸시와 같은 안내문장(CMS 편집값 또는 기본 문구)을 쓰도록
+        // 이 크론이 별도 문구로 직접 보내던 경로를 없앴다. 같은 날 중복 방지·발송 로그는 허브(sendLifecycleSms)가 처리한다.
+        await sendReservationLifecyclePush(admin, row.reservation_id, 'return_remind')
 
         succeeded++
       } catch (err) {

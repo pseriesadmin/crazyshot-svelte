@@ -151,11 +151,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .eq('id', sessionId)
 
   // 고객 FCM 푸시 — 채팅 발송과 완전히 독립적으로 동작(push.ts 내부에서 절대 throw 안 함)
+  const replyPreview = content.length > 60 ? `${content.slice(0, 60)}…` : content
   await sendPushToUser(cs.user_id, 'admin_chat_reply', {
     title: '상담 답장이 도착했어요',
-    body: content.length > 60 ? `${content.slice(0, 60)}…` : content,
+    body: replyPreview,
     link: '/',
-  })
+  }, { vars: { 답변내용: replyPreview } })
 
   return json({ message })
 }
