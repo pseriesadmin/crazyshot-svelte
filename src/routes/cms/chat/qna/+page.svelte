@@ -334,7 +334,7 @@
       role="tab"
       aria-selected={activeTab === 'candidates'}
       onclick={() => { activeTab = 'candidates'; showNew = false }}
-    >동의어 후보 <span class="tab-count">{data.synonymCandidates.length}</span></button>
+    >유의어 후보 <span class="tab-count">{data.synonymCandidates.length}</span></button>
     <button
       class="tab-nav-btn"
       class:tab-active={activeTab === 'replies'}
@@ -516,7 +516,7 @@
   <!-- §D-2: 동의어 후보 관리 탭 -->
   <div class="cand-toolbar">
     <div class="toolbar-left">
-      <h2 class="page-title">동의어 후보</h2>
+      <h2 class="page-title">유의어 후보</h2>
       <span class="count-badge">{data.synonymCandidates.length}건</span>
     </div>
     <div class="toolbar-right">
@@ -543,7 +543,7 @@
   <div class="cand-body">
     {#if data.synonymCandidates.length === 0}
       <div class="cand-empty">
-        <p>아직 등록된 동의어 후보가 없습니다.</p>
+        <p>아직 등록된 유의어 후보가 없습니다.</p>
         <p class="cand-empty-sub">"병기패턴 재스캔" 또는 "재검색패턴 재스캔" 버튼을 누르거나, 상품 등록·채팅 발송 후 자동으로 수집됩니다.</p>
       </div>
     {:else}
@@ -551,7 +551,7 @@
         <table class="cand-table">
           <thead>
             <tr>
-              <th>동의어 그룹</th>
+              <th>유의어 그룹</th>
               <th>후보어</th>
               <th>출처</th>
               <th>발생</th>
