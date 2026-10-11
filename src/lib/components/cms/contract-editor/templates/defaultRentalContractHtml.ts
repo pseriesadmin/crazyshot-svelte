@@ -381,9 +381,9 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
     <thead>
       <tr>
         <th style="width:7%">NO.</th>
-        <th style="width:40%">Item Detail</th>
+        <th style="width:35%">Item Detail</th>
         <th style="width:8%">Qty</th>
-        <th style="width:15%">Amount</th>
+        <th style="width:20%">Unit Price</th>
         <th style="width:30%">Notes</th>
       </tr>
     </thead>
@@ -391,7 +391,7 @@ export const DEFAULT_RENTAL_CONTRACT_HTML = `
 <!--REPEAT:상품목록-->
       <tr>
         <td style="text-align:center">{{NO.}}</td>
-        <td>{{상품명}} {{상품코드}}</td>
+        <td>{{상품명}}</td>
         <td style="text-align:center">{{수량}}</td>
         <td style="text-align:right">{{금액}}</td>
         <td>{{비고}}</td>

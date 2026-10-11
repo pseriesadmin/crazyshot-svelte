@@ -13,6 +13,7 @@ import { calcVatForCart } from '$lib/utils/cartCouponPoints'
 import { applyParentFieldsInPlace } from '$lib/server/products/resolveParentProductFields'
 import { formatKstDateDot } from '$lib/utils/kstDate'
 import { calcRentalMinutes, calcRentalPeriodParts } from '$lib/utils/cartRentalFee'
+import type { ReservationMainProduct } from '$lib/utils/contractLineItems'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 
 // cart/+page.svelte DUR_TYPES · ProductDetailPanel.svelte "24시간(1일)" 표기 관례와 동일
@@ -74,6 +75,40 @@ function formatTotalUsageHours(
   const diffHours = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60))
   if (diffHours <= 0) return '-'
   return `${diffHours}시간`
+}
+
+// 2026-10-10 — "대여 장비내역" 단가(Unit Price) 표기용. 예약의 대여 기간에 일 단위(Day)·12시간(12H) 블록이
+// 각각 들어 있는지 판정해 contractLineItems.buildLineItems가 "Day 60,000 / 12H 50,000"을 만들게 한다.
+// 기간 계산이 불가능하거나 월간 요금이면 플래그를 비워 기존 단일 단가 표기로 폴백한다.
+function buildPriceInfo(
+  prices: Map<string, number>,
+  productId: string,
+  durationType: string | null,
+  period: { start: string | null; end: string | null; pickupTime: string | null; returnTime: string | null; deliveryLocked: boolean },
+): Pick<ReservationMainProduct, 'unit_price' | 'price_day' | 'price_half' | 'show_day' | 'show_half'> {
+  const priceDay = prices.get(`${productId}|24h`) ?? prices.get(`${productId}|1day`) ?? null
+  const priceHalf = prices.get(`${productId}|12h`) ?? null
+  const unitPrice = durationType ? (prices.get(`${productId}|${durationType}`) ?? null) : null
+  if (durationType === 'monthly') return { unit_price: unitPrice }
+  // 기간을 계산할 수 없으면(날짜·시각 누락/동일) 예약에 기록된 요금 유형(24h·1day=Day, 12h=12H)으로 표기해 형식을 맞춘다.
+  const byDuration = {
+    unit_price: unitPrice,
+    price_day: priceDay,
+    price_half: priceHalf,
+    show_day: durationType === '24h' || durationType === '1day',
+    show_half: durationType === '12h',
+  }
+  if (!period.start || !period.end) return durationType ? byDuration : { unit_price: unitPrice }
+  const minutes = calcRentalMinutes(period.start, period.end, period.pickupTime, period.returnTime, period.deliveryLocked)
+  const parts = calcRentalPeriodParts(minutes, priceHalf != null)
+  if (parts.length === 0) return durationType ? byDuration : { unit_price: unitPrice }
+  return {
+    unit_price: unitPrice,
+    price_day: priceDay,
+    price_half: priceHalf,
+    show_day: parts.some((p) => p.unit === '일'),
+    show_half: parts.some((p) => p.unit === '시간'),
+  }
 }
 
 // ⛔ 2026-09-09 정정(Stephen 지시) — 이전까지는 이 엔드포인트가 쿠폰 할인액을 매번
@@ -239,7 +274,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // ── 2. 병렬 조회: 기본 예약의 스칼라 필드용 데이터 ────────────────────────
   const [productRes, userRes, orderItemRes, methodOptsRes, addrRes, pointRes, ownPriceRes, serviceInfo] = await Promise.all([
-    admin.from('products').select('name, product_code, components, parent_product_id').eq('id', res.product_id).maybeSingle(),
+    admin.from('products').select('name, product_code, components, parent_product_id, category, brand').eq('id', res.product_id).maybeSingle(),
     admin.from('user_profiles').select('full_name, phone, email').eq('id', res.user_id).maybeSingle(),
     admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle(),
     // 2026-09-08 — is_delivery_type 배송여부 판정과 함께 name(한글 라벨)도 같은 쿼리로
@@ -269,15 +304,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     // 대여 장비내역 Amount(금액) — 기준 예약(단독 예약 경로 전용) 실제 대여요금(price_rules).
     // 주문 묶음 경로(siblingRows)는 아래 §3에서 reservation별 duration_type이 서로 다를 수
     // 있어 별도 배치 조회로 처리 — 이 쿼리는 orderId가 없는 단독 예약일 때만 사용된다.
-    res.duration_type
-      ? admin.from('price_rules')
-          .select('price')
-          .eq('product_id', res.product_id)
-          .eq('duration_type', res.duration_type)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .maybeSingle()
-      : Promise.resolve({ data: null as { price: number } | null, error: null }),
+    // 2026-10-10: Day·12H 단가를 함께 표기하려고 단일 조회 → 그 상품의 활성 요금 전체 조회로 변경
+    admin.from('price_rules')
+      .select('duration_type, price')
+      .eq('product_id', res.product_id)
+      .eq('is_active', true)
+      .is('deleted_at', null),
     // '서비스 기본 정보'(사업자 정보, Migration #566) — 임대인 정보 4개 변수 소스.
     // 공개 RPC라 admin 클라이언트로도 그대로 호출 가능, 실패해도 빈 값으로 fail-soft.
     getServiceInfoSettings(admin),
@@ -285,7 +317,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // 상품명은 부모 값을 따른다 — 고객 계약 화면(contract/[token])과 같은 기준(자식 재고 부모 참조 전환 Phase 3-B).
   // 품번 product_code는 자식 고유값이라 그대로 둔다.
-  if (productRes.data) await applyParentFieldsInPlace(admin, [productRes.data], ['name'])
+  if (productRes.data) await applyParentFieldsInPlace(admin, [productRes.data], ['name', 'category', 'brand'])
 
   // 기준 예약(단독/주문묶음 공용) 메인상품 구성품 — 부모 해석 적용(위 resolveComponentsMap 참고)
   const mainComponentsMap = await resolveComponentsMap([{
@@ -332,7 +364,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // 모든 reservation 기본정보 + 메인상품 (duration_type — 대여요금 조회용)
       const { data: siblingRows } = await admin
         .from('rental_reservations')
-        .select('id, product_id, duration_type')
+        .select('id, product_id, duration_type, start_date, end_date, pickup_time, return_time, pickup_method')
         .in('id', siblingIds)
         .order('id', { ascending: true })
 
@@ -343,11 +375,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // 메인상품 일괄 조회 (N+1 방지) — components(구성품, 2026-09-08 추가): "대여 장비내역"
       // {{비고}} 채움용(contractLineItems.ts formatComponentsText 재사용)
       const { data: productRows } = productIdSet.length > 0
-        ? await admin.from('products').select('id, name, product_code, components, parent_product_id').in('id', productIdSet)
+        ? await admin.from('products').select('id, name, product_code, components, parent_product_id, category, brand').in('id', productIdSet)
         : { data: [] }
 
       // 상품명은 부모 값을 따른다(위 기본 상품과 동일 기준)
-      await applyParentFieldsInPlace(admin, productRows ?? [], ['name'])
+      await applyParentFieldsInPlace(admin, productRows ?? [], ['name', 'category', 'brand'])
 
       // 구성품은 부모 전용 항목이라 부모 해석 필요(resolveComponentsMap 참고)
       const resolvedMainComponentsMap = await resolveComponentsMap(
@@ -358,7 +390,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         })),
       )
 
-      const productMap: Record<string, { name: string; product_code: string | null; components: unknown }> =
+      const productMap: Record<string, { name: string; product_code: string | null; components: unknown; category: string | null; brand: string | null }> =
         Object.fromEntries(
           (productRows ?? []).map(p => [
             p.id as string,
@@ -366,6 +398,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
               name: p.name as string,
               product_code: p.product_code as string | null,
               components: resolvedMainComponentsMap[p.id as string] ?? null,
+              category: (p.category as string | null) ?? null,
+              brand: (p.brand as string | null) ?? null,
             },
           ])
         )
@@ -383,6 +417,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
       const priceMap = new Map<string, number>(
         (priceRows ?? []).map(p => [`${p.product_id}|${p.duration_type}`, p.price as number])
+      )
+
+      // 예약별 수령 방식의 배송형 여부(대여일수 산식의 deliveryLocked) — 형제 예약 전체를 한 번에 조회
+      const siblingMethodKeys = [
+        ...new Set((siblingRows ?? []).map(r => r.pickup_method as string | null).filter((v): v is string => !!v)),
+      ]
+      const { data: siblingMethodRows } = siblingMethodKeys.length > 0
+        ? await admin.from('rental_method_options').select('method_key, is_delivery_type').in('method_key', siblingMethodKeys)
+        : { data: [] as { method_key: string; is_delivery_type: boolean | null }[] }
+      const siblingDeliveryByMethod = new Map(
+        (siblingMethodRows ?? []).map(m => [m.method_key as string, m.is_delivery_type === true]),
       )
 
       // 모든 reservation의 옵션상품 일괄 조회 (N+1 방지)
@@ -440,8 +485,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       // ReservationForLineItems 배열 구성
       lineItemReservations = (siblingRows ?? []).map(row => {
         const pid = row.product_id as string
-        const prod = productMap[pid] ?? { name: '-', product_code: null, components: null }
-        const unitPrice = priceMap.get(`${pid}|${row.duration_type}`) ?? null
+        const prod = productMap[pid] ?? { name: '-', product_code: null, components: null, category: null, brand: null }
+        const priceInfo = buildPriceInfo(priceMap, pid, (row.duration_type as string | null) ?? null, {
+          start: row.start_date as string | null,
+          end: row.end_date as string | null,
+          pickupTime: row.pickup_time as string | null,
+          returnTime: row.return_time as string | null,
+          deliveryLocked: row.pickup_method ? (siblingDeliveryByMethod.get(row.pickup_method as string) ?? false) : false,
+        })
         const opts = (optionsByResId[row.id as number] ?? []).map(o => ({
           option_name:  o.option_name as string,
           qty:          o.qty as number,
@@ -452,7 +503,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
             ? (optionComponentsMap[o.option_product_id as string] ?? null)
             : null,
         }))
-        return { mainProduct: { ...prod, unit_price: unitPrice }, options: opts, bundles: assignedBundlesByResId[row.id as number] ?? bundlesByProductId[pid] ?? [] }
+        return { mainProduct: { ...prod, ...priceInfo }, options: opts, bundles: assignedBundlesByResId[row.id as number] ?? bundlesByProductId[pid] ?? [] }
       })
     }
   } else {
@@ -504,7 +555,22 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         mainProduct: {
           name:         productRes.data?.name ?? '-',
           product_code: productRes.data?.product_code ?? null,
-          unit_price:   ownPriceRes.data?.price ?? null,
+          ...buildPriceInfo(
+            new Map((ownPriceRes.data ?? []).map(p => [`${res.product_id}|${p.duration_type}`, p.price as number])),
+            res.product_id as string,
+            res.duration_type ?? null,
+            {
+              start: res.start_date,
+              end: res.end_date,
+              pickupTime: res.pickup_time,
+              returnTime: res.return_time,
+              deliveryLocked: res.pickup_method
+                ? ((methodOptsRes.data ?? []).find(m => m.method_key === res.pickup_method)?.is_delivery_type === true)
+                : false,
+            },
+          ),
+          category:     (productRes.data?.category as string | null) ?? null,
+          brand:        (productRes.data?.brand as string | null) ?? null,
           components:   mainComponentsResolved,
         },
         options: (soloOptions ?? []).map(o => ({
@@ -536,9 +602,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // "같은 상품(이름+품번 동일)을 여러 건 예약했으면 수량=실제 예약 건수"를 이 스칼라
   // {{수량}}에도 동일하게 적용해야 한다(contractLineItems.ts 그룹화 키와 완전히 동일한
   // `${name} ${product_code ?? ''}` 식별키 재사용 — 로직 이원화 방지).
-  const ownProductKey = `${productRes.data?.name ?? ''} ${productRes.data?.product_code ?? ''}`
+  // 2026-10-10: 상품목록 통합 기준이 상품명으로 바뀌어(자산코드 비표시) 같은 기준(이름)으로 센다.
+  const ownProductName = productRes.data?.name ?? ''
   const actualQty = lineItemReservations.filter(
-    (r) => `${r.mainProduct.name} ${r.mainProduct.product_code ?? ''}` === ownProductKey
+    (r) => r.mainProduct.name === ownProductName
   ).length || 1
 
   // ── 4. 응답 조립 ─────────────────────────────────────────────────────────────
