@@ -4,10 +4,10 @@
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import { sortByTier } from '$lib/utils/comboCategoryCode'
   import { csToast } from '$lib/utils/toast'
-  import { datePart } from '../../codes/_shared'
+  import { datePart } from './_shared'
   import type { PageData, ActionData } from './$types'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
-  import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, SequenceStateRow } from './+page.server'
+  import type { MappingGroup, MappingItem, TaxonomyCode } from './+page.server'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -24,23 +24,32 @@
   // $effect로 동기화하는 올바른 패턴 2를 사용).
   let userTouchedSelection = $state(false)
 
+  // 코드조합 탭이 이미 내려주는 전체 조합그룹에서 '회원' 카테고리(default_category='member')의
+  // 활성 그룹만 사용한다 — products/subscriptions 등록화면과 달리 show_in_product_filter는
+  // 상품 전용 노출 플래그라 여기선 조건에서 제외(Stephen 확정, 이전 /cms/customers/settings와 동일).
+  const memberGroups = $derived<MappingGroup[]>(
+    (data.mappingGroups as MappingGroup[]).filter((g) => g.default_category === 'member' && g.is_active)
+  )
+  const memberItems = $derived<MappingItem[]>(
+    (data.mappingItems as MappingItem[]).filter((i) => memberGroups.some((g) => g.id === i.group_id))
+  )
+  const activeCodes = $derived<TaxonomyCode[]>(
+    (data.codes as TaxonomyCode[]).filter((c) => c.is_active)
+  )
+
   const groupPickerOptions = $derived<SuggestPickerOption[]>(
-    (data.mappingGroups as MappingGroupSimple[]).map((mg) => ({ id: mg.id, label: mg.name }))
+    memberGroups.map((mg) => ({ id: mg.id, label: mg.name }))
   )
 
   $effect(() => {
     if (userTouchedSelection) return
-    const setting = data.currentSetting as { prefix: string; group_name: string; combo_row_id: string } | null
+    const setting = data.memberCode.currentSetting
     if (!setting) return
-    const matchedItem = (data.mappingItems as MappingItemSimple[]).find(
-      (i) => i.combo_row_id === setting.combo_row_id
-    )
+    const matchedItem = memberItems.find((i) => i.combo_row_id === setting.combo_row_id)
     if (!matchedItem) return
     selectedGroupId = matchedItem.group_id
     lastConfirmedGroupId = matchedItem.group_id
-    selectedGroupName =
-      (data.mappingGroups as MappingGroupSimple[]).find((g) => g.id === matchedItem.group_id)?.name ??
-      setting.group_name
+    selectedGroupName = memberGroups.find((g) => g.id === matchedItem.group_id)?.name ?? setting.group_name
     selectedComboRowId = setting.combo_row_id
   })
 
@@ -65,19 +74,19 @@
     }
   }
 
-  interface ComboRow { combo_row_id: string; combo_name: string | null; codes: TaxonomyCodeSimple[] }
+  interface ComboRow { combo_row_id: string; combo_name: string | null; codes: TaxonomyCode[] }
 
   const combosForGroup = $derived<ComboRow[]>(
     selectedGroupId
       ? (() => {
-          const items = (data.mappingItems as MappingItemSimple[]).filter((i) => i.group_id === selectedGroupId)
+          const items = memberItems.filter((i) => i.group_id === selectedGroupId)
           const rowIds = [...new Set(items.map((i) => i.combo_row_id))]
           return rowIds.map((rid) => {
             const rowItems = items.filter((i) => i.combo_row_id === rid)
             const codes = sortByTier(
               rowItems
-                .map((i) => (data.taxonomyCodes as TaxonomyCodeSimple[]).find((tc) => tc.id === i.taxonomy_code_id))
-                .filter((tc): tc is TaxonomyCodeSimple => tc !== undefined)
+                .map((i) => activeCodes.find((tc) => tc.id === i.taxonomy_code_id))
+                .filter((tc): tc is TaxonomyCode => tc !== undefined)
             )
             return { combo_row_id: rid, combo_name: rowItems[0]?.combo_name ?? null, codes }
           })
@@ -99,7 +108,7 @@
   // — 2026-08-17 Stephen이 "일괄 재발급" 실행 중 실제로 재현·보고). 그래서 이 미리보기·목록
   // 칩은 하드코딩된 "001~999" 대신 sequenceState(member_code_sequences 전체)에서 해당
   // 접두어·이번달의 실제 next_seq를 찾아 그대로 보여준다 — 실제 채번 상태와 항상 일치해야 함.
-  function comboCatCodeStr(codes: TaxonomyCodeSimple[]): string {
+  function comboCatCodeStr(codes: TaxonomyCode[]): string {
     return codes.map((c) => c.code).filter(Boolean).join('').toUpperCase()
   }
 
@@ -110,7 +119,7 @@
   // 값을 그대로 읽기만 하므로 보정 불필요). 해당 접두어·이번달 행이 아직 없으면(한 번도 채번된
   // 적 없는 조합) 1부터 시작한다.
   function nextSeqFor(prefix: string): number {
-    const row = (data.sequenceState as SequenceStateRow[]).find(
+    const row = data.memberCode.sequenceState.find(
       (r) => r.member_type === prefix && r.year_month === currentYYMM
     )
     return row?.next_seq ?? 1
@@ -137,34 +146,36 @@
   // 현재 선택이 저장된 combo_row_id와 다를 때만 활성화.
   const isDirtyCombo = $derived(
     selectedComboRowId !== null &&
-      selectedComboRowId !== (data.currentSetting as { combo_row_id: string } | null)?.combo_row_id
+      selectedComboRowId !== data.memberCode.currentSetting?.combo_row_id
   )
 
   // ─── 기존 고객 일괄 재발급 ───
   let confirmReissue = $state(false)
   let isReissuing = $state(false)
 
+  // 코드설정 페이지는 모든 탭이 같은 form 응답을 공유한다 — 다른 탭의 응답·이미 처리한 응답으로
+  // 토스트가 다시 뜨지 않도록 이 탭의 두 액션 응답만, 그것도 한 번씩만 처리한다.
+  let handledForm: unknown = null
   $effect(() => {
-    if (!form) return
-    if (form.action === 'saveMemberCodeCombo' && form.success === true) {
+    if (!form || form === handledForm) return
+    if (form.action !== 'saveMemberCodeCombo' && form.action !== 'bulkReissue') return
+    handledForm = form
+    if (form.action === 'saveMemberCodeCombo' && 'success' in form && form.success === true) {
       csToast.success('기준 코드가 저장됐습니다.')
       invalidateAll()
-    } else if (form.action === 'bulkReissue' && form.success === true) {
-      csToast.success(`기존 고객 ${form.reissuedCount ?? 0}명의 회원코드가 재발급됐습니다.`)
+    } else if (form.action === 'bulkReissue' && 'success' in form && form.success === true) {
+      const count = 'reissuedCount' in form ? Number(form.reissuedCount ?? 0) : 0
+      csToast.success(`기존 고객 ${count}명의 회원코드가 재발급됐습니다.`)
       confirmReissue = false
       invalidateAll()
     } else if ('error' in form && form.error) {
-      csToast.error(form.error)
+      csToast.error(String(form.error))
     }
   })
 </script>
 
-<svelte:head>
-  <title>고객 설정 — CMS</title>
-</svelte:head>
 
 <div class="form-wrap">
-  <h1 class="page-title">고객 설정</h1>
 
   <form
     class="sub-form"
@@ -182,7 +193,7 @@
     <section class="form-section">
       <h2 class="section-title">① 회원코드 기준 설정</h2>
       <p class="section-desc">
-        /cms/codes 코드조합에서 '회원' 카테고리로 등록한 조합을 신규 가입자의 회원코드 접두어
+        코드조합 탭에서 '회원' 카테고리로 등록한 조합을 신규 가입자의 회원코드 접두어
         기준으로 지정합니다. 저장 즉시 신규 가입자에게만 적용되며, 기존 고객은 아래 ②에서
         별도로 재발급해야 반영됩니다.
       </p>
@@ -222,7 +233,7 @@
         {#if selectedComboRowId}<input type="hidden" name="combo_row_id" value={selectedComboRowId} />{/if}
         {#if groupPickerOptions.length === 0}
           <p class="field-guide">
-            '회원' 카테고리로 태그된 코드조합이 없습니다. /cms/codes → 코드조합 탭에서 새 조합을
+            '회원' 카테고리로 태그된 코드조합이 없습니다. 코드조합 탭에서 새 조합을
             만들고 분류를 'member'로 지정한 뒤 다시 시도하세요.
           </p>
         {/if}
@@ -278,8 +289,8 @@
       {/if}
 
       <div class="info-panel">
-        {#if data.currentSetting}
-          현재 적용 중: <strong>{data.currentSetting.group_name}</strong> (접두어 <code>{data.currentSetting.prefix}</code>)
+        {#if data.memberCode.currentSetting}
+          현재 적용 중: <strong>{data.memberCode.currentSetting.group_name}</strong> (접두어 <code>{data.memberCode.currentSetting.prefix}</code>)
         {:else}
           미설정 — 기존 <code>CS+BC/BB</code> 자동 방식이 그대로 사용되고 있습니다.
         {/if}
@@ -291,7 +302,7 @@
     </section>
   </form>
 
-  {#if data.currentSetting}
+  {#if data.memberCode.currentSetting}
     <form
       method="POST"
       action="?/bulkReissue"
@@ -306,8 +317,8 @@
       <section class="form-section section-danger">
         <h2 class="section-title">② 기존 고객 일괄 재발급</h2>
         <p class="section-desc">
-          현재 활성 고객 <strong>{data.activeCustomerCount}명</strong>의 회원코드가 전부 새 기준
-          (<code>{data.currentSetting.prefix}</code>)으로 교체됩니다. <strong>되돌릴 수 없습니다.</strong>
+          현재 활성 고객 <strong>{data.memberCode.activeCustomerCount}명</strong>의 회원코드가 전부 새 기준
+          (<code>{data.memberCode.currentSetting.prefix}</code>)으로 교체됩니다. <strong>되돌릴 수 없습니다.</strong>
           변경 이력은 별도로 기록되어 이전 코드를 조회할 수 있습니다.
         </p>
 
@@ -327,8 +338,7 @@
 </div>
 
 <style>
-  .form-wrap { padding: 24px 32px 80px; display: flex; flex-direction: column; gap: 20px; }
-  .page-title { font: var(--text-pc-htitle-25); color: var(--cs-text); margin: 0; }
+  .form-wrap { display: flex; flex-direction: column; gap: 20px; }
   .sub-form { display: flex; flex-direction: column; gap: 16px; }
   .form-section {
     background: var(--cs-white); border-radius: var(--radius-lg); padding: 28px 32px;

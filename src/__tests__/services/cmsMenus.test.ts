@@ -142,7 +142,6 @@ describe('QA 정밀검수(2026-08-26) 결함③ 수정 — role 기본값 정합
     'customers.membership',
     'customers.score',
     'customers.inquiry',
-    'customers.settings',
     'promotion.ad',
     'promotion.coupon',
     'promotion.point',

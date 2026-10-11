@@ -4,10 +4,20 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { buildComboCategoryCode } from '$lib/utils/comboCategoryCode'
 import type { PageServerLoad, Actions } from './$types'
 
 const FORMAT_KEY   = 'reservation_code_format'
 const PREFIX_KEY   = 'prefix_codes'
+const MEMBER_CODE_FORMAT_KEY = 'member_code_format'
+
+// '고객코드' 탭(구 /cms/customers/settings, 2026-10-10 이관) — 신규 가입자 회원코드 접두어 기준
+export interface MemberCodeSetting {
+  prefix: string
+  group_name: string
+  combo_row_id: string
+}
+export type SequenceStateRow = { member_type: string; year_month: string; next_seq: number }
 
 function db() {
   return createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
@@ -160,6 +170,9 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
     { data: userProfile },
     mappingGroupsResult,
     mappingItemsResult,
+    { data: memberSettingRow },
+    { count: activeCustomerCount },
+    { data: rawSequences },
   ] = await Promise.all([
     admin
       .from('product_category_codes')
@@ -199,6 +212,19 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
       .from('code_mapping_items')
       .select('id, group_id, taxonomy_code_id, sort_order, date_option, max_sequence, parent_max_sequence, combo_row_id, combo_name, combo_keywords, created_at')
       .order('sort_order'),
+    // ── 고객코드 탭 ──
+    admin
+      .from('cms_settings')
+      .select('value')
+      .eq('key', MEMBER_CODE_FORMAT_KEY)
+      .maybeSingle(),
+    admin
+      .from('user_profiles')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null),
+    // 코드 조합 목록·채번 예시가 실제 발급 상태와 어긋나지 않도록(2026-08-17 Stephen 지적) 현재
+    // member_code_sequences 전체를 함께 조회해 접두어별 실제 다음 순번을 그대로 노출한다(소규모 테이블).
+    admin.from('member_code_sequences').select('member_type, year_month, next_seq'),
   ])
 
   const productCountMap: Record<string, number> = {}
@@ -220,6 +246,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
     mappingGroups: (mappingGroupsResult.data ?? []) as MappingGroup[],
     mappingItems: (mappingItemsResult.data ?? []) as MappingItem[],
     userRole: (userProfile as { cms_role: string | null } | null)?.cms_role ?? null,
+    memberCode: {
+      currentSetting: ((memberSettingRow as { value?: unknown } | null)?.value as MemberCodeSetting | null | undefined) ?? null,
+      activeCustomerCount: activeCustomerCount ?? 0,
+      sequenceState: (rawSequences ?? []) as SequenceStateRow[],
+    },
   }
 }
 
@@ -1035,5 +1066,97 @@ export const actions: Actions = {
 
     if (error) return fail(500, { action: 'removeComboItem', error: '제거 실패: ' + error.message })
     return { action: 'removeComboItem', success: true }
+  },
+
+  // ─── 고객코드 탭 (구 /cms/customers/settings 이관, 2026-10-10) ───────────────
+  // 기준코드 저장 — 이 액션은 신규 가입자에게만 즉시 영향을 준다(비파괴적).
+  // 기존 고객 반영은 반드시 별도의 bulkReissue 액션(명시적 확인 필요)에서만 이뤄진다.
+  saveMemberCodeCombo: async ({ request, locals }) => {
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'saveMemberCodeCombo', error: '권한 없음' })
+
+    const formData = await request.formData()
+    const comboRowId = String(formData.get('combo_row_id') ?? '').trim()
+    const groupName = String(formData.get('group_name') ?? '').trim()
+    if (!comboRowId) return fail(400, { action: 'saveMemberCodeCombo', error: '코드 조합을 선택해주세요' })
+
+    const admin = db()
+
+    // 코드 조합의 분류코드를 서버에서 직접 재조회해 접두어를 구성한다(클라이언트가 보낸
+    // 문자열을 그대로 신뢰하지 않음 — products/new, subscriptions/new create 액션과 동일 패턴).
+    const { data: comboItems } = await admin
+      .from('code_mapping_items')
+      .select('taxonomy_code_id')
+      .eq('combo_row_id', comboRowId)
+
+    if (!comboItems || comboItems.length === 0) {
+      return fail(400, { action: 'saveMemberCodeCombo', error: '유효하지 않은 코드 조합입니다' })
+    }
+
+    const codeIds = comboItems.map((i: { taxonomy_code_id: string }) => i.taxonomy_code_id)
+    const { data: allCodes } = await admin
+      .from('product_category_codes')
+      .select('id, code, code_tier, depth')
+      .in('id', codeIds)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+
+    if (!allCodes || allCodes.length === 0) {
+      return fail(400, { action: 'saveMemberCodeCombo', error: '코드 조합의 분류코드를 찾을 수 없습니다' })
+    }
+
+    const prefix = buildComboCategoryCode(allCodes)
+    if (!prefix) return fail(400, { action: 'saveMemberCodeCombo', error: '접두어 계산에 실패했습니다' })
+    // member_code_sequences.member_type 컬럼 폭(VARCHAR(30), migration 276)을 초과하는 접두어는
+    // generate_member_code 채번 시점(실제 신규가입 발생 시)에야 DB 에러(22001)로 터져 회원가입
+    // 자체를 막는 장애로 이어진다 — 저장 시점에 미리 차단한다(GATE E 검수 중 발견·수정, migration 276).
+    if (prefix.length > 30) {
+      return fail(400, { action: 'saveMemberCodeCombo', error: `선택한 코드 조합의 접두어(${prefix})가 너무 깁니다(최대 30자)` })
+    }
+
+    const value: MemberCodeSetting = { prefix, group_name: groupName, combo_row_id: comboRowId }
+
+    const { error } = await admin
+      .from('cms_settings')
+      .upsert({ key: MEMBER_CODE_FORMAT_KEY, value, updated_at: new Date().toISOString() })
+
+    if (error) return fail(500, { action: 'saveMemberCodeCombo', error: '저장 실패' })
+    return { action: 'saveMemberCodeCombo', success: true }
+  },
+
+  // 기존 고객 일괄 재발급 — 되돌릴 수 없는 대량 변경. confirmed=true(체크박스 확인)가 없으면
+  // 무조건 거부해 저장 액션과 완전히 분리된 명시적 확인 단계를 강제한다.
+  bulkReissue: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'bulkReissue', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'bulkReissue', error: '권한 없음' })
+
+    const formData = await request.formData()
+    if (formData.get('confirmed') !== 'true') {
+      return fail(400, { action: 'bulkReissue', error: '재발급 확인이 필요합니다' })
+    }
+
+    const admin = db()
+    const { data: settingRow } = await admin
+      .from('cms_settings')
+      .select('value')
+      .eq('key', MEMBER_CODE_FORMAT_KEY)
+      .maybeSingle()
+
+    const prefix = (settingRow?.value as MemberCodeSetting | null)?.prefix
+    if (!prefix) return fail(400, { action: 'bulkReissue', error: '기준 코드가 먼저 설정돼야 합니다' })
+
+    const { data, error } = await admin.rpc('bulk_reissue_member_codes', {
+      p_prefix: prefix,
+      p_reissued_by: session.user.email ?? session.user.id,
+    })
+
+    if (error) return fail(500, { action: 'bulkReissue', error: error.message })
+
+    const result = data as { success: boolean; reissued_count?: number; error?: string } | null
+    if (!result?.success) return fail(400, { action: 'bulkReissue', error: result?.error ?? '재발급 실패' })
+
+    return { action: 'bulkReissue', success: true, reissuedCount: result.reissued_count ?? 0 }
   },
 }

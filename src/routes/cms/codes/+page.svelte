@@ -3,12 +3,20 @@
   import TreeTab    from './_TreeTab.svelte'
   import FormatTab  from './_FormatTab.svelte'
   import AutoMappingTab from './_AutoMappingTab.svelte'
+  import CustomerCodeTab from './_CustomerCodeTab.svelte'
+  import { page } from '$app/state'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
 
-  type Tab = 'tree' | 'format' | 'mapping'
-  let activeTab = $state<Tab>('tree')
+  type Tab = 'tree' | 'format' | 'mapping' | 'customer'
+  // ?tab=customer 로 진입하면(구 /cms/customers/settings 리다이렉트·북마크) 고객코드 탭을 바로 연다.
+  const TAB_KEYS: Tab[] = ['tree', 'mapping', 'customer', 'format']
+  function initialTab(): Tab {
+    const q = page.url.searchParams.get('tab')
+    return TAB_KEYS.find((t) => t === q) ?? 'tree'
+  }
+  let activeTab = $state<Tab>(initialTab())
   let fmtDirty  = $state(false)
 
   function tierOf(c: { code_tier: string | null; depth: number }): 'major' | 'middle' | 'minor' {
@@ -45,6 +53,9 @@
       <button class="tab-btn" class:tab-active={activeTab==='mapping'} onclick={() => activeTab='mapping'}>
         코드조합
       </button>
+      <button class="tab-btn" class:tab-active={activeTab==='customer'} onclick={() => activeTab='customer'}>
+        고객코드
+      </button>
       <button class="tab-btn" class:tab-active={activeTab==='format'} onclick={() => activeTab='format'}>
         예약코드 설정
         {#if fmtDirty}<span class="dirty-dot"></span>{/if}
@@ -72,6 +83,10 @@
   {:else if activeTab === 'format'}
     <div class="panel">
       <FormatTab {data} {form} bind:dirty={fmtDirty} />
+    </div>
+  {:else if activeTab === 'customer'}
+    <div class="mapping-wrap">
+      <CustomerCodeTab {data} {form} />
     </div>
   {:else}
     <div class="mapping-wrap">
