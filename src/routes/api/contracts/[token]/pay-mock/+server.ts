@@ -6,6 +6,7 @@ import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
+import { deductOrderPoints } from '$lib/server/checkout/deductOrderPoints'
 import type { RequestHandler } from './$types'
 
 // 3단계(계약서명 완료 후) mock 결제 트리거 — TASK.md "예약 결제·계약서명 순서 재설계"
@@ -72,10 +73,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
   // orders/order_coupons에 반영해도, 이 3단계 결제확정 엔드포인트가 여전히 단일값
   // userCouponId만 읽으면 계약서명 페이지가 보낸 나머지 쿠폰이 전혀 소진되지 않는다 —
   // couponIds 배열로 통일(contract/[token]/+page.svelte가 이제 배열로 전송).
-  const couponIds = Array.isArray(body.couponIds)
+  let couponIds = Array.isArray(body.couponIds)
     ? (body.couponIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
     : []
-  const pointsUsed = Number.isFinite(Number(body.pointsUsed)) ? Math.max(0, Math.trunc(Number(body.pointsUsed))) : 0
+  // 포인트는 body 값을 쓰지 않는다 — 아래에서 주문 저장값(selected_points)으로 정한다
+  let pointsUsed: number
 
   // 이 예약이 속한 주문(order) — 쿠폰/포인트 소진 연결(migration 297/303)에 사용.
   // create_reservation_order(cart 1단계 체크아웃)가 이미 생성해둔 값을 그대로 조회만 한다.
@@ -86,12 +88,78 @@ export const POST: RequestHandler = async ({ params, request }) => {
     .maybeSingle()
   const orderId = (orderItem as { order_id: number | null } | null)?.order_id ?? null
 
+  // ── 서버 저장 금액 대조 (2026-10-03, CRITICAL) ───────────────────────────────────
+  // 이 엔드포인트는 "결제금액이 0원인 주문(쿠폰·포인트 전액)"을 결제창 없이 확정하는 용도다.
+  // 토큰만 있으면 호출할 수 있으므로 클라이언트 주장이 아니라 서버에 저장된 orders.final_amount를 기준으로
+  // 판정한다 — 0원이 아니면 거부(유료 주문을 이 경로로 우회 확정할 수 없다. api/checkout/pay-free와 동일 원칙).
+  // 주문이 없는 예약은 비교할 금액이 없으므로 확정하지 않는다(2026-10-03 폐쇄 — Stephen 승인).
+  // Production 조사 시점에 주문 없는 신청대기 예약이 0건이었고, 장바구니 신청은 항상 주문을 만든다.
+  // 쿠폰·포인트도 body가 아니라 주문에 저장된 값(order_coupons·selected_points)으로 소진한다.
+  if (!orderId) {
+    return json({ error: '주문 정보가 없어 결제를 진행할 수 없습니다.', code: 'ORDER_REQUIRED' }, { status: 409 })
+  }
+  {
+    const { data: orderRow, error: orderErr } = await admin
+      .from('orders')
+      .select('final_amount, selected_points')
+      .eq('id', orderId)
+      .maybeSingle()
+    const finalAmount = Number((orderRow as { final_amount: number | string | null } | null)?.final_amount ?? NaN)
+    if (orderErr || !orderRow || !Number.isFinite(finalAmount)) {
+      console.error('[contracts/pay-mock] 주문 금액 조회 실패:', orderErr?.message ?? 'no order row')
+      return json({ error: '주문 정보를 확인할 수 없습니다.' }, { status: 500 })
+    }
+    if (finalAmount > 0) {
+      return json({ error: '결제가 필요한 주문입니다. 결제를 진행해 주세요.', code: 'PAYMENT_REQUIRED' }, { status: 402 })
+    }
+    const storedPoints = Number((orderRow as { selected_points: number | null }).selected_points ?? 0)
+    pointsUsed = Number.isFinite(storedPoints) ? Math.max(0, Math.trunc(storedPoints)) : 0
+    const { data: orderCouponRows } = await admin
+      .from('order_coupons')
+      .select('user_coupon_id')
+      .eq('order_id', orderId)
+    const storedCouponIds = ((orderCouponRows ?? []) as { user_coupon_id: string | null }[])
+      .map((r) => r.user_coupon_id)
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    // 다중쿠폰 이전(단일 selected_coupon_id) 레거시 주문은 order_coupons 행이 없어 기존처럼 body 값을 쓴다
+    if (storedCouponIds.length > 0) couponIds = storedCouponIds
+  }
+
   // 2026-08-31(Migration 397/398): 계약이 주문당 1건만 존재해(init-contract 정책) 이
   // 계약을 소유한 대표 예약뿐 아니라 같은 주문의 형제 예약도 결제 시 함께 payment_confirmed_at을
   // 기록해야 한다 — mark_reservation_payment_confirmed_order가 주문 전체(단일 예약이면
   // 자기 자신만)를 순회하며 결제확인 기록 + 게이팅 재확인을 수행한다. (⚠️ 서명 전용
   // 재확인은 try_confirm_reservation_order를 써야 함 — 이 함수는 결제를 실제로 기록하는
   // 부수효과가 있어 결제가 확정되는 이 시점에만 호출한다.)
+  // ── 포인트 사전 차감 (2026-10-04, sp3 M-2 (c)) ──────────────────────────────────
+  // 0원 확정은 포인트로 결제금액을 충당하는 경로라, 확정 "이후"에 차감하면 차감이 실패해도(잔액 부족 등)
+  // 포인트 없이 확정된다. 차감에 성공한 뒤에만 확정한다. 재시도로 이중 차감하지 않도록 이 주문의 차감 기록이
+  // 이미 있으면 건너뛴다. 잔액이 신청 이후 줄어 차감이 불가능하면 주문을 현재 잔액 기준으로 재보정해
+  // (결제금액이 0원에서 올라감) 고객이 다시 결제하도록 안내한다.
+  let pointsDeducted = 0
+  if (pointsUsed > 0 && reservationUserId) {
+    const { count: priorUse } = await admin
+      .from('point_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('type', 'use')
+      .eq('ref_type', 'order')
+      .eq('ref_id', String(orderId))
+    if ((priorUse ?? 0) === 0) {
+      const deducted = await deductOrderPoints(admin, {
+        userId: reservationUserId, orderId, points: pointsUsed, reservationId,
+        source: 'contracts/pay-mock', alertAdminOnFailure: false,
+      })
+      if (!deducted.ok) {
+        if (deducted.error === 'INSUFFICIENT_POINTS') {
+          await admin.rpc('sync_order_after_composition_change', { p_order_id: orderId })
+          return json({ error: '보유 포인트가 부족해 사용 포인트가 조정되었어요. 화면을 새로고침해 결제 금액을 확인해 주세요.', code: 'POINTS_ADJUSTED' }, { status: 409 })
+        }
+        return json({ error: '포인트 사용 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.', code: 'POINTS_UNAVAILABLE' }, { status: 409 })
+      }
+      pointsDeducted = deducted.deducted
+    }
+  }
+
   const { data: confirmedIds, error: rpcErr } = await admin.rpc('mark_reservation_payment_confirmed_order', {
     p_reservation_id: reservationId,
   })
@@ -148,8 +216,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
   let couponUsed = false
   let couponRedeemedCode: string | null = null
   let couponError: string | null = null
-  let pointsDeducted = 0
-  let pointsOk = true
 
   if (confirmed === true && reservationUserId && couponIds.length > 0) {
     // 다중쿠폰(all-or-nothing) 소진 — use_coupons(Migration #532) 공용 헬퍼 경유.
@@ -162,26 +228,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
     }
   }
 
-  if (confirmed === true && reservationUserId && pointsUsed > 0) {
-    const { data: pointsResult, error: pointsErr } = await admin.rpc('use_points', {
-      p_user_id: reservationUserId,
-      p_points:  pointsUsed,
-      p_order_id: orderId,
-    })
-    if (pointsErr) {
-      console.error('[contracts/pay-mock] use_points 실패:', pointsErr)
-      pointsOk = false
-    } else {
-      const result = pointsResult as { ok: boolean; error?: string; deducted?: number } | null
-      if (result?.ok) {
-        pointsDeducted = result.deducted ?? 0
-      } else {
-        console.error('[contracts/pay-mock] use_points 거부:', result?.error)
-        pointsOk = false
-      }
-    }
-  }
-
   return json({
     ok:               true,
     confirmed:        confirmed === true,
@@ -190,6 +236,6 @@ export const POST: RequestHandler = async ({ params, request }) => {
     couponRedeemedCode,
     couponError,
     pointsDeducted,
-    pointsOk,
+    pointsOk: true,
   })
 }

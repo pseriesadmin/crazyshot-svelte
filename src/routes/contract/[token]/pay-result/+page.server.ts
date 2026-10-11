@@ -12,6 +12,8 @@ import { PUBLIC_SUPABASE_URL }       from '$env/static/public'
 import { createClient }      from '@supabase/supabase-js'
 import { sendPaymentCompletedAdminPush } from '$lib/server/push'
 import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
+import { isAcceptedContractTossOrderId } from '$lib/server/checkout/contractPay'
+import { deductOrderPoints } from '$lib/server/checkout/deductOrderPoints'
 import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
 import { consumeSelectedCoupons } from '$lib/server/coupons/consumeCoupons'
 import type { PageServerLoad } from './$types'
@@ -32,7 +34,7 @@ export const load: PageServerLoad = async ({ params, url }) => {
   // couponIds=id2)로 여러 장을 전달 — contract/[token]/+page.svelte의 successUrl 조립부와
   // 대응(URLSearchParams가 append로 만든 반복 키를 getAll()로 그대로 복원).
   const couponIds = url.searchParams.getAll('couponIds').filter((v) => v.length > 0)
-  const points    = Number(url.searchParams.get('points') ?? '0')
+  // ⛔ URL의 points는 읽지 않는다(클라이언트 값) — 포인트는 아래 5a에서 주문 저장값(selected_points)만 사용
 
   if (!paymentKey || !tossOrderId || !amount) {
     throw redirect(303, `${failBase}&code=MISSING_PARAMS`)
@@ -129,11 +131,30 @@ export const load: PageServerLoad = async ({ params, url }) => {
   // 정확히 계산해 저장해둔 coupon_discount_amount를 그대로 읽어 쓴다.
   const { data: orderRow } = await admin
     .from('orders')
-    .select('final_amount, coupon_discount_amount')
+    .select('final_amount, coupon_discount_amount, selected_points')
     .eq('id', internalOrderId)
     .maybeSingle()
 
-  const totalAmount    = (orderRow as { final_amount?: number | null } | null)?.final_amount ?? amount
+  // ── 5a. 서버 저장 금액 대조 (2026-10-03, CRITICAL) ──────────────────────────────
+  // successUrl의 amount·points는 클라이언트(결제위젯 setAmount)가 정한 값이라 신뢰할 수 없다.
+  // 토스 승인(돈이 실제로 확정되는 지점) 전에 서버에 저장된 주문 금액과 같은지 확인하고,
+  // 포인트도 URL 값이 아니라 주문에 저장된 selected_points만 쓴다.
+  const storedFinal = Number((orderRow as { final_amount?: number | string | null } | null)?.final_amount ?? NaN)
+  if (!orderRow || !Number.isFinite(storedFinal)) {
+    throw redirect(303, `${failBase}&code=NO_ORDER`)
+  }
+  if (amount !== storedFinal) {
+    console.error('[contract/pay-result] 결제금액 불일치 — 승인 거부:', { internalOrderId, tossOrderId, urlAmount: amount, storedFinal })
+    throw redirect(303, `${failBase}&code=AMOUNT_MISMATCH`)
+  }
+  // 토스 orderId는 pay-start가 이 주문에 묶어 발급한 값이어야 한다(다른 주문·임의 문자열로 승인 요청 불가)
+  if (!isAcceptedContractTossOrderId(tossOrderId, internalOrderId)) {
+    console.error('[contract/pay-result] 토스 orderId 불일치 — 승인 거부:', { internalOrderId, tossOrderId })
+    throw redirect(303, `${failBase}&code=INVALID_ORDER_ID`)
+  }
+  const points = Math.max(0, Math.trunc(Number((orderRow as { selected_points?: number | null }).selected_points ?? 0)) || 0)
+
+  const totalAmount    = storedFinal
   const couponDiscount = (orderRow as { coupon_discount_amount?: number | null } | null)?.coupon_discount_amount ?? 0
 
   // ── 5b. 이중결제 방지 가드 — Toss confirm 전 payment_transactions 존재 확인 ──
@@ -267,13 +288,11 @@ export const load: PageServerLoad = async ({ params, url }) => {
       } catch { /* 쿠폰 실패는 결제 성공과 독립 */ }
     }
     if (points > 0) {
-      try {
-        await admin.rpc('use_points', {
-          p_user_id:  userId,
-          p_points:   points,
-          p_order_id: internalOrderId,
-        })
-      } catch { /* 포인트 실패도 독립 처리 */ }
+      // 결과를 반드시 확인하고 실패 시 관리자에게 알린다(sp3 M-2) — 결제는 이미 끝나 되돌릴 수 없다
+      await deductOrderPoints(admin, {
+        userId, orderId: internalOrderId, points, reservationId,
+        source: 'contract/pay-result', alertAdminOnFailure: true,
+      })
     }
   }
 
