@@ -35,7 +35,7 @@ export type PushDeliveryResult = {
 // 2026-10-10부터 관리자가 /cms/set/push 에서 알림별 안내문장을 편집할 수 있다(push_notification_config.extra_config.message,
 // Migration #689) — 편집값이 있으면 아래 body 대신 그 문장(변수 치환 후)이 푸시·문자에 쓰이고, 비어 있으면 이 기본 문구를 그대로 쓴다.
 // 채팅카드(send_rental_chat_notification)는 DB 고정 문구라 이 편집의 대상이 아니다(service-operations.md §15).
-const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (productName: string) => string }> = {
+export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (productName: string) => string }> = {
   reservation_hold: {
     title: '예약 신청이 접수됐어요',
     body: (p) => `${p} 예약 신청이 접수됐어요. 전자계약서 발송을 기다려주세요.`,
@@ -358,7 +358,8 @@ export async function sendReservationLifecyclePush(
       row.user_id,
       notifyType,
       { title: copy.title, body: lockerBody ?? copy.body(productName), link: '/account/rental' },
-      { vars, noOverride: lockerBody !== undefined },
+      // 무인보관함은 조립 실패(lockerBody 없음) 때도 편집 문장을 적용하지 않는다 — 함번호·비밀번호 변수 없이 치환되면 깨진 문장이 나가기 때문
+      { vars, noOverride: notifyType === 'locker_guide' || lockerBody !== undefined },
     )
 
     // SMS 동시 발송(2026-10-02, Stephen 확정): 푸시 성공 여부와 무관하게 대상 타입이면 항상 SMS도
@@ -369,7 +370,8 @@ export async function sendReservationLifecyclePush(
     if (!options?.skipSms && !options?.skipSmsFallback) {
       const phone = profileRow?.phone
       if (phone) {
-        const smsOverride = await getNotifyMessageOverride(admin, notifyType)
+        // 무인보관함은 문자를 크론이 따로 보내고(허브는 skipSms) 허브 문자 경로에서는 편집 문장을 쓰지 않는다
+        const smsOverride = notifyType === 'locker_guide' ? null : await getNotifyMessageOverride(admin, notifyType)
         const customMessage = smsOverride ? applyNotifyTemplate(smsOverride, vars) || null : null
         await sendLifecycleSms(admin, {
           phone,

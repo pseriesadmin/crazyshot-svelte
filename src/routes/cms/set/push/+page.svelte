@@ -69,6 +69,7 @@
   // ─── 알림별 안내문장 편집(아코디언) ───
   // 푸시·문자 같은 문장을 쓴다. 비어 있으면 코드의 기본 문구를 그대로 쓴다.
   const ANSWER_TYPES = new Set(['admin_chat_reply', 'ai_auto_reply', 'canned_auto_reply'])
+  const SAMPLE_LINK = 'https://crazyshot.kr/account/rental'
   const SAMPLE_VARS: NotifyVars = Object.fromEntries(Object.values(NOTIFY_VARIABLES).map((v) => [v.key, v.sample]))
 
   let openType = $state<string | null>(null)
@@ -290,7 +291,10 @@
     {#if isOpen && spec}
       {@const draft = draftOf(row)}
       {@const check = validateNotifyMessage(row.notify_type, draft)}
-      {@const previewBody = applyNotifyTemplate(draft.trim() === '' ? spec.defaultMessage : draft, SAMPLE_VARS)}
+      {@const hasDraft = draft.trim() !== ''}
+      {@const previewBody = applyNotifyTemplate(hasDraft ? draft : spec.defaultMessage, SAMPLE_VARS)}
+      {@const smsDefault = data.smsDefaults[row.notify_type]}
+      {@const smsPreview = hasDraft || !smsDefault ? `${SMS_BRAND_PREFIX}${previewBody}${previewBody.includes('http') || row.notify_type === 'locker_guide' ? '' : `\n${SAMPLE_LINK}`}` : smsDefault}
       <div class="msg-panel" id="msg-{row.notify_type}">
         <div class="msg-editor">
           <div class="msg-editor-head">
@@ -325,10 +329,17 @@
           {/if}
 
           <div class="msg-preview">
-            <span class="msg-field-title">미리보기(예시값)</span>
+            <span class="msg-field-title">{hasDraft ? '미리보기(예시값)' : '현재 발송 중인 문구(예시값)'}</span>
+            {#if !hasDraft}
+              <p class="msg-hint">저장된 문장이 없어 지금 이 문구가 그대로 발송됩니다.</p>
+            {/if}
             <div class="msg-preview-box"><span class="msg-preview-tag">푸시</span>{previewBody}</div>
             {#if spec.sms}
-              <div class="msg-preview-box"><span class="msg-preview-tag">문자</span>{SMS_BRAND_PREFIX}{previewBody}</div>
+              <div class="msg-preview-box"><span class="msg-preview-tag">문자</span>{smsPreview}</div>
+              {#if row.notify_type === 'locker_guide'}
+                <p class="msg-warn">무인보관함 문자는 예약별 실제 함 번호·비밀번호로 채워져 발송되며, 링크는 자동으로 붙지 않습니다(미리보기의 값은 예시).</p>
+              {/if}
+              <p class="msg-warn">이 알림은 푸시와 문자가 같은 문장을 씁니다. 문장을 저장하면 현재 문자 문구도 이 문장으로 바뀌고, 비워서 복원하면 위의 기본 문구로 돌아갑니다.</p>
             {/if}
           </div>
 
