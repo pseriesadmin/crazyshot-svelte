@@ -4,6 +4,7 @@
 import type { SynonymGroup } from '$lib/server/searchEngine/core/synonymExpander'
 import type { AdminClient } from './shared'
 import { buildRecommendSearchTerms, type RecommendHit, type RecommendProductRow } from './recommend'
+import { applySemanticCandidates, defaultSemanticAssistLoader, type SemanticAssistLoader } from './recommend-semantic'
 
 export interface RecommendSearchResult {
   hits: RecommendHit[]
@@ -11,6 +12,8 @@ export interface RecommendSearchResult {
   prices: Record<string, number>
   /** 동의어 변형 검색어가 실제로 사용됐는지(관찰 기록용) */
   usedExpansion?: boolean
+  /** C-2: 의미 보조로 새로 합류한 후보 수(설정 semantic.recommend 켜짐일 때만 > 0) */
+  semanticAdded?: number
 }
 
 export type RecommendSearcher = (admin: AdminClient, query: string, tokens: readonly string[]) => Promise<RecommendSearchResult>
@@ -59,7 +62,10 @@ export async function fetchCardData(admin: AdminClient, ids: readonly string[]):
 }
 
 /** 동의어 그룹 로더를 바꿔 끼울 수 있는 추천 검색기 생성기(테스트·라이브 검증용). 기본 검색기는 아래 defaultRecommendSearcher */
-export function createRecommendSearcher(loadGroups: SynonymGroupLoader = loadConfirmedSynonymGroups): RecommendSearcher {
+export function createRecommendSearcher(
+  loadGroups: SynonymGroupLoader = loadConfirmedSynonymGroups,
+  loadSemanticAssist: SemanticAssistLoader = defaultSemanticAssistLoader,
+): RecommendSearcher {
   return async (admin, query, tokens) => {
     const { getProductSearchIndex } = await import('$lib/server/searchEngine/adapters/productSearchIndex')
     const index = await getProductSearchIndex()
@@ -79,10 +85,22 @@ export function createRecommendSearcher(loadGroups: SynonymGroupLoader = loadCon
     const usedExpansion = terms.some((t) => t.expanded)
     // 전체 검색어로 결과가 부족하면 단어별로도 찾는다(약한 가중치)
     if (merged.size < 3 && tokens.length > 1) for (const t of tokens) add(t, 0.6)
+    // C-2: 의미 보조(기본 꺼짐 — 로더가 null을 돌려주면 아무 일도 하지 않는다). 실패는 추천 결과에 영향을 주지 않는다.
+    let semanticAdded = 0
+    try {
+      const assist = await loadSemanticAssist(query)
+      if (assist) {
+        const picked = applySemanticCandidates(merged, assist.sims, assist.recommend)
+        if (assist.recommend) semanticAdded = picked.length
+        else if (assist.shadow && assist.onShadow) await assist.onShadow({ currentCount: merged.size, wouldAdd: picked.length })
+      }
+    } catch {
+      semanticAdded = 0
+    }
     const hits: RecommendHit[] = [...merged.entries()].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score).slice(0, 15)
-    if (hits.length === 0) return { hits: [], rows: [], prices: {}, usedExpansion }
+    if (hits.length === 0) return { hits: [], rows: [], prices: {}, usedExpansion, semanticAdded }
     const { rows, prices } = await fetchCardData(admin, hits.map((h) => h.id))
-    return { hits, rows, prices, usedExpansion }
+    return { hits, rows, prices, usedExpansion, semanticAdded }
   }
 }
 

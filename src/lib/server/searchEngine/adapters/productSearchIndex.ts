@@ -32,7 +32,6 @@ import { supabase } from '$lib/services/supabase'
 import { createIndex } from '../core/createIndex'
 import type { NaturalSearchProvider, SearchOptions, SearchResult } from '../core/types'
 import {
-  PRODUCT_INDEX_CONFIG,
   MAX_REVIEW_CHARS_PER_PRODUCT,
   buildCategoryLabelMap,
   buildProductDocs,
@@ -43,6 +42,8 @@ import {
   type ProductDoc,
   type ReviewsTextEntry,
 } from './productSearchDocs'
+import { loadNlsearchParams } from './nlsearchParams'
+import { resolveProductIndexConfig } from './nlsearchParamsSchema'
 
 // 기존 import 경로 호환: 순수 로직은 productSearchDocs.ts로 옮겼지만 이 파일에서도 같은 이름으로 내보낸다
 export {
@@ -56,6 +57,8 @@ export type { ProductDoc, ReviewsTextEntry }
 /** getProductSearchIndex()가 돌려주는 검색 객체 — 기존 search()에 분류 우선 검색(크레이지챗 추천 전용)을 더한 형태 */
 export type ProductSearchProvider = NaturalSearchProvider<ProductDoc> & {
   searchWithCategoryIntent: (query: string, opts?: SearchOptions) => SearchResult<ProductDoc>[]
+  /** B-4: 색인된 문서 전체(의미 점수 그림자 계산용 — 읽기 전용) */
+  docs: readonly ProductDoc[]
 }
 
 // ── 모듈 스코프 캐시 (TTL 60초) ──────────────────────────────────────────────
@@ -203,8 +206,9 @@ async function loadCategoryLabels(): Promise<Map<string, string[]>> {
 function withCategoryIntent(
   index: NaturalSearchProvider<ProductDoc>,
   labels: ReadonlyMap<string, string[]>,
+  docs: readonly ProductDoc[],
 ): ProductSearchProvider {
-  return Object.assign(index, { searchWithCategoryIntent: createCategoryIntentSearch(index, labels) })
+  return Object.assign(index, { searchWithCategoryIntent: createCategoryIntentSearch(index, labels), docs })
 }
 
 // ── L-1: 인덱스 빌드 통계 (정기 점검 cron이 읽음 — 숫자만, 상품명·후기 문구 없음) ──
@@ -247,7 +251,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
   const buildStartedAt = Date.now()
 
   // J-2 + I-4 + L-1 + L-2: 상품 조회 · promote_threshold · 관리자 확인 신호 · 공개 후기 · 분류 이름을 병렬 실행
-  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts, categoryLabels] = await Promise.all([
+  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts, categoryLabels, nlParams] = await Promise.all([
     supabase
       .from('products')
       .select(
@@ -261,7 +265,9 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
     loadReviewSearchTerms(),           // L-1: 공개 후기 텍스트 (fail-safe: 실패 시 빈 맵)
     loadCategoryLabels(),              // L-2: 한글 분류 이름 (fail-safe: 실패 시 빈 맵)
+    loadNlsearchParams(),              // A-3: 튜닝 파라미터 (fail-open: 실패 시 코드 기본값 = 기존 동작)
   ])
+  const indexConfig = resolveProductIndexConfig(nlParams)
 
   const { data, error } = productResult
 
@@ -272,7 +278,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
       indexedProducts: 0, reviewedProducts: 0, reviewRows: 0, weakProducts: 0,
       buildMs: Date.now() - buildStartedAt, status: 'error', builtAt: Date.now(),
     }
-    return withCategoryIntent(createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, []), new Map())
+    return withCategoryIntent(createIndex<ProductDoc>(indexConfig, []), new Map(), [])
   }
 
   // J-2: 학습된 검색어 로드 (product_search_stats, anon client)
@@ -286,7 +292,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
     categoryLabels,
   })
 
-  cachedIndex = withCategoryIntent(createIndex<ProductDoc>(PRODUCT_INDEX_CONFIG, docs), categoryLabels)
+  cachedIndex = withCategoryIntent(createIndex<ProductDoc>(indexConfig, docs), categoryLabels, docs)
   cachedAt = Date.now()
 
   // L-1: 정기 점검용 빌드 통계 (숫자만)

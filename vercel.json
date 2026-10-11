@@ -39,6 +39,10 @@
     {
       "path": "/api/cron/crazychat-knowledge",
       "schedule": "10 18 * * *"
+    },
+    {
+      "path": "/api/cron/nlsearch-vectors",
+      "schedule": "50 18 * * *"
     }
   ]
 }

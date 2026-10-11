@@ -14,6 +14,7 @@ import type { CannedMatchModel, ModelVerdict } from './cannedMatchModel'
 import weights from './cannedMatchModel.weights.json'
 import { withOffHoursMarker } from './offHoursTime'
 import { normalizeQuestion } from './questionNormalize'
+import type { SemanticCannedFeatures } from './cannedSemanticFeature'
 
 /** 학습된 확률 모델(저장소의 가중치 파일). 형식이 맞지 않으면 서버 시작 시점에 바로 실패해 조용한 오작동을 막는다. */
 export const activeModel: CannedMatchModel = parseModel(weights)
@@ -76,7 +77,8 @@ export interface ObservationRow {
   best_canned_id: string | null
   would_send: boolean
   top: { id: string; score: number; evidence: number; coverage: number; passesRules: boolean }[]
-  features: CannedMatchEvaluation['top'][number]['features'] | null
+  /** 규칙 판정 특징 + (C-1, 관찰 전용) 의미 유사도 2개 — 판정에는 쓰이지 않는다 */
+  features: (CannedMatchEvaluation['top'][number]['features'] & Partial<SemanticCannedFeatures>) | null
 }
 
 const round4 = (n: number): number => Math.round(n * 10000) / 10000
@@ -86,6 +88,7 @@ export function buildObservationRow(
   mode: AutoReplyMode,
   d: AutoReplyDecision,
   model: CannedMatchModel = activeModel,
+  semanticExtra: SemanticCannedFeatures | null = null,
 ): ObservationRow {
   const chosen = d.evaluation.best ? d.evaluation.top.find((t) => t.id === d.evaluation.best?.id) : undefined
   return {
@@ -100,7 +103,7 @@ export function buildObservationRow(
     best_canned_id: d.verdict.bestId,
     would_send: d.answer !== null,
     top: d.evaluation.top.map((t) => ({ id: t.id, score: t.score, evidence: t.evidence, coverage: t.coverage, passesRules: t.passesRules })),
-    features: chosen ? chosen.features : null,
+    features: chosen ? (semanticExtra ? { ...chosen.features, ...semanticExtra } : chosen.features) : null,
   }
 }
 
