@@ -390,6 +390,52 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		});
 	}
 
+	// 이 상품이 이미 내 장바구니에 담겨 있는지(2026-10-11) — 담김 상태가 화면 이탈·재진입 후에도 유지되게 한다.
+	// 장바구니 정의는 /cart와 같다: 내 hold·draft 예약 중 주문(order_items)에 아직 연결되지 않은 건. 예약의 product_id는 재고 유닛(자식)일 수 있어 부모 기준으로 비교한다.
+	let inCart = false;
+	let cartReservationIds: number[] = [];
+	if (session?.user.id) {
+		try {
+			// 조회 중 하나라도 오류면 "담김 아님"으로 안전 처리한다 — 잘못된 판정으로 제출된 예약이 자동 취소 대상에 들어가는 것을 막는다(sp3-qa M1)
+			const { data: cartRows, error: cartErr } = await locals.supabase
+				.from('rental_reservations')
+				.select('id, product_id')
+				.eq('user_id', session.user.id)
+				.in('status', ['hold', 'draft']);
+			if (cartErr) throw cartErr;
+			const rsvs = (cartRows ?? []) as Array<{ id: number | string; product_id: string | null }>;
+			if (rsvs.length > 0) {
+				const { data: linked, error: linkedErr } = await locals.supabase
+					.from('order_items')
+					.select('reservation_id')
+					.in('reservation_id', rsvs.map((r) => r.id));
+				if (linkedErr) throw linkedErr;
+				const submitted = new Set(((linked ?? []) as Array<{ reservation_id: number | string }>).map((l) => String(l.reservation_id)));
+				const pending = rsvs.filter((r) => !submitted.has(String(r.id)));
+				const productIds = [...new Set(pending.map((r) => r.product_id).filter((id): id is string => id != null))];
+				if (productIds.length > 0) {
+					const { data: prodRows, error: prodErr } = await locals.supabase
+						.from('products')
+						.select('id, parent_product_id')
+						.in('id', productIds);
+					if (prodErr) throw prodErr;
+					const thisParentId = String((row as { parent_product_id?: string | null }).parent_product_id ?? row.id);
+					const parentOf = new Map(((prodRows ?? []) as Array<{ id: string; parent_product_id: string | null }>)
+						.map((p) => [String(p.id), String(p.parent_product_id ?? p.id)]));
+					// 이 상품이 담긴 예약 id들 — 상품상세에서 옵션·수량을 바꿔 "다시 담기(리셋)"할 때 기존 건을 지우는 데 쓴다
+					cartReservationIds = pending
+						.filter((r) => r.product_id != null && parentOf.get(String(r.product_id)) === thisParentId)
+						.map((r) => Number(r.id));
+					inCart = cartReservationIds.length > 0;
+				}
+			}
+		} catch (err) {
+			inCart = false;
+			cartReservationIds = [];
+			console.error('[products/[id]] 장바구니 담김 여부 조회 실패:', err);
+		}
+	}
+
 	const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, [String(row.id), ...popularProducts.map((p) => p.id)]);
 
 	// BUG-FIX(2026-08-10): 상품상세 상단(ProductHero)의 카테고리 라벨이 하드코딩 영문 맵
@@ -443,6 +489,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		popularProducts,
 		wishedIds,
 		isLoggedIn: !!session?.user.id,
+		inCart,
+		cartReservationIds,
 		categoryLabel,
 		categories,
 	};

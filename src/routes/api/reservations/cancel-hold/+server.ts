@@ -20,14 +20,40 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY)
 
-  const { data: row } = await admin
+  const { data: row, error: rowErr } = await admin
     .from('rental_reservations')
-    .select('user_id')
+    .select('user_id, status')
     .eq('id', reservationId)
     .maybeSingle()
 
+  // 조회 오류는 "남의 예약"(403)과 구분해 500으로 응답한다(원인 파악용, sp3-qa MINOR-C)
+  if (rowErr) {
+    console.error('[reservations/cancel-hold] 예약 조회 실패:', rowErr)
+    return json({ error: '예약 정보를 확인하지 못했습니다' }, { status: 500 })
+  }
+
   if (!row || row.user_id !== session.user.id) {
     return json({ error: '본인 예약만 취소할 수 있습니다' }, { status: 403 })
+  }
+
+  // 이미 취소·만료된 건은 성공으로 응답(멱등) — 다른 탭에서 먼저 취소된 id가 목록에 남아 있어도 같은 오류가 반복되지 않게 한다(sp3-qa MINOR-1)
+  if (row.status === 'cancelled' || row.status === 'expired') {
+    return json({ success: true, alreadyClosed: true })
+  }
+
+  // 이미 예약신청이 제출된(주문에 연결된) 건은 이 경로로 취소하지 않는다 — 이 API는 "장바구니에 담긴 미제출 건"의 롤백·자동취소 전용이다
+  // (다른 탭에서 제출한 뒤 오래된 화면이 같은 id로 호출해도 제출된 예약이 조용히 취소되지 않게 서버가 막는다, sp3-qa M2). 조회 오류는 안전하게 거부한다.
+  const { data: linked, error: linkedErr } = await admin
+    .from('order_items')
+    .select('reservation_id')
+    .eq('reservation_id', reservationId)
+    .limit(1)
+  if (linkedErr) {
+    console.error('[reservations/cancel-hold] 주문 연결 확인 실패:', linkedErr)
+    return json({ error: '예약 상태를 확인하지 못했습니다' }, { status: 500 })
+  }
+  if ((linked ?? []).length > 0) {
+    return json({ error: '이미 예약신청이 제출된 건은 취소할 수 없습니다' }, { status: 409 })
   }
 
   type UpdateStatusRpcFn = (

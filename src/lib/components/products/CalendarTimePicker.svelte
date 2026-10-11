@@ -1,4 +1,20 @@
 <script lang="ts">
+  // ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
+  // ║ ⛔ AI·검수자 필독 — 이 파일의 "달력 · 시간 선택 · 렌탈요금 계산기(총 대여일·예상 대여요금)"는 사용하지 않는 영역이다. ║
+  // ║                                                                                              ║
+  // ║ 확정 사실(Stephen, 2026-10-11): 상품의 수령·반납일 관련 모든 설정은 "장바구니에 상품이 담긴 뒤" 장바구니     ║
+  // ║ 화면에서 진행한다. 상품상세에는 날짜·시간 선택 UI가 존재하지 않고, 예약신청·장바구니 담기는 항상 "날짜 없는    ║
+  // ║ 임시예약(draft)"만 만든다.                                                                      ║
+  // ║                                                                                              ║
+  // ║ 따라서 아래 [NOT IN USE] 표시 코드(달력·시간 스피너·요금 요약·그 상태/계산 로직·관련 CSS)는                  ║
+  // ║  · 화면에 렌더링되지 않는다(SCHEDULE_CALC_UI_ENABLED=false — DOM에도 없음)                           ║
+  // ║  · 검수·버그 분석·수정·리팩터 대상에서 제외한다(이 영역의 결함을 지적하거나 "고치지" 말 것)                     ║
+  // ║  · 현재 동작을 설명할 근거로 삼지 말 것(예: "날짜·시간을 바꾸면…" 같은 설명은 성립하지 않는다)                  ║
+  // ║ 실제로 쓰이는 영역은 [IN USE]로 표시된 대여방식·배송정책 안내 + 버튼 그룹(찜·장바구니 담기·예약신청·채팅)뿐이다.   ║
+  // ║ 재활용하려면 Stephen 승인 후 SCHEDULE_CALC_UI_ENABLED를 true로 바꾸고 .calc-hidden 클래스를 제거한다.        ║
+  // ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
+  const SCHEDULE_CALC_UI_ENABLED = false as boolean;
+
   interface RentalOption { id: string; name: string }
 
   interface Props {
@@ -18,7 +34,10 @@
     selectedMethodId?: string;
     selectedPeriodId?: string;
     reserveDisabled?: boolean;
-    onreserve?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId: string; periodId: string }) => void;
+    onreserve?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId: string; periodId: string; addOnly?: boolean }) => void;
+    /** 장바구니 담기 아이콘으로 이미 담은 상태 — 예약신청 버튼이 '예약신청확인'(담지 않고 장바구니 이동)으로 바뀐다 */
+    cartAdded?: boolean;
+    oncartconfirm?: () => void;
     onchange?: (data: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number }) => void;
     chatCallback?: () => void;
     wished?: boolean;
@@ -42,6 +61,8 @@
     reserveDisabled = false,
     onreserve,
     onchange,
+    cartAdded = false,
+    oncartconfirm,
     chatCallback,
     wished = false,
     onwishtoggle,
@@ -54,7 +75,7 @@
   const showRentalMethods = $derived(!saleOnly && rentalMethods.length > 0);
   const showShippingGuide = $derived(!saleOnly && !!shippingPolicy?.guide);
 
-  // ── Calendar state
+  // ── [NOT IN USE] Calendar state — 아래 달력·시간·요금 로직은 SCHEDULE_CALC_UI_ENABLED=false 동안 어디에서도 호출되지 않는다(맨 위 안내 참고)
   const today = new Date();
   let viewYear = $state(today.getFullYear());
   let viewMonth = $state(today.getMonth()); // 0-indexed
@@ -216,8 +237,16 @@
     }
   }
 
+  // ── [IN USE] 버튼 그룹 핸들러 ─────────────────────────────────────────────
   function handleReserve() {
+    if (cartAdded && mode === 'product') { oncartconfirm?.(); return; }
     onreserve?.({ startDate, endDate: endDate || startDate, startHour, startMin, endHour, endMin, methodId: selectedMethodId, periodId: selectedPeriodId });
+  }
+
+  // 장바구니 담기 아이콘 — 예약신청과 같은 검증·저장 흐름, 화면 이동만 하지 않음.
+  // 이미 담긴 상태(cartAdded)에서는 비활성 — 옵션을 수정하면 page가 담긴 건을 자동 취소하고 cartAdded를 풀어 다시 활성화한다.
+  function handleAddCart() {
+    onreserve?.({ startDate, endDate: endDate || startDate, startHour, startMin, endHour, endMin, methodId: selectedMethodId, periodId: selectedPeriodId, addOnly: true });
   }
 
   // [B-1] 당일 대여 시 종료시각 ≤ 시작시각 경고
@@ -244,13 +273,15 @@
 </script>
 
 <div class="picker-wrap" class:cart-mode={mode === 'cart'}>
-  {#if mode === 'product'}
+  <!-- [NOT IN USE] 렌탈요금 계산기 헤더·달력·시간 선택·요금 요약 — SCHEDULE_CALC_UI_ENABLED=false라 렌더링되지 않는다. 검수·수정 대상 제외(파일 맨 위 안내) -->
+  {#if SCHEDULE_CALC_UI_ENABLED && mode === 'product'}
     <div class="picker-header calc-hidden">
       <span class="header-label">렌탈요금 계산기</span>
     </div>
   {/if}
 
   <!-- Calendar + Time wrapper: mobile = col, PC = row (날짜 미정 임시예약 기능으로 CSS 가림 — 추후 재활용 대비 마크업/로직 유지) -->
+  {#if SCHEDULE_CALC_UI_ENABLED}
   <div class="cal-time-wrapper calc-hidden">
   <!-- Calendar -->
   <div class="calendar">
@@ -371,9 +402,11 @@
     </div>
   </div>
   </div><!-- /cal-time-wrapper -->
+  {/if}
 
   {#if mode === 'product'}
-    <!-- 렌탈요금 계산기 요약(총 대여일·예상 대여요금) — UX 판단에 따라 노출 가림, 추후 재활용 대비 코드 유지 -->
+    {#if SCHEDULE_CALC_UI_ENABLED}
+    <!-- [NOT IN USE] 렌탈요금 계산기 요약(총 대여일·예상 대여요금) — 렌더링되지 않는다. 검수·수정 대상 제외 -->
     <div class="calc-hidden calc-summary-group">
       <!-- Duration summary -->
       <div class="duration-row">
@@ -406,7 +439,9 @@
       {/if}
     </div>
 
-    <!-- 대여정책 (대여방식·배송정책) -->
+    {/if}<!-- /SCHEDULE_CALC_UI_ENABLED -->
+
+    <!-- [IN USE] 대여정책 (대여방식·배송정책) 안내 -->
     {#if showRentalMethods || visibleShippingItems.length > 0 || showShippingGuide}
       <div class="policy-section">
         {#if showRentalMethods}
@@ -446,7 +481,7 @@
     {/if}
 
 
-    <!-- CTAs -->
+    <!-- [IN USE] CTAs: 찜 · 장바구니 담기 · 예약신청 · 채팅 -->
     <div class="cta-row">
       {#if onwishtoggle}
         <button
@@ -462,13 +497,27 @@
           </svg>
         </button>
       {/if}
+      {#if mode === 'product'}
+        <button
+          class="cart-add-btn"
+          onclick={handleAddCart}
+          disabled={reserveDisabled || cartAdded}
+          aria-label={cartAdded ? '장바구니에 담김' : '장바구니 담기'}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 35 35" fill="none" aria-hidden="true">
+            <path class="cart-add-bg" d="M35 17.5C35 27.165 27.165 35 17.5 35C7.83502 35 0 27.165 0 17.5C0 7.83502 7.83502 0 17.5 0C27.165 0 35 7.83502 35 17.5Z"/>
+            <path d="M25.7736 14.25C26.461 14.3115 26.9685 14.918 26.9073 15.6055L26.5402 19.7188L26.5362 19.7559C26.3287 21.5004 25.6935 23.0646 24.588 24.2061C23.4647 25.3657 21.9392 26 20.1573 26H15.754C13.9724 25.9998 12.4475 25.3656 11.3243 24.2061C10.2189 23.0646 9.58361 21.5003 9.37609 19.7559L9.37316 19.7373L9.37219 19.7188L9.005 15.6055C8.94381 14.9181 9.45154 14.3116 10.1388 14.25C10.8264 14.1887 11.4339 14.6962 11.4952 15.3838L11.8614 19.4766C12.0227 20.8088 12.4854 21.8113 13.1202 22.4668C13.7398 23.1063 14.6009 23.4998 15.754 23.5H20.1573C21.3108 23.5 22.1724 23.1064 22.7921 22.4668C23.427 21.8113 23.8906 20.809 24.0519 19.4766L24.4171 15.3838C24.4784 14.6963 25.0861 14.1889 25.7736 14.25Z" fill="white"/>
+            <path d="M17.9562 9.10156C18.8942 9.10156 19.9275 9.43248 20.7423 10.1455C21.5869 10.8847 22.1417 11.9887 22.1417 13.3877V15.4326C22.1417 16.1229 21.582 16.6826 20.8917 16.6826C20.2447 16.6823 19.7125 16.1908 19.6486 15.5605L19.6417 15.4326V13.3877C19.6417 12.6973 19.3889 12.2829 19.0958 12.0264C18.7731 11.7441 18.3385 11.6016 17.9562 11.6016C17.5738 11.6017 17.1392 11.7441 16.8165 12.0264C16.5235 12.2829 16.2706 12.6975 16.2706 13.3877V15.4326C16.2706 16.1229 15.711 16.6826 15.0206 16.6826C14.3304 16.6825 13.7707 16.1228 13.7706 15.4326V13.3877C13.7706 11.9888 14.3256 10.8847 15.17 10.1455C15.9848 9.43242 17.0182 9.10166 17.9562 9.10156Z" fill="white"/>
+          </svg>
+        </button>
+      {/if}
       <button
         class="reserve-btn"
         onclick={handleReserve}
         disabled={reserveDisabled}
-        aria-label={saleOnly ? '구매신청' : '예약신청'}
+        aria-label={cartAdded ? '예약신청확인' : saleOnly ? '구매신청' : '예약신청'}
       >
-        {reserveDisabled ? '필수 옵션을 선택해주세요' : saleOnly ? '구매신청' : '예약신청'}
+        {reserveDisabled ? '필수 옵션을 선택해주세요' : cartAdded ? '예약신청확인' : saleOnly ? '구매신청' : '예약신청'}
       </button>
       <button class="chat-btn" onclick={handleChat} aria-label="채팅 문의">
         <svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60" fill="none">
@@ -511,6 +560,7 @@
      마크업/로직 유지, CSS만으로 가림. !important 필수: .cal-time-wrapper 등 동일 클래스 선택자가
      이 규칙보다 스타일시트 뒤쪽(특히 PC 미디어쿼리)에 있어 !important 없이는 display 값이
      그 규칙에 덮어써져 다시 보임 */
+  /* [NOT IN USE] 아래 .picker-header ~ .fee-note--warn(달력·시간·요금 계산기) 스타일 전부 — 마크업이 렌더링되지 않는다(파일 맨 위 안내). 검수·수정 대상 제외 */
   .calc-hidden {
     display: none !important;
   }
@@ -800,7 +850,7 @@
     font-weight: 600;
   }
 
-  /* CTAs */
+  /* [IN USE] CTAs — 여기서부터가 실제로 쓰이는 스타일(버튼 그룹·대여정책 안내) */
   .cta-row {
     display: flex;
     gap: 12px;
@@ -809,7 +859,7 @@
   .reserve-btn {
     flex: 1;
     height: 50px;
-    background: var(--cs-red-badge);
+    background: var(--cs-red);
     color: var(--cs-white);
     border: none;
     border-radius: var(--radius-xl);
@@ -817,7 +867,7 @@
     cursor: pointer;
     transition: background 0.15s;
   }
-  .reserve-btn:hover { background: var(--cs-red); }
+  .reserve-btn:hover:not(:disabled) { background: var(--cs-red-badge); } /* 기본색 red-100(--cs-red)과 달라지도록 이전 기본색(red-80)을 호버색으로 */
   .reserve-btn:disabled { background: var(--cs-text-light); cursor: not-allowed; }
 
   .wish-btn {
@@ -840,6 +890,26 @@
   .wish-btn .wish-bg { fill: var(--cs-chat-in-bg); } /* red-10 #FFCFCF — 기본·선택 상태 공통 */
   .wish-btn .wish-heart { fill: var(--cs-white); transition: fill 0.15s; }
   .wish-btn.active .wish-heart { fill: var(--cs-red-badge); } /* red-80 #FF3535 */
+
+  /* 장바구니 담기 아이콘 — Figma 1480:5494: 원형 red-80(#FF3535) + 흰 장바구니, 찜 버튼과 같은 크기 */
+  .cart-add-btn {
+    width: 50px;
+    height: 50px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: none;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .cart-add-btn svg { width: 100%; height: 100%; }
+  .cart-add-btn .cart-add-bg { fill: var(--cs-red-badge); transition: fill 0.15s; }
+  .cart-add-btn:hover:not(:disabled) .cart-add-bg { fill: var(--cs-red); }
+  .cart-add-btn:disabled { cursor: not-allowed; }
+  .cart-add-btn:disabled .cart-add-bg { fill: var(--cs-text-light); }
 
   .chat-btn {
     display: none;

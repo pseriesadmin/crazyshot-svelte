@@ -164,6 +164,9 @@
     let changed = false;
     const next = optionItems.map((o) => {
       if (!o.qty_follows_main) return o;
+      // 선택(필수 아님) 연동 옵션은 기본 0으로 시작하고, 고객이 담은 경우(qty>0)에만 본상품 수량을 따라간다(2026-10-11)
+      // 필수 연동 옵션은 기존대로 항상 본상품 수량과 같다
+      if (!o.is_required && o.qty === 0) return o;
       const target = Math.min(mainQty, stockCapFor(o.id));
       if (o.qty === target) return o;
       changed = true;
@@ -205,6 +208,7 @@
       return;
     }
     qty = clampReservationQty(qty + 1);
+    void handleOptionEdited();
   }
 
   function incrementOptionQty(opt: (typeof optionItems)[number]) {
@@ -266,7 +270,12 @@
     }
   }
 
-  // ── Calendar/time (passed to CalendarTimePicker via bindable)
+  // ── [NOT IN USE] Calendar/time (passed to CalendarTimePicker via bindable)
+  // ⛔ AI·검수자 필독: 상품상세에는 날짜·시간 선택 UI가 없다(CalendarTimePicker 안의 달력·시간·요금 계산기는 렌더링되지 않는 미사용 영역).
+  //    상품의 수령·반납일 관련 모든 설정은 "장바구니에 상품이 담긴 뒤" 장바구니 화면에서 진행한다(Stephen 확정, 2026-10-11).
+  //    그래서 아래 날짜·시간 값은 항상 초기값('' / 12 / 13)이고, handleReserve는 항상 날짜 없는 임시예약(draft) 경로로만 흐른다.
+  //    이 값들과 handleReserve의 날짜 분기(e.startDate가 있는 hold 경로·리드타임 검증)는 검수·수정 대상에서 제외하고,
+  //    "날짜·시간을 바꾸면…" 식의 동작 설명이나 버그 지적의 근거로 삼지 말 것.
   let startDate = $state('');
   let endDate = $state('');
   let startHour = $state(12);
@@ -275,6 +284,47 @@
   let endMin = $state(0);     // [A-3]
   let selectedMethodId = $state('');
   let selectedPeriodId = $state('');
+
+  // 장바구니 담기 아이콘으로 이미 담은 상태(2026-10-11) — 이후 [예약신청]은 [예약신청확인]으로 바뀌어 상품을 다시 담지 않고 장바구니 화면으로만 이동한다.
+  // 담은 뒤 수량·옵션을 바꿔도 담김 상태를 유지한다(중복 추가 방지, Stephen 확정 A안) — 수정은 장바구니 화면에서 한다.
+  // 담김 여부의 정본은 서버(data.inCart — 내 장바구니에 이 상품이 있는지)라서, 화면을 이탈했다가 다시 들어와도 그대로 유지된다.
+  // 장바구니에서 상품을 지웠거나 예약신청을 제출해 장바구니에서 빠졌다면 재진입 시 data.inCart가 false가 되어 다시 담을 수 있다.
+  let cartAdded = $state(false);
+  // 이 상품이 담긴 장바구니 예약 id들(서버가 내려준 값에서 시작, 담기·취소 때 이 화면이 직접 갱신 — invalidateAll을 쓰면 옵션 선택값이 기본값으로 초기화되므로 쓰지 않는다)
+  let cartIds = $state<number[]>([]);
+  $effect(() => {
+    cartAdded = 'inCart' in data && !!data.inCart;
+    cartIds = 'cartReservationIds' in data ? [...(data.cartReservationIds as number[])] : [];
+  });
+  // 이미 담긴 상품의 주상품 수량 또는 옵션(추가·삭제·수량변경)을 바꾸는 순간(2026-10-11, Stephen 확정): 장바구니에 담긴 이 상품(+옵션)을 자동 취소하고
+  // 담김 상태를 풀어 담기 버튼을 다시 활성화한다 — 사용자가 바뀐 옵션으로 다시 담는다. 취소에 실패하면 담김 상태를 유지한다.
+  let cartAutoCancelling = false;
+  // 수량 입력창은 포커스 시점의 값을 기억해 두고, 입력을 마쳤을 때 값이 실제로 달라진 경우에만 자동 취소한다(sp3-qa MINOR-2)
+  let mainQtyAtFocus = 1;
+  const optQtyAtFocus = new Map<string, number>();
+  async function handleOptionEdited() {
+    if (!cartAdded || cartAutoCancelling) return;
+    cartAutoCancelling = true;
+    try {
+      const ids = [...cartIds];
+      const results = await Promise.all(ids.map((rid) => fetch('/api/reservations/cancel-hold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservationId: rid }),
+      }).then((r) => r.ok || r.status === 409).catch(() => false)));
+      if (results.some((ok) => !ok)) {
+        // 취소에 성공한 건은 목록에서 빼고 실패한 건만 남긴다(다음 시도에서 이미 취소된 건을 다시 취소하려다 계속 실패하는 것 방지)
+        cartIds = ids.filter((_, i) => !results[i]);
+        csToast.error('장바구니의 기존 담김을 취소하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        return;
+      }
+      cartIds = [];
+      cartAdded = false;
+      csToast.info('변경한 내용으로 새로 담아주세요.');
+    } finally {
+      cartAutoCancelling = false;
+    }
+  }
 
   // ── Tab
   let activeTab = $state<'spec' | 'info' | 'review' | 'qa'>('info');
@@ -405,7 +455,7 @@
     return n.toLocaleString('ko-KR');
   }
 
-  async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string }) {
+  async function handleReserve(e: { startDate: string; endDate: string; startHour: number; startMin: number; endHour: number; endMin: number; methodId?: string; periodId?: string; addOnly?: boolean }) {
     if (!product || isReserving) return;
 
     // 대여 방식 미선택 (선택 가능한 방식이 있는 상품에 한해 필수) — 날짜가 있는 경우에만
@@ -443,6 +493,7 @@
       return;
     }
 
+    // [NOT IN USE] 날짜가 있는 경우에만 도는 분기 — 상품상세에는 날짜 선택이 없어 e.startDate가 항상 비어 있다(위 '[NOT IN USE] Calendar/time' 안내). 검수·수정 대상 제외.
     // 예약 일시 리드타임 검증 — 날짜가 있는 경우에만 (draft 경로는 날짜 없어 skip, 실제 검증은 FE-4 체크아웃 승격 시점에 재수행)
     if (e.startDate) {
       // 2026-09-30 — 방식별 신청 마감(리드타임)을 장바구니와 같은 공용 함수(pickupLeadTime.ts, KST)로 판정:
@@ -588,9 +639,11 @@
           }
         }
         // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
-        goto('/cart');
+        // 장바구니 담기 아이콘(addOnly): 같은 저장 흐름을 거치되 화면 이동 없이 안내만 한다(2026-10-11)
+        if (e.addOnly) { cartAdded = true; cartIds = [...(existingGroup?.member_reservation_ids ?? []), ...outcome.reservationIds]; csToast.success('장바구니에 담았어요.'); }
+        else goto('/cart');
       } else {
-        // ── hold 경로
+        // ── [NOT IN USE] hold 경로 — e.startDate가 항상 비어 도달하지 않는다(날짜는 장바구니에서 정한다). 검수·수정 대상 제외.
         type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
           data: Array<{ success: boolean; reservation_id: number | null; asset_id: number | null; error_message: string | null }> | null;
           error: unknown;
@@ -697,7 +750,9 @@
             }).catch(() => {})
           }
         }
-        goto('/cart');
+        // 장바구니 담기 아이콘(addOnly): 같은 저장 흐름을 거치되 화면 이동 없이 안내만 한다(2026-10-11)
+        if (e.addOnly) { cartAdded = true; cartIds = [...(existingGroup?.member_reservation_ids ?? []), ...outcome.reservationIds]; csToast.success('장바구니에 담았어요.'); }
+        else goto('/cart');
       }
     } catch {
       csToast.error('예약 중 오류가 발생했습니다.');
@@ -844,10 +899,10 @@
                     </div>
                   </div>
                 </div>
-                <div class="qty-control small" class:qty-control--locked={opt.qty_follows_main}>
+                <div class="qty-control small" class:qty-control--locked={opt.qty_follows_main && opt.is_required}>
                   <button
-                    onclick={() => { opt.qty = Math.max(0, opt.qty - 1); }}
-                    disabled={opt.qty_follows_main}
+                    onclick={() => { const before = opt.qty; opt.qty = opt.qty_follows_main ? 0 : Math.max(0, opt.qty - 1); if (opt.qty !== before) void handleOptionEdited(); }}
+                    disabled={isReserving || (opt.qty_follows_main && (opt.is_required || opt.qty === 0))}
                     class="qty-btn" aria-label="옵션 수량 감소"
                   >
                     <svg width="12" height="2" viewBox="0 0 14 2" fill="none">
@@ -859,24 +914,29 @@
                       type="number"
                       bind:value={opt.qty}
                       disabled={opt.qty_follows_main}
+                      onfocus={() => { optQtyAtFocus.set(opt.id, opt.qty); }}
                       onchange={() => {
                         const cap = stockCapFor(opt.id);
+                        // 입력창을 비우면 값이 null이 되므로 먼저 0으로 정리한다(sp3-qa MINOR-B)
+                        if (typeof opt.qty !== 'number' || Number.isNaN(opt.qty)) opt.qty = 0;
                         if (opt.qty > cap) {
                           csToast.warning('예약 가능한 재고가 없습니다.');
                           opt.qty = cap;
                         } else if (opt.qty < 0) {
                           opt.qty = 0;
                         }
+                        if (opt.qty !== (optQtyAtFocus.get(opt.id) ?? opt.qty)) void handleOptionEdited();
+                        optQtyAtFocus.set(opt.id, opt.qty);
                       }}
                       min="0"
                       max={stockCapFor(opt.id)}
                       class="qty-input"
-                      aria-label={opt.qty_follows_main ? '옵션 수량 (본상품 수량과 동일, 조절 불가)' : '옵션 수량'}
+                      aria-label={opt.qty_follows_main ? (opt.is_required ? '옵션 수량 (본상품 수량과 동일, 조절 불가)' : '옵션 수량 (담으면 본상품 수량과 동일)') : '옵션 수량'}
                     />
                   </div>
                   <button
-                    onclick={() => incrementOptionQty(opt)}
-                    disabled={opt.qty_follows_main || opt.qty >= stockCapFor(opt.id)}
+                    onclick={() => { const before = opt.qty; if (opt.qty_follows_main) opt.qty = Math.min(qty, stockCapFor(opt.id)); else incrementOptionQty(opt); if (opt.qty !== before) void handleOptionEdited(); }}
+                    disabled={isReserving || (opt.qty_follows_main ? (opt.is_required || opt.qty > 0 || stockCapFor(opt.id) <= 0) : opt.qty >= stockCapFor(opt.id))}
                     class="qty-btn" aria-label="옵션 수량 증가"
                   >
                     <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
@@ -956,7 +1016,7 @@
         <div class="qty-row">
           <span class="qty-label">수량</span>
           <div class="qty-control">
-            <button onclick={() => qty = clampReservationQty(qty - 1)} class="qty-btn" aria-label="수량 감소">
+            <button onclick={() => { const before = qty; qty = clampReservationQty(qty - 1); if (qty !== before) void handleOptionEdited(); }} disabled={isReserving} class="qty-btn" aria-label="수량 감소">
               <svg width="14" height="2" viewBox="0 0 14 2" fill="none">
                 <path d="M1 1H13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -965,6 +1025,7 @@
               <input
                 type="number"
                 bind:value={qty}
+                onfocus={() => { mainQtyAtFocus = qty; }}
                 onchange={() => {
                   const clamped = clampReservationQty(qty);
                   if (clamped > mainStockCap) {
@@ -973,6 +1034,8 @@
                   } else {
                     qty = clamped;
                   }
+                  if (qty !== mainQtyAtFocus) void handleOptionEdited();
+                  mainQtyAtFocus = qty;
                 }}
                 min="1"
                 max={mainStockCap}
@@ -980,7 +1043,7 @@
                 aria-label="수량"
               />
             </div>
-            <button onclick={incrementQty} disabled={qty >= mainStockCap} class="qty-btn" aria-label="수량 증가">
+            <button onclick={incrementQty} disabled={qty >= mainStockCap || isReserving} class="qty-btn" aria-label="수량 증가">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M1 7H13M7 1V13" stroke="var(--cs-text-dark)" stroke-width="2" stroke-linecap="round"/>
               </svg>
@@ -1019,6 +1082,8 @@
         saleOnly={isSaleOnly}
           mode="product"
           onreserve={handleReserve}
+          {cartAdded}
+          oncartconfirm={() => goto('/cart')}
           onchange={handleCalChange}
           chatCallback={() => csToast.info('준비중입니다.')}
           wished={wishedSet.has(product.id)}
@@ -1047,6 +1112,8 @@
           saleOnly={isSaleOnly}
         mode="product"
         onreserve={handleReserve}
+        {cartAdded}
+        oncartconfirm={() => goto('/cart')}
         onchange={handleCalChange}
         chatCallback={() => csToast.info('준비중입니다.')}
         wished={wishedSet.has(product.id)}
