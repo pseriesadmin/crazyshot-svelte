@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * /cms/customers/settings (회원코드 코드조합 기준설정) — saveMemberCodeCombo / bulkReissue
+ * /cms/codes '고객코드' 탭(구 /cms/customers/settings, 2026-10-10 이관 — 회원코드 코드조합 기준설정) — saveMemberCodeCombo / bulkReissue
  * 액션의 안전장치(권한 가드 + 명시적 확인 가드 + 선행조건 가드) 회귀 테스트.
  *
  * 배경: 이 화면은 신규가입자 채번 접두어를 바꾸는(saveMemberCodeCombo) + 기존 고객 전원의
@@ -71,7 +71,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }));
 
 // ── 동적 import (vi.mock 호이스팅 이후에 실행됨) ──────────────────────────────
-const { actions } = await import('../../routes/cms/customers/settings/+page.server');
+const { actions } = await import('../../routes/cms/codes/+page.server');
 
 // ── 스텁 팩토리 ──────────────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ function makeRequest(fields: Record<string, string> = {}): Request {
 
 type ActionMap = Record<string, (e: unknown) => Promise<unknown>>;
 
-describe('customers/settings — saveMemberCodeCombo 가드', () => {
+describe('codes 고객코드 탭 — saveMemberCodeCombo 가드', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAdminStub = makeAdminStub();
@@ -212,7 +212,7 @@ describe('customers/settings — saveMemberCodeCombo 가드', () => {
   });
 });
 
-describe('customers/settings — bulkReissue 가드', () => {
+describe('codes 고객코드 탭 — bulkReissue 가드', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAdminStub = makeAdminStub();

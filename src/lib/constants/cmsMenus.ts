@@ -93,7 +93,6 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
       { menu_key: 'customers.membership', label: '멤버십', href: '/cms/customers/membership', requiresSettingsAccess: true },
       { menu_key: 'customers.score', label: '스코어', href: '/cms/customers/score', requiresSettingsAccess: true },
       { menu_key: 'customers.inquiry', label: '빠른문의', href: '/cms/customers/inquiry', requiresSettingsAccess: true },
-      { menu_key: 'customers.settings', label: '설정', href: '/cms/customers/settings', requiresSettingsAccess: true },
     ],
   },
   {
