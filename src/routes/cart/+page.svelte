@@ -1375,10 +1375,8 @@
     return line.options.reduce((s, o) => s + itemOptionFee(line, it, o), 0)
   }
 
-  // 휴무일 연장요금(수량 1 기준, 본상품 + 옵션) — 서버 compute_reservation_line_amount.holiday_extra_fee와 동일.
-  // 2026-10-02(Stephen 확정): 이 금액은 "총 기본 대여요금(T)"에 합산되어 멤버십·쿠폰 할인 대상에 포함된다(Migration 626).
-  // 판매전용(구매) 라인은 대여기간이 없어 0, 24h 요금 미등록은 산정 불가라 0.
-  function itemHolidayExtra(
+  // 수량 N대 그룹의 휴무일 연장요금 — 서버와 동일: 본상품 부분은 N배, 옵션 부분은 대표 예약 1건에만 저장돼 1회만(2026-10-11 정정, sp3-qa 대조).
+  function groupHolidayExtra(
     line: CartLineGroup | undefined,
     it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
   ): number {
@@ -1386,8 +1384,17 @@
     const r24 = itemRate24h(line)
     if (r24 === null) return 0
     const ext = itemHolidayExtension(it)
-    return calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24)
+    const units = Math.max(line.qty ?? 1, 1)
+    return calcHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, r24) * units
       + calcOptionsHolidayExtraFee(ext.pickupExtraDays, ext.returnExtraDays, line.options ?? [])
+  }
+
+  // 수량 N대 그룹의 대여료+옵션 금액 — 서버와 동일: 대여료는 N배, 옵션은 1회(옵션은 대표 예약 1건에만 저장됨).
+  function groupRentalAndOptions(
+    line: CartLineGroup | undefined,
+    it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
+  ): number {
+    return itemRentalFee(line, it) * Math.max(line?.qty ?? 1, 1) + itemOptionsAmount(line, it)
   }
 
   // 1일차 요금(본상품 + 옵션) — 서버 compute_reservation_line_amount.first_day_amount(Migration 621)와 동일.
@@ -1395,10 +1402,13 @@
   function itemFirstDayAmount(
     line: CartLineGroup | undefined,
     it: { rentalDate: string; returnDate: string; rentalTime: string; returnTime: string; opts: { rentalMethod: DeliveryMethod | null; returnMethod: DeliveryMethod | null } },
+    units = 1,
   ): number {
     if (!line) return 0
-    const total = itemRentalFee(line, it) + itemOptionsAmount(line, it)
-    if (line.durationType === 'purchase') return total
+    const rent = itemRentalFee(line, it)
+    const total = rent + itemOptionsAmount(line, it)
+    // units(수량 N대): 서버와 동일 — 옵션은 대표 예약 1건에만 있어 나머지 N-1대는 본상품만 계산(2026-10-11 정정)
+    if (line.durationType === 'purchase') return rent * (units - 1) + total
     const r24 = itemRate24h(line)
     if (r24 === null) return 0
     const r12 = itemRate12h(line)
@@ -1419,7 +1429,7 @@
       if (o.unitPrice12h == null) return sum + optFee
       return sum + Math.min(optFee, o.qty * (fullDay ? o.unitPrice : o.unitPrice12h))
     }, 0)
-    return Math.min(mainFirst + optsFirst, total)
+    return Math.min(mainFirst, rent) * (units - 1) + Math.min(mainFirst + optsFirst, total)
   }
 
   // ── 등급별 할인율
@@ -1429,13 +1439,13 @@
   const otDiscountRate = $derived(GRADE_RATE[otGrade] ?? 0)
 
   // 대여료 소계 — 체크된(선택된) 상품만 합산 (체크 해제 시 약정요금에서 제외)
-  // 옵션상품 금액(itemOptionsAmount)도 기본 대여료와 동일하게 qty 배수 적용해 합산
+  // 옵션상품 금액(itemOptionsAmount)은 대여료와 달리 qty 배수를 적용하지 않고 1회만 합산 — 서버는 옵션을 대표 예약 1건에만 저장·계산한다(2026-10-11 정정, groupRentalAndOptions)
   // 2026-10-02(Stephen 확정): 휴무일 연장요금도 이 총 기본 대여요금(T)에 합산한다 — 멤버십·쿠폰 할인 대상 포함(Migration 626).
   const otSubtotal = $derived(
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it) + itemHolidayExtra(line, it)) * Math.max(line?.qty ?? 1, 1)
+      return sum + groupRentalAndOptions(line, it) + groupHolidayExtra(line, it)
     }, 0)
   )
 
@@ -1444,8 +1454,7 @@
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      const lineTotal = itemRentalFee(line, it) + itemOptionsAmount(line, it)
-      return sum + Math.min(itemFirstDayAmount(line, it), lineTotal) * Math.max(line?.qty ?? 1, 1)
+      return sum + itemFirstDayAmount(line, it, Math.max(line?.qty ?? 1, 1))
     }, 0)
   )
 
@@ -1533,7 +1542,7 @@
       const line = groupsById.get(it.id)
       const product = line?.product as ProductRow & { sale_only?: boolean | null } | undefined
       if (product?.sale_only) return sum
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
+      return sum + groupRentalAndOptions(line, it)
     }, 0)
   )
 
@@ -1547,7 +1556,7 @@
       const line = groupsById.get(it.id)
       const product = line?.product as ProductRow & { sale_only?: boolean | null } | undefined
       if (!product?.sale_only) return sum
-      return sum + (itemRentalFee(line, it) + itemOptionsAmount(line, it)) * Math.max(line?.qty ?? 1, 1)
+      return sum + groupRentalAndOptions(line, it)
     }, 0)
   )
 
@@ -1622,7 +1631,8 @@
   let pendingOptionKey = $state<string | null>(null)
   type SetOptionsRpcFn = (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>
   async function updateOptionQty(reservationId: string, line: CartLineGroup | undefined, optionProductId: string | null, newQty: number) {
-    if (!line || newQty < 1) return
+    // 옵션 삭제·다른 옵션 수량 변경이 처리 중이면 중단 — 오래된 옵션 목록으로 만든 전체 교체 요청이 나중에 도착해 삭제된 옵션이 되살아나는 것을 막는다(sp3-qa)
+    if (!line || newQty < 1 || pendingOptionKey) return
     // 가용 재고 사전차단(2026-09-02, Stephen GATE B 승인) — 옵션상품도 동일하게 실제 가용
     // 재고를 상한으로 반영한다.
     if (newQty > stockCapFor(optionProductId)) {
@@ -1649,6 +1659,38 @@
             ? '옵션상품 재고가 부족해 변경하지 못했습니다.'
             : '옵션 수량 변경에 실패했습니다.'
         )
+        return
+      }
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      pendingOptionKey = null
+    }
+  }
+
+  // 옵션상품 삭제(2026-10-11, Stephen 지시) — set_reservation_options가 옵션 전체를 교체하는 RPC라, 지울 옵션을 뺀 나머지 목록을 다시 보낸다.
+  // 필수 옵션은 삭제 버튼을 노출하지 않는다. 담긴 뒤 CMS에서 필수/최소선택 설정이 바뀌어 장바구니와 달라져도 그대로 두고, 최종 값은 제출·결제 단계에서 서버가 적용한다.
+  async function removeOption(reservationId: string, line: CartLineGroup | undefined, optionProductId: string | null) {
+    if (!line) return
+    const key = `${reservationId}:${optionProductId}`
+    if (pendingOptionKey) return
+    pendingOptionKey = key
+    try {
+      const payload = line.options
+        .filter(o => o.optionProductId !== optionProductId)
+        .map(o => ({
+          option_product_id: o.optionProductId,
+          option_name:       o.name,
+          qty:               o.qty,
+          unit_price:        o.unitPrice,
+        }))
+      const { error } = await (supabase.rpc as unknown as SetOptionsRpcFn)('set_reservation_options', {
+        p_reservation_id: Number(reservationId),
+        p_options:        payload,
+      })
+      if (error) {
+        csToast.error('옵션 삭제에 실패했습니다.')
         return
       }
       await invalidateAll()
@@ -1860,7 +1902,7 @@
     itemsState.reduce((sum, it) => {
       if (it.deleted || !it.checked) return sum
       const line = groupsById.get(it.id)
-      return sum + itemHolidayExtra(line, it) * Math.max(line?.qty ?? 1, 1)
+      return sum + groupHolidayExtra(line, it)
     }, 0)
   )
 
@@ -3457,6 +3499,13 @@
           <div class="option-subcard-list">
             {#each line.options as opt}
               <div class="option-subcard">
+                {#if !opt.isRequired}
+                  <button class="delete-btn opt-delete-btn" onclick={() => removeOption(item.id, line, opt.optionProductId)} disabled={pendingOptionKey !== null} aria-label="옵션 삭제">
+                  <svg width="11" height="11" viewBox="0 0 17 17" fill="none" aria-hidden="true">
+                    <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="var(--cs-text-light)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+                  </svg>
+                </button>
+                {/if}
                 <svg class="option-subcard-connector" aria-hidden="true" width="17.5" height="17.5" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1.50404 1.5C1.50404 1.5 1.49303 5.60062 1.50738 12.8098C1.52173 20.0189 7 23.5 11.5 23.5C16 23.5 23.5 23.5 23.5 23.5" stroke="var(--cs-text-light)" stroke-width="3" stroke-linecap="round"/>
                 </svg>
@@ -3579,6 +3628,13 @@
         <div class="option-subcard-list option-subcard-list--compact">
           {#each line.options as opt}
             <div class="option-subcard option-subcard--compact">
+              {#if !opt.isRequired}
+                <button class="delete-btn opt-delete-btn" onclick={(e) => { e.stopPropagation(); removeOption(item.id, line, opt.optionProductId) }} disabled={pendingOptionKey !== null} aria-label="옵션 삭제">
+                  <svg width="11" height="11" viewBox="0 0 17 17" fill="none" aria-hidden="true">
+                    <path d="M15.5 1.5L8.5 8.5M8.5 8.5L1.5 15.5M8.5 8.5L15.5 15.5M8.5 8.5L1.5 1.5" stroke="var(--cs-text-light)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/>
+                  </svg>
+                </button>
+              {/if}
               <svg class="option-subcard-connector" aria-hidden="true" width="18" height="18" viewBox="0 0 25 25" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M1.50404 1.5C1.50404 1.5 1.49303 5.60062 1.50738 12.8098C1.52173 20.0189 7 23.5 11.5 23.5C16 23.5 23.5 23.5 23.5 23.5" stroke="var(--cs-text-light)" stroke-width="3" stroke-linecap="round"/>
               </svg>
@@ -4707,6 +4763,18 @@
     border-radius: 30px;
     box-sizing: border-box;
   }
+  /* 옵션 삭제 X — 본상품 카드 X(.delete-btn)와 같은 모양, 카드 우상단에 한 단계 작게 */
+  .opt-delete-btn {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    padding: 6px;
+    line-height: 0;
+    z-index: 1;
+  }
+  .opt-delete-btn:disabled { opacity: 0.4; cursor: default; }
+  .option-subcard--compact .opt-delete-btn { top: 4px; right: 8px; padding: 4px; }
+  .option-subcard .option-label-row { padding-right: 22px; }
   .option-subcard-connector {
     position: absolute;
     left: -40px;
