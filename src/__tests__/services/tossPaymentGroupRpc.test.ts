@@ -313,6 +313,9 @@ describe('cancel_reservation_payment', () => {
       : (orderRows as { order_id: number }).order_id;
 
     // 결제 완료 상태 만들기 (rid1을 대표 예약으로)
+    // 2026-10-03(Migration 636): 실제 존재하는 주문은 청구금액이 orders.final_amount와 같아야 하므로 저장값을 읽어 사용
+    const { data: ordRow } = await admin.from('orders').select('final_amount').eq('id', orderId).single();
+    const orderFinal = Math.round(Number((ordRow as { final_amount: number | string }).final_amount));
     const idempotencyKey = `idem-group-cancel-${Date.now()}`;
     const tossOrderId = `CZ-group-cancel-${Date.now()}`;
     const { data: confirmData } = await admin.rpc('confirm_order_payment_and_update_reservations', {
@@ -321,8 +324,8 @@ describe('cancel_reservation_payment', () => {
       p_payment_key: 'test_group_cancel_key',
       p_toss_order_id: tossOrderId,
       p_idempotency_key: idempotencyKey,
-      p_total_amount: 160000,
-      p_paid_amount: 160000,
+      p_total_amount: orderFinal,
+      p_paid_amount: orderFinal,
     });
     expect(confirmData?.success).toBe(true);
 

@@ -8,6 +8,7 @@
   import { renderTiptapDocToHtml } from '$lib/utils/tiptapRender'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { browser } from '$app/environment'
+  import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import { env as publicEnv } from '$env/dynamic/public'
 
@@ -384,8 +385,10 @@
           // 기록을 교체한다 — 쌓으면 뒤로가기가 이미 서명된 링크(/contract/signed)로 되돌아가 막다른 화면에 갇힌다
           window.location.replace('/contract/complete')
         } else {
-          const body = await res.json().catch(() => ({})) as { error?: string }
+          const body = await res.json().catch(() => ({})) as { error?: string; code?: string }
           payError = body.error ?? '결제 처리 중 오류가 발생했습니다.'
+          // 보유 포인트가 부족해 서버가 사용 포인트를 조정한 경우 — 화면의 결제 금액을 서버 값으로 갱신
+          if (body.code === 'POINTS_ADJUSTED') await invalidateAll()
         }
       } else {
         // 실결제 — 이미 마운트된 결제위젯 인스턴스(tossWidgets)의 requestPayment() 호출.
@@ -394,19 +397,33 @@
         // widgets() 인스턴스여야 한다.
         if (!tossWidgets) throw new Error(widgetInitError || '결제 위젯이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.')
 
-        const tossOrderId = `CSHOT-${Date.now()}`
+        // 서버 사전등록(2026-10-04): 청구금액·토스 orderId는 서버(pay-start)가 정한 값만 사용한다.
+        // 클라이언트가 만든 금액·orderId로는 결제창을 열지 않는다(pay-result가 같은 값을 다시 검증).
+        const startRes = await fetch(`/api/contracts/${signing.token}/pay-start`, { method: 'POST' })
+        const start = await startRes.json().catch(() => ({})) as { ok?: boolean; finalAmount?: number; orderName?: string; tossOrderId?: string; error?: string; pointsAdjusted?: boolean }
+        if (!startRes.ok || !start.ok || typeof start.finalAmount !== 'number' || !start.tossOrderId) {
+          throw new Error(start.error ?? '결제를 시작할 수 없습니다. 새로고침 후 다시 시도해 주세요.')
+        }
+        // 신청 이후 보유 포인트가 줄어 서버가 사용 포인트를 조정한 경우 — 새 결제금액을 확인한 뒤 다시 결제하도록 안내
+        if (start.pointsAdjusted) {
+          csToast.warning('보유 포인트가 부족해 사용 포인트가 조정되었어요. 변경된 결제 금액을 확인한 뒤 다시 결제해 주세요.')
+          await invalidateAll()
+          return
+        }
+        const tossOrderId = start.tossOrderId
+        await tossWidgets.setAmount({ currency: 'KRW', value: start.finalAmount })
         const origin      = window.location.origin
         // 2026-09-23(쿠폰 다중중첩 체크아웃 구조 전환 후속): couponId(단일) → couponIds
         // 반복 쿼리파라미터(URLSearchParams.append)로 전환 — pay-result/+page.server.ts가
-        // getAll('couponIds')로 그대로 복원한다.
-        const successParams = new URLSearchParams({ points: String(pointsUsed) })
+        // getAll('couponIds')로 그대로 복원한다. (포인트는 서버가 주문 저장값을 쓰므로 URL로 보내지 않는다)
+        const successParams = new URLSearchParams()
         for (const id of selectedCouponIds) successParams.append('couponIds', id)
         const successUrl  = `${origin}/contract/${signing.token}/pay-result?${successParams.toString()}`
         const failUrl     = `${origin}/contract/${signing.token}?payStatus=fail`
 
         await tossWidgets.requestPayment({
           orderId:       tossOrderId,
-          orderName:     '크레이지샷 장비 대여',
+          orderName:     start.orderName ?? '크레이지샷 장비 대여',
           successUrl,
           failUrl,
           customerName:  customer?.full_name ?? undefined,
