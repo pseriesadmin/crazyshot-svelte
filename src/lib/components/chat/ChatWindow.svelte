@@ -400,33 +400,32 @@
     box-sizing: border-box;
   }
 
-  /* PC·기본: 래퍼는 레이아웃에 참여하지 않는다(기존 배치 그대로) */
+  /* PC·모바일 공통(2026-10-12 Stephen 지시: PC도 모바일 레이아웃으로 통일) — 헤더·입력 영역을 대화 목록 위에 겹치고 배경을 50% 알파로 덮어, 대화 목록이 그 뒤로 지나가는 모습이 비쳐 보이게 한다.
+     목록 자체는 시트 전체 높이를 쓰고, 위·아래 여백(--chat-overlay-top/bottom)으로 처음/마지막 말풍선이 영역에 가리지 않게 한다. */
+  .chat-window {
+    position: relative;
+    padding: 0;
+    gap: 0;
+  }
   .overlay-top,
   .overlay-bottom {
-    display: contents;
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    padding: 20px;
+    box-sizing: border-box;
+    background: color-mix(in srgb, var(--chat-bg) 50%, transparent);
   }
-
-  /* 모바일(<640px) — 헤더·입력 영역을 대화 목록 위에 겹치고 배경을 50% 알파로 덮어, 대화 목록이 그 뒤로 지나가는 모습이 비쳐 보이게 한다.
-     목록 자체는 시트 전체 높이를 쓰고, 위·아래 여백(--chat-overlay-top/bottom)으로 처음/마지막 말풍선이 영역에 가리지 않게 한다. */
-  @media (max-width: 639px) {
-    .chat-window {
-      position: relative;
-      padding: 0;
-      gap: 0;
-    }
-    .overlay-top,
-    .overlay-bottom {
-      display: block;
-      position: absolute;
-      left: 0;
-      right: 0;
-      z-index: 3;
-      padding: 20px;
-      box-sizing: border-box;
-      background: color-mix(in srgb, var(--chat-bg) 50%, transparent);
-    }
-    .overlay-top { top: 0; }
-    .overlay-bottom { bottom: 0; }
+  /* 목록 스크롤이 영역 끝에서 갑자기 보이지 않도록: 바깥쪽 끝은 배경 100%, 목록 쪽으로 갈수록 점차 투명 */
+  .overlay-top {
+    top: 0;
+    background: linear-gradient(to bottom, var(--chat-bg) 0%, var(--chat-bg) 55%, transparent 100%);
+  }
+  .overlay-bottom {
+    bottom: 0;
+    background: linear-gradient(to top, var(--chat-bg) 0%, var(--chat-bg) 55%, transparent 100%);
   }
 
   /* 로딩 닷 애니메이션 */
