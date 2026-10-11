@@ -16,6 +16,10 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import type { RequestHandler } from './$types'
 import type { ChatMessage, ChatIntent, ActionPayload } from '$lib/types/chat'
 import type { CannedResponseForMatch } from '$lib/server/matchCannedResponse'
+import { getNlsearchParamsCached } from '$lib/server/searchEngine/adapters/nlsearchParams'
+import { getSemanticModel } from '$lib/server/searchEngine/adapters/semanticModelCache'
+import { semanticCannedFeatures, type SemanticCannedFeatures } from '$lib/server/cannedSemanticFeature'
+import { withTimeout, SHADOW_MAX_WAIT_MS } from '$lib/server/searchEngine/adapters/semanticShadow'
 import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, isWaitNoticeStillPending } from '$lib/server/cannedAutoReply'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { loadSensitiveCategoryKeys } from '$lib/server/cannedCategories'
@@ -188,7 +192,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const synonymGroups = await loadSynonymGroups()
         // 2026-10-06: 규칙 판정 + 확률 모델(학습 가중치). 판정 불가·낮은 확률이면 match=null → 아래 "대기 안내" 경로로 이어진다
         const decision = decideAutoReply(body.content.trim(), (candidates as CannedResponseForMatch[] ?? []), synonymGroups)
-        await recordObservation(admin, buildObservationRow((userMessage as { id: string }).id, arEnabled ? 'on' : 'observe', decision))
+        // C-1: 의미 유사도는 관찰 기록에만 숫자로 덧붙인다(설정 semantic.shadow 켜짐 + 모델 있음일 때만, 판정·응답에는 영향 없음)
+        let semanticExtra: SemanticCannedFeatures | null = null
+        semanticExtra = await withTimeout(
+          (async (): Promise<SemanticCannedFeatures | null> => {
+            if (!(await getNlsearchParamsCached()).semantic.shadow) return null
+            return semanticCannedFeatures(await getSemanticModel(), body.content.trim(), decision.evaluation.best)
+          })(),
+          SHADOW_MAX_WAIT_MS,
+          null,
+        )
+        await recordObservation(admin, buildObservationRow((userMessage as { id: string }).id, arEnabled ? 'on' : 'observe', decision, undefined, semanticExtra))
         const match = arEnabled ? decision.answer : null
 
         if (match) {

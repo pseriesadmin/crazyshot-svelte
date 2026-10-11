@@ -152,6 +152,7 @@ describe('QA 정밀검수(2026-08-26) 결함③ 수정 — role 기본값 정합
     'promotion.content',
     'rental.contracts',
     'settings.code',
+    'settings.search',
     'subscription.list',
     'subscription.new',
   ];

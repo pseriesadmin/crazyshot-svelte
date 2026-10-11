@@ -1,0 +1,981 @@
+[
+ {
+  "q": "카메라",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "카메라 렌즈",
+  "type": "category",
+  "expectCats": [
+   "camera",
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "카메라, 렌즈 추천해 주세요",
+  "type": "category",
+  "expectCats": [
+   "camera",
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "카메라 추천해줘",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "렌즈 추천해줘",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "소니 카메라",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "캐논 렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "소니 렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "브이로그 카메라",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "인터뷰 카메라",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "풀프레임 카메라",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "캠코더",
+  "type": "category",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "광각 렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "망원 렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "단렌즈",
+  "type": "category",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "무대를 최대한 당겨 찍을 수 있는 선명도 높은 카메라 렌즈를 추천해 줘요.",
+  "type": "category",
+  "expectCats": [
+   "camera",
+   "lens"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "삼각대",
+  "type": "direct",
+  "expectCats": [
+   "accessorie",
+   "actcam"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "짐벌",
+  "type": "direct",
+  "expectCats": [
+   "dronegim",
+   "hypepack"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "조명",
+  "type": "direct",
+  "expectCats": [
+   "light"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "드론",
+  "type": "direct",
+  "expectCats": [
+   "dronegim"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "액션캠",
+  "type": "direct",
+  "expectCats": [
+   "actcam",
+   "hypepack"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "마이크",
+  "type": "direct",
+  "expectCats": [
+   "accessorie"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "배터리",
+  "type": "direct",
+  "expectCats": [
+   "accessorie"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "모니터",
+  "type": "direct",
+  "expectCats": [
+   "accessorie"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "슬라이더",
+  "type": "direct",
+  "expectCats": [
+   "accessorie"
+  ],
+  "group": "기존32"
+ },
+ {
+  "q": "Sony A7S3",
+  "type": "model",
+  "nameRe": "^Sony A7S3$",
+  "group": "기존32"
+ },
+ {
+  "q": "Canon 5D Mark IV",
+  "type": "model",
+  "nameRe": "^Canon 5D Mark IV$",
+  "group": "기존32"
+ },
+ {
+  "q": "Insta360 GO3",
+  "type": "model",
+  "nameRe": "^Insta360 GO3$",
+  "group": "기존32"
+ },
+ {
+  "q": "Aputure 600C PRO II",
+  "type": "model",
+  "nameRe": "^Aputure 600C PRO II$",
+  "group": "기존32"
+ },
+ {
+  "q": "미러리스",
+  "type": "free",
+  "group": "기존32"
+ },
+ {
+  "q": "카메라 가방",
+  "type": "free",
+  "group": "기존32"
+ },
+ {
+  "q": "브이로그 찍기 좋은 카메라 추천해줘",
+  "type": "relevant",
+  "group": "문장형",
+  "expectCats": [
+   "camera"
+  ]
+ },
+ {
+  "q": "인터뷰 촬영용 카메라 추천",
+  "type": "relevant",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "문장형"
+ },
+ {
+  "q": "콘서트 망원 렌즈 추천해줘",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "70-200|100-400|100-500|200-800|망원|Extender"
+ },
+ {
+  "q": "야외에서 쓸 액션캠 빌리고 싶어요",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "Osmo Action|Insta360"
+ },
+ {
+  "q": "드론 촬영 대여",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "FLYMORE|플라이모어"
+ },
+ {
+  "q": "짐벌 빌려주세요",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "RS ?\\d|POCKET|짐벌"
+ },
+ {
+  "q": "조명 장비 추천",
+  "type": "relevant",
+  "expectCats": [
+   "light"
+  ],
+  "group": "문장형"
+ },
+ {
+  "q": "무선 마이크 대여",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "MIC|UWP|마이크"
+ },
+ {
+  "q": "V마운트 배터리",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "V-Mount|NP-|AG-VBR|FV100|배터리"
+ },
+ {
+  "q": "모니터 대여",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "모니터|TVLogic|LVM|F-5A"
+ },
+ {
+  "q": "삼각대 추천",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "삼각대|Pixi|Manfrotto|Leofoto|Fotopro|Acebil|모노포드"
+ },
+ {
+  "q": "셀카봉",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "Selfie Stick|SELDI"
+ },
+ {
+  "q": "자전거 촬영용 카메라",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "자전거|사이클링|Osmo Action|Insta360"
+ },
+ {
+  "q": "다이빙 촬영 장비",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "프리다이빙|스노쿨링|Osmo Action|Insta360"
+ },
+ {
+  "q": "오토바이 촬영",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "모터사이클|오토타이|Osmo Action|Insta360|Helmet"
+ },
+ {
+  "q": "스마트폰 대여",
+  "type": "relevant",
+  "expectCats": [
+   "phone"
+  ],
+  "group": "문장형"
+ },
+ {
+  "q": "갤럭시",
+  "type": "relevant",
+  "expectCats": [
+   "phone"
+  ],
+  "group": "문장형"
+ },
+ {
+  "q": "즉석카메라",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "Instax|인스탁스"
+ },
+ {
+  "q": "인스탁스 필름",
+  "type": "relevant",
+  "expectCats": [
+   "product"
+  ],
+  "group": "문장형"
+ },
+ {
+  "q": "폴라로이드 느낌 카메라",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "Instax|인스탁스"
+ },
+ {
+  "q": "스포츠 경기 촬영 렌즈",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "70-200|100-400|100-500|200-800|망원|Extender"
+ },
+ {
+  "q": "인물 사진 렌즈",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "85mm|50mm|35mm|100mm"
+ },
+ {
+  "q": "풍경 사진 광각",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "16-35|15-35|7-14|12-35"
+ },
+ {
+  "q": "소니 풀프레임 카메라",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "A7S3|FX3"
+ },
+ {
+  "q": "캐논 미러리스",
+  "type": "relevant",
+  "group": "문장형",
+  "relevantRe": "R6 Mark|R6M"
+ },
+ {
+  "q": "소니",
+  "type": "relevant",
+  "group": "브랜드",
+  "relevantRe": "Sony|소니"
+ },
+ {
+  "q": "캐논",
+  "type": "relevant",
+  "group": "브랜드",
+  "relevantRe": "Canon|캐논"
+ },
+ {
+  "q": "파나소닉",
+  "type": "relevant",
+  "group": "브랜드",
+  "relevantRe": "Panasonic|파나소닉"
+ },
+ {
+  "q": "DJI",
+  "type": "relevant",
+  "relevantRe": "DJI",
+  "group": "브랜드"
+ },
+ {
+  "q": "인스타360",
+  "type": "relevant",
+  "relevantRe": "Insta360",
+  "group": "브랜드"
+ },
+ {
+  "q": "니콘",
+  "type": "relevant",
+  "relevantRe": "Nikon",
+  "group": "브랜드"
+ },
+ {
+  "q": "아푸처",
+  "type": "relevant",
+  "relevantRe": "Aputure",
+  "group": "브랜드"
+ },
+ {
+  "q": "울란지",
+  "type": "relevant",
+  "relevantRe": "Ulanzi",
+  "group": "브랜드"
+ },
+ {
+  "q": "티브이로직",
+  "type": "relevant",
+  "relevantRe": "TVLogic",
+  "group": "브랜드"
+ },
+ {
+  "q": "삼성",
+  "type": "relevant",
+  "relevantRe": "Samsung",
+  "group": "브랜드"
+ },
+ {
+  "q": "sony",
+  "type": "relevant",
+  "group": "브랜드",
+  "relevantRe": "Sony|소니"
+ },
+ {
+  "q": "canon",
+  "type": "relevant",
+  "group": "브랜드",
+  "relevantRe": "Canon|캐논"
+ },
+ {
+  "q": "dji",
+  "type": "relevant",
+  "relevantRe": "DJI",
+  "group": "브랜드"
+ },
+ {
+  "q": "insta360",
+  "type": "relevant",
+  "relevantRe": "Insta360",
+  "group": "브랜드"
+ },
+ {
+  "q": "램마운트",
+  "type": "relevant",
+  "relevantRe": "Ram",
+  "group": "브랜드"
+ },
+ {
+  "q": "스몰리그",
+  "type": "relevant",
+  "relevantRe": "SmallRig",
+  "group": "브랜드"
+ },
+ {
+  "q": "레오포토",
+  "type": "relevant",
+  "relevantRe": "Leofoto",
+  "group": "브랜드"
+ },
+ {
+  "q": "소니 A7S3",
+  "type": "relevant",
+  "relevantRe": "A7S3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "A7S3",
+  "type": "relevant",
+  "relevantRe": "A7S3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "FX3",
+  "type": "relevant",
+  "relevantRe": "Sony FX3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "5D4",
+  "type": "relevant",
+  "relevantRe": "5D Mark IV",
+  "group": "모델·규격"
+ },
+ {
+  "q": "5D Mark 4",
+  "type": "relevant",
+  "relevantRe": "5D Mark IV",
+  "group": "모델·규격"
+ },
+ {
+  "q": "R6 마크3",
+  "type": "relevant",
+  "relevantRe": "R6 Mark III|R6M3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "R6M2",
+  "type": "relevant",
+  "group": "모델·규격",
+  "relevantRe": "R6 Mark II(?!I)|R6M2"
+ },
+ {
+  "q": "GH7",
+  "type": "relevant",
+  "relevantRe": "GH7",
+  "group": "모델·규격"
+ },
+ {
+  "q": "GH5S",
+  "type": "relevant",
+  "relevantRe": "GH5S",
+  "group": "모델·규격"
+ },
+ {
+  "q": "Z90",
+  "type": "relevant",
+  "relevantRe": "Z90",
+  "group": "모델·규격"
+ },
+ {
+  "q": "오즈모 액션",
+  "type": "relevant",
+  "relevantRe": "Osmo Action",
+  "group": "모델·규격"
+ },
+ {
+  "q": "오즈모 포켓",
+  "type": "relevant",
+  "relevantRe": "POCKET 3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "RS4",
+  "type": "relevant",
+  "relevantRe": "RS 4",
+  "group": "모델·규격"
+ },
+ {
+  "q": "RS3 프로",
+  "type": "relevant",
+  "relevantRe": "RS3 PRO",
+  "group": "모델·규격"
+ },
+ {
+  "q": "고 울트라",
+  "type": "relevant",
+  "relevantRe": "GO Ultra",
+  "group": "모델·규격"
+ },
+ {
+  "q": "인스타360 X6",
+  "type": "relevant",
+  "relevantRe": "Insta360 X6",
+  "group": "모델·규격"
+ },
+ {
+  "q": "미니4 프로",
+  "type": "relevant",
+  "relevantRe": "Mini 4 Pro",
+  "group": "모델·규격"
+ },
+ {
+  "q": "아바타2",
+  "type": "relevant",
+  "relevantRe": "Avata 2",
+  "group": "모델·규격"
+ },
+ {
+  "q": "매빅3 프로",
+  "type": "relevant",
+  "relevantRe": "MAVIC 3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "에어3",
+  "type": "relevant",
+  "relevantRe": "AIR 3",
+  "group": "모델·규격"
+ },
+ {
+  "q": "70-200",
+  "type": "relevant",
+  "relevantRe": "70-200",
+  "group": "모델·규격"
+ },
+ {
+  "q": "24-70",
+  "type": "relevant",
+  "relevantRe": "24-70",
+  "group": "모델·규격"
+ },
+ {
+  "q": "50mm 1.2",
+  "type": "relevant",
+  "relevantRe": "50mm F1.2|50mm 1.2",
+  "group": "모델·규격"
+ },
+ {
+  "q": "85mm",
+  "type": "relevant",
+  "relevantRe": "85mm",
+  "group": "모델·규격"
+ },
+ {
+  "q": "100-500",
+  "type": "relevant",
+  "relevantRe": "100-500",
+  "group": "모델·규격"
+ },
+ {
+  "q": "200-800",
+  "type": "relevant",
+  "relevantRe": "200-800",
+  "group": "모델·규격"
+ },
+ {
+  "q": "16-35",
+  "type": "relevant",
+  "relevantRe": "16-35",
+  "group": "모델·규격"
+ },
+ {
+  "q": "NP-F770",
+  "type": "relevant",
+  "relevantRe": "NP-F770",
+  "group": "모델·규격"
+ },
+ {
+  "q": "NP-FZ100",
+  "type": "relevant",
+  "relevantRe": "NP-FZ100",
+  "group": "모델·규격"
+ },
+ {
+  "q": "600C",
+  "type": "relevant",
+  "relevantRe": "600C",
+  "group": "모델·규격"
+ },
+ {
+  "q": "소니카메라",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "Sony (A7S3|FX3|Cybershot|HXR|PXW)"
+ },
+ {
+  "q": "캐논렌즈",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "Canon (RF|EF|100mm|EXTENDER|Mount)"
+ },
+ {
+  "q": "카메라렌즈",
+  "type": "relevant",
+  "expectCats": [
+   "camera",
+   "lens"
+  ],
+  "group": "오타·띄어쓰기"
+ },
+ {
+  "q": "렌즈추천",
+  "type": "relevant",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "오타·띄어쓰기"
+ },
+ {
+  "q": "카매라",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "expectCats": [
+   "camera"
+  ]
+ },
+ {
+  "q": "랜즈",
+  "type": "relevant",
+  "expectCats": [
+   "lens"
+  ],
+  "group": "오타·띄어쓰기"
+ },
+ {
+  "q": "액숀캠",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "Osmo Action|Insta360"
+ },
+ {
+  "q": "짐발",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "RS ?\\d|POCKET|짐벌"
+ },
+ {
+  "q": "조명장비",
+  "type": "relevant",
+  "expectCats": [
+   "light"
+  ],
+  "group": "오타·띄어쓰기"
+ },
+ {
+  "q": "카메라 대여",
+  "type": "relevant",
+  "expectCats": [
+   "camera"
+  ],
+  "group": "오타·띄어쓰기"
+ },
+ {
+  "q": "삼각 대",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "삼각대|Pixi|Manfrotto|Leofoto|Fotopro|Acebil|모노포드"
+ },
+ {
+  "q": "무선마이크",
+  "type": "relevant",
+  "group": "오타·띄어쓰기",
+  "relevantRe": "MIC|UWP|마이크"
+ },
+ {
+  "q": "촬영 세트",
+  "type": "relevant",
+  "expectCats": [
+   "hypepack"
+  ],
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "플라이모어 콤보",
+  "type": "relevant",
+  "group": "세트·액세서리",
+  "relevantRe": "FLYMORE|플라이모어"
+ },
+ {
+  "q": "크리에이터 콤보",
+  "type": "relevant",
+  "relevantRe": "Creator Combo|CREATOR COMBO",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "하이킹 콤보",
+  "type": "relevant",
+  "relevantRe": "하이킹",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "프리다이빙",
+  "type": "relevant",
+  "relevantRe": "프리다이빙",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "넥 마운트",
+  "type": "relevant",
+  "relevantRe": "넥 마운트",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "렌즈 세트 대여",
+  "type": "relevant",
+  "group": "세트·액세서리",
+  "relevantRe": "^SET ?\\d|^SET\\.? ?\\d"
+ },
+ {
+  "q": "카메라 세트",
+  "type": "relevant",
+  "group": "세트·액세서리",
+  "relevantRe": "^SET ?\\d|^SET\\.? ?\\d|Mark III ?\\+"
+ },
+ {
+  "q": "프롬프터",
+  "type": "relevant",
+  "relevantRe": "Prompter",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "모노포드",
+  "type": "relevant",
+  "relevantRe": "모노포드",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "TVLogic 모니터",
+  "type": "relevant",
+  "relevantRe": "TVLogic",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "에델크론",
+  "type": "relevant",
+  "relevantRe": "Edelkrone",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "파워뱅크 그립",
+  "type": "relevant",
+  "relevantRe": "POWER BANK GRIP",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "비디오 헤드",
+  "type": "relevant",
+  "relevantRe": "비디오 헤드",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "인스탁스 미니",
+  "type": "relevant",
+  "relevantRe": "Instax mini",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "와이드 필름",
+  "type": "relevant",
+  "relevantRe": "Wide Film",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "헬멧 마운트",
+  "type": "relevant",
+  "relevantRe": "Helmet",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "가슴 하네스",
+  "type": "relevant",
+  "relevantRe": "Chest|Harness",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "손목 스트랩",
+  "type": "relevant",
+  "relevantRe": "Wrist",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "흡착 거치대",
+  "type": "relevant",
+  "relevantRe": "흡착",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "미니삼각대",
+  "type": "relevant",
+  "relevantRe": "미니삼각대",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "목걸이 마운트",
+  "type": "relevant",
+  "relevantRe": "PENDANT",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "강아지 하네스",
+  "type": "relevant",
+  "relevantRe": "Dog Harness",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "스포트라이트",
+  "type": "relevant",
+  "relevantRe": "spotlight",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "렌턴",
+  "type": "relevant",
+  "relevantRe": "lenturn",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "데도 라이트",
+  "type": "relevant",
+  "relevantRe": "Dedo",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "시네로이드",
+  "type": "relevant",
+  "relevantRe": "Cineroid",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "컴팩트 모니터",
+  "type": "relevant",
+  "relevantRe": "모니터|F-5A|LVM",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "캠코더 소형",
+  "type": "relevant",
+  "relevantRe": "HXR|AG-CX10|VIXIA|Xacti",
+  "group": "세트·액세서리"
+ },
+ {
+  "q": "올림푸스",
+  "type": "unanswerable",
+  "group": "취급없음"
+ },
+ {
+  "q": "고프로",
+  "type": "unanswerable",
+  "group": "취급없음"
+ },
+ {
+  "q": "아이폰",
+  "type": "unanswerable",
+  "group": "취급없음"
+ },
+ {
+  "q": "블랙매직",
+  "type": "unanswerable",
+  "group": "취급없음"
+ },
+ {
+  "q": "렌즈 어댑터",
+  "type": "relevant",
+  "relevantRe": "Adapter|어댑터",
+  "group": "세트·액세서리"
+ }
+]

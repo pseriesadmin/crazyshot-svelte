@@ -26,6 +26,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { supabase } from '$lib/services/supabase'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { recordSemanticShadow, semanticFallbackCandidates, withTimeout, SHADOW_MAX_WAIT_MS } from '$lib/server/searchEngine/adapters/semanticShadow'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
@@ -125,6 +126,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
         wished: wishedSet.has(id),
       }
     })
+    await observeShadow(q, category, page, searchLogId, results)
     return json({ results, query: q, page, limit, search_log_id: searchLogId })
   }
 
@@ -133,7 +135,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const seenIds = new Set(
     rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? ''))
   )
-  let mergedResults = [...rpcResults]
+  const mergedResults = [...rpcResults]
 
   // 동의어 그룹 1회 로드 — 확장 RPC 재조회 + MiniSearch 폴백 두 곳에서 재사용
   let expandedTerms: string[] = []
@@ -204,6 +206,16 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     // 자연어 폴백 실패 시 현재까지 병합된 결과만 반환 (서비스 중단 방지)
   }
 
+  // B-5(기본 꺼짐: 설정 semantic.weight 0): 약한 매칭 폴백에서만 "뜻이 가까운 새 후보"를 최대 3개 뒤에 덧붙인다 — 기존 결과 순서·내용은 불변
+  if (page === 1 && !category) {
+    const semantic = await withTimeout(semanticFallbackCandidates({ query: q, excludeIds: seenIds }), SHADOW_MAX_WAIT_MS, [])
+    for (const c of semantic) {
+      if (seenIds.has(c.id)) continue
+      seenIds.add(c.id)
+      mergedResults.push({ ...c, _source: 'semantic' })
+    }
+  }
+
   const finalResults = mergedResults.slice(0, limit)
 
   // 자연어 폴백(natural_fallback) 결과는 search_products RPC를 거치지 않아 price_min이 없다 —
@@ -239,7 +251,30 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     }
   })
 
+  await observeShadow(q, category, page, searchLogId, results)
   return json({ results, query: q, page, limit, search_log_id: searchLogId })
+}
+
+// B-4(2026-10-10): 의미 점수 그림자 관찰 — 응답은 바꾸지 않는다. 설정(semantic.shadow)이 꺼져 있거나 모델이 없으면 즉시 반환하고,
+// 어떤 실패도 삼킨다(semanticShadow.ts). 분류 필터·2쪽 이후 요청은 비교 기준이 달라 제외한다.
+async function observeShadow(
+  q: string,
+  category: string | null,
+  page: number,
+  searchLogId: string | null,
+  results: Record<string, unknown>[],
+): Promise<void> {
+  if (category || page !== 1 || q.length < 2) return
+  // 응답을 오래 붙잡지 않는다(설정 조회가 느려도 SHADOW_MAX_WAIT_MS 뒤에는 그대로 응답)
+  await withTimeout(
+    recordSemanticShadow({
+      query: q,
+      searchLogId,
+      currentIds: results.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
+    }),
+    SHADOW_MAX_WAIT_MS,
+    undefined,
+  )
 }
 
 /** 판매전용(sale_only) 상품은 대여가격이 없는 게 정상 — 카드가 "Day 0" 대신 판매가를 보이도록 판매 정보를 함께 내려준다(products.md §2-9). */

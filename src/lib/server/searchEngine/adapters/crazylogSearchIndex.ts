@@ -20,7 +20,9 @@
 import { supabase } from '$lib/services/supabase'
 import { createIndex } from '../core/createIndex'
 import type { NaturalSearchProvider } from '../core/types'
-import { CRAZYLOG_INDEX_CONFIG, buildCrazylogDocs, type CrazylogDoc } from './crazylogSearchDocs'
+import { buildCrazylogDocs, type CrazylogDoc } from './crazylogSearchDocs'
+import { loadNlsearchParams } from './nlsearchParams'
+import { resolveCrazylogIndexConfig } from './nlsearchParamsSchema'
 
 export type { CrazylogDoc }
 
@@ -46,6 +48,9 @@ function isCacheValid(): boolean {
 export async function getCrazylogSearchIndex(): Promise<NaturalSearchProvider<CrazylogDoc>> {
   if (isCacheValid()) return cachedIndex!
 
+  // A-3: 튜닝 파라미터(실패 시 코드 기본값 = 기존 동작)
+  const indexConfig = resolveCrazylogIndexConfig(await loadNlsearchParams())
+
   // 공개 게시물만 조회 (RLS와 동일 조건: status='published' AND is_public=true)
   const { data: rawPosts, error } = await supabase
     .from('user_posts')
@@ -57,7 +62,7 @@ export async function getCrazylogSearchIndex(): Promise<NaturalSearchProvider<Cr
 
   if (error || !rawPosts) {
     console.error('[crazylogSearchIndex] user_posts 조회 실패:', error?.message)
-    return createIndex<CrazylogDoc>(CRAZYLOG_INDEX_CONFIG, [])
+    return createIndex<CrazylogDoc>(indexConfig, [])
   }
 
   // 작성자명 별도 조회 (+page.server.ts와 동일 패턴, N+1 방지)
@@ -77,7 +82,7 @@ export async function getCrazylogSearchIndex(): Promise<NaturalSearchProvider<Cr
 
   const docs = buildCrazylogDocs(posts, authorMap)
 
-  cachedIndex = createIndex<CrazylogDoc>(CRAZYLOG_INDEX_CONFIG, docs)
+  cachedIndex = createIndex<CrazylogDoc>(indexConfig, docs)
   cachedAt = Date.now()
   return cachedIndex
 }

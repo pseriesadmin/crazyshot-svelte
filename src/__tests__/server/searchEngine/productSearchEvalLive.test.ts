@@ -17,7 +17,7 @@ import {
   type ProductDoc,
 } from '$lib/server/searchEngine/adapters/productSearchDocs'
 import { buildRecommendSearchTerms, extractRecommendQuery } from '$lib/server/crazychat/recommend'
-import { evaluate, formatSummary, type EvalHit } from '../../helpers/searchEval'
+import { evaluate, evaluateRanking, formatRanking, formatSummary, type EvalHit } from '../../helpers/searchEval'
 
 const LIVE = process.env.NLSEARCH_EVAL_LIVE === '1'
 const KEY = process.env.NLSEARCH_EVAL_ANON ?? ''
@@ -67,7 +67,7 @@ describe.skipIf(!LIVE || !KEY)('상품 검색 인덱스 — 실데이터 전·�
         return [...merged.entries()].map(([id, score]) => ({ id, score })).sort((a, b) => b.score - a.score).slice(0, 15)
       }
       const wide = (q: string): EvalHit[] => index.search(q, { fuzzy: 0.2, prefix: true, limit: 300 }).map((r) => ({ id: r.document.id, score: r.score }))
-      return { docs, ms, report: evaluate(docs, rec, wide) }
+      return { docs, ms, report: evaluate(docs, rec, wide), ranking: evaluateRanking(docs, rec) }
     }
 
     const before = buildSide(new Map())
@@ -78,6 +78,7 @@ describe.skipIf(!LIVE || !KEY)('상품 검색 인덱스 — 실데이터 전·�
         `상품 ${after.docs.length}개 · 분류 이름 출처: ${labelSource}`,
         `\n■ 개선 전 (분류 이름 없음 — 기존과 같은 문서; 끝말 칸은 포함되어 있어 완전한 '전'은 M-0 기록값 참고)\n${formatSummary(before.report)}`,
         `\n■ 개선 후\n${formatSummary(after.report)}`,
+        `\n■ 순위 지표(150질의, 추천 검색 경로) 전: \n${formatRanking(before.ranking)}\n후: \n${formatRanking(after.ranking)}`,
         `\n빌드 시간(문서 변환+인덱스 구축): 전 ${before.ms}ms · 후 ${after.ms}ms`,
         `\n${after.report.lines.join('\n')}`,
       ].join('\n') + '\n',
