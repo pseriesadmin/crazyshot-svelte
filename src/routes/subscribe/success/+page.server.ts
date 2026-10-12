@@ -91,15 +91,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   const confirmedAt = new Date().toISOString().replace(/T(\d{2}):(\d{2}).*/, '·$1:$2').replace(/-/g, '.')
   const nextBillingDay = Math.min(billingCycleDay, 28)
 
+  // 첫 결제가 승인되지 않으면 구독은 시작되지 않는다 — DB(record_subscription_charge_result,
+  // Migration 699)가 성공 이력 없는 구독의 결제 실패를 즉시 expired로 전환하므로 혜택이 적용되지 않고
+  // 같은 사용자가 바로 다시 가입할 수 있다. 화면도 "구독 시작됨"이 아닌 실패로 안내한다.
   if (!chargeSucceeded) {
     return {
-      success: true,
-      planName: plan.name,
-      monthlyPrice: plan.monthly_price,
-      billingCycleDay: nextBillingDay,
-      confirmedAt,
-      paymentMethod,
-      chargeWarning: '카드 등록은 완료됐으나 최초 결제에는 실패했습니다. 다음 청구일에 재시도됩니다.',
+      success: false,
+      error: '카드 등록은 됐지만 첫 결제가 승인되지 않았어요. 카드 한도·잔액을 확인하고 다시 시도해 주세요. 구독은 시작되지 않았습니다.',
     }
   }
 
