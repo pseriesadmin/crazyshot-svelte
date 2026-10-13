@@ -77,6 +77,8 @@ describe('coupon-gift approve — 고객 푸시', () => {
       'customer-uid',
       'event_coupon_issued',
       expect.objectContaining({ body: expect.stringContaining('3,000원 할인') }),
+      // 안내문장 CMS 편집(Migration 689) 이후: 편집된 문장의 {{할인내용}} 변수 값을 4번째 인자로 함께 넘긴다(기본 본문은 그대로)
+      { vars: { 할인내용: '3,000원 할인' } },
     )
   })
 
