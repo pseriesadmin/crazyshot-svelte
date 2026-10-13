@@ -20,6 +20,8 @@ vi.mock('@supabase/supabase-js', () => ({
       const b: Record<string, unknown> = {}
       const self = () => b
       b.select = self; b.eq = self; b.not = self; b.is = self; b.order = self; b.limit = self
+      // attachCancelPending(Migration 687)이 쓰는 조회 체인 — .in(id 목록) + .neq(status)
+      b.in = self; b.neq = self
       b.then = (resolve: (v: { data: unknown; error: unknown }) => void) => {
         if (table === 'rental_reservations') return resolve({ data: pendingError ? null : pendingIds.map(id => ({ id })), error: pendingError })
         return resolve({ data: [], error: null }) // cms_menu_permissions

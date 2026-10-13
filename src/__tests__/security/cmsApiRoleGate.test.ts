@@ -117,7 +117,21 @@ const cases: Case[] = [
   },
 ]
 
-beforeEach(() => { adminFrom.mockReset(); profileRef.cms_role = null })
+// 서버 권한(admin) 클라이언트로 user_profiles.cms_role을 조회하는 라우트용 기본 체인
+// (segment/refresh — Migration #698 이후 refresh_user_segments를 cms_role 검사 뒤 서버 권한으로만 호출).
+// 개별 테스트가 adminFrom을 직접 지정하면 그쪽이 우선한다.
+function adminProfileChain() {
+  const chain: Record<string, unknown> = {}
+  const q = () => chain
+  Object.assign(chain, {
+    select: q, eq: q,
+    single: async () => ({ data: { cms_role: profileRef.cms_role }, error: null }),
+    maybeSingle: async () => ({ data: { cms_role: profileRef.cms_role }, error: null }),
+  })
+  return chain
+}
+
+beforeEach(() => { adminFrom.mockReset(); adminFrom.mockImplementation(() => adminProfileChain()); profileRef.cms_role = null })
 
 describe.each(cases)('$name', ({ call }) => {
   it('(i) 세션 없음 → 401', async () => {
