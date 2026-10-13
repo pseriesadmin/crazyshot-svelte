@@ -55,7 +55,7 @@ export async function getReservationForDhero(
   // rental_reservations 기본 정보 — 실제 존재하는 컬럼만 (customer_name 등은 여기 없음)
   const { data: resRow, error: resError } = await admin
     .from('rental_reservations')
-    .select('id, status, pickup_method, return_method, tracking_number, reservation_code, user_id, product_id, dhero_status, dhero_status_code, dhero_synced_at, dhero_meta, dhero_dong_group, dhero_return_book_id, notes')
+    .select('id, status, pickup_method, return_method, tracking_number, reservation_code, user_id, product_id, dhero_status, dhero_status_code, dhero_synced_at, dhero_meta, dhero_dong_group, dhero_return_book_id, notes, pickup_address_road, pickup_address_detail, pickup_postal_code')
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -77,24 +77,30 @@ export async function getReservationForDhero(
     .eq('user_id', r.user_id as string)
     .maybeSingle()
 
-  // 고객 기본 배송지 (user_shipping_addresses — is_default=true 우선)
-  const { data: addrRow } = await admin
-    .from('user_shipping_addresses')
-    .select('road_address, detail_address, postal_code, recipient')
-    .eq('user_id', r.user_id as string)
-    .eq('is_default', true)
-    .maybeSingle()
+  // 배송지 — 예약신청 시점 스냅샷(pickup_address_road/detail)이 정본이다.
+  // 고객 계정에 저장된 배송지(user_shipping_addresses)는 장바구니에서 주소를 직접 입력한 고객에게는
+  // 없을 수 있어(0건이면 주소가 빈 값으로 두발히어로에 나가 접수가 조용히 실패하던 결함, 2026-10-12)
+  // 스냅샷이 없을 때와 우편번호 보충용으로만 쓴다. 우편번호는 예약에 저장되지 않으므로 같은 도로명 주소의
+  // 저장 배송지에서 찾는다.
+  const snapRoad   = ((r.pickup_address_road as string | null) ?? '').trim()
+  const snapDetail = ((r.pickup_address_detail as string | null) ?? '').trim()
+  // 2026-10-13(Migration #704): 예약신청 시점에 저장된 우편번호가 정본 — 없을 때만(옛 예약) 같은 도로명 주소의 저장 배송지에서 찾는다
+  const snapPostal = ((r.pickup_postal_code as string | null) ?? '').trim()
 
-  // 기본 배송지가 없으면 첫 번째 배송지 시도
-  const { data: fallbackAddr } = !addrRow ? await admin
+  const { data: savedAddrs } = await admin
     .from('user_shipping_addresses')
-    .select('road_address, detail_address, postal_code, recipient')
+    .select('road_address, detail_address, postal_code, is_default, sort_order')
     .eq('user_id', r.user_id as string)
+    .order('is_default', { ascending: false })
     .order('sort_order', { ascending: true })
-    .limit(1)
-    .maybeSingle() : { data: null }
+  const saved = (savedAddrs ?? []) as Array<{ road_address: string | null; detail_address: string | null; postal_code: string | null }>
+  const norm = (v: string | null | undefined): string => (v ?? '').replace(/\s+/g, '')
 
-  const addr = addrRow ?? fallbackAddr
+  const matched = snapRoad ? saved.find((a) => norm(a.road_address) === norm(snapRoad)) : undefined
+  const fallback = saved[0]
+  const addr = snapRoad
+    ? { road_address: snapRoad, detail_address: snapDetail || (matched?.detail_address ?? ''), postal_code: snapPostal || (matched?.postal_code ?? '') }
+    : (fallback ?? null)
 
   // 상품명
   // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C) — 배송 주문서에 전달되는 상품명
