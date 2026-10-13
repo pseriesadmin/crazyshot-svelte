@@ -16,6 +16,7 @@
   import { checkCouponOrderConditions, couponConditionMessage, hasOrderCondition, type CouponOrderContext, type CouponOrderReason } from '$lib/utils/couponOrderConditions';
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte';
   import { supabase } from '$lib/services/supabase';
+  import { isAddressInDeliveryArea, type DeliveryAreaLike } from '$lib/utils/deliveryArea';
   import { csToast } from '$lib/utils/toast';
   import { showDocGateToast } from '$lib/utils/docGateToast'
   import { browser } from '$app/environment';
@@ -630,6 +631,21 @@
     itemsState = itemsState.map(it => ({ ...it, returnTime: '' }))
     csToast.warning('반납 시간 정보가 초기화되었습니다.')
   }
+  // 수령·반납 방식을 바꿨는데 이미 입력된 주소가 새 방식 기준 배송 허용지역 밖이면 그 주소를 비운다(2026-10-13, Stephen 지시).
+  // 주소 선택 시점의 리셋(PostcodeSearchButton onselect)과 같은 처리 — touched 처리는 기존 폼 핸들러를 그대로 탄다.
+  function clearOutOfAreaAddressAfterMethodChange() {
+    const blank = (f: FormState): FormState => ({ ...f, addr: '', addrDetail: '', postalCode: '', memberCheck2: false })
+    let cleared = false
+    if (isOutOfDeliveryArea(bulkOpts.rentalMethod, bulkRentalForm.addr, bulkRentalForm.postalCode)) {
+      bulkHandleRentalForm(blank(bulkRentalForm))
+      cleared = true
+    }
+    if (isOutOfDeliveryArea(bulkOpts.returnMethod, bulkReturnForm.addr, bulkReturnForm.postalCode)) {
+      bulkHandleReturnForm(blank(bulkReturnForm))
+      cleared = true
+    }
+    if (cleared) csToast.error(DELIVERY_AREA_MESSAGE)
+  }
   function bulkHandleMethod(v: DeliveryMethod) {
     if (v !== bulkOpts.rentalMethod && hasDateTimeSet()) {
       resetDateTimeForMethodChange()
@@ -664,6 +680,7 @@
       bulkTime = '00:00'
       bulkReturnTime = '24:00'
     }
+    clearOutOfAreaAddressAfterMethodChange()
     applyBulkToItems()
   }
   function bulkHandleReturnMethod(v: DeliveryMethod) {
@@ -687,6 +704,7 @@
     } else {
       tryAutoCopyToReturn()
     }
+    clearOutOfAreaAddressAfterMethodChange()
     applyBulkToItems()
   }
   // 수령·반납 방법이 모두 방문·퀵·무인보관함이고 수령 폼의 고객정보·주소가 입력 완료됐으며 반납 폼이 비어 있으면
@@ -1464,6 +1482,17 @@
 
   const sdDeliveryOpts = $derived((data.deliveryOptions as Array<{ method_key: string; name: string; is_bulk_delivery: boolean; is_courier_dependent: boolean; is_delivery_type: boolean }> | undefined) ?? [])
 
+  // 배송 허용지역(/cms/set/rental "배송지역 관리정보") — 1건 이상이면 배송형(is_delivery_type) 수령·반납 주소 제한, 0건이면 제한 없음
+  const sdDeliveryAreas = $derived((data.deliveryAreas as DeliveryAreaLike[] | undefined) ?? [])
+  const DELIVERY_AREA_MESSAGE = '배송가능지역이 아닙니다. 죄송합니다.'
+  // 이 방식·주소 조합이 허용지역 밖인지 (주소가 비었거나 배송형이 아니면 false)
+  // 우편번호를 알면 허용지역 안의 배송 가능 우편번호 구간까지 확인한다(같은 시군구라도 배송 불가 동네 차단)
+  function isOutOfDeliveryArea(method: DeliveryMethod | null, addr: string, postal?: string | null): boolean {
+    if (sdDeliveryAreas.length === 0 || !addr.trim()) return false
+    if (!isDeliveryTypeMethod(method)) return false
+    return !isAddressInDeliveryArea(addr, sdDeliveryAreas, postal)
+  }
+
   // 왕복요금/반납요금: CMS "/cms/set/rental > 배송 설정"(rental_shipping_settings) —
   // 배송비(왕복/배송/반납요금) — 3-way 배타 규칙(2026-08-30 확정, cartShippingFee.ts 헤더
   // 참고): 수령+반납 둘 다 배송이면 왕복요금만, 수령만 배송이면 배송요금만, 반납만 배송이면
@@ -1607,6 +1636,8 @@
     // "반납방식"에 지점명이 붙지 않던 결함을 수정 — Migration 479.
     pickupPointId?: string,
     returnPointId?: string,
+    // 2026-10-13(Migration #704): 수령 주소의 우편번호 — 서버가 배송 허용지역(우편번호 구간)을 최종 판정하고 예약에 남긴다
+    pickupPostalCode?: string,
   ): Promise<{ success: boolean; errorMessage: string | null }> {
     if (!resId) return { success: true, errorMessage: null }
     const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_shipment_method', {
@@ -1621,6 +1652,7 @@
       p_return_request_note:   returnRequestNote || null,
       p_pickup_point_id:       pickupPointId || null,
       p_return_point_id:       returnPointId || null,
+      p_pickup_postal_code:    pickupPostalCode || null,
     })
     return { success: !error, errorMessage: error?.message ?? null }
   }
@@ -1836,7 +1868,14 @@
   const priceUnsetBlocked = $derived(
     itemsState.some(it => !it.deleted && it.checked && itemPriceUnset(groupsById.get(it.id)))
   )
-  const readyToSubmit = $derived(canProceed && formsComplete && methodSelectionValid && !priceUnsetBlocked)
+  const deliveryAreaBlocked = $derived(
+    itemsState.some(it => {
+      if (it.deleted || !it.checked) return false
+      const ef = effectiveForms(it)
+      return isOutOfDeliveryArea(it.opts.rentalMethod, ef.rental.addr, ef.rental.postalCode) || isOutOfDeliveryArea(it.opts.returnMethod, ef.ret.addr, ef.ret.postalCode)
+    })
+  )
+  const readyToSubmit = $derived(canProceed && formsComplete && methodSelectionValid && !priceUnsetBlocked && !deliveryAreaBlocked)
 
   // 제출이 막힌 이유를 구체적으로 안내(2026-10-05) — "미입력 항목을 확인하세요" 한 문구 대신 화면 위→아래 순서로 첫 번째 빠진 항목을 알린다.
   // 판정은 readyToSubmit 구성요소(datesSet·pickupPointsSet·formsComplete·methodSelectionValid·deadlineOk·priceUnsetBlocked·agreed)와 같은 기준.
@@ -1870,7 +1909,7 @@
       rentalDateMissing, rentalTimeMissing, returnDateMissing, returnTimeMissing,
       rentalPointMissing, returnPointMissing, rentalFormMissing, returnFormMissing,
       deadlineOk, priceUnset: priceUnsetBlocked, agreed,
-    }) ?? '미입력 항목을 확인하세요'
+    }) ?? (deliveryAreaBlocked ? DELIVERY_AREA_MESSAGE : '미입력 항목을 확인하세요')
   }
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
@@ -2117,7 +2156,7 @@
   const sdHasUserAddress = $derived<boolean>((sd as { hasUserAddress?: boolean }).hasUserAddress ?? false)
   // "회원정보 반영" 체크박스 자동채움 원본 데이터(+page.server.ts 제공)
   type UserProfileInfo = { name: string | null; phone: string | null; email: string | null } | null
-  type UserAddressInfo = { road_address: string | null; detail_address: string | null } | null
+  type UserAddressInfo = { road_address: string | null; detail_address: string | null; postal_code?: string | null } | null
   const sdUserProfileInfo = $derived<UserProfileInfo>((sd as { userProfileInfo?: UserProfileInfo }).userProfileInfo ?? null)
   const sdUserAddressInfo = $derived<UserAddressInfo>((sd as { userAddressInfo?: UserAddressInfo }).userAddressInfo ?? null)
   // "회원정보 반영"(고객정보) 체크박스 활성화 조건 — 배송지 체크박스(sdHasUserAddress)와 동일
@@ -2983,7 +3022,7 @@
               if (directPay) {
                 const pm: DeliveryMethod = it.opts.rentalMethod ?? 'crazydelivery'
                 for (const reservationId of it.reservationIds) {
-                  const saved = await saveShipmentMethod(reservationId, pm, pm, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).rental.pickupPointId)
+                  const saved = await saveShipmentMethod(reservationId, pm, pm, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).rental.pickupPointId, effectiveForms(it).rental.postalCode)
                   if (!saved.success) {
                     csToast.error(saved.errorMessage ?? '수령 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -3145,7 +3184,7 @@
                   // TypeScript 제어흐름 분석이 ternary 이후의 narrowing을 추적하지 못해 필요하다.
                   const pickupMethodSafe: DeliveryMethod = pickupMethodCo ?? 'crazydelivery'
                   const returnMethodSafe: DeliveryMethod = returnMethodCo ?? 'crazydelivery'
-                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodSafe, returnMethodSafe, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).ret.pickupPointId)
+                  const shipmentResultCo = await saveShipmentMethod(reservationId, pickupMethodSafe, returnMethodSafe, it.rentalTime, it.returnTime, effectiveForms(it).rental.addr, effectiveForms(it).rental.addrDetail, effectiveForms(it).rental.notes, effectiveForms(it).ret.notes, effectiveForms(it).rental.pickupPointId, effectiveForms(it).ret.pickupPointId, effectiveForms(it).rental.postalCode)
                   if (!shipmentResultCo.success) {
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
@@ -3904,12 +3943,19 @@
           disabled={!p.hasUserAddress}
           onclick={() => {
             const next = !p.form.memberCheck2
+            // 저장된 회원 주소가 배송 허용지역 밖이면 반영하지 않고 안내(리셋 상태 유지)
+            if (next && isOutOfDeliveryArea(p.method ?? null, p.userAddressInfo?.road_address ?? '', p.userAddressInfo?.postal_code ?? null)) {
+              csToast.error(DELIVERY_AREA_MESSAGE)
+              p.onFormChange({ ...p.form, addr: '', addrDetail: '', postalCode: '', memberCheck2: false })
+              return
+            }
             p.onFormChange(next
               ? {
                   ...p.form,
                   memberCheck2: true,
                   addr:       p.userAddressInfo?.road_address  ?? p.form.addr,
                   addrDetail: p.userAddressInfo?.detail_address ?? p.form.addrDetail,
+                  postalCode: p.userAddressInfo?.postal_code ?? p.form.postalCode,
                 }
               : { ...p.form, memberCheck2: false })
           }}
@@ -3927,14 +3973,30 @@
         value={p.form.addr}
         placeholder="기본주소 입력 (클릭하여 검색)"
         onselect={(road, postal) => {
+          // 배송 허용지역 밖이면 안내 토스트만 띄우고 주소·우편번호를 비운다(리셋) — 허용 밖 주소가 폼에 남지 않게
+          if (isOutOfDeliveryArea(p.method ?? null, road, postal)) {
+            csToast.error(DELIVERY_AREA_MESSAGE)
+            p.onFormChange({ ...p.form, addr: '', addrDetail: '', postalCode: '', memberCheck2: false })
+            return
+          }
           p.onFormChange({ ...p.form, addr: road, postalCode: postal })
           // 배송가능 지역 사전검증은 배송 방식에만 의미가 있다(방문·무인보관함은 배송이 아님)
           if (p.method && !isPointPickupMethod) validateDeliveryAddress(road, postal, p.method)
         }}
       />
-      {#if p.form.postalCode}
-        <p class="cart-postal-hint">[{p.form.postalCode}]</p>
-      {/if}
+      <!-- 우편번호: 주소 검색 결과가 자동 입력되는 읽기 전용(비활성) 입력폼 — "우편번호" 라벨 + 번호 -->
+      <div class="f-affix" aria-disabled="true">
+        <span class="f-affix-label">우편번호</span>
+        <input
+          class="f-input f-affix-input"
+          type="text"
+          placeholder="주소 검색 시 자동 입력"
+          value={p.form.postalCode}
+          disabled
+          readonly
+          aria-label="우편번호"
+        />
+      </div>
       <input class="f-input" placeholder="상세주소 입력" value={p.form.addrDetail} oninput={(e) => p.onFormChange({ ...p.form, addrDetail: readInputValue(e) })}/>
     </div>
   </div>
@@ -5233,12 +5295,6 @@
     line-height: 1.6;
     margin: 0;
   }
-  .cart-postal-hint {
-    font-size: 12px;
-    color: #888;
-    margin: -8px 0 0;
-    letter-spacing: -0.3px;
-  }
   /* 2026-09-07(같은 날 후속, Stephen 요청) — wrapper(.visit-info) 자체의 회색 배경
      박스 레이아웃 제거. 콤보버튼(.pickup-point-btn)이 각자 자기 배경을 가지므로
      바깥 박스는 순수 레이아웃(세로 정렬용)만 담당. */
@@ -5653,6 +5709,39 @@
     outline: none;
     box-sizing: border-box;
     min-height: 44px;
+  }
+  /* 우편번호 읽기 전용 입력폼 — 앞쪽 "우편번호" 라벨 + 자동 입력된 번호(비활성) */
+  .f-affix {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--cs-surface-gray);
+    border-radius: 15px;
+    padding: 0 20px;
+    min-height: 44px;
+    box-sizing: border-box;
+    width: 100%;
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .f-affix-label {
+    font-family: var(--font-kr);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .f-affix .f-affix-input,
+  .f-affix .f-affix-input:disabled {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    min-height: 0;
+    height: 44px;
+    background: transparent;
+    opacity: 1;
+    cursor: not-allowed;
   }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
   .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
@@ -6403,6 +6492,9 @@
     .form-section-label { font-size: 14px; }
     .form-check-label { font-size: 12px; }
     .f-input { font-size: 12px; }
+    /* 우편번호 읽기 전용 칸(2026-10-13, Stephen 지시) — 번호/안내 입력칸만 PC 전용 값을 한 단계 위(12px → 14px)로 상향, "우편번호" 라벨은 12px 유지. 다른 .f-input은 그대로 */
+    .f-affix-label { font-size: 12px; }
+    .f-affix .f-affix-input { font-size: 14px; }
     .copy-label { font-size: 12px; }
 
     /* — Order Total(.cs-section) — */

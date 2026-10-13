@@ -14,6 +14,7 @@ import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/do
 import { loadPointUseRules } from '$lib/server/pointUseSettings'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { attachZipRanges } from '$lib/utils/deliveryArea'
 
 // database.ts에 rental_guide_settings 미등록 상태 — cms/set/rental/+page.server.ts와 동일 패턴
 // (generate_typescript_types 이후 제거)
@@ -36,6 +37,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     consentItemsRes,
     shippingSettingsRes,
     discountTiersRes,
+    deliveryAreasRes,
+    zipRangesRes,
     sessionRes,
   ] = await Promise.all([
     supabase
@@ -73,8 +76,18 @@ export const load: PageServerLoad = async ({ locals }) => {
       .eq('is_active', true)
       .is('deleted_at', null)
       .order('min_rental_amount', { ascending: true }),
+    // 배송 허용지역(/cms/set/rental "배송지역 관리정보") — 1건 이상이면 배송형 수령·반납 주소 제한, 0건이면 제한 없음
+    untypedFrom(supabase, 'delivery_service_areas')
+      .select('sido, sigungu')
+      .is('deleted_at', null),
+    // 두발히어로 배송 가능 우편번호 구간(Migration #703) — 허용지역 안에서도 배송 가능한 동네(우편번호)만 통과시키는 정밀 판정용
+    (supabase as unknown as { rpc: (fn: string) => Promise<{ data: unknown }> }).rpc('get_delivery_zip_ranges'),
     locals.safeGetSession(),
   ])
+  const deliveryAreas = attachZipRanges(
+    ((deliveryAreasRes as { data: Array<{ sido: string; sigungu: string | null }> | null }).data ?? []),
+    ((zipRangesRes as { data: Array<{ sido: string; sigungu: string; range_start: number; range_end: number }> | null }).data ?? []),
+  )
 
   // 배송 방식 옵션 — 세션 불필요, 모든 사용자에게 제공
   const deliveryOptionsData = deliveryOptionsRes.data
@@ -201,7 +214,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     // 없으면 등록순 첫 배송지
     supabase
       .from('user_shipping_addresses')
-      .select('road_address, detail_address')
+      .select('road_address, detail_address, postal_code')
       .eq('user_id', session.user.id)
       .order('is_default', { ascending: false })
       .order('sort_order', { ascending: true })
@@ -238,7 +251,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .limit(1),
   ])
 
-  const addressRows = (addressResult.data ?? []) as Array<{ road_address: string | null; detail_address: string | null }>
+  const addressRows = (addressResult.data ?? []) as Array<{ road_address: string | null; detail_address: string | null; postal_code: string | null }>
   const hasUserAddress = addressRows.some(row => !!row.road_address)
   const primaryAddress = addressRows.find(row => !!row.road_address) ?? null
 
@@ -690,6 +703,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     consentItems,
     shippingSettings,
     discountTiers,
+    deliveryAreas,
     userId:          session.user.id,
     reservationIds,
     cartProducts,
@@ -722,7 +736,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       email: (profileResult.data as ProfileRow | null)?.email ?? null,
     },
     userAddressInfo: primaryAddress
-      ? { road_address: primaryAddress.road_address, detail_address: primaryAddress.detail_address }
+      ? { road_address: primaryAddress.road_address, detail_address: primaryAddress.detail_address, postal_code: primaryAddress.postal_code }
       : null,
   }
 }
