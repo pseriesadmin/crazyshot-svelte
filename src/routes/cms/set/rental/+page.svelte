@@ -8,6 +8,9 @@
   import CmsHolidayCalendar from '$lib/components/cms/CmsHolidayCalendar.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte'
+  import DeliveryAreaMap from '$lib/components/cms/DeliveryAreaMap.svelte'
+  import { areaLabel, toAreaFromRegionNames, zipRangeLabel, SIDO_LIST, type PostcodeRegionInfo } from '$lib/utils/deliveryArea'
   import type { PageData, ActionData } from './$types'
   import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
   import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
@@ -123,6 +126,244 @@
     if (branchForms[branchId]) {
       branchForms[branchId].phone = formatPhone(raw)
     }
+  }
+
+  // ─── 배송지역 관리정보 ───
+  let deliveryAreas = $state(data.deliveryAreas)
+  $effect(() => { deliveryAreas = data.deliveryAreas })
+  let areaView = $state<'list' | 'map'>('list')
+  // 목록보기 — 시/도별 묶음(처음엔 모두 접힘) + 지역명·우편번호 검색. 검색 중에는 결과가 있는 묶음이 자동으로 펼쳐진다.
+  let areaQuery = $state('')
+  let openSidos = $state<Record<string, boolean>>({})
+
+  // 정렬(cms-uiux.md §7-13) — 클릭할 때마다 최신 등록순 → 과거 등록순 → 오름순 → 내림순 순환(기본: 최신 등록순)
+  type AreaSortMode = 'newest' | 'oldest' | 'asc' | 'desc'
+  const AREA_SORT_CYCLE: AreaSortMode[] = ['newest', 'oldest', 'asc', 'desc']
+  const AREA_SORT_LABELS: Record<AreaSortMode, string> = {
+    newest: '최신 등록순',
+    oldest: '과거 등록순',
+    asc: '오름순',
+    desc: '내림순',
+  }
+  let areaSort = $state<AreaSortMode>('newest')
+  function nextAreaSort(): void {
+    areaSort = AREA_SORT_CYCLE[(AREA_SORT_CYCLE.indexOf(areaSort) + 1) % AREA_SORT_CYCLE.length]
+  }
+  const sortedDeliveryAreas = $derived.by(() => {
+    const items = [...deliveryAreas]
+    const time = (a: { created_at: string }) => new Date(a.created_at).getTime()
+    if (areaSort === 'asc') items.sort((a, b) => areaLabel(a).localeCompare(areaLabel(b), 'ko'))
+    else if (areaSort === 'desc') items.sort((a, b) => areaLabel(b).localeCompare(areaLabel(a), 'ko'))
+    else if (areaSort === 'newest') items.sort((a, b) => time(b) - time(a))
+    else items.sort((a, b) => time(a) - time(b))
+    return items
+  })
+  // 검색어 정규화 — 공백 제거 + 소문자(한글은 그대로). 지역명·우편번호 범위·시/도 이름에 부분 일치.
+  const normQuery = (v: string): string => v.replace(/\s+/g, '').toLowerCase()
+  const areaSearchTerm = $derived(normQuery(areaQuery))
+  // 우편번호 검색 — 숫자 2~5자리를 입력하면 그 번호(앞자리)가 지역의 배송 가능 우편번호 구간에 걸치는지 본다(5자리는 정확히 포함 여부)
+  function zipQueryMatches(ranges: ReadonlyArray<readonly [number, number]> | null | undefined, q: string): boolean {
+    if (!ranges || !/^[0-9]{2,5}$/.test(q)) return false
+    const lo = Number(q.padEnd(5, '0'))
+    const hi = Number(q.padEnd(5, '9'))
+    return ranges.some(([from, to]) => from <= hi && to >= lo)
+  }
+  // 두발히어로 카탈로그 중 아직 허용지역으로 등록되지 않은 시/군/구 — 묶음의 "+ 지역 추가" 후보
+  const registeredKeys = $derived(new Set(deliveryAreas.map((a) => `${a.sido}|${a.sigungu ?? ''}`)))
+  const unregisteredBySido = $derived.by(() => {
+    const map = new Map<string, typeof data.catalogRegions>()
+    for (const c of data.catalogRegions) {
+      if (registeredKeys.has(`${c.sido}|${c.sigungu}`)) continue
+      const list = map.get(c.sido) ?? []
+      list.push(c)
+      map.set(c.sido, list)
+    }
+    for (const list of map.values()) list.sort((a, b) => a.sigungu.localeCompare(b.sigungu, 'ko'))
+    return map
+  })
+  const catalogSidos = $derived(new Set(data.catalogRegions.map((c) => c.sido)))
+  type AreaGroup = { sido: string; total: number; items: typeof deliveryAreas }
+  const areaGroups = $derived.by((): AreaGroup[] => {
+    const bySido = new Map<string, typeof deliveryAreas>()
+    const totalBySido = new Map<string, number>()
+    for (const a of sortedDeliveryAreas) {
+      totalBySido.set(a.sido, (totalBySido.get(a.sido) ?? 0) + 1)
+      if (areaSearchTerm) {
+        const hay = normQuery(`${areaLabel(a)} ${a.sido} ${a.postal_code ?? ''}`)
+        if (!hay.includes(areaSearchTerm) && !zipQueryMatches(a.zipRanges, areaSearchTerm)) continue
+      }
+      const list = bySido.get(a.sido) ?? []
+      list.push(a)
+      bySido.set(a.sido, list)
+    }
+    // 묶음 순서: 서비스 주력 권역(서울·경기·인천)을 먼저, 나머지는 시/도 표준 순서
+    const PRIORITY = ['서울', '경기', '인천']
+    const order = (sido: string): number => {
+      const p = PRIORITY.indexOf(sido)
+      if (p !== -1) return p
+      const i = SIDO_LIST.indexOf(sido)
+      return PRIORITY.length + (i === -1 ? SIDO_LIST.length : i)
+    }
+    // 검색 중이 아니면 카탈로그 시/도는 등록된 지역이 0곳이어도 묶음을 보여 준다(전부 삭제해도 다시 추가할 수 있게)
+    if (!areaSearchTerm) {
+      for (const c of data.catalogRegions) if (!bySido.has(c.sido)) { bySido.set(c.sido, []); totalBySido.set(c.sido, 0) }
+    }
+    return [...bySido.entries()]
+      .sort((x, y) => order(x[0]) - order(y[0]))
+      .map(([sido, items]) => ({ sido, total: totalBySido.get(sido) ?? items.length, items }))
+  })
+  const isSidoOpen = (sido: string): boolean => areaSearchTerm !== '' || openSidos[sido] === true
+  const allSidosOpen = $derived(areaGroups.length > 0 && areaGroups.every((g) => isSidoOpen(g.sido)))
+  function toggleAllSidos(): void {
+    const open = !allSidosOpen
+    openSidos = Object.fromEntries(areaGroups.map((g) => [g.sido, open]))
+  }
+  const areaMatchCount = $derived(areaGroups.reduce((n, g) => n + g.items.length, 0))
+  let areaLoading = $state(false)
+  // 지도 클릭·주소 검색으로 고른 후보 — 확인 후 등록
+  let pendingArea = $state<{ sido: string; sigungu: string | null; lat: number | null; lng: number | null; postal: string | null; dhero: 'checking' | 'ok' | 'ng' | null } | null>(null)
+
+  function setPendingArea(sidoRaw: string, sigunguRaw: string, lat: number | null, lng: number | null, postal: string | null = null): void {
+    const a = toAreaFromRegionNames(sidoRaw, sigunguRaw)
+    if (!a) { csToast.warning('시/도를 확인할 수 없는 주소입니다.'); return }
+    // 중복 감지 — 같은 지역이 이미 있거나, 그 시/도 전체가 이미 등록돼 있으면 확인 줄을 띄우지 않고 바로 경고(서버도 같은 중복을 거절)
+    const sameSido = deliveryAreas.filter((x) => toAreaFromRegionNames(x.sido, '')?.sido === a.sido)
+    if (sameSido.some((x) => (x.sigungu ?? null) === a.sigungu)) {
+      pendingArea = null
+      csToast.warning(`이미 등록된 지역입니다. (${areaLabel(a)})`)
+      return
+    }
+    if (a.sigungu && sameSido.some((x) => !x.sigungu)) {
+      pendingArea = null
+      csToast.warning(`이미 ${a.sido} 전체가 등록되어 있어 포함된 지역입니다.`)
+      return
+    }
+    pendingArea = { sido: a.sido, sigungu: a.sigungu, lat, lng, postal, dhero: null }
+  }
+
+  // "+ 지역 추가" — 한 시/도의 미등록 카탈로그 시/군/구를 골라 한 번에 등록
+  let addModal = $state<{ sido: string; selected: string[]; saving: boolean; custom: string; customSaving: boolean } | null>(null)
+  const addModalCandidates = $derived(addModal ? (unregisteredBySido.get(addModal.sido) ?? []) : [])
+  function openAddModal(sido: string): void { addModal = { sido, selected: [], saving: false, custom: '', customSaving: false } }
+  function closeAddModal(): void { if (addModal && !addModal.saving && !addModal.customSaving) addModal = null }
+  function toggleAddCandidate(sigungu: string): void {
+    if (!addModal) return
+    addModal = {
+      ...addModal,
+      selected: addModal.selected.includes(sigungu) ? addModal.selected.filter((x) => x !== sigungu) : [...addModal.selected, sigungu],
+    }
+  }
+  function toggleAddAll(): void {
+    if (!addModal) return
+    const all = addModalCandidates.map((c) => c.sigungu)
+    addModal = { ...addModal, selected: addModal.selected.length === all.length ? [] : all }
+  }
+  async function submitAddModal(): Promise<void> {
+    if (!addModal || addModal.saving || addModal.selected.length === 0) return
+    const { sido, selected } = addModal
+    addModal = { ...addModal, saving: true }
+    try {
+      const fd = new FormData()
+      for (const sg of selected) fd.append('region', `${sido}|${sg}`)
+      const res = await fetch('?/addDeliveryAreas', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        const d = result.data as { added?: number; duplicates?: number } | undefined
+        csToast.success(`${sido} 지역 ${d?.added ?? selected.length}곳이 추가되었습니다.`)
+        addModal = null
+        await invalidateAll()
+      } else {
+        addModal = { sido, selected, saving: false, custom: addModal?.custom ?? '', customSaving: false }
+        csToast.error((result.type === 'failure' ? (result.data as { error?: string } | undefined)?.error : null) ?? '추가에 실패했습니다.')
+      }
+    } catch {
+      addModal = { sido, selected, saving: false, custom: addModal?.custom ?? '', customSaving: false }
+      csToast.error('추가에 실패했습니다.')
+    }
+  }
+
+  // 크레이지샷 자체 배송 지역 직접 추가 — 카탈로그에 없는 시/군/구를 이름으로 등록
+  async function submitCustomArea(): Promise<void> {
+    if (!addModal || addModal.customSaving) return
+    const sigungu = addModal.custom.trim()
+    if (!sigungu) { csToast.warning('시/군/구 이름을 입력해주세요.'); return }
+    const sido = addModal.sido
+    addModal = { ...addModal, customSaving: true }
+    try {
+      const fd = new FormData()
+      fd.set('sido', sido)
+      fd.set('sigungu', sigungu)
+      const res = await fetch('?/addCustomDeliveryArea', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        csToast.success(`${sido} ${sigungu}이(가) 자체 배송 지역으로 추가되었습니다.`)
+        if (addModal) addModal = { ...addModal, custom: '', customSaving: false }
+        await invalidateAll()
+      } else {
+        if (addModal) addModal = { ...addModal, customSaving: false }
+        csToast.error((result.type === 'failure' ? (result.data as { error?: string } | undefined)?.error : null) ?? '추가에 실패했습니다.')
+      }
+    } catch {
+      if (addModal) addModal = { ...addModal, customSaving: false }
+      csToast.error('추가에 실패했습니다.')
+    }
+  }
+
+  // "더보기" — 시/군/구별 배송 가능 주소지(우편번호·동·지역그룹) 목록 모달
+  type AreaZipRow = { postal_code: string; dong: string; group_name: string | null }
+  let zipModal = $state<{ label: string; zipLabel: string | null; loading: boolean; rows: AreaZipRow[] } | null>(null)
+  let zipModalSeq = 0
+  async function openZipModal(area: { sido: string; sigungu: string | null; zipRanges: Array<readonly [number, number]> | null }): Promise<void> {
+    const seq = ++zipModalSeq
+    zipModal = { label: areaLabel(area), zipLabel: zipRangeLabel(area.zipRanges), loading: true, rows: [] }
+    try {
+      const fd = new FormData()
+      fd.set('sido', area.sido)
+      fd.set('sigungu', area.sigungu ?? '')
+      const res = await fetch('?/listAreaZips', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+      const result = deserialize(await res.text())
+      if (seq !== zipModalSeq || !zipModal) return
+      if (result.type === 'success') {
+        zipModal = { ...zipModal, loading: false, rows: ((result.data as { zips?: AreaZipRow[] } | undefined)?.zips ?? []) }
+      } else {
+        zipModal = null
+        csToast.error('주소지 목록을 불러오지 못했습니다.')
+      }
+    } catch {
+      if (seq === zipModalSeq) { zipModal = null; csToast.error('주소지 목록을 불러오지 못했습니다.') }
+    }
+  }
+  function closeZipModal(): void { zipModalSeq++; zipModal = null }
+
+  // 두발히어로 배송 가능 주소 사전 확인(참고용 경고 — 등록은 막지 않음). 오래된 응답은 버린다.
+  let dheroCheckSeq = 0
+  async function checkDheroForPending(road: string, postal: string): Promise<void> {
+    const seq = ++dheroCheckSeq
+    if (!pendingArea) return
+    pendingArea = { ...pendingArea, dhero: 'checking' }
+    let verdict: 'ok' | 'ng' | null = null
+    try {
+      const fd = new FormData()
+      fd.set('address', road)
+      fd.set('postal_code', postal)
+      const res = await fetch('?/checkDheroAddress', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        const v = (result.data as { dhero_valid?: boolean | null } | undefined)?.dhero_valid
+        verdict = v === true ? 'ok' : v === false ? 'ng' : null
+      }
+    } catch {
+      verdict = null
+    }
+    if (seq !== dheroCheckSeq || !pendingArea) return
+    pendingArea = { ...pendingArea, dhero: verdict }
+    if (verdict === 'ng') csToast.warning('이 주소는 두발히어로 배송 불가로 조회됩니다. 추가 전에 확인해 주세요.')
+  }
+
+  function onAreaAddressSelect(road: string, postal: string, region?: PostcodeRegionInfo): void {
+    if (!region) return
+    setPendingArea(region.sido, region.sigungu, null, null, postal)
+    if (pendingArea) void checkDheroForPending(road, postal)
   }
 
   // ─── 배송 설정 ───
@@ -1467,6 +1708,265 @@
     </section>
 
     <!-- ══════════════════════════════════════════
+         배송지역 관리정보 — 배송 허용지역 (2026-10-12)
+         허용지역이 1건 이상 등록되면 장바구니 배송형 수령·반납 주소가 그 안이어야 한다(0건이면 제한 없음)
+    ══════════════════════════════════════════ -->
+    <section class="setting-section">
+      <div class="section-head">
+        <h2 class="section-title">배송가능지역 등록</h2>
+        <span class="section-badge section-badge--end">{deliveryAreas.length}곳</span>
+      </div>
+
+      <div class="area-toolbar">
+        <div class="area-left">
+          <div class="area-search">
+            <PostcodeSearchButton
+              id="area-postcode-btn"
+              placeholder="주소 검색으로 지역 추가"
+              onselect={onAreaAddressSelect}
+            />
+          </div>
+          <button
+            type="button"
+            class="sort-btn"
+            onclick={nextAreaSort}
+            aria-label="정렬: {AREA_SORT_LABELS[areaSort]}"
+            title={AREA_SORT_LABELS[areaSort]}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none">
+              <rect width="30" height="30" rx="15" fill={areaSort !== 'newest' ? 'rgba(59,47,138,0.08)' : '#F6F6F6'}/>
+              <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+                stroke={areaSort !== 'newest' ? '#3B2F8A' : '#AAAAAA'}
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="sort-label" class:sort-label-active={areaSort !== 'newest'}>{AREA_SORT_LABELS[areaSort]}</span>
+          </button>
+        </div>
+        <div class="area-view-pills" role="group" aria-label="보기 방식">
+          <button type="button" class="area-pill" class:active={areaView === 'list'} onclick={() => (areaView = 'list')}>목록보기</button>
+          <button type="button" class="area-pill" class:active={areaView === 'map'} onclick={() => (areaView = 'map')}>지도보기</button>
+        </div>
+      </div>
+
+      {#if pendingArea}
+        <form
+          method="POST"
+          action="?/addDeliveryArea"
+          class="area-confirm"
+          use:enhance={() => {
+            areaLoading = true
+            return async ({ result, update }) => {
+              areaLoading = false
+              if (result.type === 'success') {
+                pendingArea = null
+                csToast.success('배송 허용지역이 추가되었습니다.')
+                await update({ reset: false })
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
+              }
+            }
+          }}
+        >
+          <input type="hidden" name="sido" value={pendingArea.sido} />
+          <input type="hidden" name="sigungu" value={pendingArea.sigungu ?? ''} />
+          <input type="hidden" name="lat" value={pendingArea.lat ?? ''} />
+          <input type="hidden" name="lng" value={pendingArea.lng ?? ''} />
+          <input type="hidden" name="postal_code" value={pendingArea.postal ?? ''} />
+          <span class="area-confirm-text">
+            <strong>{areaLabel(pendingArea)}</strong>을(를) 배송 허용지역으로 추가할까요?
+            {#if pendingArea.dhero === 'checking'}
+              <em class="area-dhero area-dhero--checking">두발히어로 배송 가능 여부 확인 중...</em>
+            {:else if pendingArea.dhero === 'ng'}
+              <em class="area-dhero area-dhero--ng">⚠ 고른 주소가 두발히어로 배송 불가로 조회됩니다. 그래도 추가할 수 있습니다.</em>
+            {:else if pendingArea.dhero === 'ok'}
+              <em class="area-dhero area-dhero--ok">두발히어로 배송 가능 주소로 확인됐습니다.</em>
+            {/if}
+          </span>
+          {#if pendingArea.sigungu}
+            <button
+              type="button"
+              class="btn-area-mini"
+              onclick={() => { if (pendingArea) pendingArea = { ...pendingArea, sigungu: null, postal: null } }}
+            >{pendingArea.sido} 전체로 추가</button>
+          {/if}
+          <button type="submit" class="btn-area-save" disabled={areaLoading}>{areaLoading ? '추가 중...' : '추가'}</button>
+          <button type="button" class="btn-area-mini" onclick={() => (pendingArea = null)} disabled={areaLoading}>취소</button>
+        </form>
+      {/if}
+
+      {#if areaView === 'map'}
+        <DeliveryAreaMap
+          areas={deliveryAreas}
+          onpick={(p) => setPendingArea(p.sido, p.sigungu, p.lat, p.lng)}
+        />
+      {:else if deliveryAreas.length > 0}
+        <div class="area-list">
+          <div class="area-list-head">
+            <input
+              type="search"
+              class="area-filter"
+              placeholder="지역명·우편번호 검색 (예: 분당, 13479)"
+              aria-label="배송가능지역 검색"
+              bind:value={areaQuery}
+            />
+            <span class="area-list-count">
+              {areaSearchTerm ? `검색 결과 ${areaMatchCount}곳 / 전체 ${deliveryAreas.length}곳` : `전체 ${deliveryAreas.length}곳`}
+            </span>
+            {#if areaGroups.length > 0 && !areaSearchTerm}
+              <button type="button" class="area-accordion-btn" aria-pressed={allSidosOpen} onclick={toggleAllSidos}>
+                {allSidosOpen ? '모두 접기' : '모두 펼치기'}
+                <ChevronIcon direction={allSidosOpen ? 'up' : 'down'} size={8} color="currentColor" />
+              </button>
+            {/if}
+          </div>
+
+          {#each areaGroups as group (group.sido)}
+            <div class="area-group">
+              <div class="area-group-bar">
+                <button
+                  type="button"
+                  class="area-group-head"
+                  aria-expanded={isSidoOpen(group.sido)}
+                  onclick={() => { if (!areaSearchTerm) openSidos = { ...openSidos, [group.sido]: !isSidoOpen(group.sido) } }}
+                >
+                  <span class="area-group-name">{group.sido}</span>
+                  <span class="area-group-count">
+                    {areaSearchTerm ? `${group.items.length}곳 / ${group.total}곳` : `${group.total}곳`}
+                    {#if !areaSearchTerm}
+                      {#if (unregisteredBySido.get(group.sido)?.length ?? 0) > 0}
+                        · 미등록 {unregisteredBySido.get(group.sido)?.length}
+                      {:else if catalogSidos.has(group.sido)}
+                        · 모두 등록됨
+                      {/if}
+                    {/if}
+                  </span>
+                  <ChevronIcon direction={isSidoOpen(group.sido) ? 'up' : 'down'} size={8} color="currentColor" />
+                </button>
+                {#if !areaSearchTerm}
+                  <button type="button" class="btn-area-mini" onclick={() => openAddModal(group.sido)}>+ 지역 추가</button>
+                {/if}
+              </div>
+              {#if isSidoOpen(group.sido)}
+                {#each group.items as area (area.id)}
+                  <div class="area-row">
+                    <div class="list-row">
+                      <span class="area-postal" title="배송 가능 우편번호 범위">{zipRangeLabel(area.zipRanges) ?? area.postal_code ?? '-'}</span>
+                      <span class="list-row-name">{areaLabel(area)}{#if area.zipCount > 0}<span class="area-zip-count">· 우편번호 {area.zipCount}개</span>{/if}</span>
+                      <span class="area-tag" class:area-tag--own={area.zipCount === 0} title={area.zipCount > 0 ? '두발히어로 배송 가능 우편번호 카탈로그와 연동된 지역' : '카탈로그에 없는 크레이지샷 자체 배송 지역(시/군/구 단위로 판정)'}>{area.zipCount > 0 ? '두발히어로' : '자체 배송'}</span>
+                      {#if area.zipCount > 0}
+                        <button type="button" class="btn-area-mini" onclick={() => openZipModal(area)}>더보기</button>
+                      {/if}
+                    </div>
+                    <CmsDeleteButton
+                      action="?/deleteDeliveryArea"
+                      id={area.id}
+                      successMessage="배송 허용지역이 삭제되었습니다."
+                    />
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/each}
+
+          {#if areaGroups.length === 0}
+            <p class="area-empty">검색 결과가 없습니다.</p>
+          {/if}
+        </div>
+      {:else}
+        <p class="area-empty">등록된 배송 허용지역이 없습니다.</p>
+      {/if}
+    </section>
+
+    {#if addModal}
+      <div class="zip-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) closeAddModal() }}>
+        <div class="zip-dialog" role="dialog" aria-modal="true" aria-label="배송가능지역 추가">
+          <div class="zip-head">
+            <div class="zip-title-wrap">
+              <h3 class="zip-title">{addModal.sido} 지역 추가</h3>
+              <p class="zip-sub">두발히어로 배송 가능 지역 중 아직 등록되지 않은 {addModalCandidates.length}곳</p>
+            </div>
+            <button class="close-btn" type="button" aria-label="닫기" onclick={closeAddModal}>✕</button>
+          </div>
+          <div class="add-pick-wrap">
+            <p class="add-pick-title">두발히어로 배송 가능 지역</p>
+            {#if addModalCandidates.length > 0}
+              <div class="add-pick-tools">
+                <button type="button" class="btn-area-mini" onclick={toggleAddAll}>
+                  {addModal.selected.length === addModalCandidates.length ? '전체 해제' : '전체 선택'}
+                </button>
+                <span class="zip-sub">{addModal.selected.length}곳 선택</span>
+              </div>
+              <div class="add-pick-list">
+                {#each addModalCandidates as c (c.sigungu)}
+                  <button
+                    type="button"
+                    class="area-pill"
+                    class:active={addModal.selected.includes(c.sigungu)}
+                    aria-pressed={addModal.selected.includes(c.sigungu)}
+                    onclick={() => toggleAddCandidate(c.sigungu)}
+                  >{c.sigungu} · {c.zipCount}개</button>
+                {/each}
+              </div>
+            {:else}
+              <p class="zip-sub">{catalogSidos.has(addModal.sido) ? `${addModal.sido}의 두발히어로 배송 가능 지역이 모두 등록되어 있습니다.` : `${addModal.sido}에는 두발히어로 카탈로그 지역이 없습니다.`}</p>
+            {/if}
+
+            <div class="add-pick-divider"></div>
+            <p class="add-pick-title">크레이지샷 자체 배송 지역 직접 추가</p>
+            <p class="zip-sub">두발히어로 카탈로그에 없는 시/군/구를 자체 배송으로 등록합니다. 주소 검색 결과의 표기와 같게 입력하세요. (예: 양평군, 성남시 분당구) 우편번호 구간 없이 시/군/구 단위로 판정됩니다.</p>
+            <form class="add-custom" onsubmit={(e) => { e.preventDefault(); void submitCustomArea() }}>
+              <span class="add-custom-sido">{addModal.sido}</span>
+              <input
+                type="text"
+                class="area-filter"
+                placeholder="시/군/구 이름"
+                maxlength="20"
+                aria-label="자체 배송 시/군/구 이름"
+                bind:value={addModal.custom}
+                disabled={addModal.customSaving}
+              />
+              <button type="submit" class="btn-area-save" disabled={addModal.customSaving || !addModal.custom.trim()}>
+                {addModal.customSaving ? '추가 중...' : '자체 배송 추가'}
+              </button>
+            </form>
+          </div>
+          <div class="add-pick-foot">
+            <button type="button" class="btn-area-mini" onclick={closeAddModal} disabled={addModal.saving}>취소</button>
+            <button type="button" class="btn-area-save" disabled={addModal.saving || addModal.selected.length === 0} onclick={submitAddModal}>
+              {addModal.saving ? '추가 중...' : `${addModal.selected.length}곳 추가`}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if zipModal}
+      <div class="zip-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) closeZipModal() }}>
+        <div class="zip-dialog" role="dialog" aria-modal="true" aria-label="배송 가능 주소지 목록">
+          <div class="zip-head">
+            <div class="zip-title-wrap">
+              <h3 class="zip-title">{zipModal.label}</h3>
+              <p class="zip-sub">
+                {#if zipModal.loading}불러오는 중...{:else}배송 가능 주소지 {zipModal.rows.length}곳{#if zipModal.zipLabel}&nbsp;&nbsp;·&nbsp;&nbsp;우편번호 {zipModal.zipLabel}{/if}{/if}
+              </p>
+            </div>
+            <button class="close-btn" type="button" aria-label="닫기" onclick={closeZipModal}>✕</button>
+          </div>
+          <div class="zip-table-wrap">
+            <table class="zip-table">
+              <thead><tr><th>우편번호</th><th>동</th><th>지역그룹</th></tr></thead>
+              <tbody>
+                {#each zipModal.rows as z (z.postal_code)}
+                  <tr><td class="zip-code">{z.postal_code}</td><td>{z.dong}</td><td>{z.group_name ?? '-'}</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ══════════════════════════════════════════
          섹션 4: 대여·예약 이용안내
     ══════════════════════════════════════════ -->
     <section class="setting-section">
@@ -1794,6 +2294,188 @@
   .section-badge--end {
     margin-left: auto;
   }
+
+  /* ─── 배송지역 관리정보 ─── */
+  .area-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .area-left { display: flex; align-items: center; gap: 24px; flex: 1; min-width: 0; }
+  /* 정렬 버튼(cms-uiux.md §7-13) */
+  .sort-btn {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    min-height: 44px;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity 0.12s;
+  }
+  .sort-btn:hover { opacity: 0.75; }
+  .sort-label {
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    white-space: nowrap;
+    line-height: 1;
+  }
+  .sort-label-active { color: var(--cs-purple); }
+  .area-view-pills { display: flex; gap: 6px; margin-left: auto; }
+  .area-search { flex: 0 1 420px; min-width: 240px; }
+  /* 콤보버튼 UI(cms-uiux.md §7-12-A, 툴바형) */
+  .area-pill {
+    height: 30px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--radius-xl, 30px);
+    background: var(--cs-lilac);
+    color: var(--cs-text);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .area-pill:hover:not(.active):not(:disabled) { color: var(--cs-purple); }
+  .area-pill.active { background: var(--cs-purple); color: var(--cs-white); }
+  .area-pill:disabled { opacity: 0.5; cursor: default; }
+  .area-confirm {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 4px 0;
+    margin-bottom: 14px;
+  }
+  .area-dhero { display: block; margin-top: 4px; font-style: normal; font: var(--text-pc-script-12); }
+  .area-dhero--checking { color: var(--cs-text-mid); }
+  .area-dhero--ng { color: var(--cs-error); font-weight: 700; }
+  .area-dhero--ok { color: var(--cs-purple); }
+  /* 확인 줄 버튼 — "추가": 액션 소형 actionSave(cms-uiux.md §0-10) / "취소"·"전체로 추가": 초소형 라운드 버튼형(§0-10-C) */
+  .btn-area-save {
+    height: 34px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--crazy-shot-purple-100);
+    color: var(--cs-white);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-area-save:hover:not(:disabled) { background: var(--crazy-shot-purple-80); }
+  .btn-area-save:disabled { opacity: 0.5; cursor: default; }
+  .btn-area-mini {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-area-mini:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .btn-area-mini:disabled { opacity: 0.5; cursor: default; }
+  .area-confirm-text { flex: 1; min-width: 200px; font: var(--text-pc-body-14); color: var(--cs-text); }
+  .area-list-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+  .area-filter {
+    flex: 0 1 320px; min-width: 200px; height: 36px; padding: 0 14px;
+    border: none; border-radius: var(--cms-radius-sm); background: var(--cs-surface-gray);
+    font: var(--text-pc-body-14); color: var(--cs-text); outline: none;
+  }
+  .area-filter::placeholder { color: var(--cs-text-light); }
+  .area-filter:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .area-list-count { font: var(--text-pc-script-12); color: var(--cs-text-light); white-space: nowrap; }
+  .area-accordion-btn {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 6px;
+    min-height: 32px; padding: 0 4px;
+    background: none; border: none; cursor: pointer;
+    font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-mid);
+    transition: color 0.15s;
+  }
+  .area-accordion-btn:hover { color: var(--cs-purple); }
+  .area-group { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--cs-lilac); padding-bottom: 4px; }
+  .area-group-bar { display: flex; align-items: center; gap: 10px; }
+  .area-group-bar .area-group-head { flex: 1; min-width: 0; }
+  .add-pick-title { margin: 0 0 8px; font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
+  .add-pick-divider { height: 1px; margin: 18px 0 14px; background: var(--cs-lilac); }
+  .add-custom { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .add-custom-sido { flex-shrink: 0; font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text-mid); }
+  .add-custom .area-filter { flex: 1; min-width: 0; }
+  .area-tag {
+    flex-shrink: 0; padding: 2px 8px; border-radius: var(--radius-full);
+    background: var(--cs-lilac); color: var(--cs-text-mid);
+    font: var(--text-pc-script-12); font-weight: 700; white-space: nowrap;
+  }
+  .area-tag--own { background: var(--cs-purple); color: var(--cs-white); }
+  .add-pick-wrap { padding: 0 28px 8px; overflow-y: auto; }
+  .add-pick-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .add-pick-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .add-pick-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 14px 28px 22px; }
+  .area-group-head {
+    display: flex; align-items: center; gap: 10px;
+    min-height: 44px; padding: 0 4px;
+    background: none; border: none; cursor: pointer;
+    color: var(--cs-text); text-align: left;
+  }
+  .area-group-name { font: var(--text-pc-title-16); }
+  .area-group-count { margin-right: auto; font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .area-list { display: flex; flex-direction: column; gap: 8px; }
+  .area-row { display: flex; align-items: center; gap: 10px; }
+  .area-postal {
+    flex: 0 0 auto;
+    min-width: 52px;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+  }
+  .area-zip-count { margin-left: 8px; color: var(--cs-text-light); font-weight: 400; }
+  /* 배송 가능 주소지 목록 모달(cms-uiux.md §7-9 확인 모달 패턴 + close-red 닫기) */
+  .zip-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(16, 11, 50, 0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .zip-dialog {
+    background: var(--cs-white);
+    border-radius: var(--radius-lg);
+    width: 100%; max-width: 560px; max-height: 80vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .zip-head { display: flex; align-items: flex-start; gap: 12px; padding: 24px 28px 14px; }
+  .zip-title-wrap { flex: 1; min-width: 0; }
+  .zip-title { margin: 0; font: var(--text-pc-title-16); color: var(--cs-text); }
+  .zip-sub { margin: 4px 0 0; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .close-btn {
+    margin-left: auto; flex-shrink: 0;
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .close-btn:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
+  .zip-table-wrap { overflow-y: auto; padding: 0 28px 24px; }
+  .zip-table { width: 100%; border-collapse: collapse; font: var(--text-pc-body-14); color: var(--cs-text); }
+  .zip-table th { position: sticky; top: 0; background: var(--cs-white); text-align: left; padding: 8px 6px; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .zip-table td { padding: 8px 6px; border-top: 1px solid var(--cs-lilac); }
+  .zip-code { font-variant-numeric: tabular-nums; color: var(--cs-text-mid); }
+  .area-empty { margin: 0; font: var(--text-pc-body-14); color: var(--cs-text-mid); }
 
   /* ─── 추가 폼 ─── */
   .add-form {

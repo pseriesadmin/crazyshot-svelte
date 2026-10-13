@@ -6,12 +6,15 @@
 //  - isDeliveryLocked() 재사용: bulk-delivery 방식 아닐 때는 무조건 valid:true 반환 (호출 불필요)
 //  - validateAddress() 실패 → fail-soft (valid:true 반환, 서버 에러가 UX를 막지 않음)
 //  - 이 응답이 valid:false여도 제출 자체를 막지 않음 (경고 toast만 표시)
+//  - 배송 허용지역(delivery_service_areas)이 등록돼 있고 배송형(is_delivery_type) 방식이면 지역 밖은 valid:false + reason:'out_of_area'
+//    (실제 차단은 장바구니 제출 게이트 + set_reservation_shipment_method가 한다 — 이 응답은 사전 안내용)
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { validateAddress } from '$lib/server/dhero'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
+import { isAddressInDeliveryArea, attachZipRanges, type DeliveryAreaLike } from '$lib/utils/deliveryArea'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -37,6 +40,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // bulk-delivery 방식인지 isBulkDeliveryMethod() 공유 함수로 판단 (LOW-1 수정 — 2026-08-25)
   // 기존 인라인 rental_method_options 조회를 제거하고 공유 유틸 재사용 (DRY 원칙)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  // 배송 허용지역 검사 (fail-soft — 조회 실패 시 통과)
+  try {
+    const { data: typeRow } = await admin
+      .from('rental_method_options')
+      .select('is_delivery_type')
+      .eq('method_key', methodKey)
+      .is('deleted_at', null)
+      .maybeSingle()
+    if ((typeRow as { is_delivery_type?: boolean } | null)?.is_delivery_type) {
+      const { data: areaRows } = await (admin as unknown as { from: (t: string) => { select: (c: string) => { is: (c: string, v: null) => Promise<{ data: DeliveryAreaLike[] | null }> } } })
+        .from('delivery_service_areas')
+        .select('sido, sigungu')
+        .is('deleted_at', null)
+      const { data: zipRows } = await (admin as unknown as { rpc: (fn: string) => Promise<{ data: Array<{ sido: string; sigungu: string; range_start: number; range_end: number }> | null }> }).rpc('get_delivery_zip_ranges')
+      const areasWithZips = attachZipRanges(areaRows ?? [], zipRows ?? [])
+      if (!isAddressInDeliveryArea(address, areasWithZips, postalCode)) {
+        return json({ valid: false, reason: 'out_of_area' })
+      }
+    }
+  } catch {
+    // 지역 조회 실패 → 낙관적 처리
+  }
+
   const isBulk = await isBulkDeliveryMethod(admin, methodKey)
   if (!isBulk) {
     return json({ valid: true }) // 배송 방식이 두발히어로 아님 → 검증 불필요

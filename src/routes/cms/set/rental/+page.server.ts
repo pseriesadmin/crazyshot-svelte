@@ -5,6 +5,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { syncNationalHolidays } from '$lib/server/holidaySync'
+import { toAreaFromRegionNames, attachZipRanges, type ZipRange } from '$lib/utils/deliveryArea'
+import { validateAddress } from '$lib/server/dhero'
 import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -117,11 +119,36 @@ export interface PublicHolidayRow {
   is_active: boolean
 }
 
+export interface DeliveryServiceArea {
+  id: string
+  sido: string
+  sigungu: string | null
+  lat: number | null
+  lng: number | null
+  postal_code: string | null
+  created_at: string
+  /** 두발히어로 배송가능 우편번호 카탈로그 구간(없으면 null) */
+  zipRanges: ZipRange[] | null
+  /** 카탈로그의 우편번호 개수 */
+  zipCount: number
+}
+
+/** 두발히어로 배송가능 우편번호 카탈로그의 시/군/구(등록 여부와 무관) — "+ 지역 추가" 후보 */
+export interface DeliveryCatalogRegion {
+  sido: string
+  sigungu: string
+  zipCount: number
+  zipMin: number
+  zipMax: number
+}
+
+const MAX_DELIVERY_AREAS = 300
+
 export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow, serviceInfoRow] = await Promise.all([
+  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow, serviceInfoRow, deliveryAreas, zipRangeRes] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -178,7 +205,37 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('company_name, ceo_name, biz_address, biz_reg_no, mail_order_biz_no, privacy_officer, ceo_email, cs_phone, business_hours')
       .limit(1)
       .single(),
+
+    untypedFrom(supabase, 'delivery_service_areas')
+      .select('id, sido, sigungu, lat, lng, postal_code, created_at')
+      .is('deleted_at', null)
+      .order('sido')
+      .order('sigungu', { nullsFirst: true }),
+
+    untypedRpc(supabase, 'get_delivery_zip_ranges'),
   ])
+
+  type ZipRangeRow = { sido: string; sigungu: string; range_start: number; range_end: number; zip_count: number }
+  const zipRows = ((zipRangeRes.data as ZipRangeRow[] | null) ?? [])
+  const countByKey = new Map<string, number>()
+  for (const r of zipRows) countByKey.set(`${r.sido}|${r.sigungu}`, (countByKey.get(`${r.sido}|${r.sigungu}`) ?? 0) + r.zip_count)
+  const catalogMap = new Map<string, DeliveryCatalogRegion>()
+  for (const r of zipRows) {
+    const key = `${r.sido}|${r.sigungu}`
+    const cur = catalogMap.get(key)
+    if (cur) {
+      cur.zipCount += r.zip_count
+      cur.zipMin = Math.min(cur.zipMin, r.range_start)
+      cur.zipMax = Math.max(cur.zipMax, r.range_end)
+    } else {
+      catalogMap.set(key, { sido: r.sido, sigungu: r.sigungu, zipCount: r.zip_count, zipMin: r.range_start, zipMax: r.range_end })
+    }
+  }
+  const catalogRegions = [...catalogMap.values()]
+  const areasWithZips = attachZipRanges(
+    ((deliveryAreas as { data: Omit<DeliveryServiceArea, 'zipRanges' | 'zipCount'>[] | null }).data ?? []),
+    zipRows,
+  ).map((a) => ({ ...a, zipCount: countByKey.get(`${a.sido}|${a.sigungu ?? ''}`) ?? 0 }))
 
   type GuideRow = { guide_text: string | null }
   type PolicyRow = { privacy_text: string; terms_text: string; refund_text: string }
@@ -199,6 +256,8 @@ export const load: PageServerLoad = async ({ locals }) => {
     discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
     policySettings: ((policyRow as { data: PolicyRow | null }).data ?? { privacy_text: '', terms_text: '', refund_text: '' }),
     serviceInfo: ((serviceInfoRow as { data: ServiceInfoSettings | null }).data ?? emptyServiceInfo),
+    deliveryAreas: areasWithZips as DeliveryServiceArea[],
+    catalogRegions,
   }
 }
 
@@ -466,6 +525,206 @@ export const actions: Actions = {
     if (inUse) return fail(409, { error: '이미 상품정보에 적용중입니다.' })
     const { error } = await untypedRpc(locals.supabase, 'delete_pickup_point', { p_id: id })
     if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 배송 허용지역 ─────────────────────────────
+  // 허용지역이 1건 이상이면 장바구니 배송형 수령·반납 주소가 그 안이어야 한다(0건이면 제한 없음).
+  addDeliveryArea: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const area = toAreaFromRegionNames(
+      (data.get('sido') as string | null) ?? '',
+      (data.get('sigungu') as string | null) ?? '',
+    )
+    if (!area) return fail(400, { error: '시/도를 확인할 수 없습니다.' })
+
+    const latRaw = Number(data.get('lat'))
+    const lngRaw = Number(data.get('lng'))
+    const lat = Number.isFinite(latRaw) && latRaw >= 33 && latRaw <= 39 ? latRaw : null
+    const lng = Number.isFinite(lngRaw) && lngRaw >= 124 && lngRaw <= 132 ? lngRaw : null
+
+    const postalRaw = ((data.get('postal_code') as string | null) ?? '').trim()
+    const postalCode = /^[0-9]{5}$/.test(postalRaw) ? postalRaw : null
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류' })
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const { count } = await untypedFrom(admin, 'delivery_service_areas')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null)
+    if ((count ?? 0) >= MAX_DELIVERY_AREAS) {
+      return fail(400, { error: `배송 허용지역은 최대 ${MAX_DELIVERY_AREAS}개까지 등록할 수 있습니다.` })
+    }
+
+    const { data: result, error } = await untypedRpc(admin, 'cms_add_delivery_area', {
+      p_sido: area.sido,
+      p_sigungu: area.sigungu,
+      p_lat: lat,
+      p_lng: lng,
+      p_user_id: session.user.id,
+      p_postal_code: postalCode,
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = result as { ok?: boolean; error?: string } | null
+    if (!r?.ok) {
+      if (r?.error === 'duplicate') return fail(409, { error: '이미 등록된 지역입니다.' })
+      return fail(400, { error: '지역을 등록하지 못했습니다.' })
+    }
+    return { success: true }
+  },
+
+  // 지역 추가 전 사전 확인 — 고른 주소가 두발히어로 배송 가능 주소로 조회되는지(참고용, 차단하지 않음).
+  // dhero_valid: true/false = 조회 결과, null = 확인 불가(환경변수 없음·API 오류) — 이 경우 화면은 조용히 넘어간다.
+  checkDheroAddress: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const address = ((data.get('address') as string | null) ?? '').trim().slice(0, 200)
+    const postalCode = ((data.get('postal_code') as string | null) ?? '').trim().slice(0, 10)
+    if (!address) return { success: true, dhero_valid: null }
+    try {
+      const res = await validateAddress({ address, postalCode })
+      return { success: true, dhero_valid: res.valid }
+    } catch {
+      return { success: true, dhero_valid: null }
+    }
+  },
+
+  // "더보기" 모달 — 한 시/군/구의 배송 가능 주소지(우편번호·동·지역그룹) 목록
+  listAreaZips: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const area = toAreaFromRegionNames((data.get('sido') as string | null) ?? '', (data.get('sigungu') as string | null) ?? '')
+    if (!area || !area.sigungu) return { success: true, zips: [] as Array<{ postal_code: string; dong: string; group_name: string | null }> }
+    const { data: rows, error } = await untypedFrom(locals.supabase, 'delivery_area_zipcodes')
+      .select('postal_code, dong, group_name')
+      .eq('sido', area.sido)
+      .eq('sigungu', area.sigungu)
+      .order('postal_code')
+      .limit(2000)
+    if (error) return fail(500, { error: error.message })
+    return { success: true, zips: (rows ?? []) as Array<{ postal_code: string; dong: string; group_name: string | null }> }
+  },
+
+  // "+ 지역 추가" — 두발히어로 카탈로그의 시/군/구를 여러 곳 한 번에 허용지역으로 등록(카탈로그에 있는 지역만 허용)
+  addDeliveryAreas: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const wanted = [...new Set(data.getAll('region').map((v) => String(v)))].slice(0, 100)
+    if (wanted.length === 0) return fail(400, { error: '추가할 지역을 선택해주세요.' })
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류' })
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const { data: zipRowsRaw, error: zipErr } = await untypedRpc(admin, 'get_delivery_zip_ranges')
+    if (zipErr) return fail(500, { error: zipErr.message })
+    const catalogKeys = new Set(((zipRowsRaw as Array<{ sido: string; sigungu: string }> | null) ?? []).map((r) => `${r.sido}|${r.sigungu}`))
+
+    const { count } = await untypedFrom(admin, 'delivery_service_areas')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null)
+    if ((count ?? 0) + wanted.length > MAX_DELIVERY_AREAS) {
+      return fail(400, { error: `배송 허용지역은 최대 ${MAX_DELIVERY_AREAS}개까지 등록할 수 있습니다.` })
+    }
+
+    let added = 0
+    let duplicates = 0
+    for (const key of wanted) {
+      const [sidoRaw, sigunguRaw] = key.split('|')
+      const area = toAreaFromRegionNames(sidoRaw ?? '', sigunguRaw ?? '')
+      if (!area || !area.sigungu || !catalogKeys.has(`${area.sido}|${area.sigungu}`)) {
+        return fail(400, { error: '배송 가능 카탈로그에 없는 지역이 포함되어 있습니다.' })
+      }
+      const { data: result, error } = await untypedRpc(admin, 'cms_add_delivery_area', {
+        p_sido: area.sido,
+        p_sigungu: area.sigungu,
+        p_lat: null,
+        p_lng: null,
+        p_user_id: session.user.id,
+        p_postal_code: null,
+      })
+      if (error) return fail(500, { error: error.message })
+      const r = result as { ok?: boolean; error?: string } | null
+      if (r?.ok) added++
+      else if (r?.error === 'duplicate') duplicates++
+      else return fail(400, { error: '지역을 등록하지 못했습니다.' })
+    }
+    return { success: true, added, duplicates }
+  },
+
+  // 크레이지샷 자체 배송 지역 직접 추가 — 두발히어로 카탈로그에 없는 시/군/구를 이름으로 등록한다.
+  // 이름은 주소 검색 결과의 표기("양평군", "성남시 분당구")와 같아야 판정에 걸리므로 형식을 검증한다.
+  addCustomDeliveryArea: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const sigungu = ((data.get('sigungu') as string | null) ?? '').trim().replace(/\s+/g, ' ')
+    const area = toAreaFromRegionNames((data.get('sido') as string | null) ?? '', sigungu)
+    if (!area) return fail(400, { error: '시/도를 확인할 수 없습니다.' })
+    if (area.sido !== '세종' && !/^[가-힣]{1,10}(시|군|구)( [가-힣]{1,10}구)?$/.test(sigungu)) {
+      return fail(400, { error: '시/군/구 이름을 주소 표기대로 입력해주세요. (예: 양평군, 성남시 분당구)' })
+    }
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류' })
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const { count } = await untypedFrom(admin, 'delivery_service_areas')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null)
+    if ((count ?? 0) >= MAX_DELIVERY_AREAS) {
+      return fail(400, { error: `배송 허용지역은 최대 ${MAX_DELIVERY_AREAS}개까지 등록할 수 있습니다.` })
+    }
+
+    const { data: result, error } = await untypedRpc(admin, 'cms_add_delivery_area', {
+      p_sido: area.sido,
+      p_sigungu: area.sigungu,
+      p_lat: null,
+      p_lng: null,
+      p_user_id: session.user.id,
+      p_postal_code: null,
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = result as { ok?: boolean; error?: string } | null
+    if (!r?.ok) {
+      if (r?.error === 'duplicate') return fail(409, { error: '이미 등록된 지역입니다.' })
+      return fail(400, { error: '지역을 등록하지 못했습니다.' })
+    }
+    return { success: true }
+  },
+
+  deleteDeliveryArea: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const id = (data.get('id') as string | null) ?? ''
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return fail(400, { error: '잘못된 요청입니다.' })
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { error: '서버 설정 오류' })
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const { data: result, error } = await untypedRpc(admin, 'cms_delete_delivery_area', { p_id: id })
+    if (error) return fail(500, { error: error.message })
+    if (!(result as { ok?: boolean } | null)?.ok) return fail(404, { error: '이미 삭제된 지역입니다.' })
     return { success: true }
   },
 

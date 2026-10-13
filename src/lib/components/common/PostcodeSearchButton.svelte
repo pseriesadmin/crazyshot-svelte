@@ -4,11 +4,17 @@
   // AddressTabContent.svelte 및 cart/+page.svelte 등에서 공유.
   import { tick } from 'svelte'
   import { csToast } from '$lib/utils/toast'
+  import type { PostcodeRegionInfo } from '$lib/utils/deliveryArea'
 
   interface KakaoAddressData {
     roadAddress: string
     jibunAddress: string
     zonecode: string
+    sido?: string
+    sigungu?: string
+    sigunguCode?: string
+    bname?: string
+    bcode?: string
   }
 
   type KakaoPostcodeCtor = new (opts: {
@@ -29,7 +35,7 @@
     /** 버튼 id (label for 연결용) */
     id?: string
     /** 주소 선택 완료 콜백 */
-    onselect: (roadAddress: string, postalCode: string) => void
+    onselect: (roadAddress: string, postalCode: string, region?: PostcodeRegionInfo) => void
   }
 
   let {
@@ -69,7 +75,13 @@
     if (!w.daum?.Postcode || !container) { showModal = false; return }
     new w.daum.Postcode({
       oncomplete: (data: KakaoAddressData) => {
-        onselect(data.roadAddress || data.jibunAddress, data.zonecode)
+        onselect(data.roadAddress || data.jibunAddress, data.zonecode, {
+          sido: data.sido ?? '',
+          sigungu: data.sigungu ?? '',
+          sigunguCode: data.sigunguCode ?? '',
+          bname: data.bname ?? '',
+          bcode: data.bcode ?? '',
+        })
         showModal = false
       },
       width:  '100%',
