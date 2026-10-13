@@ -92,6 +92,25 @@
 
 ---
 
+## 배송지역 관리정보 — 배송 허용지역 (2026-10-12 추가, Migration #700·#701)
+
+| 구분 | 내용 |
+|---|---|
+| CMS 설정(표 A) | `/cms/set/rental` "배송지역 관리정보" — 시/도 + 시/군/구 등록·삭제, 목록보기/지도보기(카카오맵, 지도 클릭 → 시군구 추가). 저장: `delivery_service_areas`(`cms_add_delivery_area`·`cms_delete_delivery_area`, service_role 전용) |
+| 제한 활성 조건 | 활성 지역 **1건 이상**일 때만 제한(0건 = 전국 허용) |
+| 판정(표 B) | 도로명 주소 앞부분의 시/도·시군구 비교 — TS `isAddressInDeliveryArea`(`src/lib/utils/deliveryArea.ts`)와 SQL `private.is_address_in_delivery_area`는 같은 규칙(함께 변경, Stage 비교표로 일치 확인) |
+| 장바구니 효과(표 B) | 배송형(`is_delivery_type`) 수령·반납 방식에서 주소가 허용지역 밖이면 안내 문구 + 제출 차단(`deliveryAreaBlocked`), `validate-delivery-address` API는 사전 안내(`out_of_area`) |
+| 제출 시 서버 집행(표 C) | `set_reservation_shipment_method`가 배송형 수령 주소를 검사해 `out_of_delivery_area` 예외. **반납 주소는 서버에 저장되지 않아 화면·검증 API까지만** |
+| 전제 | 지도는 `PUBLIC_KAKAO_MAP_KEY`(카카오 JavaScript 키, 도메인 등록) 필요 — 없으면 지도 탭만 비활성 |
+
+**우편번호 카탈로그 (2026-10-13, Migration #703)**: 두발히어로 서울·경기·인천 배송가능지역 엑셀(우편번호·시·구·동·지역그룹, 10,738건)을 `delivery_area_zipcodes`에 적재하고
+(`scripts/import-delivery-zipcodes.mjs`, 원본 JSON `supabase/seed/delivery_zipcodes.json`) 65개 시/군/구를 허용지역으로 등록한다. 서울 우편번호는 엑셀에서 앞의 0이 지워져 5자리로 복원했다.
+· 허용지역에 카탈로그가 있으면 장바구니 판정이 **우편번호 구간까지** 본다(같은 시군구라도 카탈로그에 없는 동네는 차단). 카탈로그가 없는 지역(지도 클릭 등록)·우편번호를 모르는 경우는 시군구 단위.
+· 구간 계산은 DB 함수 `get_delivery_zip_ranges()`(연속 번호 묶음)를 CMS·장바구니·검증 API가 같이 쓴다.
+· **서버 최종 방어(Migration #704)**: 예약에 `rental_reservations.pickup_postal_code`를 저장하고, `set_reservation_shipment_method`(12-인자, `p_pickup_postal_code` 추가)가 `private.is_address_in_delivery_area(road, postal)`로 우편번호 구간까지 검사한다(TS `isAddressInDeliveryArea`와 같은 규칙 — 두 곳을 함께 바꿀 것). 두발히어로 접수(`getReservationForDhero`)도 이 우편번호를 우선 쓴다. 반납 주소는 여전히 서버 저장이 없어 화면·검증 API까지만.
+· CMS 목록 행: 우편번호 범위 · 지역명 · "우편번호 N개" · [더보기](동·우편번호·지역그룹 모달) · 삭제.
+· 운영 적용 순서: Migration 700→701→702→703→704 → `node scripts/import-delivery-zipcodes.mjs --production`(SUPABASE_URL·SERVICE_ROLE_KEY 환경변수) → 코드 배포. 적재하면 65곳이 바로 허용지역으로 등록돼 제한이 켜진다.
+
 ## 알려진 갭 / 미해결 이슈 (2026-09-05 기준)
 
 ```

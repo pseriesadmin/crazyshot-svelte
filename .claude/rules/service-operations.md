@@ -39,6 +39,12 @@ cms에서 등록/수정한 상품(가격·재고·품번)이 front 고객 화면
 ```
 → 상세: `products.md` §2-8(RLS), §5(예약 가능 조건), §8-G(가격 동기화 트리거)
 
+```
+자식 재고(예약에 배정되는 재고 단위)의 이름·분류·이미지·판매전용 등은 부모 값을 따른다(2026-10-07) — 화면·알림·계약·외부연동이 자식에 복사된 옛 값을
+보여주지 않도록 서버 코드는 resolveParentProductFields 헬퍼, DB 함수는 COALESCE(부모, 자식)으로 읽는다. 재발 방지 가드 테스트가 소스를 스캔한다.
+```
+→ 상세: `products.md` §2-16(읽기 규칙·헬퍼·가드·전환 이력)
+
 ---
 
 ## 3. 예약 상태전이 → 알림 자동/수동 매핑
@@ -56,6 +62,7 @@ cms에서 예약 상태를 변경(승인·반출·반납 등)하면 front 고객
 
 ```
 front 장바구니에 여러 상품(또는 동일 상품 여러 대)을 담아 한 번에 예약신청(hold)하면:
+  - ⛔ 예약코드(reservation_code)는 주문 단위 단일 최상위 코드다(Migration 400, 옛 주문은 Migration 649로 백필) — 같은 주문의 예약은 모두 같은 코드를 공유하고, CMS 화면에는 별도 주문번호(ORD-…)를 노출하지 않는다(orders·order_key는 결제·정산용 내부 값)
   - hold 생성 시점에는 order_id가 비어있다(각 reservation은 독립적으로 재고를 원자 배정받음)
   - 장바구니 체크아웃 제출 시점(cart/+page.svelte)에 create_reservation_order RPC 1회 호출로
     이번 제출에 포함된 reservation 전부를 하나의 order로 묶는다 — 이 지점이 주문 연결이
@@ -77,10 +84,26 @@ front 장바구니에 여러 상품(또는 동일 상품 여러 대)을 담아 �
     **승인을 일으킨 트리거가 무엇이든(관리자 수동 "승인하기" 버튼이든, 고객의 계약서명
     완료로 인한 자동승인이든) 동일하게 적용된다**(2026-08-18 — 최초엔 관리자 수동승인
     경로에만 있고 고객 자동승인 경로엔 빠져 있던 설계공백을 발견해 통일).
+
+⚠️ **2026-10-06부터 아래 "+ 추가"형 경로(`cms_add_reservation_product_unit`)는 관리자 화면에서 차단돼 있다** — 예약 구성 직접 편집 정책(§27).
+  이 RPC를 다시 켜는 경우에만 아래 원칙(복사 대상 컬럼 전부 복사)이 적용된다.
+
+⛔ **CMS "+ 추가"형 주문 합류 경로의 필드 복사 누락 — 결제금액 0원 결함(2026-10-02, Migration #619)**:
+  CMS 예약 상세 "+ 추가"(`cms_add_reservation_product_unit` RPC, 원본 예약을 복제해 같은 주문에
+  새 예약 행을 추가하는 "원본 복제형" 경로)가 날짜·수령방식·기간유형만 복사하고 수령/반납
+  시간·지점·휴무일 연장일·주소 등 10개 컬럼을 복사하지 않아, `compute_reservation_line_amount`가
+  시간을 0분으로 계산해 그 상품 금액이 0원이 되고 주문 전체 결제금액까지 왜곡된 실사고가 있었다.
+  **원칙**: 기존 예약을 복제·분기해 같은 주문(order)에 새 예약 행을 추가하는 모든 경로는 그
+  예약 ID(고유값)만 빼고 `compute_reservation_line_amount`가 참조하는 일정·장소 필드 전부를
+  원본에서 복사해야 한다 — "주요해 보이는" 일부 컬럼만 골라 복사하면 이 클래스의 결함이
+  재발한다. 새 "원본 복제형" 경로를 추가할 때는 이 RPC(Migration #619)를 복사 대상 컬럼
+  목록의 기준으로 삼는다.
 ```
 → 상세: `.claude/harness/TASK.md` "예약 신청 시점 주문 연결 + 대여정보 탭 통합 표시"(2026-08-17
   NOW 항목, Migration 280/275) · `rental-lifecycle.md` "옵션상품(reservation_options)" ·
-  `reservation-rental-execution.md` §0-4 #7(통합/개별 알림 판단 트리거 통일 경위)
+  `reservation-rental-execution.md` §0-4 #7(통합/개별 알림 판단 트리거 통일 경위) ·
+  `.claude/harness/TASK.md` "CMS '+ 추가'로 주문에 넣은 상품의 결제금액 0원 오류 수정"
+  (2026-10-02, Migration #619 — Stage·Production 적용 완료)
 
 ---
 
@@ -129,6 +152,12 @@ cms에서 계약서를 발행·발송하면 front 고객 채팅에 서명 액션
 ```
 → 상세: `contract.md` "발송 흐름"·"서명 흐름"·"관리자 딥링크 라우팅"
 
+```
+용어 구분(2026-10-09): 대여예약 "신청일시" = 장바구니에서 예약신청을 완료한 시점(rental_reservations.submitted_at, created_at 아님). 전자계약 "발행일시" = 그 예약건으로 관리자가
+발행(발송)을 실행한 시점 — 둘은 다를 수 있다. 미서명 계약서를 재발송하면 발행일은 마지막 발송일로 갱신되고, 서명 완료 후에는 재발송 불가·발행일 불변.
+```
+→ 상세: `contract.md` "신청일시 vs 발행일시 — 용어와 기록 시점 정책"
+
 ---
 
 ## 9. 예약승인(confirmed) 게이팅 — 결제완료 AND 계약서명 완료 (✅ 구현·Stage·Production 전부 검증 완료, 2026-08-17/18)
@@ -175,7 +204,7 @@ execution.md` §1 ②④행(실화면 검증 기준 트리거·배지 매핑)
 
 ---
 
-## 10. HOLD 만료 — 전자계약 발송 시점에만 30분 타이머 시작 (⛔ 2026-09-07 정책 전면 반전, Stephen 확정)
+## 10. HOLD 만료 — 전자계약 발송 시점에만 1시간 타이머 시작(2026-10-08 Migration 676으로 30분→1시간) (⛔ 2026-09-07 정책 전면 반전, Stephen 확정)
 
 ```
 ⛔ 이 절은 2026-09-07 Stephen 지시로 기존 정책을 근본적으로 뒤집은 최신 버전이다. 과거
@@ -185,7 +214,7 @@ execution.md` §1 ②④행(실화면 검증 기준 트리거·배지 매핑)
 현재 정책: front 고객이 상품을 예약신청(hold 생성)만 하면 — 그 자체로는 타이머가 전혀
 시작되지 않는다. hold는 다음 중 하나가 실행되기 전까지 재고점유를 무기한 유지한다:
   ① 관리자가 CMS '계약서'탭에서 전자계약을 발송(contract_signings.sent_at 기록) —
-     이 시점부터 정확히 30분의 타이머가 시작되고, 그 안에 서명하지 않으면 status='expired'로
+     이 시점부터 정확히 1시간(2026-10-08 Stephen 지시·Migration 670으로 30분→1시간 변경)의 타이머가 시작되고, 그 안에 서명하지 않으면 status='expired'로
      자동 전환된다. "재발송"할 때마다 sent_at이 갱신돼 타이머가 다시 리셋된다(기존 동작 유지).
   ② 고객 본인이 예약을 취소(status='cancelled')
   ③ 관리자가 예약을 거부(status='cancelled', ②와 DB상 동일 값 — 액터 구분 컬럼 없음)
@@ -204,7 +233,7 @@ EXISTS 분기 불필요). D-3(payment_confirmed_at IS NOT NULL, 결제완료 예
 (release_reservation_hold RPC 재설계) · `rental-lifecycle.md` "전체 상태 머신" ·
 `src/__tests__/services/holdExpiration.test.ts`(계약 미발송 시나리오 — "아무리 오래돼도
 만료 안 됨" 검증) · `src/__tests__/services/holdExpirationContractTimer.test.ts`(EC-5,
-계약 발송 후 sent_at 기준 30분 검증)
+계약 발송 후 sent_at 기준 1시간 검증 — 2026-10-08 30분→1시간)
 
 ✅ **Stage(ezyvffjvuwmtuhpxdjrw)·Production(vnbpmvxruyciuuaermyh) 둘 다 적용 완료**
 (2026-09-07) — Stage에서 관련 TDD 3개 파일 29/29 GREEN 확인 후 Production 적용.
@@ -351,11 +380,20 @@ dhero_place_guide·return_registration·return_remind·reservation_cancelled + �
 (+ 허브를 우회하는 계약서 2곳은 `sendCardSms`). 규칙:
   · 수신동의(allow_rental_alert)·블랙리스트는 보지 않는다 — 예약·대여 관련 안내는 항상 발송.
   · 제외: 전화번호 없음 / 탈퇴(requested·purged) / 비대상 타입(locker_guide는 비밀번호 포함 자체 SMS가 있어 제외) /
-    개발환경(dev) / 같은 날(KST) 동일 (reservation_id, notify_type) 중복(`sms_notification_logs`, Migration 626).
+    개발환경(dev) / 같은 날(KST) 동일 (reservation_id, notify_type) 중복(`sms_notification_logs`, Migration 622).
     계약서 재발송(contract_link)은 중복 판정에서 제외(매번 발송).
   · 묶음 주문은 SMS 1통만(confirm-mock은 첫 건 외 `skipSms`, 승인 헬퍼는 건당 1회 호출).
   · 새 notify_type을 추가할 때는 **SQL 채팅카드 · push.ts 푸시 · sms.ts SMS 3곳**을 세트로 확인한다.
   · SQL(pg_cron) 전용 발생 이벤트(hold_expired·연체료 요청)는 앱코드 경로가 없어 SMS도 불가(푸시와 동일 한계).
+
+✅ **안내문장 CMS 편집(2026-10-10, Migration #689)**: `/cms/set/push` 에서 알림 23종마다 안내문장을 편집한다
+(`push_notification_config.extra_config.message`, 비어 있으면 코드의 기본 문구 — 미설정 = 이전과 동일). 같은 문장이 **푸시와 문자(Solapi)에 함께** 쓰이고
+채팅카드(DB 함수 고정 문구)는 대상이 아니다. 변수·치환·검증·바이트 규칙의 단일 출처는 `src/lib/utils/notifyTemplate.ts`(`{{고객이름}}` 등 유형별 허용 변수,
+저장 시 허용 밖 변수·제어문자·(문자 대상) 이모지·문자 2000바이트 초과 거절, 90바이트 초과는 경고만 — 문자는 SMS≤90B/LMS≤2000B를 `type`으로 명시).
+발송 경로: 푸시 `sendPushToUser(…, { vars, noOverride })`(설정 행을 이미 읽어 override 적용) · 문자 허브 `sendReservationLifecyclePush`/`sendCardSms`(`getNotifyMessageOverride` 30초 캐시).
+문자 유형↔설정 유형 매핑 `smsTypeToConfigType`(contract_link→contract_sent, contract_signed→contract_signed_customer, contract_reshare는 편집 제외).
+`event_coupon_issued`(광고성)는 푸시 전용. 반납예정 크론(`return-remind`)은 허브가 푸시·문자를 함께 보내도록 통일(이전 별도 문구 폐기).
+새 알림 유형을 추가할 때는 **채팅카드 SQL · push.ts 기본 문구 · sms.ts 문구 · notifyTemplate.ts NOTIFY_SPECS** 네 곳을 세트로 확인한다.
 
 ⚠️ **iOS Safari 구조적 한계(2026-08-19 진단 → 같은 날 부분 해소)**: iOS 16.4+ Safari는 Web
 Push를 "홈 화면에 추가"된 독립형(standalone) 웹앱에서만 허용하며, 일반 브라우저 탭에서는
@@ -803,17 +841,107 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
+## 27. 예약 구성(상품·재고·옵션) 관리자 직접 편집 차단 + 재고 재배정 규칙 (2026-10-06, Stephen 확정)
+
+```
+배경: 관리자 예약목록 상세에서 상품 추가·재고 추가·✕ 삭제·옵션 추가/수량/삭제를 하면 front 사용자가 예약신청 때 확인한
+대여요금 합계(쿠폰·포인트 변수 포함)와 전자계약 내용이 달라진다. 코드·DB 정의 대조 결과(2026-10-06):
+  · 옵션 추가·수량·삭제(cms_add/update/delete_reservation_option)는 reservation_options만 바꾸고 order_items·orders 금액을 갱신하지 않는다
+    (sync_order_after_composition_change 미호출). 옵션 단가는 화면이 보낸 값을 그대로 저장(서버 가격 산출·판매전용 재고 가드 없음).
+  · 재고 추가(cms_add_reservation_product_unit)는 합계 재계산은 하지만 assign_bundle_assets를 호출하지 않아 결합 구성품이 배정되지 않는다
+    (구성품 재고 미점유·계약서 장비번호 누락). 재계산 실패 결과도 확인하지 않는다.
+  · 계약서는 발행 시점 내용이 저장(content_hash·signed_content_snapshot)되고 구성 변경 함수는 계약 상태를 확인하지 않는다 —
+    서명 후 구성이 바뀌면 서명본과 결제 금액이 달라진다.
+  · 쿠폰 조건(최소 금액·적용 대상) 재검사 여부는 확인하지 못했다(미확인).
+
+정책: 가격·계약이 바뀌는 편집은 화면과 서버에서 모두 막는다.
+  차단: 상품 추가(POST products) · 상품 삭제(DELETE products) · 옵션 추가(POST options) · 옵션 수량(PATCH options) · 옵션 삭제(DELETE options) → 403
+  유지: 재고 재배정(PATCH products — 본체, PATCH bundles — 결합상품), 거부·취소·예약변경(changeReservation), 모든 조회(GET)
+  정책 상수 한 곳: src/lib/utils/reservationCompositionPolicy.ts (RESERVATION_COMPOSITION_EDIT_ENABLED=false). 화면(RentalDetailPanel
+  canEditProducts)과 API 핸들러가 이 상수를 함께 본다. 구성 변경 RPC 5종 호출은 products·options API 두 파일에만 있다(우회 경로 없음).
+  구성을 바꿔야 하면: 기존 "예약변경"(결제 취소 후 신청대기 복귀) 또는 "거부" 후 고객 재신청.
+
+⛔ 다시 켜기 전 선행 조건(전부): ① 옵션 변경 시 order_items 금액 갱신 + 재계산 호출 + 서버 단가 산출 ② 재고 추가 시 결합 구성품 배정 +
+   재계산 실패 시 롤백 ③ 계약서 발송·서명된 예약의 구성 변경 처리(차단 또는 발행취소 후 재발송) ④ 쿠폰 조건 재검증.
+
+재고 재배정(가격·계약 내용 불변이라 유지): 본체 상품 코드 재배정과 결합상품 직접 재배정, 본체 재배정 시 결합상품 자동 재배정,
+옵션상품 실물 재배정(reservation_option_assets, #654·#655 — 옵션도 부모 상품이라 같은 부모의 활성 자식이 실물) 규칙은 products.md §2-14-1.
+옵션 재배정은 "실물 번호만 교체"라 금액·계약 내용이 그대로여서 구성 편집 차단과 무관하게 유지된다(옵션 추가·수량·삭제는 계속 차단).
+⚠️ 재배정은 계약서의 장비번호(상품코드) 표기와 어긋날 수 있다 — 서명 후 재배정 시 서명본의 번호와 실물이 다를 수 있으나 기존 허용 동작이라
+   별도 정책 결정 전까지 유지한다(Stephen 판단 대기).
+```
+→ 상세: `reservationCompositionPolicy.ts` · `src/__tests__/utils/reservationCompositionEditPolicy.test.ts` · `products.md` §2-14-1 ·
+`rental-lifecycle.md` "예약 구성(상품·재고·옵션) 관리자 직접 편집 차단"
+
+---
+
+## 28. 무인보관함 비밀번호 — 입력·발송·폐기 정책 (2026-10-08, Stephen 확정, Migration #673·#674·#675)
+
+```
+입력: CMS 예약 상세 "무인보관함 배정정보"(manager 이상)는 수령/반납 방식이 방문(visit)·퀵서비스(quick)이면 시간대·예약 단계와 무관하게 항상 노출.
+      무인함 번호(1~10자, Migration 678)와 비밀번호(4~10자)는 둘 다 필수 — 둘 다 숫자·특수문자만 입력 가능(영문·한글·공백 불가, lockerFields.ts) — 한쪽이라도 비면 [배정 확정] 비활성(서버·DB도 둘 다 있거나 둘 다 NULL만 허용). 안내 문자: "[크레이지샷] 상품명 대여예약 무인보관함 이용정보 No {무인함 번호} / {비밀번호}". 취소·만료 예약은 입력·저장 불가(DB도 거부). [시범 발송]은 회사 테스트폰(SMS_TEST_PHONE, 없으면 SMS_SENDER_PHONE)으로 실제 문자 1통.
+발송: Vercel Cron(/api/cron/locker-guide, 10분)이 방문·퀵서비스 + 비밀번호 저장 + 상태(수령=confirmed·shipped / 반납=in_use·return_requested) + 수령(반납)시각 1시간 이내(KST)를 선점해
+      문자(최우선) → 채팅카드 → 푸시 순으로 발송. 시간대(영업외시간) 제한 없음. 같은 건 수령용·반납용 각 1회.
+재시도: 문자 실패 → 채팅·푸시 미발송 + "발송됨" 표시 복구(다음 크론 재시도, 시각 경과 시 종료). 문자 성공 후 채팅 실패는 복구하지 않음(문자 중복 방지). 번호 없음 + 채팅 실패는 재시도.
+안내 문구(2026-10-11, Migration #694·#695, Stephen 확정): CMS 푸시알림 설정 → "무인보관함 이용 안내"의 공통 안내문장이 푸시·문자·채팅카드의 정본이다(비우면 기본 문구 "{{상품명}} 무인보관함 이용 {{무인함번호}}번함 비밀번호는 '{{무인함비밀번호}}'입니다." + 다음 줄 "중앙현관 비밀번호: {{중앙현관비밀번호}}").
+      변수: 고객이름·상품명·예약코드·수령일시·반납일시·무인함번호·무인함비밀번호·중앙현관비밀번호·반납기한(날짜 시각). 조립은 서버 한 곳(src/lib/server/lockerGuideMessage.ts + notifyTemplate.renderLockerGuideMessage): 중앙현관 값이 없으면 그 변수가 든 줄을, 번호가 없으면 "번함" 부분을 뺀다.
+      문자는 앞에 "[크레이지샷] "이 붙고 90바이트를 넘으면 LMS로 나간다(저장 시 2000바이트 초과 거절). 채팅카드는 서버 전용 래퍼 send_locker_guide_card(예약, 문장)가 문장을 카드 본문으로 쓴다(공개 함수 send_rental_chat_notification에는 문장 매개변수가 없다 — 임의 문장 주입 방지). 조립 실패 시에만 DB·코드의 고정 문구로 되돌린다.
+      발송 대상은 항상 그 예약의 소유 고객 1명(rental_reservations.user_id): 전화번호=그 고객 프로필, 푸시=그 고객 토큰(수신거부 시 푸시만 생략), 채팅=그 고객 세션. 관리자 동시 발송은 이 알림에 없다.
+      중앙현관 비밀번호는 cms_settings['locker_entrance_password'].password 한 곳(CMS 푸시알림 설정 → 무인보관함 이용 안내 항목, manager 이상 수정 · 감사로그엔 값 미기록). 비밀번호가 푸시 본문에 들어가면 잠금 화면에 보일 수 있다.
+폐기: 예약이 cancelled·expired로 바뀌면(계약 미서명 30분 만료 포함) 비밀번호·발송 기록 삭제. 전자계약이 취소돼 contract_signings.sent_at이 값→NULL이 되면(발행취소·발송 폐기·예약변경 경로)
+      같은 주문의 형제 예약 비밀번호까지 삭제 — 재발행 후에는 다시 입력해야 한다.
+```
+→ 상세: `.claude/harness/TASK.md` "무인보관함 비밀번호(CMS 대여정보)" 블록(2026-10-08) · `rental-lifecycle.md` locker_guide 서술
+
+---
+
+## 29. 서명+결제 후 고객 취소 = "취소 요청" 접수, 환불은 관리자 승인 시 (2026-10-09, Stephen 확정, Migration #687)
+
+```
+계약완료(confirmed) 예약을 고객이 [예약 취소]/[취소 요청]으로 취소하면 — 수령 신청 마감 전·후 구분 없이 — 즉시 환불·취소하지 않는다.
+  ① 같은 주문의 계약완료 예약 전체에 rental_reservations.cancel_requested_at 표식(request_customer_cancel RPC, service_role 전용)
+  ② 고객 채팅 세션에 고객 발신 'cancel_request' 카드(고객·관리자 양쪽 노출, §17 예외) + 관리자 푸시 — 공용 헬퍼 src/lib/server/cancelRequest.ts
+  ③ 예약 상태·결제·재고·쿠폰은 그대로(취소 전). 마이페이지는 "취소중" 비활성 카드(cancelling)
+관리자: 예약목록·대여현황 행에 "취소대기" 배지(상태 배지를 대체, 목록 상단 정렬 — attachCancelPending), 패널 헤더 [예약취소] 실행 =
+  기존 updateStatus 취소 경로(Toss 전액 환불 + cancel_reservation_payment, manager 이상 + rental.change_cancel) → status=cancelled로 대기 자동 종료 →
+  예약목록 '전체' 탭에서 "취소"로 조회, 고객은 마이페이지 "취소" 목록.
+hold(신청대기)는 결제 전이라 기존처럼 즉시 취소(요청 아님). 대여 시작일 이후·운송장 등록은 기존처럼 고객센터 문의(요청 불가).
+레거시 "취소중"(이미 환불·취소됐지만 관리자 확인 전, #589) 행은 같은 "취소대기" 배지로 보이고 별도 [예약취소](=확인 처리) 버튼이 남는다.
+⚠️ 고객 취소 API(cancel-reservation)는 더 이상 cancelReservationWithRefund를 호출하지 않는다(헬퍼·테스트는 유지). 요청 거절 기능은 아직 없다.
+```
+→ 상세: `src/lib/server/cancelRequest.ts` · `attachCancelPending.ts` · `supabase/migrations/20261009050000_687_customer_cancel_request.sql` · `cancelRequestApi.test.ts`·`customerSelfCancel.test.ts`
+
+---
+
+## 30. 배송 허용지역 — CMS 등록 ↔ 장바구니 배송형 주소 제한 (2026-10-12, Migration #700·#701)
+
+```
+CMS /cms/set/rental "배송지역 관리정보"에 등록한 시/도·시군구가 배송형(is_delivery_type) 수령·반납 주소의 허용 범위다.
+· 활성 지역이 1건 이상일 때만 제한(0건 = 제한 없음). 방문·무인보관함·퀵서비스는 대상 아님.
+· 판정 규칙은 TS(deliveryArea.ts)와 SQL(private.is_address_in_delivery_area) 두 곳 — 함께 바꾼다.
+· 서버 집행: set_reservation_shipment_method(수령 주소). 반납 주소는 서버 저장이 없어 화면·검증 API까지만(한계).
+· 지도 등록은 카카오맵 키(PUBLIC_KAKAO_MAP_KEY) 필요, 키가 없어도 목록 등록·장바구니 제한은 동작.
+· 두발히어로 배송가능 우편번호 카탈로그(#703)가 있는 지역은 우편번호 구간까지 판정 — 화면·검증 API·서버(#704, 예약에 pickup_postal_code 저장) 모두. 반납 주소만 서버 저장이 없어 화면·검증 API까지. 적재·운영 순서는 rental-cms-settings.md 참고.
+```
+→ 상세: `rental-cms-settings.md` "배송지역 관리정보"
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
+[ ] 화면·알림·계약·외부연동에서 예약 상품의 이름·분류·이미지를 새로 읽는 코드가 부모 우선 헬퍼를 쓰는가? (products.md §2-16, productChildReadGuard.test.ts)
 [ ] 이 변경이 front에서 발생한 이벤트를 cms에 반영하는가, 반대인가 — 방향을 명확히 인지했는가?
 [ ] 주문 연결(order_id) 생성 지점을 장바구니 체크아웃 제출 외의 곳에 추가하지 않았는가? (§4)
+[ ] 기존 예약을 복제해 같은 주문에 새 행을 추가하는 "원본 복제형" RPC를 새로 만들거나 수정했다면 —
+    compute_reservation_line_amount가 참조하는 일정·장소 필드(수령/반납 시간·지점·휴무일 연장일·
+    주소 등)를 전부 원본에서 복사하는가? 일부만 골라 복사하지 않았는가? (§4, Migration #619)
 [ ] 상태전이 시 자동발송해야 할 채팅알림 타입을 rental-lifecycle.md 매핑표와 대조했는가? (§3)
 [ ] cms_role 권한 검사와 front 고객 세션 검사를 혼동하지 않았는가? (§5)
 [ ] 요구사항이 불명확한데 추측으로 구현하지 않았는가? (§6 Class C)
 [ ] confirmed 전환 게이팅(§9) 관련 변경 시 — 관리자 수동 "승인하기" 우회 경로에 실수로
     계약 체크를 추가하지 않았는가?
-[ ] HOLD 만료(§10) 관련 변경 시 — release_reservation_hold의 30분 임계값·hold_expiration_
+[ ] HOLD 만료(§10) 관련 변경 시 — release_reservation_hold의 1시간 임계값(구 30분, Migration 676)·hold_expiration_
     cleanup pg_cron 잡이 여전히 존재·활성 상태인가? (`SELECT * FROM cron.job WHERE
     jobname='hold_expiration_cleanup'`로 정기 확인 권장)
 [ ] 관리자 발신 채팅 알림 엔드포인트를 새로 추가했다면(§11) — 자체 세션조회 로직을
@@ -844,13 +972,18 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 [ ] CMS 상품 등록 경로를 추가·수정했다면(§20) — 동일 부모 코드품번 상품이 생길 수 있는 경로가
     생기지 않았는가? 복제·재고 추가의 수량/순번 상한 제한이 서버에서 집행되는가?
 [ ] 서버 전용 함수(§23)를 새로 만들거나 바꿀 때 — REVOKE ALL FROM PUBLIC에 더해 anon·authenticated도 명시적으로 REVOKE하고 service_role에만 GRANT했는가? 적용 뒤 has_function_privilege로 실제 상태를 확인했는가? 기존 함수 권한을 "동일하게" 복사하지 않았는가?
+[ ] 고객 검색 DB 함수(search_products·search_category_intent)의 분류 의도 판정 규칙(조사·부탁 표현·분류 이름 분리)을 바꿀 때 — TS(productSearchDocs.detectCategoryIntent)와 SQL을 함께 바꿨고, Stage 비교 표 테스트(searchProductsCategoryIntentDb)가 통과하는가? (Migration 683, nlsearch.md §4-9)
 [ ] 렌탈 적립(§22)의 계산식을 바꿀 때 — SQL 함수·장바구니 cartEarnPoints.ts·두 테스트를 함께 고쳤는가? 할인 풀에서 무료배송 쿠폰 분과 구매 라인 몫을 빼먹지 않았는가?
+[ ] NLSearch 의미 벡터 말뭉치(nlsearch.md §4-12)에 새 소스를 추가했다면 — 화이트리스트 7종 안인가? 채팅 원문·검색 로그 원문·분류 로그 원문을 넣지 않았는가? 사용자 작성 텍스트는 마스킹·어휘 필터를 통과하는가? 관찰 기록(nlsearch_shadow_observations·canned features)에 원문·상품명이 없는가?
 [ ] 쿠폰 다중 선택(§21) 변경 시 — 주문 의존 조건 판정을 서버 로더로 되돌리지 않았는가? 중복 불가 쿠폰 혼합이
     화면(안내창)·create_reservation_order·use_coupons 세 곳에서 모두 막히는가?
 [ ] 할인 산식(§21 "2026-10-02 전면 개정판")을 구현·수정할 때 — 정률 쿠폰 2장 이상을 "순차
     복리"로 되돌리지 않았는가? 같은 기준 금액에 율을 합산하는가? 1일차 한정(discount_scope='first_day')
     쿠폰이 R1=B1×R/T(1일차 몫)만 기준으로 계산되는가? 화면(couponStacking.ts)·서버(apply_order_coupon_discounts)·
     관리자 아코디언(orderCouponBreakdown.ts) 세 곳이 전부 동일한가?
+[ ] 예약 구성(상품·재고·옵션) 편집 기능을 새로 만들거나 다시 켤 때(§27) — 금액(order_items·쿠폰·포인트 재계산)·결합 구성품 배정·계약서 처리를 모두 맞췄는가?
+    화면 버튼만 숨기지 않고 서버 API에도 같은 제한이 걸려 있는가? (정책 상수 reservationCompositionPolicy.ts)
+[ ] 재고 재배정(§27·products.md §2-14-1)을 바꿀 때 — 후보 조회와 교체가 같은 점유 판정을 쓰는가? 본체 재배정 시 결합상품 자동 재배정이 유지되는가?
 [ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
     설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
 [ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?
@@ -859,7 +992,11 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 
 ---
 
-*service-operations.md v1.10 | 2026-10-02 §21 할인 산식 전면 개정(Stephen 확정, Migration 620·621 Stage 구현·검증) — ① 정률 쿠폰 2장 이상을 "순차 복리"에서 "같은 기준금액(R0)에 각자 계산 후 금액
+*service-operations.md v1.13 | 2026-10-06(후속) §27 옵션상품 실물 재배정(#654·#655) 반영 — "옵션은 재배정 대상 아님" 서술 개정 | 2026-10-06 §27 신설 — 예약 구성(상품·재고·옵션) 관리자 직접 편집 차단 정책(금액·결합 구성품·계약서 정합성 근거 포함) + 재고 재배정 규칙 포인터 + GATE C 2항목, §4 "+ 추가"형 경로에 차단 주석 | 2026-10-02(같은 날 후속) TASK.md 전수 대조로 §4에 Migration #619
+("원본 복제형" 주문 합류 RPC의 일정·장소 필드 복사 누락 — 결제금액 0원 결함) 보완 + GATE C 1건
+추가. 그 외 10/1~10/2 TASK.md 항목(SMS 동시발송·할인 산식·휴무일 연장요금 합산·주문 단위 목록
+통일)은 이미 §15·§21·§4/rental-lifecycle.md에 반영돼 있음을 대조로 확인(중복 기록 없음). |
+2026-10-02 §21 할인 산식 전면 개정(Stephen 확정, Migration 620·621 Stage 구현·검증) — ① 정률 쿠폰 2장 이상을 "순차 복리"에서 "같은 기준금액(R0)에 각자 계산 후 금액
 합산"으로 교체(기존 방식이 체감 기대치보다 항상 적게 할인되던 문제 해소) ② 정액→정률 적용
 순서는 기존 유지 ③ "1일차한정" 등 대여기간 일부에만 적용되는 할인 신설(대상 상품의 하루
 단가만 기준, discount_scope 신규 컬럼 제안) — 현재 운영 중인 "방문 픽업·반납 1일차 10%할인"
