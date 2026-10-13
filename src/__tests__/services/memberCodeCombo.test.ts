@@ -156,10 +156,26 @@ describe('bulk_reissue_member_codes — 기존 고객 일괄 재발급', () => {
     // 재발급으로 생성된 로그부터 정리(원상복구 후 UNIQUE(member_code) 재사용 시 로그가
     // 남아있으면 old_code 이력이 왜곡되므로 먼저 삭제).
     await adminClient.from('member_code_reissue_log').delete().in('user_id', testUserIds);
-    for (const uid of testUserIds) {
-      await adminClient.from('user_profiles').update({ member_code: originalCodes[uid] }).eq('id', uid);
+    // 고객 수가 늘어(2026-10 기준 Stage 210명) 한 명씩 순서대로 되돌리면 기본 훅 제한(10초)을 넘겨
+    // 중간에 끊기고 일부 고객의 회원번호가 되돌려지지 않은 채 남았다 — 20명씩 묶어 동시에 복구하고,
+    // 실패한 건은 한 번 더 시도한 뒤 남으면 오류로 알린다(조용히 남기지 않는다).
+    const RESTORE_BATCH = 20;
+    const restore = (uid: string) =>
+      adminClient!.from('user_profiles').update({ member_code: originalCodes[uid] }).eq('id', uid);
+    let pending = testUserIds;
+    for (let attempt = 0; attempt < 2 && pending.length > 0; attempt++) {
+      const failed: string[] = [];
+      for (let i = 0; i < pending.length; i += RESTORE_BATCH) {
+        const batch = pending.slice(i, i + RESTORE_BATCH);
+        const results = await Promise.all(batch.map(restore));
+        results.forEach((r, idx) => { if (r.error) failed.push(batch[idx]); });
+      }
+      pending = failed;
     }
-  });
+    if (pending.length > 0) {
+      throw new Error(`회원번호 원상복구 실패 ${pending.length}건 — Stage 고객 member_code 수동 점검 필요`);
+    }
+  }, 120_000);
 
   it('RED: 빈/NULL 접두어는 안전하게 거부되고 아무것도 변경하지 않는다', async () => {
     const { data: emptyResult, error: emptyError } = await callBulkReissue('');
