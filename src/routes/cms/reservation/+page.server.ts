@@ -653,6 +653,7 @@ export const actions: Actions = {
     // 존재하지 않는 컬럼(customer_name/addr 등) 조회로 42703 오류 → resRow=null →
     // 트리거 전체 스킵되던 버그를 getReservationForDhero() 공유 함수로 교체하여 수정.
     let dheroCancelFailed = false
+    let dheroBookFailedMsg: string | null = null
     if (newStatus === 'shipped' || newStatus === 'return_requested' || newStatus === 'cancelled') {
       try {
         // 예약 정보 JOIN 조회 — user_profiles/user_shipping_addresses/products 포함
@@ -664,6 +665,14 @@ export const actions: Actions = {
             const isBulk = await isBulkDeliveryMethod(admin, res.pickupMethod)
             if (isBulk) {
               try {
+                // 주소·우편번호가 없으면 두발히어로가 접수를 거절하므로 호출 전에 사유를 명확히 알린다
+                // (실패가 조용히 삼켜져 운송장이 안 생기던 결함 — 2026-10-12)
+                if (!res.address || !res.postalCode) {
+                  dheroBookFailedMsg = !res.address
+                    ? '배송지 주소가 없어 두발히어로 배송 접수를 하지 못했습니다.'
+                    : '배송지 우편번호가 없어 두발히어로 배송 접수를 하지 못했습니다.'
+                  throw new Error(dheroBookFailedMsg)
+                }
                 const deliveryRes = await createDelivery({
                   receiverName:              res.customerName,
                   receiverMobile:            res.customerPhone,
@@ -700,6 +709,11 @@ export const actions: Actions = {
                   }
                 }
               } catch (e) {
+                if (!dheroBookFailedMsg) {
+                  dheroBookFailedMsg = e instanceof DheroApiError
+                    ? `두발히어로 배송 접수에 실패했습니다: ${e.message}`
+                    : '두발히어로 배송 접수에 실패했습니다.'
+                }
                 console.error('[dhero/shipped] fail-soft:', e instanceof Error ? e.message : e)
               }
             }
@@ -745,7 +759,11 @@ export const actions: Actions = {
     }
     // ── dhero 트리거 끝 ────────────────────────────────────────────────────
 
-    return { ok: true, ...(dheroCancelFailed ? { dhero_cancel_failed: true } : {}) }
+    return {
+      ok: true,
+      ...(dheroCancelFailed ? { dhero_cancel_failed: true } : {}),
+      ...(dheroBookFailedMsg ? { dhero_book_failed: dheroBookFailedMsg } : {}),
+    }
   },
 
   clearIssuedContract: async ({ request, locals }) => {

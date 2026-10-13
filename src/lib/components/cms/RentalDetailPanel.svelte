@@ -2598,6 +2598,8 @@
                         isSubmitting = false
                         if (result.type === 'success') {
                           csToast.success('상태가 변경되었습니다.')
+                          const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
+                          if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
                           // 상품별 처리 후 형제 목록(각 상품 상태·다음 단계 버튼)을 다시 조회해 화면에 남은 이전 상태를 없앤다
                           rentalSiblingsFetchedForId = null
                           onrefresh()
@@ -2628,7 +2630,12 @@
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
-                if (result.type === 'success') { csToast.success('상태가 변경되었습니다.'); onrefresh() }
+                if (result.type === 'success') {
+                  csToast.success('상태가 변경되었습니다.')
+                  const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
+                  if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
+                  onrefresh()
+                }
                 else csToast.error(actionErrorMessage(result))
                 await update()
               }
