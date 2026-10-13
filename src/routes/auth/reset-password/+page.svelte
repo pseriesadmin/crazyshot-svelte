@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
+  import { goto, replaceState } from '$app/navigation'
+  import { onMount } from 'svelte'
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
 
@@ -9,6 +10,21 @@
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
   let done = $state(false)
+
+  // 메일 링크 처리 — 두 가지 형태를 모두 받는다.
+  //  ① ?code=…        : 요청한 브라우저에 PKCE 확인값이 남아 있을 때만 supabase-js가 자동으로 세션 교환(같은 브라우저에서 열어야 함)
+  //  ② ?token_hash=…  : 메일 템플릿을 token_hash 방식으로 바꾸면 다른 기기·메일 앱 내장 브라우저에서 열어도 동작(여기서 verifyOtp로 세션 생성)
+  onMount(async () => {
+    const params = new URL(window.location.href).searchParams
+    const tokenHash = params.get('token_hash')
+    if (tokenHash && params.get('type') === 'recovery') {
+      const { error } = await supabase.auth.verifyOtp({ type: 'recovery', token_hash: tokenHash })
+      if (error) errorMsg = SESSION_HELP
+      replaceState('/auth/reset-password', {})
+    }
+  })
+
+  const SESSION_HELP = '링크가 만료됐거나 다른 기기·브라우저에서 열려 확인할 수 없습니다. 비밀번호를 요청한 같은 브라우저에서 메일 링크를 열거나, 로그인 화면에서 재설정 링크를 다시 요청해주세요.'
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
@@ -25,13 +41,19 @@
 
     isLoading = true
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        errorMsg = SESSION_HELP
+        return
+      }
       const { error } = await supabase.auth.updateUser({ password: newPassword })
       if (error) throw error
       done = true
       csToast.success('비밀번호가 변경되었습니다.')
       setTimeout(() => goto('/auth/login'), 2000)
     } catch (err) {
-      errorMsg = err instanceof Error ? err.message : '비밀번호 변경에 실패했습니다.'
+      const msg = err instanceof Error ? err.message : ''
+      errorMsg = msg.includes('session missing') ? SESSION_HELP : (msg || '비밀번호 변경에 실패했습니다.')
     } finally {
       isLoading = false
     }
