@@ -23,7 +23,9 @@ export async function findOrderPaymentTransaction(
     status,
     refund_failed_at,
     refund_failure_reason,
-    pg_cancelled_at
+    pg_cancelled_at,
+    cancelled_at,
+    cancel_reason
   `
 
   const { data: direct, error: directErr } = await admin

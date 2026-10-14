@@ -40,14 +40,28 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
   const RENTAL_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed']
 
+  // '취소·환불' 칩(status=cancelled_refunded, 2026-10-14): 관리자·고객이 취소한 예약 전부(결제 전 취소 포함).
+  // 환불까지 완료된 건은 행 배지가 '취소·환불', 결제 전 취소는 '취소'로 구분된다(payment_status). 칩 필터는 기존 get_rental_list의
+  // p_status·p_include_statuses(cancelled)로 처리 — 총 건수·페이지네이션도 그대로 맞는다.
+  const isCancelledView = status === 'cancelled_refunded'
+
+  // 예약을 가리키는 링크(?selected=)로 들어왔는데 그 예약이 이미 취소 상태라면 '취소·환불' 칩으로 전환해 연다
+  // (취소된 예약은 다른 칩 목록에 없어 패널이 열리지 않던 문제). 칩 클릭 시에는 화면이 selected를 지우므로 칩 이동이 막히지 않는다.
+  if (selectedId != null && !isCancelledView) {
+    const { data: selRow } = await admin.from('rental_reservations').select('status').eq('id', selectedId).maybeSingle()
+    if ((selRow as { status?: string } | null)?.status === 'cancelled') {
+      throw redirect(303, `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`)
+    }
+  }
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:           status   || null,
+    p_status:           isCancelledView ? 'cancelled' : (status || null),
     p_search:           search   || null,
     p_date_from:        null,
     p_date_to:          null,
     p_page:             page,
     p_per_page:         30,
-    p_include_statuses: RENTAL_STATUSES,
+    p_include_statuses: isCancelledView ? ['cancelled'] : RENTAL_STATUSES,
     // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
     p_group_by_order:   true,
   })
@@ -60,6 +74,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // "총 N건"과 페이지 수가 틀어진다(QA B-1).
   const totalCount = rentals[0]?.total_count ?? 0
 
+  // 링크로 연 예약이 이 페이지(1페이지 30건)에 없으면(취소 건이 많아 다음 페이지에 있는 경우) 그 행만 따로 가져와 맨 위에 붙인다 —
+  // 목록에 없으면 패널이 열리자마자 닫히므로. 총 건수·페이지 수는 영향 없음(원 목록 기준으로 이미 확정).
+  if (isCancelledView && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
+    const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
+      p_status: null, p_search: null, p_date_from: null, p_date_to: null,
+      p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled'], p_reservation_id: selectedId,
+      p_group_by_order: true,
+    })
+    if (selErr) console.error('[cms/rentals] 링크 예약 조회 실패:', selErr.message)
+    const one = ((selOne ?? []) as RentalListRow[])[0]
+    if (one) rentals.unshift(one)
+  }
   // 고객이 취소했고 관리자 취소확인 전인 예약("취소중") — 대여 라이프사이클 스코프(cancelled 제외)와 별개로
   // 목록 최상단에 "예약취소" 배지로 노출해 관리자가 놓치지 않게 한다(첫 페이지, 검색어 없음, 전체/계약완료 칩에서만).
   // 헤더의 [예약취소] 버튼 = 관리자 취소확인(confirm-cancel API) → 고객 마이페이지에서 "취소" 화면으로 이동.
@@ -92,6 +118,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
         .map(r => ({ ...r, cancel_pending: true }))
       rentals.unshift(...pending)
     }
+  }
+  // '취소·환불' 칩: 고객이 취소했고 관리자 취소확인 전인 행은 "취소중"(cancel_pending)로 표시 — 헤더 [예약취소] = 취소확인 흐름 유지
+  if (isCancelledView && rentals.length > 0) {
+    const { data: pendRows, error: pendErr } = await admin
+      .from('rental_reservations')
+      .select('id')
+      .in('id', rentals.map(r => r.reservation_id))
+      .not('customer_cancelled_at', 'is', null)
+      .is('cancel_confirmed_at', null)
+    if (pendErr) console.error('[cms/rentals] 취소중 표시 조회 실패:', pendErr.message)
+    const pendSet = new Set(((pendRows ?? []) as Array<{ id: number }>).map(r => r.id))
+    for (const r of rentals) if (pendSet.has(r.reservation_id)) r.cancel_pending = true
   }
   // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지 + 목록 상단 정렬
   await attachCancelPending(admin, rentals)
