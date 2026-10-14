@@ -230,6 +230,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             .select()
             .single()
 
+          if (matchInsertErr) console.error('[chat/message] 빠른답변 자동응답 저장 실패:', matchInsertErr.message)
           if (!matchInsertErr && matchedMessage) {
             await admin.rpc('increment_canned_response_usage', { p_id: match.id })
             await admin

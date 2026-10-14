@@ -12,7 +12,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
 import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
-import { resolveCannedBlocks } from '$lib/server/cannedContentBlocks'
+import { resolveCannedBlocks, CANNED_CONTENT_MAX, CANNED_CONTENT_TOO_LONG } from '$lib/server/cannedContentBlocks'
 
 export interface CannedResponse {
   id: string
@@ -93,6 +93,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   }
   if (!title)   return json({ error: '제목을 입력해주세요.' }, { status: 400 })
   if (!content) return json({ error: '내용을 입력해주세요.' }, { status: 400 })
+  if (content.length > CANNED_CONTENT_MAX) return json({ error: CANNED_CONTENT_TOO_LONG }, { status: 400 })
 
   if (category && !isAssignableCategory(category, await loadCannedCategories(createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)))) {
     return json({ error: '올바르지 않은 카테고리입니다.' }, { status: 400 })

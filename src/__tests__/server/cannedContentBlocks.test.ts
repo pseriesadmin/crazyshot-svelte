@@ -42,3 +42,14 @@ describe('resolveCannedBlocks', () => {
     }
   })
 })
+
+describe('채팅 글자 상한(chat_messages.content 1000자)', () => {
+  it('서식 본문의 글자가 1000자를 넘으면 거절한다', () => {
+    const r = resolveCannedBlocks([{ type: 'text', html: `<p>${'가'.repeat(1001)}</p>` }])
+    expect(r.ok).toBe(false)
+  })
+  it('1000자까지는 허용한다', () => {
+    const r = resolveCannedBlocks([{ type: 'text', html: `<p>${'가'.repeat(1000)}</p>` }])
+    expect(r.ok).toBe(true)
+  })
+})

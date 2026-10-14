@@ -33,6 +33,8 @@
   }
 
   const MAX_KEYWORDS = 10
+  // 채팅 메시지 상한(chat_messages.content 1000자) — 넘으면 자동답변·전송이 실패하므로 저장 전에 막는다(서버도 동일 검사)
+  const CANNED_CONTENT_MAX = 1000
 
   interface Props {
     item: CannedResponseRow | null
@@ -128,6 +130,10 @@
     const blocksToSave = flushed?.blocks ?? localBlocks
     const contentToSave = blocksToPlainText(blocksToSave).trim()
     if (!localTitle.trim() || !contentToSave || !localHelpCategory || !hasBlocksContent(blocksToSave)) return
+    if (contentToSave.length > CANNED_CONTENT_MAX) {
+      csToast.error(`채팅 답변은 ${CANNED_CONTENT_MAX}자 이내로 작성해주세요. (현재 ${contentToSave.length}자)`)
+      return
+    }
     // CTA 입력 검증 — 링크는 http(s):// 또는 / 로 시작해야 고객 화면에서 열린다. 버튼 텍스트만 있고 링크가
     // 없으면 눌러도 동작하지 않는 버튼이 되므로 막는다(2026-10-02).
     const ctaUrlTrim = localCtaUrl.trim()
@@ -301,7 +307,7 @@
     <div class="field">
       <label class="field-label" for="cr-content">
         내용 <span class="req">*</span>
-        <span class="char-count">{contentLength}자</span>
+        <span class="char-count" class:char-over={contentLength > CANNED_CONTENT_MAX}>{contentLength}/{CANNED_CONTENT_MAX}자</span>
       </label>
       <!-- 공통 문서 편집기(RichContentEditor) — 글자 서식·이미지·동영상·표. 채팅에는 텍스트만, 이미지·동영상은 썸네일로 나간다 -->
       {#key editorKey}
@@ -570,6 +576,7 @@
     color: var(--cs-text-light, #aaa);
   }
 
+  .char-over { color: var(--cs-red-badge); }
   .char-count {
     margin-left: auto;
     font: 400 12px/1 'Noto Sans KR', sans-serif;
