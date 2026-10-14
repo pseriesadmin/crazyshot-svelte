@@ -213,7 +213,7 @@
         <input
           class="search-in"
           type="search"
-          placeholder="이름·이메일·전화번호 검색"
+          placeholder="이름·이메일·전화번호·회원코드 검색"
           bind:value={searchInput}
           onkeydown={(e) => e.key === 'Enter' && applySearch()}
         />
@@ -291,7 +291,7 @@
                     <span class="badge-m" title={row.cms_role}>M</span>
                   {/if}
                 </td>
-                <td><span class="user-name">{row.name ?? '-'}</span></td>
+                <td>{#if row.name}<span class="user-name">{row.name}</span>{:else}<span class="user-name text-light">(이름 미입력)</span>{/if}</td>
                 <td><span class="user-email">{row.email || '-'}</span></td>
                 <td class="col-hide">
                   {#if row.member_code}
