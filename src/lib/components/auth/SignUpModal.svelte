@@ -2,6 +2,7 @@
   import { performSignUp, performSignIn } from '$lib/stores/auth'
   import { supabase, rpc } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
+  import { slide } from 'svelte/transition'
 
   type Mode = 'login' | 'signup' | 'find-email' | 'reset-pw'
 
@@ -31,6 +32,7 @@
   let email = $state('')
   let password = $state('')
   let passwordConfirm = $state('')
+  let fullName = $state('')
   let phone = $state('010-')        // 형식: 010-0000-0000
   let verifyCode = $state('')
   let showPassword = $state(false)
@@ -95,7 +97,18 @@
     }, 600)
   }
 
-  const canProceed = $derived(emailAvailable && !!password && !!passwordConfirm)
+  // ── 이름 입력 노출: 비밀번호 확인까지 일치하게 입력되는 즉시 아래에 '성함' 입력란을 보여준다 ──
+  // 한 번 노출되면 비밀번호를 다시 고쳐도 숨기지 않는다(입력 중인 이름이 사라지는 것 방지).
+  const FULL_NAME_MAX_LENGTH = 30
+  const passwordsMatched = $derived(password.length >= 6 && passwordConfirm === password)
+  let nameRevealed = $state(false)
+  $effect(() => {
+    if (passwordsMatched) nameRevealed = true
+  })
+
+  const canProceed = $derived(
+    emailAvailable && !!password && !!passwordConfirm && nameRevealed && fullName.trim().length > 0,
+  )
 
   // ── 로딩·에러 ──
   let isLoading = $state(false)
@@ -126,6 +139,8 @@
     email = ''
     password = ''
     passwordConfirm = ''
+    fullName = ''
+    nameRevealed = false
     phone = ''
     verifyCode = ''
     step = 'form'
@@ -189,6 +204,10 @@
     }
     if (password !== passwordConfirm) {
       errorMsg = '비밀번호가 일치하지 않습니다.'
+      return
+    }
+    if (!fullName.trim()) {
+      errorMsg = '성함을 입력해주세요.'
       return
     }
     step = 'verify'
@@ -276,9 +295,41 @@
       return
     }
 
+    const trimmedName = fullName.trim()
+    if (!trimmedName) {
+      errorMsg = '성함을 입력해주세요.'
+      return
+    }
+
     isLoading = true
     try {
       const cleaned = phone.replace(/\D/g, '')
+
+      // 성함 저장 — 이름 없는 가입을 막기 위해 가입 확정(인증번호 소진·계정 전환)보다 "먼저" 저장하고,
+      // 실패하면 여기서 중단한다(인증번호는 아직 쓰이지 않아 같은 화면에서 다시 시도할 수 있다).
+      // 인증 단계에 들어온 시점에 익명 세션과 프로필 행이 이미 있고(ensureSignupSession), 익명→영구 전환은
+      // 같은 UID를 유지하므로 저장한 이름이 그대로 이어진다. 마이페이지 이름 수정과 동일한 update_user_profile RPC
+      // (email·생일은 null = 변경 없음).
+      // 프로필 행 보정 1회 재시도 — ensureSignupSession은 프로필 생성 실패를 삼키므로, 행이 없으면 이름 저장이
+      // "프로필을 찾을 수 없습니다"로 실패해 가입이 막힐 수 있다. ensure_user_profile은 이미 있으면 안전(멱등)하고,
+      // 여기서 실패해도 아래 이름 저장 결과로 판단하므로 오류는 무시한다.
+      try {
+        await rpc.ensureUserProfile()
+      } catch {
+        // 아래 이름 저장 결과로 최종 판단
+      }
+      const { data: nameData, error: nameErr } = await (supabase.rpc as unknown as (
+        fn: string,
+        args: Record<string, unknown>,
+      ) => Promise<{ data: { ok: boolean } | null; error: { message: string } | null }>)(
+        'update_user_profile',
+        { p_full_name: trimmedName, p_email: null, p_birth_date: null },
+      )
+      if (nameErr || !nameData?.ok) {
+        errorMsg = '성함 저장에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        return
+      }
+
       // supabase-js rpc() 제네릭 오버로드 추론 이슈로 로컬 캐스트 필요(기존 관례,
       // ProductHeroModal.svelte 등과 동일 패턴) — database.ts에 타입 자체는 등록돼 있음
       const { data: verifyData, error: verifyErr } = await (supabase.rpc as unknown as (
@@ -619,6 +670,22 @@
               </button>
             </div>
           </div>
+
+          <!-- 성함 — 비밀번호 확인이 일치하는 즉시 노출 -->
+          {#if nameRevealed}
+            <div class="su-field" transition:slide={{ duration: 200 }}>
+              <input
+                id="su-name"
+                class="su-input"
+                type="text"
+                maxlength={FULL_NAME_MAX_LENGTH}
+                placeholder="성함을 입력해주세요."
+                bind:value={fullName}
+                autocomplete="name"
+                aria-label="성함"
+              />
+            </div>
+          {/if}
         </div>
 
         {#if errorMsg}

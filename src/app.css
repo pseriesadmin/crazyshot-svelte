@@ -117,7 +117,7 @@
 
   /* ── 타이포그래피 스케일 (PC) ── */
   /* format: font-size / line-height, font-weight */
-  --text-pc-ad-en-80: 900 80px/120% var(--font-en-condensed);     /* 영문 광고 대형 */
+  --text-pc-ad-en-80: 400 80px/120% var(--font-en-display);       /* 영문 광고 대형 (Tilt Warp — Config Condensed 파일 미등록이라 교체, 2026-10-14) */
   --text-pc-ad-en-35: 400 35px/130% var(--font-en-display);       /* 영문 광고 중형 */
   --text-pc-ad-kr-60: 700 60px/100% var(--font-kr-heading);       /* 한글 광고 대형 */
   --text-pc-ad-kr-35: 700 35px/160% var(--font-kr-heading);       /* 한글 타이틀 대형 */
