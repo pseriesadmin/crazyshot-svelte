@@ -83,7 +83,7 @@ CMS 화면     → cms-uiux.md 참조
 
 | JSON 키 | 크기/굵기 | 폰트 | CSS 변수 |
 |---|---|---|---|
-| `display-xl` | 80px Black Italic | Config Condensed | `--text-pc-ad-en-80` |
+| `display-xl` | 80px Regular | Tilt Warp | `--text-pc-ad-en-80` |
 | `display-lg` | 60px Bold | SB AggroOTF | `--text-pc-ad-kr-60` |
 | `display-md` | 35px Regular | Tilt Warp | `--text-pc-ad-en-35` |
 | `heading-xl` | 35px Bold | SB AggroOTF | `--text-pc-ad-kr-35` |

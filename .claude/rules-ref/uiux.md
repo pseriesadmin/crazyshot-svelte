@@ -156,7 +156,7 @@ border: 1px solid rgba(255,255,255,0.6);
 ### PC 타이포 스케일 (`--text-pc-*`)
 | 토큰 | 크기/굵기 | 폰트 | 용도 |
 |------|----------|------|------|
-| `--text-pc-ad-en-80` | 80px Black Italic | Config Condensed | 랜딩 영문 광고 |
+| `--text-pc-ad-en-80` | 80px Regular | Tilt Warp | 랜딩 영문 광고 |
 | `--text-pc-ad-kr-60` | 60px Bold | SB AggroOTF | 랜딩 한글 광고 |
 | `--text-pc-ad-en-35` | 35px Regular | Tilt Warp | 영문 광고 서브 |
 | `--text-pc-ad-kr-35` | 35px Bold | SB AggroOTF | 한글 타이틀 대형 |
