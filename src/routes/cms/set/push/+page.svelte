@@ -173,6 +173,7 @@
     { key: 'urgent_chat_message', label: '긴급상담', field: 'admin_notify_urgent_chat_message' as const },
     { key: 'identity_review', label: '본인증명승인', field: 'admin_notify_identity_review' as const },
     { key: 'crazychat_request', label: '크레이지챗접수', field: 'admin_notify_crazychat_request' as const },
+    { key: 'sms_undelivered', label: '문자미도착', field: 'admin_notify_sms_undelivered' as const },
   ] as const
 
   let togglingAdminCell = $state<string | null>(null)
@@ -227,6 +228,7 @@
     { value: 'urgent_chat_message', label: '긴급상담(관리자)' },
     { value: 'identity_review', label: '본인증명승인(관리자)' },
     { value: 'crazychat_request', label: '크레이지챗접수(관리자)' },
+    { value: 'sms_undelivered', label: '문자미도착(관리자)' },
   ])
 
   // 로그 "이벤트" 열 한글 표기 — 설정 라벨 + 관리자 이벤트 라벨, 매핑 없으면 원문 코드 그대로

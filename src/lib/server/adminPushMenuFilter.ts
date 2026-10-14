@@ -18,6 +18,8 @@ export const ADMIN_PUSH_EVENT_MENU_KEYS: Record<string, string | undefined> = {
   identity_review: 'customers.list',
   // 크레이지챗 접수(2026-10-07, S3)는 상담 화면 권한을 따른다
   crazychat_request: 'consulting.chat',
+  // 문자 미도착 의심(2026-10-14)은 예약 상세(알림발송 탭) 권한을 따른다
+  sms_undelivered: 'rental.reservation',
 }
 
 export async function filterAdminPushRecipientsByMenu(

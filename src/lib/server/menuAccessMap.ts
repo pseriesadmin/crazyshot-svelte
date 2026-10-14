@@ -133,6 +133,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/options/assets/available',
       'src/routes/api/cms/reservations/[id]/order-coupons',
       'src/routes/api/cms/reservations/[id]/order-siblings',
+      'src/routes/api/cms/reservations/[id]/sms-delivery',
       'src/routes/api/cms/reservations/[id]/payment',
       'src/routes/api/cms/reservations/[id]/payment/pg-status',
       'src/routes/api/cms/reservations/[id]/products',
