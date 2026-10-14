@@ -276,7 +276,7 @@
                     <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
                   {:else if !(row.status === 'hold' && row.signing_sent_at)}
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
-                      {STATUS_LABEL[row.status] ?? row.status}
+                      {row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status)}
                     </span>
                   {/if}
                   {#if row.status_mixed}

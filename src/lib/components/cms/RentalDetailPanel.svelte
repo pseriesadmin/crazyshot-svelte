@@ -19,6 +19,7 @@
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import { CANCEL_REASON_OPTIONS, CANCEL_REASON_NOTE_MAX } from '$lib/utils/cancelReason'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   import { pickLowestUnit } from '$lib/utils/availableUnitOrder'
@@ -104,6 +105,8 @@
     coupon_discount:        number | null
     confirmed_at:           string | null
     pg_cancelled_at:        string | null   // PG 실제 취소 처리 시각 (Migration #493)
+    cancelled_at:           string | null   // 환불(취소) 처리 시각 — cancel_reservation_payment RPC가 기록
+    cancel_reason:          string | null   // 환불(취소) 사유
     toss_response:          Record<string, unknown> | null
     status:                 string | null   // 'done' | 'cancelled' | null
     refund_failed_at:       string | null   // RSV-B-C1: Toss취소 성공 후 RPC 실패 시 기록
@@ -125,11 +128,13 @@
     /** 예약 단계 상태 변경(승인·거부·취소) 완료 시 호출 — /cms/reservation에서 closePanel에 연결.
         /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
     onstatuschange?: () => void
+    /** 이 예약이 취소(환불)로 확정된 직후 호출 — 대여현황이 '취소·환불' 목록으로 전환하는 용도(미지정 시 동작 없음) */
+    oncancelled?: (reservationId: number) => void
     /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -265,6 +270,7 @@
       // 목록을 새로고침하면 이 예약은 "취소중" 대상에서 빠지고 패널이 닫힌다(/cms/rentals 로더 참고)
       onrefresh?.()
       onstatuschange?.()
+      oncancelled?.(row.reservation_id)
     } catch {
       csToast.error('네트워크 오류로 처리하지 못했습니다.')
     } finally {
@@ -277,6 +283,68 @@
   let paymentDetail   = $state<PaymentDetail | null>(null)
   let paymentLoading  = $state(false)
   let paymentError    = $state<string | null>(null)
+
+  // ── 취소·환불 사유(2026-10-14) — 취소된 예약의 사유 선택(SuggestPicker) + 추가 입력(200자), 자동 저장(저장 버튼 없음) ──
+  // 저장은 사용자 조작(선택·입력·포커스 이탈)에서만 일어난다 — 조회 결과를 채우는 동안에는 저장하지 않는다(로드→저장 루프 방지).
+  let cancelReasonId        = $state<string | null>(null)
+  let cancelReasonNote      = $state('')
+  let cancelReasonLoadedFor = $state<number | null>(null)
+  let cancelReasonStatus    = $state<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  // 저장 완료(또는 저장된 값을 불러온) 상태 — 입력칸 BG를 비활성 토큰으로, 다시 선택(포커스)·수정하면 활성 토큰으로 되돌린다(cms-uiux.md §0-10-H)
+  let cancelReasonSaved     = $state(false)
+  let cancelReasonTimer: ReturnType<typeof setTimeout> | null = null
+
+  $effect(() => {
+    if (row.status !== 'cancelled') { cancelReasonLoadedFor = null; return }
+    if (cancelReasonLoadedFor === row.reservation_id) return
+    const id = row.reservation_id
+    cancelReasonLoadedFor = id
+    cancelReasonId = null
+    cancelReasonNote = ''
+    cancelReasonStatus = 'idle'
+    cancelReasonSaved = false
+    fetch(`/api/cms/reservations/${id}/cancel-reason`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelReasonLoadedFor !== id) return
+        cancelReasonId = d.code ?? null
+        cancelReasonNote = d.note ?? ''
+        cancelReasonSaved = !!(d.code || d.note)
+      })
+      .catch(() => { if (cancelReasonLoadedFor === id) cancelReasonStatus = 'error' })
+  })
+
+  // 예약·값을 호출 시점에 붙잡아 저장한다 — 디바운스 중 다른 예약으로 넘어가도 입력한 내용이 원래 예약에 저장된다
+  function persistCancelReason(id: number, code: string | null, note: string): void {
+    cancelReasonStatus = 'saving'
+    cancelReasonSaved = false
+    fetch(`/api/cms/reservations/${id}/cancel-reason`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, note }),
+    })
+      .then(async (r) => {
+        if (cancelReasonLoadedFor !== id) return
+        if (r.ok) { cancelReasonStatus = 'saved'; cancelReasonSaved = !!(code || note.trim()); return }
+        const b = await r.json().catch(() => ({}))
+        cancelReasonStatus = 'error'
+        csToast.error(b.error ?? '취소 사유를 저장하지 못했습니다.')
+      })
+      .catch(() => { if (cancelReasonLoadedFor === id) { cancelReasonStatus = 'error'; csToast.error('네트워크 오류로 취소 사유를 저장하지 못했습니다.') } })
+  }
+
+  function saveCancelReasonNow(code: string | null = cancelReasonId): void {
+    if (cancelReasonTimer) { clearTimeout(cancelReasonTimer); cancelReasonTimer = null }
+    persistCancelReason(row.reservation_id, code, cancelReasonNote)
+  }
+
+  function scheduleCancelReasonSave(): void {
+    if (cancelReasonTimer) clearTimeout(cancelReasonTimer)
+    const id = row.reservation_id, code = cancelReasonId, note = cancelReasonNote
+    cancelReasonStatus = 'saving'
+    cancelReasonSaved = false
+    cancelReasonTimer = setTimeout(() => { cancelReasonTimer = null; persistCancelReason(id, code, note) }, 700)
+  }
 
   // ── 알림발송 탭 — SMS 발송 내역 + 솔라피 단말 도착 결과(2026-10-14) ──
   interface SmsDeliveryCardItem {
@@ -1214,6 +1282,12 @@
     expired: '만료됨',
   }
 
+  // 취소·환불(2026-10-14): 결제까지 끝난 뒤 취소돼 PG 환불이 완료된 예약만 '취소·환불', 결제 전에 취소된 예약은 그대로 '취소'
+  // (row.payment_status = 주문의 최근 결제 상태 — 환불 완료 시 'cancelled', 환불 실패·미환불은 'done'이라 '취소'로 남는다)
+  let rowStatusLabel = $derived(
+    row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status),
+  )
+
   const PICKUP_LABELS: Record<string, string> = {
     crazydelivery: '크레이지샷 배송',
     quick:         '당일퀵 배송',
@@ -1694,7 +1768,7 @@
     <div class="panel-title-wrap">
       <span class="panel-label">대여</span>
       <span class="panel-id">{reservationCode()}</span>
-      <span class="panel-status">{STATUS_LABEL[row.status] ?? row.status}</span>
+      <span class="panel-status">{rowStatusLabel}</span>
       {#if row.status === 'hold' && row.payment_confirmed_at}
         <span class="payment-contract-badge">결제완료 · 계약대기</span>
       {/if}
@@ -1763,7 +1837,7 @@
                 csToast.error(actionErrorMessage(result))
               }
               await update()
-              if (result.type === 'success') onstatuschange?.()
+              if (result.type === 'success') { onstatuschange?.(); oncancelled?.(row.reservation_id) }
             }
           }}
         >
@@ -1829,7 +1903,58 @@
     {#if activeTab === 'rental'}
 
       <!-- 대여 여정 스텝퍼 -->
-      <RentalJourneyStepper status={row.status} steps={stepFilter} />
+      <RentalJourneyStepper status={row.status} steps={stepFilter}>
+        {#if row.status === 'cancelled'}
+          <!-- 취소·환불 사유(2026-10-14): 스텝퍼 박스 안에 배치 — 대표 사유 선택 + 추가 입력 200자, 자동 저장(저장 버튼 없음) -->
+          <div class="cancel-reason-box">
+            <SuggestPicker
+              id="cancel-reason-picker"
+              bind:selectedId={cancelReasonId}
+              options={CANCEL_REASON_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+              placeholder="취소·환불 사유를 등록하세요."
+              onselect={(opt) => saveCancelReasonNow(opt.id)}
+              oninput={(v) => { if (!v.trim() && cancelReasonLoadedFor === row.reservation_id) saveCancelReasonNow(null) }}
+            >
+              {#snippet field(ctrl)}
+                <input
+                  id={ctrl.id}
+                  name={ctrl.name}
+                  class="cancel-reason-input"
+                  class:is-saved={cancelReasonSaved}
+                  placeholder={ctrl.placeholder}
+                  value={ctrl.value}
+                  oninput={ctrl.oninput}
+                  onkeydown={ctrl.onkeydown}
+                  onfocus={ctrl.onfocus}
+                  onblur={ctrl.onblur}
+                  aria-autocomplete={ctrl.ariaAutocomplete}
+                  aria-expanded={ctrl.ariaExpanded}
+                  aria-controls={ctrl.ariaControls}
+                  aria-label="취소·환불 사유 선택"
+                  autocomplete="off"
+                />
+              {/snippet}
+            </SuggestPicker>
+            <div class="cancel-reason-note-wrap">
+              <input
+                class="cancel-reason-input"
+                class:is-saved={cancelReasonSaved}
+                type="text"
+                maxlength={CANCEL_REASON_NOTE_MAX}
+                placeholder="추가 사유를 입력하세요 (200자 이내)"
+                aria-label="취소·환불 추가 사유"
+                bind:value={cancelReasonNote}
+                oninput={scheduleCancelReasonSave}
+                onblur={() => { if (cancelReasonTimer) saveCancelReasonNow() }}
+              />
+              <span class="cancel-reason-count">{cancelReasonNote.length}/{CANCEL_REASON_NOTE_MAX}</span>
+            </div>
+            <span class="cancel-reason-status" role="status" aria-live="polite">
+              {cancelReasonStatus === 'saving' ? '저장 중…' : cancelReasonStatus === 'saved' ? '자동 저장됨' : cancelReasonStatus === 'error' ? '저장 실패' : ''}
+            </span>
+          </div>
+        {/if}
+      </RentalJourneyStepper>
 
       <!-- 예약 정보 -->
       <div class="section-title">대여 정보</div>
@@ -1840,7 +1965,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">현재 상태</span>
-          <span class="info-value">{STATUS_LABEL[row.status] ?? row.status}</span>
+          <span class="info-value">{rowStatusLabel}</span>
         </div>
         <div class="info-row">
           <span class="info-label">신청일시</span>
@@ -3032,11 +3157,28 @@
             <span class="info-label">결제 승인시간</span>
             <span class="info-value">{formatDateTime(paymentDetail.confirmed_at)}</span>
           </div>
-          {#if paymentDetail.pg_cancelled_at}
+          {#if paymentDetail.status === 'cancelled' || paymentDetail.pg_cancelled_at}
+            <!-- 환불 정보(2026-10-14): 고객 자가취소 경로는 pg_cancelled_at을 기록하지 않아 환불시간이 비어 보이던 결함 — 환불 처리 시각(cancelled_at)으로 대체 표시 -->
+            <div class="info-row">
+              <span class="info-label">환불 상태</span>
+              <span class="info-value">{PAYMENT_STATUS_LABELS[paymentDetail.status ?? ''] ?? paymentDetail.status ?? '-'}</span>
+            </div>
+            {#if paymentDetail.status === 'cancelled' && paymentDetail.paid_amount != null}
+              <div class="info-row">
+                <span class="info-label">환불 금액</span>
+                <span class="info-value fw-bold">{formatAmount(paymentDetail.paid_amount)}</span>
+              </div>
+            {/if}
             <div class="info-row">
               <span class="info-label">취소 환불시간</span>
-              <span class="info-value">{formatDateTime(paymentDetail.pg_cancelled_at)}</span>
+              <span class="info-value">{formatDateTime(paymentDetail.pg_cancelled_at ?? paymentDetail.cancelled_at)}</span>
             </div>
+            {#if paymentDetail.cancel_reason}
+              <div class="info-row">
+                <span class="info-label">환불 사유</span>
+                <span class="info-value">{paymentDetail.cancel_reason}</span>
+              </div>
+            {/if}
           {/if}
           <!-- PG(Toss) 실시간 조회 — DB 기록과 별개로 PG 쪽에서 취소가 실제 실행됐는지 확인 -->
           <div class="info-row">
@@ -3339,6 +3481,43 @@
   .sms-empty  { font: var(--text-pc-body-14); color: var(--cs-text-light); padding: 24px 0; text-align: center; }
   .sms-notice { font: var(--text-pc-script-12); color: var(--cs-red-badge); }
   .sms-hint   { font: var(--text-pc-script-12); color: var(--cs-text-light); line-height: 1.6; }
+
+  /* 취소·환불 사유 — 선택(SuggestPicker) + 추가 입력, 자동 저장 */
+  .cancel-reason-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: visible; /* SuggestPicker 목록 레이어가 잘리지 않게 */
+  }
+  .cancel-reason-input {
+    width: 100%;
+    font: var(--text-pc-body-14);
+    padding: 10px 14px;
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    outline: none;
+  }
+  .cancel-reason-input:focus { border-color: var(--cs-purple); }
+  /* 안내 문구(placeholder)는 입력값보다 옅게 — 보조 텍스트 토큰 */
+  .cancel-reason-input::placeholder { color: var(--cs-text-placeholder); }
+  .cancel-reason-note-wrap { position: relative; }
+  .cancel-reason-note-wrap .cancel-reason-input { padding-right: 64px; }
+  .cancel-reason-count {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    pointer-events: none;
+  }
+  .cancel-reason-status { font: var(--text-pc-script-12); color: var(--cs-text-light); text-align: right; min-height: 1em; }
+  /* 회색 스텝퍼 박스 안이라 입력칸은 흰 바탕으로 구분 */
+  .cancel-reason-box .cancel-reason-input { background: var(--cs-white); }
+  /* 저장 완료 상태는 비활성 BG 토큰(박스와 같은 surface-gray), 다시 선택(:focus)하면 활성 BG(white)로 복귀 — cms-uiux.md §0-10-H */
+  .cancel-reason-box .cancel-reason-input.is-saved:not(:focus) { background: var(--cs-surface-gray); }
 
   .section-title-btns {
     display: flex;

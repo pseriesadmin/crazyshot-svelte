@@ -21,6 +21,8 @@
     { label: '반납요청', value: 'return_requested' },
     { label: '반납완료', value: 'returned' },
     { label: '완료',     value: 'completed' },
+    // 결제까지 끝난 뒤 취소·환불된 대여 — 별도 조회(loadRefundedRentals), 단계 화살표 없음
+    { label: '취소·환불', value: 'cancelled_refunded' },
     { label: '전체',     value: '' },
   ]
 
@@ -33,6 +35,7 @@
     returned:         '반납완료',
     completed:        '완료',
     damage_claimed:   '파손신고',
+    // 취소 행 라벨은 표시 시점에 결정(환불 완료 = '취소·환불', 결제 전 취소 = '취소') — rowStatusLabel 참고
     cancelled:        '취소',
   }
 
@@ -45,6 +48,11 @@
     completed:        { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
     damage_claimed:   { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
     cancelled:        { bg: 'rgba(255,53,53,0.10)',   color: '#CF0000' },
+  }
+
+  // 결제까지 끝난 뒤 PG 환불이 완료된 취소만 '취소·환불', 결제 전 취소·환불 미완료는 '취소'
+  function rowStatusLabel(row: RentalListRow): string {
+    return row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status)
   }
 
   const PICKUP_LABELS: Record<string, string> = {
@@ -103,6 +111,7 @@
     // '전체'(val === '')도 명시적으로 채운다 — 위 applyFilters와 동일한 이유
     params.set('status', val)
     params.delete('page')
+    params.delete('selected') // 칩 이동 시 열린 패널 선택은 해제 — 취소된 예약 링크의 칩 자동 전환(서버 리다이렉트)과 충돌하지 않게
     goto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
 
@@ -129,6 +138,12 @@
     const params = new URLSearchParams(window.location.search)
     params.set('selected', String(row.reservation_id))
     syncSelectedUrl(`/cms/rentals?${params.toString()}`)
+  }
+
+  // 관리자가 예약을 취소(환불)하면 그 예약이 있는 '취소·환불' 목록으로 전환해 같은 예약을 다시 연다
+  async function openInCancelledList(id: number) {
+    await goto(`/cms/rentals?status=cancelled_refunded&selected=${id}`, { replaceState: true, invalidateAll: true })
+    selectedId = id
   }
 
   function closePanel() {
@@ -180,11 +195,12 @@
         <button
           class="chip"
           class:chip-all={f.value === ''}
+          class:chip-refund={f.value === 'cancelled_refunded'}
           class:chip-active={(data.status ?? '') === f.value}
           onclick={() => setStatus(f.value)}
         >
           <span>{f.label}</span>
-          {#if f.value !== '' && f.value !== 'completed'}
+          {#if f.value !== '' && f.value !== 'completed' && f.value !== 'cancelled_refunded'}
             <ChevronIcon direction="right" size={6} color="currentColor" />
           {/if}
         </button>
@@ -235,7 +251,7 @@
                     <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
                   {:else}
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
-                      {STATUS_LABEL[row.status] ?? row.status}
+                      {rowStatusLabel(row)}
                     </span>
                   {/if}
                   {#if row.status_mixed && !row.cancel_pending}
@@ -311,6 +327,7 @@
             row={selectedRow}
             onclose={closePanel}
             onrefresh={invalidateAll}
+            oncancelled={openInCancelledList}
             isRentalView={true}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
             cmsRole={data.cmsRole}
@@ -395,6 +412,9 @@
   /* '전체'는 파이프라인 밖의 리셋 액션 — 미선택 시 기본 BG토큰(purple-10) 제거해 다른
      순차 상태 버튼들과 시각적으로 구분(선택되면 다른 칩과 동일하게 chip-active 배경 적용) */
   .chip-all:not(.chip-active) { background: transparent; }
+  /* '취소·환불'은 일반 진행 단계와 구분되는 종료 상태 — 미선택 시 극연한 레드(red-5%), 선택 시 레드(red-100, 흰 글자 대비 확보) */
+  .chip-refund:not(.chip-active) { background: var(--cs-red-xlight); }
+  .chip-refund.chip-active { background: var(--cs-red); }
 
   .count-badge {
     font: var(--text-pc-script-12);

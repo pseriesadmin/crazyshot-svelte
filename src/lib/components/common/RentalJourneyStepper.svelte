@@ -1,11 +1,14 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte'
+
   interface Props {
     status: string
     steps?: string[]  // 표시할 status 값 목록 — 미지정 시 전체 6단계
     productName?: string  // bg 박스 상단 좌측에 표시할 대여 상품명(선택 — 미지정 시 미노출)
+    children?: Snippet    // bg 박스 안, 단계 표시 아래에 넣을 추가 콘텐츠(선택 — CMS 취소·환불 사유 입력 등, 미지정 시 기존과 동일)
   }
 
-  let { status, steps, productName }: Props = $props()
+  let { status, steps, productName, children }: Props = $props()
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
@@ -72,6 +75,9 @@
       {/each}
     {/if}
   </div>
+  {#if children}
+    <div class="stepper-extra">{@render children()}</div>
+  {/if}
 </div>
 
 <style>
@@ -116,6 +122,9 @@
   .stepper-scroll::-webkit-scrollbar {
     display: none;
   }
+  /* children 슬롯 — 박스 안 단계 표시 아래 */
+  .stepper-extra { margin-top: 16px; }
+  .stepper-extra:empty { display: none; }
   .step-item {
     display: flex;
     flex-direction: column;

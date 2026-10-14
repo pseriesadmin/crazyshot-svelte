@@ -119,6 +119,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/available-units',
       'src/routes/api/cms/reservations/[id]/bundles',
       'src/routes/api/cms/reservations/[id]/bundles/available',
+      'src/routes/api/cms/reservations/[id]/cancel-reason',
       'src/routes/api/cms/reservations/[id]/confirm-cancel',
       'src/routes/api/cms/reservations/[id]/contract-data',
       'src/routes/api/cms/reservations/[id]/detail',
