@@ -5,10 +5,13 @@
     status: string
     steps?: string[]  // 표시할 status 값 목록 — 미지정 시 전체 6단계
     productName?: string  // bg 박스 상단 좌측에 표시할 대여 상품명(선택 — 미지정 시 미노출)
+    compact?: boolean                  // 박스 상하 패딩 50% 축소(22→11px) — CMS 취소·환불 사유 박스용, 기본 false
+    cancelledLabel?: string            // 취소 상태 문구(기본 '취소됨' — CMS 취소·환불 사유 박스는 '취소사유등록')
+    cancelledAlign?: 'center' | 'start'  // 취소됨 표시 위치(기본 center — CMS 취소·환불 사유 박스는 start=좌측)
     children?: Snippet    // bg 박스 안, 단계 표시 아래에 넣을 추가 콘텐츠(선택 — CMS 취소·환불 사유 입력 등, 미지정 시 기존과 동일)
   }
 
-  let { status, steps, productName, children }: Props = $props()
+  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false }: Props = $props()
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
@@ -40,16 +43,16 @@
   })
 </script>
 
-<div class="journey-stepper">
+<div class="journey-stepper" class:compact>
   {#if productName}
     <p class="stepper-product-name">{productName}</p>
   {/if}
-  <div class="stepper-scroll" role="list" aria-label="대여 여정" bind:this={stepperEl}>
+  <div class="stepper-scroll" class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
     {#if isCancelled}
       <div class="journey-cancelled">
         <span class="cancelled-icon">✕</span>
         <span class="cancelled-label">
-          {status === 'damage_claimed' ? '파손신고' : '취소됨'}
+          {status === 'damage_claimed' ? '파손신고' : (cancelledLabel ?? '취소됨')}
         </span>
       </div>
     {:else}
@@ -90,6 +93,8 @@
     background: var(--cs-surface-gray);
     border-radius: 30px;
   }
+  /* 상하 패딩 50% 축소(좌우는 유지) — 반응형 padding 규칙보다 우선하도록 클래스 2개 */
+  .journey-stepper.compact { padding-top: 11px; padding-bottom: 11px; background: var(--cs-bg-row-hover); /* 더 옅은 회색(#fafafa) */ }
   /* 박스 상단 좌측 상품명 — 기존 박스 바깥에 있던 문구를 박스 안으로 재배치 */
   .stepper-product-name {
     font-family: var(--font-kr);
@@ -121,6 +126,12 @@
   }
   .stepper-scroll::-webkit-scrollbar {
     display: none;
+  }
+  /* 취소됨 좌측 배치 — 좌측 끝 페이드 마스크를 끄지 않으면 라벨이 흐려진다 */
+  .stepper-scroll.cancelled-start {
+    justify-content: flex-start;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
   /* children 슬롯 — 박스 안 단계 표시 아래 */
   .stepper-extra { margin-top: 16px; }
