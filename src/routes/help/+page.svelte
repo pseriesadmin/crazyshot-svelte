@@ -3,6 +3,8 @@
   import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
   import { HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB } from '$lib/constants/helpHero'
+  import { imageBlockStyle } from '$lib/types/content-editor'
+  import '$lib/styles/rich-content.css'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -215,7 +217,36 @@
             </button>
             {#if open}
               <div class="faq-a">
-                <p class="faq-a-text">{item.content}</p>
+                {#if item.content_blocks}
+                  <!-- 빠른답변을 공통 문서 편집기로 쓴 경우 — 편집기 서식(글자 서식·이미지·동영상·표)을 그대로 보여준다(서버에서 정화 완료) -->
+                  <div class="faq-a-rich rc-content">
+                    {#each item.content_blocks as block}
+                      {#if block.type === 'text'}
+                        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                        {@html block.html}
+                      {:else if block.type === 'html'}
+                        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                        {@html block.content}
+                      {:else if block.type === 'image'}
+                        <div class="rc-images rc-images--{block.layout}" style={imageBlockStyle(block.width, block.align)}>
+                          {#each block.images.filter((img) => !img.isHead) as img}
+                            <figure class="rc-fig"><img class="rc-img" src={img.url} alt={img.alt} loading="lazy" /></figure>
+                          {/each}
+                        </div>
+                      {:else if block.type === 'youtube'}
+                        <div class="rc-youtube">
+                          <iframe src="https://www.youtube.com/embed/{block.videoId}?rel=0" title="유튜브 동영상" loading="lazy" allow="encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                        </div>
+                      {:else if block.type === 'divider'}
+                        <hr />
+                      {:else if block.type === 'link-entry'}
+                        <a href={block.url} target="_blank" rel="noopener noreferrer">{block.text}</a>
+                      {/if}
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="faq-a-text">{item.content}</p>
+                {/if}
               </div>
             {/if}
           </div>
@@ -618,6 +649,18 @@
   border-radius: 20px;
   border: 1px solid var(--cs-purple-op10);
 }
+
+.faq-a-rich {
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 13px;
+  color: var(--cs-purple);
+  line-height: 1.7;
+  letter-spacing: -0.3px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.faq-a-rich :global(p) { margin: 0; }
 
 .faq-a-text {
   font-family: 'Noto Sans KR', sans-serif;

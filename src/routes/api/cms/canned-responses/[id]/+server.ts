@@ -10,6 +10,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
 import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
+import { resolveCannedBlocks } from '$lib/server/cannedContentBlocks'
 
 // PATCH /api/cms/canned-responses/[id] — 수정
 export const PATCH: RequestHandler = async ({ locals, request, params }) => {
@@ -24,6 +25,16 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
   const updates: Record<string, unknown> = {}
   if (typeof body.title === 'string')    updates.title    = body.title.trim()
   if (typeof body.content === 'string')  updates.content  = body.content.trim()
+  // 서식 본문(공통 문서 편집기) — 있으면 content는 그 텍스트 파생값으로 대체, null/빈 배열이면 서식 해제
+  const resolvedBlocks = resolveCannedBlocks(body.content_blocks)
+  if (!resolvedBlocks.ok) return json({ error: resolvedBlocks.error }, { status: 400 })
+  if (!('unchanged' in resolvedBlocks)) {
+    updates.content_blocks = resolvedBlocks.blocks
+    if (resolvedBlocks.content) updates.content = resolvedBlocks.content
+  } else if (typeof body.content === 'string') {
+    // 서식 본문 없이 글자만 수정하는 요청 — 남아 있는 서식 본문이 새 글자와 어긋나지 않게 해제한다
+    updates.content_blocks = null
+  }
   if ('category' in body)               updates.category  = body.category ?? null
   if ('help_category' in body)          updates.help_category = body.help_category ?? null
   if ('shortcut' in body) {
@@ -69,7 +80,7 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
     .from('canned_responses')
     .update(updates)
     .eq('id', id)
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review, content_blocks')
     .single()
 
   if (error) {

@@ -3,12 +3,16 @@
   // create/update: 기존 /api/cms/canned-responses REST API fetch 재사용 (로직 중복 없음)
   // delete: CmsDeleteButton.svelte action="?/delete" 재사용
 
+  import { untrack } from 'svelte'
   import { invalidateAll } from '$app/navigation'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
   import { isValidCtaUrl } from '$lib/utils/ctaUrl'
   import { DEFAULT_CANNED_CATEGORIES, sortCategories, type CannedCategory } from '$lib/constants/cannedResponseCategories'
   import { HELP_CATEGORIES } from '$lib/constants/helpCategories'
+  import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
+  import { blocksToPlainText, extractCannedMedia, hasBlocksContent, mediaThumbUrl, textToBlocks } from '$lib/utils/cannedBlocks'
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙)
   interface CannedResponseRow {
     id: string
@@ -24,6 +28,8 @@
     cta_label: string | null
     cta_url: string | null
     pending_review?: boolean
+    /** 서식 본문(공통 문서 편집기). null/없음 = 순수 텍스트만 있는 기존 답변 */
+    content_blocks?: ContentBlock[] | null
   }
 
   const MAX_KEYWORDS = 10
@@ -42,7 +48,16 @@
 
   // 로컬 편집 상태
   let localTitle    = $state('')
-  let localContent  = $state('')
+  // 서식 본문(공통 문서 편집기) — 채팅에는 이 본문의 텍스트(localContent)만 나가고, 이미지·동영상은 썸네일로 따로 붙는다
+  let localBlocks   = $state<ContentBlock[]>([])
+  let editorKey     = $state(0)
+  let editorRef     = $state<RichContentEditor | undefined>()
+  // 편집기가 요구하는 키워드 바인딩(이 화면은 showKeywords=false라 쓰지 않음 — 고객 매칭 키워드는 아래 별도 입력란)
+  let editorKeywords = $state<string[]>([])
+  // 이미지·동영상 업로드 위치(Storage 폴더) — 새 답변은 임시 폴더, 기존 답변은 답변 id 폴더
+  let tmpUploadId   = $state(globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : 'tmp')
+  const localContent = $derived(blocksToPlainText(localBlocks))
+  const localMedia   = $derived(extractCannedMedia(localBlocks))
   let localCategory = $state<string | null>(null)
   let localHelpCategory = $state<string | null>(null)
   let localShortcut = $state('')
@@ -56,7 +71,12 @@
   // item 변경 시 로컬 상태 동기화
   $effect(() => {
     localTitle    = item?.title    ?? ''
-    localContent  = item?.content  ?? ''
+    // 서식 본문이 있으면 그대로, 없으면(기존 순수 텍스트 답변) 줄 단위 문단으로 변환해 편집기에 넣는다
+    localBlocks   = item?.content_blocks && item.content_blocks.length > 0
+      ? (JSON.parse(JSON.stringify(item.content_blocks)) as ContentBlock[])
+      : textToBlocks(item?.content)
+    // 같은 effect 안에서 읽고 쓰면 자기 자신을 다시 예약해 무한 갱신이 될 수 있어 읽기를 추적에서 뺀다
+    untrack(() => { editorKey++ })
     localCategory = item?.category ?? null
     localHelpCategory = item?.help_category ?? null
     localShortcut = item?.shortcut ?? ''
@@ -98,7 +118,16 @@
   )
 
   async function handleSave(): Promise<void> {
-    if (!localTitle.trim() || !localContent.trim() || !localHelpCategory || isSaving) return
+    if (isSaving) return
+    // 편집기의 디바운스 대기 중인 마지막 입력을 저장 전에 확정하고 직렬화 누락 여부를 점검한다(변경이 없으면 원본 그대로)
+    const flushed = editorRef?.flush()
+    if (flushed && !flushed.ok) {
+      csToast.error('본문을 저장 형식으로 변환하는 중 내용이 달라져 저장을 멈췄어요. 새로고침 후 다시 시도해주세요.')
+      return
+    }
+    const blocksToSave = flushed?.blocks ?? localBlocks
+    const contentToSave = blocksToPlainText(blocksToSave).trim()
+    if (!localTitle.trim() || !contentToSave || !localHelpCategory || !hasBlocksContent(blocksToSave)) return
     // CTA 입력 검증 — 링크는 http(s):// 또는 / 로 시작해야 고객 화면에서 열린다. 버튼 텍스트만 있고 링크가
     // 없으면 눌러도 동작하지 않는 버튼이 되므로 막는다(2026-10-02).
     const ctaUrlTrim = localCtaUrl.trim()
@@ -116,7 +145,8 @@
       const method = isNew ? 'POST' : 'PATCH'
       const body = {
         title:    localTitle.trim(),
-        content:  localContent.trim(),
+        content:  contentToSave,
+        content_blocks: blocksToSave,
         category: localCategory || null,
         help_category: localHelpCategory,
         shortcut: localShortcut.replace(/^\//, '').trim() || null,
@@ -273,20 +303,37 @@
         내용 <span class="req">*</span>
         <span class="char-count">{contentLength}자</span>
       </label>
-      <textarea
-        id="cr-content"
-        class="field-textarea"
-        bind:value={localContent}
-        placeholder="고객에게 전송할 답변 내용을 입력하세요"
-        rows={6}
-      ></textarea>
+      <!-- 공통 문서 편집기(RichContentEditor) — 글자 서식·이미지·동영상·표. 채팅에는 텍스트만, 이미지·동영상은 썸네일로 나간다 -->
+      {#key editorKey}
+        <div class="content-editor-box" id="cr-content">
+          <RichContentEditor
+            bind:this={editorRef}
+            bind:blocks={localBlocks}
+            bind:keywords={editorKeywords}
+            variant="cms"
+            showKeywords={false}
+            uploadPrefix={`canned/${item?.id ?? tmpUploadId}`}
+            placeholder="고객에게 전송할 답변 내용을 입력하세요"
+          />
+        </div>
+      {/key}
     </div>
 
-    <!-- 내용 전체 미리보기 -->
+    <!-- 내용 전체 미리보기 — 채팅에 실제로 나가는 모습(글자만 + 이미지·동영상 썸네일) -->
     {#if localContent}
       <div class="content-preview">
-        <span class="preview-label">내용 미리보기</span>
+        <span class="preview-label">내용 미리보기 (채팅 표시)</span>
         <div class="preview-bubble">{localContent}</div>
+        {#if localMedia.length > 0}
+          <div class="preview-media">
+            {#each localMedia as m, i (i)}
+              <span class="preview-thumb">
+                <img src={mediaThumbUrl(m)} alt="" loading="lazy" />
+                {#if m.type === 'youtube'}<span class="preview-play" aria-hidden="true">▶</span>{/if}
+              </span>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -297,7 +344,9 @@
       </span>
       <div class="cta-fields">
         <div class="cta-field">
-          <label class="cta-field-label" for="cr-image-url">이미지 URL</label>
+          <label class="cta-field-label" for="cr-image-url">
+            이미지 URL <span class="field-hint">— 카드 대표 이미지(주소 직접 입력). 본문에 넣을 사진·동영상은 위 편집기에 추가하세요.</span>
+          </label>
           <input
             id="cr-image-url"
             type="url"
@@ -528,8 +577,7 @@
   }
 
   /* cms-uiux.md §7-7 .f-input 표준(배경 gray, 테두리 없음) */
-  .field-input,
-  .field-textarea {
+  .field-input {
     border: none;
     border-radius: var(--radius-sm);
     padding: 10px 16px;
@@ -540,13 +588,10 @@
     box-sizing: border-box;
     resize: vertical;
   }
-  .field-input:focus,
-  .field-textarea:focus {
+  .field-input:focus {
     outline: 2px solid var(--cs-purple);
     outline-offset: -2px;
   }
-
-  .field-textarea { min-height: 120px; }
 
   /* 카테고리 콤보 버튼 */
   .cat-pills {
@@ -609,6 +654,33 @@
     flex-direction: column;
     gap: 6px;
     margin-top: 4px;
+  }
+
+  /* 공통 문서 편집기 래퍼 — ProductDetailPanel .content-editor-box와 동일 */
+  .content-editor-box {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: clip;
+  }
+  .preview-media { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .preview-thumb {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--cs-lilac);
+  }
+  .preview-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .preview-play {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--cs-white);
+    background: rgba(16, 11, 50, 0.35);
+    font-size: 14px;
   }
 
   .preview-label {

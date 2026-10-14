@@ -5,6 +5,7 @@
   import type { ActionPayload, CtaModalRequest } from '$lib/types/chat'
   import { csToast } from '$lib/utils/toast'
   import { smsNotifyTypesForCard } from '$lib/utils/smsCardTypes'
+  import { mediaThumbUrl } from '$lib/utils/cannedBlocks'
 
   interface Props {
     payload: ActionPayload
@@ -77,6 +78,25 @@
     void imageUrl
     imageFailed = false
   })
+
+  // 빠른답변 서식 본문의 이미지·동영상 썸네일(canned_cta) — 눌러서 확대/재생(2026-10-14)
+  let mediaItems = $derived(
+    payload.type === 'canned_cta' && Array.isArray(payload.media)
+      ? payload.media.filter((m) => (m.type === 'youtube' ? /^[\w-]{11}$/.test(m.videoId) : m.type === 'image' && /^(?:https?:\/\/|\/(?!\/))/i.test(m.url)))
+      : []
+  )
+  let lightboxIdx = $state<number | null>(null)
+  let lightboxItem = $derived(lightboxIdx !== null ? (mediaItems[lightboxIdx] ?? null) : null)
+  // 썸네일만 있는 카드(대표 이미지·버튼 문구·링크 없음) — 버튼을 숨긴다(서버가 button_label을 빈 문자열로 보낸다)
+  let hideCta = $derived(payload.type === 'canned_cta' && payload.button_label === '' && !payload.action_url)
+  // 확대 화면은 채팅창(transform 조상) 밖인 body로 옮겨 렌더링한다 — position:fixed가 뷰포트 기준이 되게(ui-mobile.md "CSS transform + position:fixed 충돌")
+  function portal(node: HTMLElement): { destroy: () => void } {
+    document.body.appendChild(node)
+    return { destroy: () => node.remove() }
+  }
+  function onLightboxKey(e: KeyboardEvent): void {
+    if (lightboxIdx !== null && e.key === 'Escape') lightboxIdx = null
+  }
 
   // CTA 버튼 레이블 + 색상 결정
   let ctaLabel = $derived(payload.button_label ?? ctaDefaults(payload.type).label)
@@ -488,9 +508,29 @@
   let ctaDisabled = $derived(isBlocked || returnRemindBlocked || isCouponPending || isCouponRejected)
 </script>
 
+{#snippet mediaStrip()}
+  {#if mediaItems.length > 0}
+    <div class="media-strip">
+      {#each mediaItems as m, i (i)}
+        <button
+          type="button"
+          class="media-thumb"
+          onclick={() => (lightboxIdx = i)}
+          aria-label={m.type === 'youtube' ? '동영상 재생' : (m.alt || '이미지 크게 보기')}
+        >
+          <img src={mediaThumbUrl(m)} alt={m.type === 'image' ? m.alt : ''} loading="lazy" />
+          {#if m.type === 'youtube'}<span class="media-play" aria-hidden="true">▶</span>{/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet scriptText()}
   {#if script}<p class="card-script">{script}</p>{/if}
 {/snippet}
+
+<svelte:window onkeydown={onLightboxKey} />
 
 <div class="action-card" class:expired={isBlocked}>
   <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
@@ -622,6 +662,7 @@
           <p class="late-fee-info">연체 {payload.hours_late}시간 · {payload.fee_amount.toLocaleString()}원</p>
         {/if}
 
+        {@render mediaStrip()}
         {@render scriptText()}
         <!-- CTA 버튼 — Figma node 2497:8767 -->
         {#if isShipmentPending}
@@ -629,6 +670,8 @@
         {:else if payload.type === 'cancel_request' && !isAdmin}
           <!-- 고객 화면: 안내 전용(CTA 없음) — 관리자가 채팅 세션에서 확인 후 직접 처리 -->
           <p class="shipment-pending-note">취소 요청이 접수되었습니다. 관리자가 확인 후 이 채팅으로 안내드립니다. (취소 수수료가 적용될 수 있습니다)</p>
+        {:else if hideCta}
+          <!-- 썸네일만 있는 빠른답변 카드 — 누를 곳이 없으므로 버튼 없음 -->
         {:else}
           <button
             class="cta-btn cta-btn--{ctaColor}"
@@ -664,6 +707,7 @@
         <p class="coupon-code">{payload.coupon_code}</p>
       {/if}
 
+      {@render mediaStrip()}
       {@render scriptText()}
       {#if payload.type === 'coupon_duplicate_warning'}
         <!-- 경고 카드는 안내 전용 — CTA 버튼 없음 -->
@@ -701,6 +745,8 @@
         <button class="cta-btn cta-btn--purple cta-btn--full" disabled>
           발급 취소됨
         </button>
+      {:else if hideCta}
+        <!-- 썸네일만 있는 빠른답변 카드 — 누를 곳이 없으므로 버튼 없음 -->
       {:else}
         <button
           class="cta-btn cta-btn--{ctaColor} cta-btn--full"
@@ -713,6 +759,27 @@
       {#if smsSentLive}
         <p class="sms-sent-note">SMS 발송 성공.</p>
       {/if}
+    </div>
+  {/if}
+
+  {#if lightboxItem}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="lb-backdrop" use:portal onclick={() => (lightboxIdx = null)} role="presentation">
+      <div class="lb-box" role="dialog" aria-modal="true" aria-label="첨부 크게 보기" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+        <button type="button" class="lb-close" onclick={() => (lightboxIdx = null)} aria-label="닫기">✕</button>
+        {#if lightboxItem.type === 'image'}
+          <img class="lb-img" src={lightboxItem.url} alt={lightboxItem.alt} />
+        {:else}
+          <iframe
+            class="lb-video"
+            src="https://www.youtube.com/embed/{lightboxItem.videoId}?autoplay=1"
+            title="동영상"
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowfullscreen
+          ></iframe>
+        {/if}
+      </div>
     </div>
   {/if}
 
@@ -839,6 +906,67 @@
   }
 
   /* CTA 버튼 — Figma node 2497:8767, 2497:8782 */
+  /* 빠른답변 서식 본문의 이미지·동영상 썸네일 — 눌러서 확대 */
+  .media-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+  }
+  .media-thumb {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--cs-lilac);
+    cursor: zoom-in;
+  }
+  .media-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .media-play {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--cs-white);
+    background: rgba(16, 11, 50, 0.35);
+    font-size: 18px;
+  }
+  /* 확대 보기 — body로 옮겨 렌더링되므로 :global */
+  :global(.lb-backdrop) {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(16, 11, 50, 0.85);
+  }
+  :global(.lb-box) { position: relative; max-width: min(960px, 100%); max-height: 100%; display: flex; }
+  :global(.lb-img) { max-width: 100%; max-height: calc(100vh - 40px); object-fit: contain; border-radius: 12px; }
+  :global(.lb-video) { width: min(960px, calc(100vw - 40px)); aspect-ratio: 16 / 9; border: none; border-radius: 12px; background: #000; }
+  :global(.lb-close) {
+    position: absolute;
+    top: -14px;
+    right: -14px;
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: 50%;
+    background: var(--cs-white);
+    color: var(--cs-text);
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  :global(.lb-close:hover) { background: var(--cs-red-badge); color: var(--cs-white); }
+
   .cta-btn {
     border: none;
     border-radius: 10px;

@@ -184,10 +184,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         // Migration #617: pending_review=true(CSV 일괄등록 등 관리자 미검토) 항목은 제외 —
         // shortcut/match_keywords가 비어 있어도 title/content가 매칭 대상에 포함되므로
         // 이 필터 없이는 미검토 원문이 자동매칭·자동발송될 수 있다.
-      const { data: candidates } = await admin
+      const { data: candidates, error: candidatesError } = await admin
           .from('canned_responses')
-          .select('id, title, content, category, shortcut, match_keywords, usage_count, image_url, cta_label, cta_url')
+          .select('id, title, content, category, shortcut, match_keywords, usage_count, image_url, cta_label, cta_url, content_blocks')
           .eq('pending_review', false)
+        // 조회 실패(예: 칼럼 누락)가 조용히 '매칭 없음'으로 보이지 않도록 로그를 남긴다
+        if (candidatesError) console.error('[chat/message] canned_responses 조회 실패:', candidatesError.message)
         // §E SYN-9: 확정된 동의어 그룹을 로드해 키워드 매칭 범위를 확장
         const synonymGroups = await loadSynonymGroups()
         // 2026-10-06: 규칙 판정 + 확률 모델(학습 가중치). 판정 불가·낮은 확률이면 match=null → 아래 "대기 안내" 경로로 이어진다
