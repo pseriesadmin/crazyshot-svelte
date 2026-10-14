@@ -235,7 +235,7 @@
             class:chip-all={opt.value === ''}
             class:chip-active={opt.value === '' ? (data.bl ?? '') === '' && data.classifications.length === 0 : (data.bl ?? '') === opt.value}
             onclick={() => setBl(opt.value)}
-          >{opt.label}</button>
+          ><span>{opt.label}</span>{#if opt.value === 'true' && (data.managedMatchPending ?? 0) > 0}<span class="chip-badge" aria-label="미확인 관리대상 일치 {data.managedMatchPending}건">{data.managedMatchPending}</span>{/if}</button>
         {/each}
       </div>
     </div>
@@ -291,7 +291,7 @@
                     <span class="badge-m" title={row.cms_role}>M</span>
                   {/if}
                 </td>
-                <td>{#if row.name}<span class="user-name">{row.name}</span>{:else}<span class="user-name text-light">(이름 미입력)</span>{/if}</td>
+                <td>{#if row.name}<span class="user-name">{row.name}</span>{:else}<span class="user-name text-light">(이름 미입력)</span>{/if}{#if row.managed_match?.status === 'pending'} <span class="match-tag" title="사전 등록 관리대상과 {row.managed_match.basis === 'phone' ? '전화번호' : '이메일'}가 일치합니다">관리대상 일치</span>{/if}</td>
                 <td><span class="user-email">{row.email || '-'}</span></td>
                 <td class="col-hide">
                   {#if row.member_code}
@@ -457,6 +457,32 @@
   .chip:hover:not(.chip-active) { color: var(--cs-purple); }
   .chip-active { background: var(--cs-purple); color: var(--cs-white); }
   .chip-all:not(.chip-active) { background: transparent; }
+
+  .chip-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: var(--cs-red-badge);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    line-height: 1;
+  }
+  .match-tag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    background: var(--cs-red-xlight);
+    color: var(--cs-red-badge);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    white-space: nowrap;
+  }
 
   .count-badge {
     font: var(--text-pc-script-12);

@@ -52,6 +52,15 @@ describe('registerManagedPerson', () => {
       p_name: '홍길동', p_phone: '01012345678', p_email: null, p_birth_date: '1990-05-06', p_reason: '분쟁 이력', p_created_by: 'admin-1',
     })
     expect(res).toMatchObject({ ok: true, registered: true, id: 'mp-1', member_code: 'CSMG2610001' })
+    // 등록 직후 이미 가입한 동일 번호·이메일 회원 재대조(#709) — 실패해도 등록 결과에는 영향 없음
+    expect(rpcMock).toHaveBeenCalledWith('cms_rescan_managed_matches')
+  })
+
+  it('재대조가 실패해도 등록은 성공으로 돌려준다', async () => {
+    rpcMock.mockResolvedValueOnce({ data: { ok: true, id: 'mp-2', member_code: 'CSMG2610002' }, error: null })
+    rpcMock.mockRejectedValueOnce(new Error('rescan down'))
+    const res = await actions.registerManagedPerson(ev(base))
+    expect(res).toMatchObject({ ok: true, registered: true, id: 'mp-2' })
   })
 
   it('잘못된 생년월일 형식은 null로 정리', async () => {
@@ -120,5 +129,54 @@ describe('updateManagedPerson · deleteManagedPerson', () => {
     const ok = await actions.deleteManagedPerson(ev({ id: 'mp-1' }))
     expect(rpcMock).toHaveBeenCalledWith('cms_delete_managed_person', { p_id: 'mp-1', p_deleted_by: 'admin-1' })
     expect(ok).toMatchObject({ ok: true, deleted: true })
+  })
+})
+
+describe('reviewManagedMatch (#708)', () => {
+  it('파트너는 RPC 호출 없이 403', async () => {
+    cmsRole = 'partner'
+    const res = await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'dismiss' })) as { status: number }
+    expect(res.status).toBe(403)
+    expect(rpcMock).not.toHaveBeenCalled()
+  })
+
+  it('해당 없음: 일치 기록만 dismissed로 닫고 관리대상 지정은 하지 않는다', async () => {
+    rpcMock.mockResolvedValue({ data: { ok: true, status: 'dismissed' }, error: null })
+    const res = await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'dismiss' }))
+    expect(rpcMock).toHaveBeenCalledTimes(1)
+    expect(rpcMock).toHaveBeenCalledWith('cms_review_managed_match', { p_user_id: 'u-1', p_decision: 'dismissed', p_reviewer: 'admin-1' })
+    expect(res).toMatchObject({ ok: true, matchReviewed: 'dismiss' })
+  })
+
+  it('관리대상 확정: 대기 건 확인 → toggle_blacklist(사유에 등록 인물 정보) → confirmed로 닫는다', async () => {
+    rpcMock
+      .mockResolvedValueOnce({ data: [{ status: 'pending', person_name: '홍길동', person_reason: '분쟁 이력' }], error: null })
+      .mockResolvedValueOnce({ data: { ok: true }, error: null })
+      .mockResolvedValueOnce({ data: { ok: true, status: 'confirmed' }, error: null })
+    const res = await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'confirm' }))
+    expect(rpcMock.mock.calls.map((c) => c[0])).toEqual(['cms_get_managed_match_flags', 'toggle_blacklist', 'cms_review_managed_match'])
+    expect(rpcMock.mock.calls[1][1]).toMatchObject({ p_user_id: 'u-1', p_blacklisted: true, p_reason: '사전 등록 관리대상 일치(홍길동): 분쟁 이력' })
+    expect(res).toMatchObject({ ok: true, matchReviewed: 'confirm' })
+  })
+
+  it('이미 처리된 건은 확정해도 관리대상 지정을 하지 않는다', async () => {
+    rpcMock.mockResolvedValueOnce({ data: [{ status: 'dismissed', person_name: null, person_reason: null }], error: null })
+    const res = await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'confirm' })) as { status: number }
+    expect(res.status).toBe(400)
+    expect(rpcMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('일치 기록 조회가 실패하면 "이미 처리됨"으로 둔갑시키지 않고 실제 오류로 알린다', async () => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: 'boom' } })
+    const res = await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'confirm' })) as { status: number; data: { error: string } }
+    expect(res.status).toBe(500)
+    expect(res.data.error).toContain('boom')
+    expect(rpcMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('처리 구분·대상 ID 검증', async () => {
+    expect((await actions.reviewManagedMatch(ev({ user_id: 'u-1', decision: 'x' })) as { status: number }).status).toBe(400)
+    expect((await actions.reviewManagedMatch(ev({ decision: 'dismiss' })) as { status: number }).status).toBe(400)
+    expect(rpcMock).not.toHaveBeenCalled()
   })
 })
