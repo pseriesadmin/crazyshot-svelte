@@ -50,6 +50,17 @@ export interface CustomerRow {
   legacy_purchase_count: number | null
   /** 회원 가입 이력 없는 관리대상(managed_persons) 행 여부 — Migration #686 */
   is_managed_person: boolean
+  /** 사전 등록 관리대상과 가입 정보가 일치한 회원의 대조 결과 — Migration #708(없으면 null) */
+  managed_match?: ManagedMatch | null
+}
+
+export interface ManagedMatch {
+  status: 'pending' | 'confirmed' | 'dismissed'
+  basis: 'phone' | 'email'
+  matched_at: string
+  person_name: string | null
+  person_phone: string | null
+  person_reason: string | null
 }
 
 export const load: PageServerLoad = async ({ parent, url }) => {
@@ -68,6 +79,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     return {
       customers: [] as CustomerRow[], totalCount: 0, search: '', classifications: [] as string[], bl: null, page: 1,
       selected: null as string | null, selectedCustomer: null as CustomerRow | null, tab: null as string | null,
+      managedMatchPending: 0,
     }
   }
 
@@ -103,7 +115,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     console.error('[customers/load] get_customer_list error:', error)
     return {
       customers: [] as CustomerRow[], totalCount: 0, search, classifications, bl, page,
-      selected, selectedCustomer: null as CustomerRow | null, tab,
+      selected, selectedCustomer: null as CustomerRow | null, tab, managedMatchPending: 0,
     }
   }
 
@@ -111,7 +123,29 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   const totalCount = rows[0]?.total_count ?? 0
   const selectedCustomer = ((selectedResult.data as CustomerRow[] | null)?.[0]) ?? null
 
-  return { customers: rows, totalCount, search, classifications, bl, page, selected, selectedCustomer, tab }
+  // 사전 등록 관리대상과의 가입 정보 일치 표시(Migration #708) — 조회 실패해도 목록은 그대로 보여준다(fail-soft)
+  let managedMatchPending = 0
+  try {
+    const ids = [...rows.map((r) => r.user_id), ...(selectedCustomer ? [selectedCustomer.user_id] : [])]
+    const [flagsRes, countRes] = await Promise.all([
+      ids.length > 0 ? admin.rpc('cms_get_managed_match_flags', { p_user_ids: ids }) : Promise.resolve({ data: [], error: null }),
+      admin.rpc('cms_managed_match_pending_count'),
+    ])
+    const flagMap = new Map<string, ManagedMatch>()
+    for (const f of (flagsRes.data ?? []) as Array<ManagedMatch & { user_id: string }>) {
+      flagMap.set(f.user_id, {
+        status: f.status, basis: f.basis, matched_at: f.matched_at,
+        person_name: f.person_name, person_phone: f.person_phone, person_reason: f.person_reason,
+      })
+    }
+    for (const r of rows) r.managed_match = flagMap.get(r.user_id) ?? null
+    if (selectedCustomer) selectedCustomer.managed_match = flagMap.get(selectedCustomer.user_id) ?? null
+    managedMatchPending = typeof countRes.data === 'number' ? countRes.data : 0
+  } catch (e) {
+    console.error('[customers/load] managed match flags error:', e)
+  }
+
+  return { customers: rows, totalCount, search, classifications, bl, page, selected, selectedCustomer, tab, managedMatchPending }
 }
 
 export const actions: Actions = {
@@ -321,6 +355,42 @@ export const actions: Actions = {
     return { ok: true, deleted: true }
   },
 
+  // ── 사전 등록 관리대상과 일치한 가입자 확인 — Migration #708 ───────────────────────────────────
+  // decision=confirm: 기존 블랙리스트(관리대상) 지정 경로(toggle_blacklist)로 확정 후 일치 기록을 '확정'으로 닫는다.
+  // decision=dismiss: 해당 없음 — 일치 기록만 닫고 계정은 그대로(관리대상 필터에서 빠짐).
+  reviewManagedMatch: async ({ request, locals }) => {
+    const guard = await guardManagedPersonAction(locals)
+    if ('failure' in guard) return guard.failure
+    const form = await request.formData()
+    const userId   = String(form.get('user_id') ?? '').trim()
+    const decision = String(form.get('decision') ?? '').trim()
+    if (!userId) return fail(400, { ok: false, error: '대상 ID 필수' })
+    if (decision !== 'confirm' && decision !== 'dismiss') return fail(400, { ok: false, error: '처리 구분이 올바르지 않습니다.' })
+
+    if (decision === 'confirm') {
+      const { data: flags, error: flagsErr } = await guard.admin.rpc('cms_get_managed_match_flags', { p_user_ids: [userId] })
+      if (flagsErr) {
+        console.error('[customers/reviewManagedMatch] flags error:', flagsErr.message)
+        return fail(500, { ok: false, error: `일치 기록 조회에 실패했습니다: ${flagsErr.message}` })
+      }
+      const flag = ((flags ?? []) as Array<{ status: string; person_name: string | null; person_reason: string | null }>)[0]
+      if (!flag || flag.status !== 'pending') return fail(400, { ok: false, error: '이미 처리됐거나 일치 기록이 없습니다.' })
+      const reason = `사전 등록 관리대상 일치${flag.person_name ? `(${flag.person_name})` : ''}${flag.person_reason ? `: ${flag.person_reason}` : ''}`.slice(0, 500)
+      const { data: tb, error: tbErr } = await guard.admin.rpc('toggle_blacklist', { p_user_id: userId, p_blacklisted: true, p_reason: reason })
+      const tbRes = tb as { ok: boolean; error?: string } | null
+      if (!tbRes?.ok) return fail(400, { ok: false, error: tbRes?.error ?? tbErr?.message ?? '관리대상 지정에 실패했습니다.' })
+    }
+
+    const { data, error } = await guard.admin.rpc('cms_review_managed_match', {
+      p_user_id: userId,
+      p_decision: decision === 'confirm' ? 'confirmed' : 'dismissed',
+      p_reviewer: guard.userId,
+    })
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error === 'not_pending' ? '이미 처리된 건입니다.' : (error?.message ?? '처리에 실패했습니다.') })
+    return { ok: true, matchReviewed: decision }
+  },
+
   // ── 관리대상(회원 가입 이력 없는 인물) 등록·수정·삭제 — Migration #686 ──────────────────────────
   // 권한: 고객목록 메뉴 + manager 이상(블랙리스트 등록과 같은 등급). RPC는 service_role 전용.
   registerManagedPerson: async ({ request, locals }) => {
@@ -339,6 +409,7 @@ export const actions: Actions = {
     if (!result?.ok) {
       return fail(400, { ok: false, error: managedPersonErrorMessage(result?.error) ?? error?.message ?? '등록에 실패했습니다.', existingId: result?.existing_id ?? null })
     }
+    await rescanManagedMatches(guard.admin)
     return { ok: true, registered: true, id: result.id, member_code: result.member_code }
   },
 
@@ -359,6 +430,7 @@ export const actions: Actions = {
     if (!result?.ok) {
       return fail(400, { ok: false, error: managedPersonErrorMessage(result?.error) ?? error?.message ?? '저장에 실패했습니다.', existingId: result?.existing_id ?? null })
     }
+    await rescanManagedMatches(guard.admin)
     return { ok: true, updated: true }
   },
 
@@ -404,6 +476,16 @@ async function guardManagedPersonAction(locals: App.Locals) {
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return { failure: fail(500, { ok: false, error: '서버 설정 오류' }) }
   return { admin: createClient(getSupabaseUrl(), serviceRoleKey), userId: session.user.id }
+}
+
+/** 관리대상 등록·수정 직후 이미 가입한 동일 번호·이메일 회원을 다시 대조한다(Migration #709). 실패해도 등록·수정 결과에는 영향 없음. */
+async function rescanManagedMatches(admin: { rpc: (fn: string) => PromiseLike<{ error: { message: string } | null }> }) {
+  try {
+    const { error } = await admin.rpc('cms_rescan_managed_matches')
+    if (error) console.error('[customers] rescan managed matches error:', error.message)
+  } catch (e) {
+    console.error('[customers] rescan managed matches failed:', e)
+  }
 }
 
 async function readManagedPersonForm(request: Request) {

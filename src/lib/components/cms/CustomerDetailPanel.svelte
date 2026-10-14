@@ -53,6 +53,15 @@
     legacy_purchase_count?: number | null
     // 회원 가입 이력 없는 관리대상(managed_persons) 행 여부 — Migration #686
     is_managed_person?: boolean
+    // 사전 등록 관리대상과 가입 정보 일치(Migration #708) — pending이면 관리자 확인 대기
+    managed_match?: {
+      status: 'pending' | 'confirmed' | 'dismissed'
+      basis: 'phone' | 'email'
+      matched_at: string
+      person_name: string | null
+      person_phone: string | null
+      person_reason: string | null
+    } | null
   }
 
   interface Subscription {
@@ -635,6 +644,21 @@
     }
   }
 
+  let matchBusy = $state(false)
+  const submitMatchReview: SubmitFunction = () => {
+    matchBusy = true
+    return async ({ result }) => {
+      matchBusy = false
+      if (result.type === 'success') {
+        const d = result.data as { matchReviewed?: string } | undefined
+        csToast.success(d?.matchReviewed === 'confirm' ? '관리대상으로 확정했습니다.' : '해당 없음으로 처리했습니다.')
+        await invalidateAll()
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { error?: string })?.error ?? '처리 실패')
+      }
+    }
+  }
+
   function formatPhone(val: string): string {
     const digits = val.replace(/\D/g, '')
     if (digits.length <= 3) return digits
@@ -1117,6 +1141,32 @@
     {/if}
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
   </div>
+
+  {#if mode === 'member' && row.managed_match?.status === 'pending'}
+    {@const mm = row.managed_match}
+    <div class="match-banner" role="status">
+      <div class="match-banner-text">
+        <strong>사전 등록 관리대상과 일치합니다</strong>
+        <span>
+          {mm.basis === 'phone' ? '전화번호' : '이메일'} 일치 ·
+          등록 인물 {mm.person_name ?? '-'}{mm.person_phone ? ` (${mm.person_phone})` : ''}
+          {#if mm.person_reason} · 사유: {mm.person_reason}{/if}
+        </span>
+      </div>
+      <div class="match-banner-actions">
+        <form method="POST" action="/cms/customers?/reviewManagedMatch" use:enhance={submitMatchReview}>
+          <input type="hidden" name="user_id" value={row.user_id} />
+          <input type="hidden" name="decision" value="dismiss" />
+          <button type="submit" class="mm-btn" disabled={matchBusy}>해당 없음</button>
+        </form>
+        <form method="POST" action="/cms/customers?/reviewManagedMatch" use:enhance={submitMatchReview}>
+          <input type="hidden" name="user_id" value={row.user_id} />
+          <input type="hidden" name="decision" value="confirm" />
+          <button type="submit" class="mm-btn mm-btn-danger" disabled={matchBusy}>관리대상 확정</button>
+        </form>
+      </div>
+    </div>
+  {/if}
 
   <!-- 탭 -->
   <div class="panel-tabs">
@@ -2391,6 +2441,35 @@
   .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* 탭 */
+.match-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--cs-red-xlight);
+    color: var(--cs-text);
+  }
+  .match-banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font: var(--text-pc-body-14); }
+  .match-banner-text span { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .match-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  /* DetailPanel 대형 CTA 규격(cms-uiux §0-10-G) — [해당 없음]=일반 버튼(퍼플), [관리대상 확정]=삭제·거부 버튼(레드) */
+  .mm-btn {
+    height: 44px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font: var(--text-pc-body-14);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .mm-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
+  .mm-btn-danger { background: var(--cs-error); }
+  .mm-btn-danger:hover:not(:disabled) { background: var(--cs-error); opacity: 0.85; }
+  .mm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .panel-tabs {
     display: flex;
     gap: 0;
