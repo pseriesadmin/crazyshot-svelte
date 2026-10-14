@@ -7,6 +7,7 @@ import { sendReservationLifecyclePush } from '$lib/server/push'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
 import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
+import { checkUndeliveredSms, type SmsAlertResult } from '$lib/server/smsDeliveryAlert'
 import type { RequestHandler } from './$types'
 
 const BATCH_SIZE = 50
@@ -119,5 +120,14 @@ export const GET: RequestHandler = async ({ request }) => {
     if (relErr) errors.push({ reservationId: r.reservationId, leg: r.leg, error: `재시도 표시 복구 실패: ${relErr.message}` })
   }
 
-  return json({ processed, succeeded, failed, retryScheduled: toRelease.length, errors })
+  // 문자 미도착 점검(2026-10-14) — 별도 크론을 늘리지 않고 이 10분 크론 끝에 얹는다. 최근 3시간 안의 미확인 발송이 없으면 DB 조회 한 번으로 끝나며,
+  // 실패해도 안내 발송 결과에는 영향이 없다.
+  let smsAlert: SmsAlertResult | { error: string }
+  try {
+    smsAlert = await checkUndeliveredSms(admin)
+  } catch (e) {
+    smsAlert = { error: e instanceof Error ? e.message : '문자 미도착 점검 실패' }
+  }
+
+  return json({ processed, succeeded, failed, retryScheduled: toRelease.length, errors, smsAlert })
 }

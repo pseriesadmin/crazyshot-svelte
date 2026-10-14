@@ -121,7 +121,7 @@
     /** 최초 마운트 시 활성화할 탭 — 미지정 시 기존과 동일하게 'rental'(대여정보).
         컴포넌트가 마운트된 이후 row가 갱신(onrefresh)돼도 재적용되지 않음(마운트 시 1회만) —
         관리자가 이미 다른 탭으로 전환한 상태를 되돌리지 않기 위함 */
-    initialTab?:  'rental' | 'customer' | 'payment' | 'contract'
+    initialTab?:  'rental' | 'customer' | 'payment' | 'contract' | 'sms'
     /** 예약 단계 상태 변경(승인·거부·취소) 완료 시 호출 — /cms/reservation에서 closePanel에 연결.
         /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
     onstatuschange?: () => void
@@ -231,7 +231,7 @@
     }
   }
 
-  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract'>(initialTab ?? 'rental')
+  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'sms'>(initialTab ?? 'rental')
   let isSubmitting = $state(false)
 
   // 헤더 버튼 이중확인 — ProductDetailPanel.svelte handleDeleteProduct 패턴
@@ -277,6 +277,53 @@
   let paymentDetail   = $state<PaymentDetail | null>(null)
   let paymentLoading  = $state(false)
   let paymentError    = $state<string | null>(null)
+
+  // ── 알림발송 탭 — SMS 발송 내역 + 솔라피 단말 도착 결과(2026-10-14) ──
+  interface SmsDeliveryCardItem {
+    log_id: number
+    label: string
+    sent_at: string
+    kind: string | null
+    state: 'delivered' | 'pending' | 'undelivered' | 'failed' | 'unknown'
+    state_label: string
+    status_code: string | null
+    reason: string | null
+  }
+  let smsFetchedFor  = $state<number | null>(null)
+  let smsLoading     = $state(false)
+  let smsError       = $state<string | null>(null)
+  let smsCards       = $state<SmsDeliveryCardItem[]>([])
+  let smsPhoneMasked = $state<string | null>(null)
+  let smsNotice      = $state<string | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'sms') { smsFetchedFor = null; return } // 탭을 벗어나면 다음 진입 때 다시 조회(도착 결과는 시간이 지나며 바뀐다)
+    if (smsLoading) return
+    if (smsFetchedFor === row.reservation_id) return
+
+    const id = row.reservation_id
+    smsFetchedFor = id
+    smsLoading = true
+    smsError = null
+    smsNotice = null
+    fetch(`/api/cms/reservations/${id}/sms-delivery`)
+      .then(async (r) => ({ ok: r.ok, body: await r.json() }))
+      .then(({ ok, body }) => {
+        if (smsFetchedFor !== id) return
+        if (!ok) { smsError = body.error ?? '조회에 실패했습니다.'; smsCards = []; return }
+        smsCards = body.cards ?? []
+        smsPhoneMasked = body.phone_masked ?? null
+        smsNotice = body.solapi_error ?? null
+      })
+      .catch(() => { if (smsFetchedFor === id) smsError = '네트워크 오류로 조회하지 못했습니다.' })
+      .finally(() => { smsLoading = false })
+  })
+
+  function smsDateLabel(iso: string): string {
+    const d = new Date(iso)
+    const kst = new Date(d.getTime() + 9 * 3600 * 1000).toISOString()
+    return `${kst.slice(5, 10).replace('-', '.')} ${kst.slice(11, 16)}`
+  }
 
   $effect(() => {
     if (activeTab !== 'payment') return
@@ -1763,6 +1810,7 @@
       { id: 'customer', label: '고객정보' },
       { id: 'payment',  label: '결제정보' },
       { id: 'contract', label: '계약서'   },
+      { id: 'sms',      label: '알림발송' },
     ] as tab}
       <button
         class="tab"
@@ -3039,6 +3087,39 @@
       />
     {/if}
 
+    <!-- ─── Tab 5: 알림발송 ─── -->
+    {#if activeTab === 'sms'}
+      <div class="section-title-row">
+        <div class="section-title">문자 발송 내역{smsPhoneMasked ? ` · 수신 ${smsPhoneMasked}` : ''}</div>
+      </div>
+      {#if smsLoading}
+        <div class="sms-empty">발송 결과를 불러오는 중…</div>
+      {:else if smsError}
+        <div class="sms-empty" role="alert">{smsError}</div>
+      {:else if smsCards.length === 0}
+        <div class="sms-empty">이 예약으로 발송된 문자가 없습니다.</div>
+      {:else}
+        {#if smsNotice}<div class="sms-notice" role="status">{smsNotice}</div>{/if}
+        <div class="sms-card-list">
+          {#each smsCards as c (c.log_id)}
+            <div class="sms-card">
+              <div class="sms-card-main">
+                <span class="sms-card-title">{c.label}</span>
+                <span class="sms-card-meta">{smsDateLabel(c.sent_at)}{c.kind ? ` · ${c.kind}` : ''}</span>
+              </div>
+              <div class="sms-card-result">
+                <span class="sms-badge sms-badge-{c.state}">{c.state_label}</span>
+                {#if c.state !== 'delivered' && (c.reason || c.status_code)}
+                  <span class="sms-card-reason">{c.reason ?? ''}{c.status_code ? ` (${c.status_code})` : ''}</span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+        <div class="sms-hint">'미도착 의심'은 이통사 접수 후 30분이 지나도 단말 도착 결과가 오지 않은 문자입니다. 해당 번호로 단말 수신 여부를 직접 확인해 주세요.</div>
+      {/if}
+    {/if}
+
   </div>
  </div>
 </div>
@@ -3224,6 +3305,40 @@
   .panel-body > .rental-method-group,
   .panel-body > .locker-group,
   .panel-body > .rental-shipping-group { margin-top: 20px; }
+
+  /* 알림발송 탭 — 카드형 목록(inlineListRow 표준: gray-150 + 15px 반경) */
+  .sms-card-list { display: flex; flex-direction: column; gap: 12px; }
+  .sms-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 15px 20px;
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-surface-gray);
+  }
+  .sms-card-main   { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .sms-card-title  { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text); }
+  .sms-card-meta   { font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .sms-card-result { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+  .sms-card-reason { font: var(--text-pc-script-12); color: var(--cs-text-light); text-align: right; max-width: 220px; }
+  .sms-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font: var(--text-pc-script-12);
+    line-height: 1.6;
+    white-space: nowrap;
+  }
+  .sms-badge-delivered   { background: rgba(16, 185, 129, 0.12); color: var(--cs-success-light); }
+  .sms-badge-pending     { background: rgba(59, 47, 138, 0.08);  color: var(--cs-purple); }
+  .sms-badge-undelivered,
+  .sms-badge-failed      { background: rgba(255, 53, 53, 0.10);  color: var(--cs-red-badge); }
+  .sms-badge-unknown     { background: rgba(102, 102, 102, 0.10); color: var(--cs-text-light); }
+  .sms-empty  { font: var(--text-pc-body-14); color: var(--cs-text-light); padding: 24px 0; text-align: center; }
+  .sms-notice { font: var(--text-pc-script-12); color: var(--cs-red-badge); }
+  .sms-hint   { font: var(--text-pc-script-12); color: var(--cs-text-light); line-height: 1.6; }
 
   .section-title-btns {
     display: flex;

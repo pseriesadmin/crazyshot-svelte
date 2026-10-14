@@ -8,7 +8,9 @@ import { SMS_BRAND_PREFIX, classifySms, smsByteLength } from '$lib/utils/notifyT
 // env 미설정 시 SMS 미전송 (graceful skip) — api/profile/send-otp에서 이동(2026-08-20,
 // 무인보관함 안내 발송과 공유하기 위해 메시지 본문을 인자로 받는 범용 형태로 일반화).
 // 2026-09-10: Aligo(IP 화이트리스트 필수) → Solapi(HMAC 인증, IP 제약 없음)로 전면 교체.
-export async function sendSms(to: string, message: string): Promise<void> {
+// customFields(2026-10-14): 솔라피 메시지에 예약번호·알림유형을 심어 두면 발송 결과 조회 때 우리 로그와 정확히 짝지어진다
+// (CMS 예약 상세 "알림발송" 탭). 값은 문자열만 허용되며 수신자에게는 보이지 않는다.
+export async function sendSms(to: string, message: string, customFields?: Record<string, string>): Promise<void> {
   const apiKey      = env.SOLAPI_API_KEY
   const apiSecret   = env.SOLAPI_API_SECRET
   const senderPhone = env.SMS_SENDER_PHONE
@@ -37,6 +39,7 @@ export async function sendSms(to: string, message: string): Promise<void> {
     text: message,
     type: kind,
     ...(kind === 'LMS' ? { subject: '[크레이지샷]' } : {}),
+    ...(customFields ? { customFields } : {}),
   })
 
   if (res.failedMessageList.length > 0) {
@@ -206,7 +209,7 @@ export async function sendLifecycleSms(
       : '****'
 
     try {
-      await sendSms(phone, message)
+      await sendSms(phone, message, { reservationId: String(reservationId), notifyType })
     } catch (err) {
       await insertSmsLog(admin, {
         reservation_id: reservationId,

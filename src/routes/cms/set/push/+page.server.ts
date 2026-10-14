@@ -35,6 +35,7 @@ export interface AdminNotifyRow {
   admin_notify_urgent_chat_message: boolean
   admin_notify_identity_review: boolean
   admin_notify_crazychat_request: boolean
+  admin_notify_sms_undelivered: boolean
 }
 
 export interface PushLogRow {
@@ -49,7 +50,7 @@ export interface PushLogRow {
 }
 
 const LOGS_PER_PAGE = 20
-const ADMIN_EVENT_KEYS = ['new_reservation', 'contract_signed', 'payment_completed', 'new_session', 'urgent_chat_message', 'identity_review', 'crazychat_request'] as const
+const ADMIN_EVENT_KEYS = ['new_reservation', 'contract_signed', 'payment_completed', 'new_session', 'urgent_chat_message', 'identity_review', 'crazychat_request', 'sms_undelivered'] as const
 
 // 설정 유형 → sms.ts 문자 유형(smsTypeToConfigType의 역방향). 문자 고정 문구가 없는 유형(예: 무인보관함은 별도 조립)은 undefined.
 function configTypeToSmsType(configType: string): string | undefined {
@@ -112,7 +113,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled, extra_config').order('id'),
     sb
       .from('user_profiles')
-      .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review, admin_notify_crazychat_request')
+      .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review, admin_notify_crazychat_request, admin_notify_sms_undelivered')
       .not('cms_role', 'is', null)
       .order('cms_role', { ascending: false })
       .order('full_name'),

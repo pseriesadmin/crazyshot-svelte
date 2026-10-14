@@ -618,6 +618,27 @@ export async function sendUrgentChatAdminPush(
 }
 
 /**
+ * 문자 미도착 의심 관리자 푸시(2026-10-14) — 10분 크론이 솔라피 결과와 발송 로그를 대조해 단말 도착이 확인되지 않은 건을 찾았을 때 호출한다.
+ * 한 번 점검에서 찾은 건은 한 통으로 묶어 알린다(첫 건 예약으로 연결). 실패해도 throw하지 않는다(알림 표시는 이미 저장됨).
+ */
+export async function sendSmsUndeliveredAdminPush(
+  items: Array<{ reservationId: number; reservationCode: string; label: string }>,
+): Promise<void> {
+  try {
+    if (items.length === 0) return
+    const first = items[0]
+    const more = items.length > 1 ? ` 외 ${items.length - 1}건` : ''
+    await sendPushToAdmins('sms_undelivered', {
+      title: '고객 문자가 도착하지 않은 것으로 보여요',
+      body: `${first.reservationCode} ${first.label}${more} 문자가 단말에 도착하지 않았어요. 예약 상세의 알림발송 탭을 확인해 주세요.`,
+      link: `/cms/reservation?selected=${first.reservationId}`,
+    })
+  } catch {
+    // 발신 허브 오류는 크론 흐름에 영향 없음
+  }
+}
+
+/**
  * 크레이지챗 접수 관리자 푸시(2026-10-07, S3) — 에이전트가 고객의 예약 시간 변경·연장 요청을 접수했을 때 호출한다.
  * 관리자 전용 알림이라 chat_messages가 아니라 푸시(+CMS 접수 카드)로만 전달한다(service-operations.md §17).
  * 실패해도 절대 throw하지 않는다(접수 기록은 이미 저장된 상태).
