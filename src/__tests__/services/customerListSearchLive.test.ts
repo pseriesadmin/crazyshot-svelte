@@ -45,4 +45,19 @@ describe('get_customer_list 검색 확장 (#705)', () => {
     const rows = await search('zz987654zz')
     expect(rows).toHaveLength(0)
   })
+
+  it('한글 초성(공백 유무 무관)으로 이름을 찾는다 (#707)', async () => {
+    const { data } = await admin.from('user_profiles').select('id, full_name').is('deleted_at', null).not('full_name', 'is', null).limit(50)
+    const row = (data as Array<{ id: string; full_name: string }>).find((r) => /^[가-힣]{3}$/.test(r.full_name))
+    expect(row, '테스트용 3글자 한글 이름 회원이 필요').toBeTruthy()
+    const { data: cs } = await admin.rpc('hangul_chosung', { p_text: row!.full_name })
+    const chosung = cs as string
+    expect((await search(chosung)).some((r) => r.user_id === row!.id)).toBe(true)
+    expect((await search(chosung.slice(0, 2))).some((r) => r.user_id === row!.id)).toBe(true)
+    expect((await search(`${chosung[0]} ${chosung.slice(1)}`)).some((r) => r.user_id === row!.id)).toBe(true)
+  })
+
+  it('찾을 수 없는 초성은 0건', async () => {
+    expect(await search('ㅋㅋㅋㅋㅋㅋㅋ')).toHaveLength(0)
+  })
 })
