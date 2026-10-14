@@ -1903,7 +1903,7 @@
     {#if activeTab === 'rental'}
 
       <!-- 대여 여정 스텝퍼 -->
-      <RentalJourneyStepper status={row.status} steps={stepFilter}>
+      <RentalJourneyStepper status={row.status} steps={stepFilter} cancelledAlign="start" cancelledLabel="취소사유등록" compact={row.status === 'cancelled'}>
         {#if row.status === 'cancelled'}
           <!-- 취소·환불 사유(2026-10-14): 스텝퍼 박스 안에 배치 — 대표 사유 선택 + 추가 입력 200자, 자동 저장(저장 버튼 없음) -->
           <div class="cancel-reason-box">
@@ -3491,7 +3491,8 @@
   }
   .cancel-reason-input {
     width: 100%;
-    font: var(--text-pc-body-14);
+    font: var(--text-pc-script-12); /* 한 사이즈 작게(14→12px), 굵기는 기존 700 유지 */
+    font-weight: 700;
     padding: 10px 14px;
     border: 1px solid var(--cs-lilac);
     border-radius: var(--cms-radius-sm);
@@ -3517,7 +3518,7 @@
   /* 회색 스텝퍼 박스 안이라 입력칸은 흰 바탕으로 구분 */
   .cancel-reason-box .cancel-reason-input { background: var(--cs-white); }
   /* 저장 완료 상태는 비활성 BG 토큰(박스와 같은 surface-gray), 다시 선택(:focus)하면 활성 BG(white)로 복귀 — cms-uiux.md §0-10-H */
-  .cancel-reason-box .cancel-reason-input.is-saved:not(:focus) { background: var(--cs-surface-gray); }
+  .cancel-reason-box .cancel-reason-input.is-saved:not(:focus) { background: var(--cs-bg-row-hover); }
 
   .section-title-btns {
     display: flex;
