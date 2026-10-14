@@ -36,6 +36,8 @@ export interface CannedResponseForMatch {
   image_url?: string | null
   cta_label?: string | null
   cta_url?: string | null
+  /** 서식 본문(공통 문서 편집기) — 매칭에는 쓰지 않고, 자동답변 카드에 이미지·동영상 썸네일을 싣는 데만 쓴다 */
+  content_blocks?: unknown
 }
 
 export type CannedMatchDecision = 'answer' | 'ambiguous' | 'no_match'

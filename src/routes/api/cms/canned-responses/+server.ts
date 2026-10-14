@@ -12,6 +12,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
 import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
+import { resolveCannedBlocks } from '$lib/server/cannedContentBlocks'
 
 export interface CannedResponse {
   id: string
@@ -28,6 +29,7 @@ export interface CannedResponse {
   cta_label?: string | null
   cta_url?: string | null
   pending_review?: boolean
+  content_blocks?: unknown[] | null
 }
 
 // GET /api/cms/canned-responses?category=return
@@ -44,7 +46,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
   let query = admin
     .from('canned_responses')
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review, content_blocks')
     .order('usage_count', { ascending: false })
     .order('title', { ascending: true })
 
@@ -72,7 +74,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   const body = await request.json() as Partial<CannedResponse>
   const title   = (body.title ?? '').trim()
-  const content = (body.content ?? '').trim()
+  let content = (body.content ?? '').trim()
+  // 서식 본문(공통 문서 편집기) — 있으면 content는 그 텍스트 파생값으로 대체
+  const resolvedBlocks = resolveCannedBlocks((body as Record<string, unknown>).content_blocks)
+  if (!resolvedBlocks.ok) return json({ error: resolvedBlocks.error }, { status: 400 })
+  const contentBlocks = 'unchanged' in resolvedBlocks ? null : resolvedBlocks.blocks
+  if (!('unchanged' in resolvedBlocks) && resolvedBlocks.content) content = resolvedBlocks.content
   const category = body.category ?? null
   const helpCategory = body.help_category ?? null
   const shortcut = body.shortcut ? body.shortcut.trim() || null : null
@@ -103,6 +110,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     .insert({
       title,
       content,
+      content_blocks: contentBlocks,
       category,
       help_category: helpCategory,
       shortcut,
@@ -114,7 +122,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       // pending_review 미지정 — 관리자가 직접 작성한 단건 등록은 DB 기본값(false)대로
       // 즉시 신뢰 가능(검토 대기 아님). CSV 일괄등록(bulk-import)만 true로 명시 삽입.
     })
-    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
+    .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review, content_blocks')
     .single()
 
   if (error) {

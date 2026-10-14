@@ -1,10 +1,14 @@
 import type { PageServerLoad } from './$types'
+import { sanitizeContentBlocks } from '$lib/server/sanitizeContentHtml'
+import type { ContentBlock } from '$lib/types/content-editor'
 
 export interface FaqItem {
 	id: string
 	title: string
 	content: string
 	help_category: string
+	/** 서식 본문(공통 문서 편집기) — 정화 완료본. 없으면 null이고 content 텍스트를 보여준다 */
+	content_blocks: ContentBlock[] | null
 }
 
 export interface HeroImageItem {
@@ -27,14 +31,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// canned_responses는 cr_read 정책(FOR SELECT USING (true))으로 anon 공개 조회 가능
 	const { data: faqData } = await locals.supabase
 		.from('canned_responses')
-		.select('id, title, content, help_category')
+		.select('id, title, content, help_category, content_blocks')
 		// 미검토(CSV 일괄등록 등 pending_review=true) 항목은 고객 도움말에 노출 금지 — CMS 관리자 세션은
 		// RLS(cr_admin_all)로 전체가 조회되므로 RLS와 별개로 앱 쿼리에서도 반드시 제외한다.
 		.eq('pending_review', false)
 		.order('usage_count', { ascending: false })
 		.order('title', { ascending: true })
 
-	const faqItems = (faqData ?? []) as FaqItem[]
+	// 서식 본문은 {@html}로 출력되므로 고객 화면으로 내려보내기 전에 정화(저장값은 그대로)
+	const faqItems: FaqItem[] = ((faqData ?? []) as Array<Omit<FaqItem, 'content_blocks'> & { content_blocks: unknown }>).map((row) => {
+		const blocks = sanitizeContentBlocks(row.content_blocks)
+		return { ...row, content_blocks: blocks.length > 0 ? blocks : null }
+	})
 
 	// 도움말 히어로 배경 이미지 설정
 	const { data: heroBgSettingRow } = await locals.supabase

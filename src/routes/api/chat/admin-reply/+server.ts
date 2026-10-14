@@ -55,10 +55,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (cannedResponseId && !actionPayload) {
     const { data: cannedRow } = await admin
       .from('canned_responses')
-      .select('id, image_url, cta_label, cta_url')
+      .select('id, image_url, cta_label, cta_url, content_blocks')
       .eq('id', cannedResponseId)
       .maybeSingle()
-    if (cannedRow) actionPayload = buildCannedCtaPayload(cannedRow as { id: string; image_url: string | null; cta_label: string | null; cta_url: string | null })
+    if (cannedRow) actionPayload = buildCannedCtaPayload(cannedRow as { id: string; image_url: string | null; cta_label: string | null; cta_url: string | null; content_blocks: unknown })
   }
   const messageType = actionPayload ? 'action_card' : 'text'
 

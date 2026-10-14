@@ -109,6 +109,8 @@ export interface ActionPayload {
   is_expired?: boolean
   // 자동답변 전용
   canned_response_id?: string
+  // canned_cta 전용 — 서식 본문의 이미지·동영상 썸네일(최대 6개). 눌러서 확대/재생
+  media?: Array<{ type: 'image'; url: string; alt: string } | { type: 'youtube'; videoId: string }>
   // contract_link(전자계약서명) — 관리자 CTA 모달에서 ContractTemplatePreviewModal(viewOnly)로
   // 고객이 보는 계약서를 미리보기하기 위한 contracts.id
   contract_id?: string

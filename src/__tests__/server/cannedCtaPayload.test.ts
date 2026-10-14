@@ -44,4 +44,35 @@ describe('buildCannedCtaPayload — 빠른답변 CTA → canned_cta 카드', () 
     expect(p?.action_url).toBeNull()
     expect(p?.button_label).toBe('열기')
   })
+
+  it('서식 본문의 이미지·동영상만 있으면 썸네일 카드 — 버튼 문구는 빈 문자열(버튼 숨김)', () => {
+    const p = buildCannedCtaPayload({
+      id: 'c4',
+      content_blocks: [
+        { type: 'text', html: '<p>안내</p>' },
+        { type: 'image', layout: 'individual', images: [{ url: 'https://x/a.png', alt: '대체' }] },
+        { type: 'youtube', videoId: 'abcdefghijk', url: '' },
+      ],
+    })
+    expect(p?.button_label).toBe('')
+    expect(p?.action_url).toBeNull()
+    expect(p?.media).toEqual([
+      { type: 'image', url: 'https://x/a.png', alt: '대체' },
+      { type: 'youtube', videoId: 'abcdefghijk' },
+    ])
+  })
+
+  it('글자만 있는 서식 본문은 카드를 만들지 않는다(일반 텍스트)', () => {
+    expect(buildCannedCtaPayload({ id: 'c5', content_blocks: [{ type: 'text', html: '<p>안내</p>' }] })).toBeNull()
+    expect(buildCannedCtaPayload({ id: 'c5', content_blocks: null })).toBeNull()
+  })
+
+  it('버튼·링크가 있으면 썸네일과 함께 기존 버튼 문구 유지', () => {
+    const p = buildCannedCtaPayload({
+      id: 'c6', cta_label: '자세히', cta_url: '/help',
+      content_blocks: [{ type: 'image', layout: 'individual', images: [{ url: 'https://x/a.png', alt: '' }] }],
+    })
+    expect(p?.button_label).toBe('자세히')
+    expect(p?.media).toHaveLength(1)
+  })
 })
