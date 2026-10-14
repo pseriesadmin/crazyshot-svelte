@@ -10,7 +10,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { normalizeKeywords } from '$lib/server/normalizeKeywords'
 import { isAssignableCategory, loadCannedCategories } from '$lib/server/cannedCategories'
 import { VALID_HELP_CATEGORIES } from '$lib/constants/helpCategories'
-import { resolveCannedBlocks } from '$lib/server/cannedContentBlocks'
+import { resolveCannedBlocks, CANNED_CONTENT_MAX, CANNED_CONTENT_TOO_LONG } from '$lib/server/cannedContentBlocks'
 
 // PATCH /api/cms/canned-responses/[id] — 수정
 export const PATCH: RequestHandler = async ({ locals, request, params }) => {
@@ -34,6 +34,9 @@ export const PATCH: RequestHandler = async ({ locals, request, params }) => {
   } else if (typeof body.content === 'string') {
     // 서식 본문 없이 글자만 수정하는 요청 — 남아 있는 서식 본문이 새 글자와 어긋나지 않게 해제한다
     updates.content_blocks = null
+  }
+  if (typeof updates.content === 'string' && updates.content.length > CANNED_CONTENT_MAX) {
+    return json({ error: CANNED_CONTENT_TOO_LONG }, { status: 400 })
   }
   if ('category' in body)               updates.category  = body.category ?? null
   if ('help_category' in body)          updates.help_category = body.help_category ?? null

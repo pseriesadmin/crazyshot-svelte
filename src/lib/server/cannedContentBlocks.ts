@@ -5,6 +5,10 @@ import { sanitizeContentBlocks } from '$lib/server/sanitizeContentHtml'
 import { blocksToPlainText } from '$lib/utils/cannedBlocks'
 import type { ContentBlock } from '$lib/types/content-editor'
 
+/** 채팅 메시지 글자 상한 — chat_messages.content CHECK(length<=1000)와 같다. 넘으면 자동답변·관리자 전송 INSERT가 실패한다 */
+export const CANNED_CONTENT_MAX = 1000
+export const CANNED_CONTENT_TOO_LONG = `채팅 답변은 ${CANNED_CONTENT_MAX}자 이내로 작성해주세요.`
+
 /** 서식 본문 JSON 크기 상한(문자 수) — 이미지는 주소만 담기므로 충분히 넉넉한 값 */
 const MAX_BLOCKS_JSON = 200_000
 
@@ -25,5 +29,6 @@ export function resolveCannedBlocks(raw: unknown): ResolvedCannedBlocks | { ok: 
   if (JSON.stringify(blocks).length > MAX_BLOCKS_JSON) return { ok: false, error: '내용이 너무 깁니다. 이미지·표를 줄여주세요.' }
   const content = blocksToPlainText(blocks)
   if (!content) return { ok: false, error: '글자 내용을 입력해주세요. (이미지·동영상만으로는 채팅 답변을 보낼 수 없습니다.)' }
+  if (content.length > CANNED_CONTENT_MAX) return { ok: false, error: CANNED_CONTENT_TOO_LONG }
   return { ok: true, blocks, content }
 }
