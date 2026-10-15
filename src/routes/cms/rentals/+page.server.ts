@@ -50,7 +50,12 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId != null && !isCancelledView) {
     const { data: selRow } = await admin.from('rental_reservations').select('status').eq('id', selectedId).maybeSingle()
     if ((selRow as { status?: string } | null)?.status === 'cancelled') {
-      throw redirect(303, `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`)
+      // 결제완료 이력이 없는 취소는 예약현황 '취소' 칩에서 관리한다(Migration #714)
+      const { data: payRow } = await admin.from('rental_reservations').select('payment_confirmed_at').eq('id', selectedId).maybeSingle()
+      const wasPaid = (payRow as { payment_confirmed_at?: string | null } | null)?.payment_confirmed_at != null
+      throw redirect(303, wasPaid
+        ? `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`
+        : `/cms/reservation?status=cancelled&selected=${selectedId}`)
     }
   }
 
@@ -62,6 +67,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     p_page:             page,
     p_per_page:         30,
     p_include_statuses: isCancelledView ? ['cancelled'] : RENTAL_STATUSES,
+    // '취소·환불' 칩 = 결제완료 이력이 있는 취소(계약완료·결제완료 후 취소). 결제 전 취소는 예약현황 '취소' 칩(Migration #714)
+    p_cancel_payment_scope: isCancelledView ? 'paid' : null,
     // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
     p_group_by_order:   true,
   })
@@ -107,6 +114,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
           p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled'], p_reservation_id: id,
           // 주문 단위 취소이므로 대표 행 1개로 묶어 가져온다(같은 주문의 형제가 각각 "취소중" 행으로 중복 노출되지 않게)
           p_group_by_order: true,
+          p_cancel_payment_scope: 'paid',
         })
         if (pendingListErr) console.error('[cms/rentals] 취소중 예약 상세 조회 실패:', id, pendingListErr.message)
         return ((data ?? []) as RentalListRow[])[0] ?? null

@@ -134,7 +134,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // p_exclude_statuses를 SQL WHERE에 반영해 LIMIT/OFFSET·total_count가 이 스코프 기준으로
   // 계산되도록 함(2026-08-07 페이지네이션 정합성 수정 — RPC에서 필터링 전 count를 쓰면
   // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
-  const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft']
+  // '임시예약' 칩(status=draft, 2026-10-15)에서만 draft를 제외 목록에서 뺀다 — 그 외 칩('전체' 포함)은 기존대로 draft 제외
+  const isDraftTab = status === 'draft'
+  const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', ...(isDraftTab ? [] : ['draft'])]
 
   // '취소' 칩(2026-09-09 확장, Stephen 지시) — HOLD 30분 자동만료(release_reservation_hold,
   // service-operations.md §10)로 만료된 예약은 status='expired'로 전환되는데, 이 화면에
@@ -147,14 +149,33 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // 되는 문제는 없다.
   const isCancelledTab = status === 'cancelled'
 
+  // 임시예약 칩에서만 '임시-292'·'292' 형태 검색을 임시예약 id 조회로 처리한다(임시예약은 예약코드가 없어 화면 표시용 이름이 id 기반 — 2026-10-15)
+  const draftIdMatch = isDraftTab ? search.trim().match(/^(?:임시-?)?(\d{1,15})$/) : null
+  const draftIdSearch = draftIdMatch ? Number(draftIdMatch[1]) : null
+
+  // 취소·만료된 예약을 가리키는 링크(?selected=)는 그 예약이 속한 칩으로 보낸다 — 결제완료 이력이 있으면 대여현황 '취소·환불', 없으면 이 화면 '취소'(Migration #714)
+  if (selectedId != null) {
+    const { data: selRow } = await admin.from('rental_reservations').select('status, payment_confirmed_at').eq('id', selectedId).maybeSingle()
+    const sel = selRow as { status?: string; payment_confirmed_at?: string | null } | null
+    if (sel?.status === 'cancelled' && sel.payment_confirmed_at != null) {
+      throw redirect(303, `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`)
+    }
+    if ((sel?.status === 'cancelled' || sel?.status === 'expired') && !isCancelledTab) {
+      throw redirect(303, `/cms/reservation?status=cancelled&selected=${selectedId}`)
+    }
+  }
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
     p_status:                          (status && !isCancelledTab) ? status : null,
-    p_search:                          escapeLikePattern(search) || null,
+    p_search:                          draftIdSearch != null ? null : (escapeLikePattern(search) || null),
+    p_reservation_id:                  draftIdSearch,
     p_date_from:                       dateFrom || null,
     p_date_to:                         dateTo   || null,
     p_page:                            page,
     p_per_page:                        30,
     p_include_statuses:                isCancelledTab ? ['cancelled', 'expired'] : null,
+    // '취소' 칩 = 결제완료 이력이 없는 취소·만료(예약신청·계약대기 단계 취소). 결제완료 후 취소·환불은 대여현황 '취소·환불' 칩(Migration #714)
+    p_cancel_payment_scope:            isCancelledTab ? 'unpaid' : null,
     p_exclude_statuses:                RENTAL_VIEW_STATUSES,
     p_require_contract_sent_unsigned:  contractPending || null,
     p_exclude_contract_sent:           isReservationPendingTab || null,
@@ -165,10 +186,22 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
 
   const rentals: RentalListRow[] = rows ?? []
+  // 총 건수는 링크 예약 행을 앞에 붙이기 "전" 원 목록 기준으로 확정(붙인 행의 total_count는 항상 1)
+  const totalCount = rentals[0]?.total_count ?? 0
+  // 링크로 연 취소 예약이 이 페이지(30건)에 없으면 그 행만 따로 가져와 맨 위에 붙인다 — 목록에 없으면 패널이 열리자마자 닫힌다(총 건수·페이지 수는 영향 없음)
+  if (isCancelledTab && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
+    const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
+      p_status: null, p_search: null, p_date_from: null, p_date_to: null,
+      p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled', 'expired'], p_reservation_id: selectedId,
+      p_group_by_order: true,
+    })
+    if (selErr) console.error('[cms/reservation] 링크 예약 조회 실패:', selErr.message)
+    const one = ((selOne ?? []) as RentalListRow[])[0]
+    if (one) rentals.unshift(one)
+  }
   // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지·패널 안내
   await attachCancelPending(admin, rentals)
   await attachRentalDaysLabel(admin, rentals)
-  const totalCount = rentals[0]?.total_count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
   // rental.change_cancel per-account 권한 판정

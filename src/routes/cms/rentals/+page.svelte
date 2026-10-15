@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { goto, invalidateAll, replaceState } from '$app/navigation'
   import { browser } from '$app/environment'
   import { supabase } from '$lib/services/supabase'
@@ -144,6 +145,13 @@
   async function openInCancelledList(id: number) {
     await goto(`/cms/rentals?status=cancelled_refunded&selected=${id}`, { replaceState: true, invalidateAll: true })
     selectedId = id
+    await scrollSelectedRowIntoView()
+  }
+
+  // 취소·환불 칩으로 전환된 뒤에도 이전 목록의 스크롤 위치가 남아 취소 건이 화면 밖에 있을 수 있어, 선택된 행이 보이도록 맞춘다
+  async function scrollSelectedRowIntoView() {
+    await tick()
+    document.querySelector('.table-wrap tr.selected')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
   function closePanel() {
