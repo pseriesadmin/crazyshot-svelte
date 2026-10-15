@@ -20,10 +20,33 @@ describe('서류 등록 UX 배선', () => {
     expect(profile).toContain('buildMissingDocsMessage(missingIdentityDocs(identityType))')
   })
 
-  it('상품상세·장바구니 둘 다 공용 게이트 토스트를 쓴다(장바구니에도 [확인]/[문의] 제공)', () => {
-    expect(read('src/routes/products/[id]/+page.svelte')).toContain('showDocGateToast(docGate, docLandingKind(')
-    expect(read('src/routes/cart/+page.svelte')).toContain('showDocGateToast(data.docGate, data.docLanding)')
-    expect(read('src/routes/cart/+page.server.ts')).toContain('docLanding:')
+  it('상품상세·장바구니는 본인증명 미등록이어도 예약을 막지 않고 토스트 대신 서버 요청(채팅카드+SMS)을 보낸다(2026-10-15)', () => {
+    const product = read('src/routes/products/[id]/+page.svelte')
+    const cart = read('src/routes/cart/+page.svelte')
+    // 차단 토스트 호출이 사라졌다 — 호출문이 남아 있으면(import 포함) 예약 흐름이 다시 막힌다
+    expect(product).not.toContain('showDocGateToast(')
+    expect(cart).not.toContain('showDocGateToast(')
+    expect(product).not.toMatch(/if \(showDocGateToast/)
+    expect(cart).not.toMatch(/if \(showDocGateToast/)
+    // 대신 서류 미등록이면 서버에 등록 요청을 보낸다(응답을 기다리지 않는 fire-and-forget)
+    expect(product).toContain('requestDocRegistrationIfNeeded(docGate)')
+    expect(cart).toContain('requestDocRegistrationIfNeeded(data.docGate)')
+    // 게이트 토스트 헬퍼는 정책을 되돌릴 때 쓰도록 남겨 둔다
+    expect(read('src/lib/utils/docGateToast.ts')).toContain('export function showDocGateToast')
+  })
+
+  it('관리자 수동 요청 카드(direct-send)도 자동 요청과 같은 카드 정의를 쓴다 — CTA는 본인증명 영역(doc=identity)으로 랜딩', () => {
+    const direct = read('src/routes/api/cms/chat/identity-request/direct-send/+server.ts')
+    expect(direct).toContain('buildIdentityRequestPayload(docType)')
+    expect(direct).toContain('identityRequestActionUrl(docType)')
+    expect(direct).not.toContain("'/account/profile?tab=profile',")
+  })
+
+  it('클라이언트 헬퍼는 서류 미등록(none)일 때만 /api/profile/doc-request를 호출하고 토스트·예외를 내지 않는다', () => {
+    const helper = read('src/lib/utils/docRequestClient.ts')
+    expect(helper).toContain("gate !== 'none'")
+    expect(helper).toContain("'/api/profile/doc-request'")
+    expect(helper).not.toContain('csToast')
   })
 
   it('upload-doc은 서버 재검증 missing을 응답하고, 필수 완비 시 고객 자동 안내를 남긴다', () => {
