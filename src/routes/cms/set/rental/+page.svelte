@@ -12,8 +12,7 @@
   import DeliveryAreaMap from '$lib/components/cms/DeliveryAreaMap.svelte'
   import { areaLabel, toAreaFromRegionNames, zipRangeLabel, SIDO_LIST, type PostcodeRegionInfo } from '$lib/utils/deliveryArea'
   import type { PageData, ActionData } from './$types'
-  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalConsentItem, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
-  import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
+  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
 
   interface Props {
     data: PageData
@@ -432,54 +431,6 @@
     holidayGuideText     = data.cutoffSettings?.holiday_guide_text      ?? ''
   })
 
-  // ─── 이용안내 ───
-  let guideText = $state(data.guideText)
-  let guideLoading = $state(false)
-  let guideCharCount = $derived(guideText.length)
-  let guideIsDirty = $derived.by(() => guideText !== data.guideText)
-
-  $effect(() => { guideText = data.guideText })
-
-  // ─── 법적 고지 텍스트 ───
-  let privacyText   = $state(data.policySettings?.privacy_text ?? '')
-  let termsText     = $state(data.policySettings?.terms_text   ?? '')
-  let refundText    = $state(data.policySettings?.refund_text  ?? '')
-  let policyLoading = $state<'privacy' | 'terms' | 'refund' | null>(null)
-
-  let privacyIsDirty = $derived.by(() => privacyText !== (data.policySettings?.privacy_text ?? ''))
-  let termsIsDirty   = $derived.by(() => termsText   !== (data.policySettings?.terms_text   ?? ''))
-  let refundIsDirty  = $derived.by(() => refundText  !== (data.policySettings?.refund_text  ?? ''))
-
-  $effect(() => {
-    privacyText = data.policySettings?.privacy_text ?? ''
-    termsText   = data.policySettings?.terms_text   ?? ''
-    refundText  = data.policySettings?.refund_text  ?? ''
-  })
-
-  // ─── 서비스 기본 정보(사업자 정보, Migration #566) ───
-  // PC 공통푸터·모바일 멤버십 푸터·표준계약서 임대인 정보가 이 9개 필드를 단일 소스로 참조한다.
-  const EMPTY_SERVICE_INFO: ServiceInfoSettings = {
-    company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
-    privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
-  }
-  let serviceInfo = $state<ServiceInfoSettings>({ ...EMPTY_SERVICE_INFO, ...data.serviceInfo })
-  let serviceInfoLoading = $state(false)
-  let serviceInfoIsDirty = $derived.by(() => {
-    const orig = { ...EMPTY_SERVICE_INFO, ...data.serviceInfo }
-    return (Object.keys(EMPTY_SERVICE_INFO) as (keyof ServiceInfoSettings)[])
-      .some((key) => serviceInfo[key] !== orig[key])
-  })
-
-  $effect(() => { serviceInfo = { ...EMPTY_SERVICE_INFO, ...data.serviceInfo } })
-
-  // ─── 필수 동의문 ───
-  let consents = $state<RentalConsentItem[]>(data.consents)
-  let consentInput = $state('')
-  let consentLoading = $state(false)
-  let consentCharCount = $derived(consentInput.length)
-
-  $effect(() => { consents = data.consents })
-
   // ─── 배송료 우대설정 (최대 5개) ───
   let discountTiers = $state<DeliveryFeeDiscountTier[]>(data.discountTiers)
   let tierAmount = $state<number | ''>('')
@@ -582,23 +533,6 @@
     fd.set('ids', JSON.stringify(ids))
     try {
       const res = await fetch('?/reorderMethods', { method: 'POST', body: fd })
-      const result = deserialize(await res.text())
-      if (result.type === 'success') {
-        await invalidateAll()
-        return
-      }
-      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
-    } catch {
-      csToast.error('순서 저장에 실패했습니다.')
-    }
-  }
-
-  async function saveConsentOrder(): Promise<void> {
-    const ids = consents.map((c) => c.id)
-    const fd = new FormData()
-    fd.set('ids', JSON.stringify(ids))
-    try {
-      const res = await fetch('?/reorderConsents', { method: 'POST', body: fd })
       const result = deserialize(await res.text())
       if (result.type === 'success') {
         await invalidateAll()
@@ -1966,276 +1900,6 @@
       </div>
     {/if}
 
-    <!-- ══════════════════════════════════════════
-         섹션 4: 대여·예약 이용안내
-    ══════════════════════════════════════════ -->
-    <section class="setting-section">
-      <div class="section-head">
-        <h2 class="section-title">대여·예약 이용안내</h2>
-      </div>
-
-      <!-- 공통 안내문 -->
-      <div class="subsection">
-        <h3 class="subsection-title">공통 대여 안내문</h3>
-        <form
-          method="POST"
-          action="?/saveGuide"
-          use:enhance={() => {
-            guideLoading = true
-            return async ({ result, update }) => {
-              guideLoading = false
-              if (result.type === 'success') {
-                csToast.success('안내문이 저장되었습니다.')
-                await update({ reset: false })
-              } else if (result.type === 'failure') {
-                csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
-              }
-            }
-          }}
-        >
-          <div class="textarea-wrap">
-            <textarea
-              name="guide_text"
-              class="guide-textarea"
-              placeholder="공통 대여 안내문을 입력하세요 (최대 1,000자)"
-              maxlength="1000"
-              rows="6"
-              bind:value={guideText}
-              aria-label="공통 대여 안내문"
-            ></textarea>
-            <span class="char-count" class:char-count--warn={guideCharCount > 900}>
-              {guideCharCount} / 1,000
-            </span>
-          </div>
-          <div class="guide-actions">
-            <button
-              type="submit"
-              class="btn-save"
-              disabled={guideLoading || !guideIsDirty}
-            >
-              {guideLoading ? '저장 중...' : '저장'}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <!-- 법적 고지 텍스트 -->
-      {#each ([
-        { key: 'privacy' as const, field: 'privacy_text' as const, label: '개인정보처리방침', bind: privacyText, dirty: privacyIsDirty },
-        { key: 'terms'   as const, field: 'terms_text'   as const, label: '이용약관',         bind: termsText,   dirty: termsIsDirty   },
-        { key: 'refund'  as const, field: 'refund_text'  as const, label: '환불·취소 정책',   bind: refundText,  dirty: refundIsDirty  },
-      ] as const) as item}
-        <div class="subsection">
-          <div class="subsection-head subsection-head--between">
-            <h3 class="subsection-title">{item.label}</h3>
-            <button
-              type="submit"
-              form="policy-form-{item.key}"
-              class="btn-save-inline"
-              class:dirty={item.dirty}
-              disabled={policyLoading !== null || !item.dirty}
-            >
-              {policyLoading === item.key ? '저장 중...' : '저장'}
-            </button>
-          </div>
-          <form
-            id="policy-form-{item.key}"
-            method="POST"
-            action="?/savePolicy"
-            use:enhance={() => {
-              policyLoading = item.key
-              return async ({ result, update }) => {
-                policyLoading = null
-                if (result.type === 'success') {
-                  csToast.success(`${item.label}이(가) 저장되었습니다.`)
-                  await update({ reset: false })
-                } else if (result.type === 'failure') {
-                  csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
-                }
-              }
-            }}
-          >
-            <input type="hidden" name="policy_field" value={item.field} />
-            <div class="textarea-wrap">
-              <textarea
-                name="policy_text"
-                class="guide-textarea"
-                placeholder="{item.label} 내용을 입력하세요 (최대 5,000자)"
-                maxlength="5000"
-                rows="6"
-                value={item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText}
-                oninput={(e) => {
-                  const v = (e.target as HTMLTextAreaElement).value
-                  if (item.key === 'privacy') privacyText = v
-                  else if (item.key === 'terms') termsText = v
-                  else refundText = v
-                }}
-                aria-label={item.label}
-              ></textarea>
-              <span class="char-count" class:char-count--warn={
-                (item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText).length > 4500
-              }>
-                {(item.key === 'privacy' ? privacyText : item.key === 'terms' ? termsText : refundText).length} / 5,000
-              </span>
-            </div>
-          </form>
-        </div>
-      {/each}
-
-      <!-- 필수 동의문 -->
-      <div class="subsection">
-        <div class="subsection-head">
-          <h3 class="subsection-title">필수 동의문 항목</h3>
-          <span class="section-badge section-badge--end">{consents.length} / 10</span>
-        </div>
-
-        <form
-          method="POST"
-          action="?/addConsent"
-          class="add-form"
-          use:enhance={({ formData }) => {
-            formData.set('count', String(consents.length))
-            consentLoading = true
-            return async ({ result, update }) => {
-              consentLoading = false
-              if (result.type === 'success') {
-                consentInput = ''
-                csToast.success('동의문이 추가되었습니다.')
-                await update({ reset: false })
-              } else if (result.type === 'failure') {
-                csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
-              }
-            }
-          }}
-        >
-          <div class="consent-input-wrap">
-            <input
-              type="text"
-              name="content"
-              class="add-input"
-              placeholder="필수 동의문 내용 입력 (최대 200자)"
-              maxlength="200"
-              bind:value={consentInput}
-              disabled={consentLoading}
-              aria-label="필수 동의문"
-            />
-            <span class="char-count-inline" class:char-count--warn={consentCharCount > 180}>
-              {consentCharCount}/200
-            </span>
-          </div>
-          <button
-            type="submit"
-            class="btn-add"
-            disabled={consentLoading || !consentInput.trim() || consents.length >= 10}
-          >
-            {consentLoading ? '추가 중...' : '추가'}
-          </button>
-        </form>
-
-        {#if consents.length > 0}
-          <CmsDragList
-            bind:items={consents}
-            itemKey={(item) => item.id}
-            onreorder={saveConsentOrder}
-            class="drag-list-wrap"
-          >
-            {#snippet renderItem(item: RentalConsentItem)}
-              <div class="list-row">
-                <span class="list-row-name consent-text">{item.content}</span>
-                <CmsDeleteButton action="?/deleteConsent" id={item.id} />
-              </div>
-            {/snippet}
-          </CmsDragList>
-        {:else}
-          <p class="empty-hint">등록된 필수 동의문이 없습니다.</p>
-        {/if}
-      </div>
-    </section>
-
-    <!-- ══════════════════════════════════════════
-         섹션 5: 서비스 기본 정보 (Migration #566)
-    ══════════════════════════════════════════ -->
-    <section class="setting-section">
-      <div class="section-head">
-        <h2 class="section-title">서비스 기본 정보</h2>
-      </div>
-
-      <form
-        method="POST"
-        action="?/saveServiceInfo"
-        use:enhance={() => {
-          serviceInfoLoading = true
-          return async ({ result, update }) => {
-            serviceInfoLoading = false
-            if (result.type === 'success') {
-              csToast.success('서비스 기본 정보가 저장되었습니다.')
-              await update({ reset: false })
-            } else if (result.type === 'failure') {
-              csToast.error((result.data as { error?: string })?.error ?? '저장에 실패했습니다.')
-            }
-          }
-        }}
-      >
-        <div class="subsection">
-          <div class="subsection-head subsection-head--between">
-            <h3 class="subsection-title">사업정보</h3>
-            <button
-              type="submit"
-              class="btn-save-inline"
-              class:dirty={serviceInfoIsDirty}
-              disabled={serviceInfoLoading || !serviceInfoIsDirty}
-            >
-              {serviceInfoLoading ? '저장 중...' : '저장'}
-            </button>
-          </div>
-          <div class="service-info-grid">
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-company">사업자명(상호명)</label>
-              <input id="si-company" type="text" name="company_name" class="field-input" maxlength="100" bind:value={serviceInfo.company_name} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-ceo">대표자명</label>
-              <input id="si-ceo" type="text" name="ceo_name" class="field-input" maxlength="50" bind:value={serviceInfo.ceo_name} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-addr">사업장 소재지</label>
-              <input id="si-addr" type="text" name="biz_address" class="field-input" maxlength="200" bind:value={serviceInfo.biz_address} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-regno">사업자등록번호</label>
-              <input id="si-regno" type="text" name="biz_reg_no" class="field-input" maxlength="30" placeholder="000-00-00000" bind:value={serviceInfo.biz_reg_no} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-mailorder">통신판매업신고</label>
-              <input id="si-mailorder" type="text" name="mail_order_biz_no" class="field-input" maxlength="50" bind:value={serviceInfo.mail_order_biz_no} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-officer">개인정보관리책임자</label>
-              <input id="si-officer" type="text" name="privacy_officer" class="field-input" maxlength="50" bind:value={serviceInfo.privacy_officer} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-email">대표 이메일</label>
-              <input id="si-email" type="email" name="ceo_email" class="field-input" maxlength="100" bind:value={serviceInfo.ceo_email} />
-            </div>
-          </div>
-        </div>
-
-        <div class="subsection">
-          <h3 class="subsection-title">안내정보</h3>
-          <div class="service-info-grid">
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-csphone">고객센터 번호</label>
-              <input id="si-csphone" type="text" name="cs_phone" class="field-input" maxlength="30" placeholder="1588-0033" bind:value={serviceInfo.cs_phone} />
-            </div>
-            <div class="field-row field-row--wide">
-              <label class="field-label field-label--wide" for="si-hours">운영시간 안내</label>
-              <input id="si-hours" type="text" name="business_hours" class="field-input" maxlength="100" bind:value={serviceInfo.business_hours} />
-            </div>
-          </div>
-        </div>
-      </form>
-    </section>
-
   </div>
 </div>
 
@@ -2865,10 +2529,6 @@
      (CmsHolidayCalendar)으로 바뀌며 비활성 국경일 구분(흐림+취소선+안내 레이어)은 그
      컴포넌트 안으로 이전됨. */
 
-  .consent-text {
-    font: var(--text-pc-body-14);
-  }
-
   /* ─── 위험 버튼 (삭제) ─── */
   .act-del {
     display: inline-flex; align-items: center; justify-content: center;
@@ -3026,25 +2686,6 @@
     margin-bottom: 10px;
   }
 
-  /* '서비스 기본 정보' 필드 — 라벨이 길어(예: 통신판매업신고, 개인정보관리책임자) 지점
-     상세 폼의 80px 라벨 폭으로는 줄바꿈됨. .field-row/.field-label/.field-input 기본
-     스타일은 그대로 재사용하고 라벨 폭만 modifier로 넓힘(2026-09-28, Migration #566). */
-  .field-row--wide {
-    grid-template-columns: 140px 1fr;
-  }
-
-  /* '서비스 기본 정보' 병렬 2단 정렬(2026-09-28, Stephen 지시) — .field-row--wide 항목들을
-     좌우 2열로 배치. 항목 수가 홀수(사업정보 7개)면 마지막 항목만 1열에 단독 배치됨(정상). */
-  .service-info-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 32px;
-  }
-
-  .field-label--wide {
-    white-space: normal;
-  }
-
   .field-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
@@ -3164,11 +2805,6 @@
     margin: 0;
   }
 
-  .guide-actions {
-    display: flex;
-    justify-content: flex-end;
-  }
-
   /* ─── 택배 휴무일 캘린더 제어 서브섹션 ─── */
   .subsection-head--between {
     justify-content: space-between;
@@ -3238,26 +2874,6 @@
   /* ⛔ .textarea-save-btn·.guide-textarea--has-save-btn 삭제됨(2026-09-23) — 두 안내문
      저장 버튼(배송 안내문·배송 휴무일 안내문)이 전부 textarea 내부 겹침 배치에서
      섹션 헤더 우측(.btn-save-inline)으로 이전되며 더 이상 쓰이지 않게 됨. */
-
-  /* ─── 동의문 입력 래퍼 ─── */
-  .consent-input-wrap {
-    flex: 1;
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-
-  .consent-input-wrap .add-input {
-    padding-right: 60px;
-  }
-
-  .char-count-inline {
-    position: absolute;
-    right: 12px;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    pointer-events: none;
-  }
 
   /* ─── 배송 설정 섹션 ─── */
   .shipping-form {

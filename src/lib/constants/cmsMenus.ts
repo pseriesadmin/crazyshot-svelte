@@ -119,6 +119,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
       { menu_key: 'settings.push', label: '푸시알림', href: '/cms/set/push', requiresSettingsAccess: true },
       { menu_key: 'settings.admin', label: '관리정보', href: '/cms/set/admin', requiresSettingsAccess: true },
       { menu_key: 'settings.search', label: '검색설정', href: '/cms/set/search', requiresSettingsAccess: true },
+      { menu_key: 'settings.policy', label: '정책관리', href: '/cms/set/policy', requiresSettingsAccess: true },
     ],
   },
 ]

@@ -7,10 +7,6 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { BENEFIT_TYPES, defaultBenefitParams, type BenefitType } from '$lib/utils/subscriptionBenefits'
 import { buildComboCategoryCode } from '$lib/utils/comboCategoryCode'
 import type { PageServerLoad, Actions } from './$types'
-import type { SubscriptionPolicyItem } from '$lib/types/database'
-
-const POLICY_ITEM_MAX_LENGTH = 200
-const POLICY_ITEM_MAX_COUNT = 20
 
 export type MappingGroupSimple = { id: string; name: string; default_category: string | null }
 export type MappingItemSimple = { group_id: string; taxonomy_code_id: string; combo_row_id: string }
@@ -35,7 +31,7 @@ export const load: PageServerLoad = async ({ parent }) => {
   if (!hasSettingsAccess(cmsRole ?? '')) throw redirect(303, '/cms?notice=access_denied')
 
   const db = admin()
-  const [{ data: parentProductRows }, { data: policyItemRows }, { data: rawGroups }, { data: rawItems }] =
+  const [{ data: parentProductRows }, { data: rawGroups }, { data: rawItems }] =
     await Promise.all([
       db
         .from('products')
@@ -45,11 +41,6 @@ export const load: PageServerLoad = async ({ parent }) => {
         .eq('is_active', true)
         .order('name', { ascending: true })
         .limit(500),
-      db
-        .from('subscription_policy_items')
-        .select('id, content, sort_order, created_at, updated_at')
-        .order('sort_order', { ascending: true })
-        .order('created_at', { ascending: true }),
       // products/new와 동일한 코드조합(code_mapping_groups/items) 소스 재사용 — §T1
       db
         .from('code_mapping_groups')
@@ -78,7 +69,6 @@ export const load: PageServerLoad = async ({ parent }) => {
 
   return {
     parentProducts: (parentProductRows ?? []) as { id: string; name: string }[],
-    policyItems: (policyItemRows ?? []) as SubscriptionPolicyItem[],
     mappingGroups: (rawGroups ?? []) as MappingGroupSimple[],
     mappingItems: (rawItems ?? []) as MappingItemSimple[],
     taxonomyCodes,
@@ -215,82 +205,5 @@ export const actions: Actions = {
 
     const warnParam = regWarnings.length > 0 ? `&regWarn=${encodeURIComponent(regWarnings.join(','))}` : ''
     throw redirect(303, `/cms/subscriptions?selected=${plan.id}${warnParam}`)
-  },
-
-  addPolicyItem: async ({ request, locals }) => {
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-
-    const content = String((await request.formData()).get('content') ?? '').trim()
-    if (!content) return fail(400, { error: '정책항목 내용을 입력해주세요' })
-    if (content.length > POLICY_ITEM_MAX_LENGTH) {
-      return fail(400, { error: `정책항목은 ${POLICY_ITEM_MAX_LENGTH}자 이내로 작성해주세요` })
-    }
-
-    const db = admin()
-    const { data: existing, count } = await db
-      .from('subscription_policy_items')
-      .select('sort_order', { count: 'exact' })
-      .order('sort_order', { ascending: false })
-      .limit(1)
-    if ((count ?? 0) >= POLICY_ITEM_MAX_COUNT) {
-      return fail(400, { error: `정책항목은 최대 ${POLICY_ITEM_MAX_COUNT}개까지 등록할 수 있습니다` })
-    }
-    const nextSortOrder = ((existing?.[0] as { sort_order: number } | undefined)?.sort_order ?? -1) + 1
-
-    const { error } = await db.from('subscription_policy_items').insert({ content, sort_order: nextSortOrder })
-    if (error) return fail(500, { error: error.message })
-    return { ok: true }
-  },
-
-  updatePolicyItem: async ({ request, locals }) => {
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-
-    const formData = await request.formData()
-    const id = String(formData.get('id') ?? '')
-    const content = String(formData.get('content') ?? '').trim()
-    if (!id) return fail(400, { error: '잘못된 요청' })
-    if (!content) return fail(400, { error: '정책항목 내용을 입력해주세요' })
-    if (content.length > POLICY_ITEM_MAX_LENGTH) {
-      return fail(400, { error: `정책항목은 ${POLICY_ITEM_MAX_LENGTH}자 이내로 작성해주세요` })
-    }
-
-    const { error } = await admin()
-      .from('subscription_policy_items')
-      .update({ content, updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) return fail(500, { error: error.message })
-    return { ok: true }
-  },
-
-  deletePolicyItem: async ({ request, locals }) => {
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-
-    const id = String((await request.formData()).get('id') ?? '')
-    if (!id) return fail(400, { error: '잘못된 요청' })
-
-    const { error } = await admin().from('subscription_policy_items').delete().eq('id', id)
-    if (error) return fail(500, { error: error.message })
-    return { ok: true }
-  },
-
-  reorderPolicyItems: async ({ request, locals }) => {
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-
-    const orderedIds = parseJsonField<string[]>((await request.formData()).get('ordered_ids'))
-    if (!orderedIds || orderedIds.length === 0) return fail(400, { error: '잘못된 요청' })
-
-    const db = admin()
-    const results = await Promise.all(
-      orderedIds.map((id, index) =>
-        db.from('subscription_policy_items').update({ sort_order: index }).eq('id', id)
-      )
-    )
-    const failed = results.find((r) => r.error)
-    if (failed?.error) return fail(500, { error: failed.error.message })
-    return { ok: true }
   },
 }
