@@ -65,6 +65,11 @@ export interface ApplyTemplateOptions {
    */
   contractTermsText?: string | null
   privacyTermsText?: string | null
+  /**
+   * 요청에 쓸 fetch — 브라우저에서는 기본(전역 fetch). 서버(예약 승인 시 자동발행)에서는 SvelteKit 이벤트의 fetch를 넘겨
+   * 상대 경로 호출이 관리자 세션 쿠키와 함께 같은 API를 그대로 타게 한다(2026-10-15).
+   */
+  fetchFn?: typeof fetch
 }
 
 export type ApplyTemplateResult =
@@ -80,9 +85,10 @@ export async function applyContractTemplate(
   opts: ApplyTemplateOptions
 ): Promise<ApplyTemplateResult> {
   let activeContractId = opts.contractId
+  const doFetch = opts.fetchFn ?? fetch
 
   if (!activeContractId) {
-    const initRes = await fetch(
+    const initRes = await doFetch(
       `/api/cms/reservations/${opts.reservationId}/init-contract`,
       { method: 'POST' }
     )
@@ -94,7 +100,7 @@ export async function applyContractTemplate(
     activeContractId = newId
   }
 
-  const patchRes = await fetch(
+  const patchRes = await doFetch(
     `/api/cms/contracts/${activeContractId}/content`,
     {
       method:  'PATCH',

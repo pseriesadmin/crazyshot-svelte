@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { page } from '$app/stores'
   import ContractTemplatePanel from '$lib/components/cms/ContractTemplatePanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
@@ -40,6 +41,17 @@
     void searchQuery
     currentPage = 1
   })
+
+  // 좌측 양식 목록 접기/펼치기 — 문서 뷰어 영역을 넓게 쓰기 위함(2026-10-15). 선택은 브라우저에 기억.
+  const LIST_OPEN_KEY = 'cs-contracts-list-open'
+  let listOpen = $state(true)
+  $effect(() => {
+    try { if (localStorage.getItem(LIST_OPEN_KEY) === '0') listOpen = false } catch { /* 저장소 접근 불가 시 기본값 */ }
+  })
+  function toggleList() {
+    listOpen = !listOpen
+    try { localStorage.setItem(LIST_OPEN_KEY, listOpen ? '1' : '0') } catch { /* 저장 실패 무시 */ }
+  }
 
   const showPanel = $derived(isNewMode || (!!data.selectedId && !!data.selectedTemplate))
 
@@ -119,7 +131,12 @@
   <div class="main-layout">
 
     <!-- 좌측: 검색 + 목록 + 페이지네이션 -->
-    <div class="list-pane">
+    <div class="list-pane" class:collapsed={!listOpen}>
+      <div class="list-pane-head">
+        <button type="button" class="close-btn" onclick={toggleList} aria-expanded={listOpen} aria-label={listOpen ? '양식 목록 닫기' : '양식 목록 펼치기'} title={listOpen ? '양식 목록 닫기' : '양식 목록 펼치기'}>
+          {#if listOpen}✕{:else}<ChevronIcon direction="right" size={10} color="currentColor" />{/if}
+        </button>
+      </div>
       <div class="search-wrap">
         <input
           type="search"
@@ -162,6 +179,9 @@
                   <span class="mode-badge" class:spreadsheet={(tpl.authoring_mode ?? 'flow') === 'spreadsheet'} class:canvas={tpl.authoring_mode === 'canvas'} class:html={tpl.authoring_mode === 'html'}>
                     {modeLabel(tpl.authoring_mode)}
                   </span>
+                  {#if tpl.auto_issue_default}
+                    <span class="mode-badge auto-issue" title="예약승인 시 이 양식으로 전자계약이 자동 발행됩니다">자동발행</span>
+                  {/if}
                   <span class="tpl-date">{formatDate(tpl.created_at)}</span>
                 </div>
               </button>
@@ -205,6 +225,7 @@
           {#key data.selectedId}
             <ContractTemplatePanel
               template={data.selectedTemplate}
+              onautoissuechange={() => invalidateAll()}
               onclose={closePanel}
               onsaved={onSaved}
             />
@@ -282,7 +303,8 @@
 
   /* 좌측 목록 패널 */
   .list-pane {
-    width: 280px;
+    /* 2026-10-15: 삭제 버튼을 카드 안(우상단)으로 합쳐 별도 열이 사라짐 → 배지 3개 + 날짜가 한 줄에 들어가는 최소 폭 */
+    width: 290px;
     flex-shrink: 0;
     border-right: 1px solid var(--cs-lilac);
     background: var(--cs-white);
@@ -291,6 +313,26 @@
     overflow: hidden;
   }
 
+  .list-pane-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 4px 8px 0;
+  }
+  .list-pane-head .close-btn {
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .list-pane-head .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+  .list-pane { transition: width 0.2s ease; }
+  .list-pane.collapsed {
+    width: 36px;
+  }
+  .list-pane.collapsed > :not(.list-pane-head) { display: none; }
+  .list-pane.collapsed .list-pane-head { justify-content: center; padding: 4px 0 0; }
   /* 검색 */
   .search-wrap {
     padding: 10px 12px;
@@ -323,6 +365,7 @@
      형제로 감싼다. 보더·호버·선택 배경은 전부 이 행 단위로 옮겨왔다(예전엔 .tpl-card
      자신이 <button> 전체였을 때 가지고 있던 스타일). */
   .tpl-card-row {
+    position: relative;
     display: flex;
     align-items: stretch;
     border-bottom: 1px solid var(--cs-lilac);
@@ -344,12 +387,16 @@
     text-align: left;
     cursor: pointer;
   }
-  /* CmsDeleteButton(.act-del) — 행 오른쪽 끝에 세로 중앙 정렬 */
+  /* CmsDeleteButton(.act-del) — 2026-10-15: 카드와 별도 열을 차지하지 않고 카드 우상단(제목 줄)에 겹쳐 배치 → 가로폭 절약 */
+  .tpl-card-row :global(form) {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+  }
   .tpl-card-row :global(.act-del) {
     flex-shrink: 0;
-    align-self: center;
-    margin-right: 10px;
   }
+  .tpl-title { padding-right: 28px; }
 
   .tpl-title {
     font: var(--text-pc-body-14);
@@ -359,18 +406,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* 2026-10-15 — '자동발행' 배지가 늘어나 카드 폭(약 280px)에서 배지 글자가 줄바꿈("자동발/행")되던 문제:
+     배지 폰트 토큰을 두 단계 낮추고(--text-pc-script-12 → --text-pc-descript-10), 배지는 줄바꿈 없이 한 줄로 고정,
+     공간이 모자라면 배지 글자가 아니라 날짜가 다음 줄로 내려가게 재배열(날짜는 오른쪽 정렬). */
   .tpl-meta {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 4px 6px;
   }
   .status-badge {
     display: inline-block;
+    flex-shrink: 0;
+    white-space: nowrap;
     padding: 1px 7px;
     border-radius: var(--radius-full);
     background: rgba(59,47,138,0.1);
     color: var(--cs-purple);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-descript-10);
     font-weight: 700;
   }
   .status-badge.archived {
@@ -382,11 +435,13 @@
      동일한 중립 톤, 캔버스형/스프레드시트형만 구분되는 톤을 준다. */
   .mode-badge {
     display: inline-block;
+    flex-shrink: 0;
+    white-space: nowrap;
     padding: 1px 7px;
     border-radius: var(--radius-full);
     background: var(--cs-surface-gray);
     color: var(--cs-text-mid);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-descript-10);
     font-weight: 700;
   }
   .mode-badge.canvas {
@@ -397,11 +452,17 @@
     background: rgba(59, 47, 138, 0.1);
     color: var(--cs-purple);
   }
+  .mode-badge.auto-issue {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
   .mode-badge.html {
     background: rgba(14, 165, 233, 0.1);
     color: var(--cs-info);
   }
   .tpl-date {
+    margin-left: auto;
+    white-space: nowrap;
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
   }

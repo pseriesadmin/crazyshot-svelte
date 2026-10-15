@@ -19,6 +19,8 @@
     reservationId:    number
     /** 취소(cancelled)·만료(expired) 예약은 발행·발송 버튼을 비활성화한다 */
     reservationStatus: string
+    /** 예약승인 전(신청대기·예약현황)에는 전자계약 발행·발송을 잠근다 — '예약승인' 실행 후 풀린다(2026-10-15) */
+    approvalLocked?: boolean
     productName:      string
     productCode:      string | null
     productCategory:  string
@@ -47,6 +49,7 @@
     signingsentAt,
     reservationId,
     reservationStatus,
+    approvalLocked = false,
     productName,
     productCode,
     productCategory,
@@ -318,6 +321,11 @@
 
 <div class="contract-viewer">
   <!-- 상태 배너 -->
+  {#if approvalLocked && !issueBlocked}
+    <div class="banner banner-none">
+      예약승인 전입니다 — '예약승인'을 실행하면 전자계약을 발행·발송할 수 있어요
+    </div>
+  {/if}
   {#if issueBlocked}
     <div class="banner banner-blocked">
       {issueBlockedLabel} 예약입니다 — 계약서 발행·발송이 비활성화되었습니다
@@ -355,8 +363,8 @@
         <span class="tpl-section-title">계약서 양식 선택 편집</span>
         <button
           class="btn-issue"
-          disabled={issueBlocked}
-          title={issueBlocked ? `${issueBlockedLabel} 예약은 계약서를 발행할 수 없습니다.` : undefined}
+          disabled={issueBlocked || approvalLocked}
+          title={issueBlocked ? `${issueBlockedLabel} 예약은 계약서를 발행할 수 없습니다.` : approvalLocked ? '예약승인 후 전자계약을 발행할 수 있어요.' : undefined}
           onclick={() => { previewTemplateId = '' }}
         >발행</button>
       </div>
@@ -393,6 +401,8 @@
                  차단한다 — 이 버튼은 더 이상 disabled 처리하지 않는다. -->
             <button
               class="btn-tpl-preview"
+              disabled={approvalLocked && !customerSignedAt}
+              title={approvalLocked && !customerSignedAt ? '예약승인 후 전자계약을 발송할 수 있어요.' : undefined}
               onclick={() => { previewTemplateId = '' }}
             >
               {isRentalView || customerSignedAt || issueBlocked ? '보기' : '미리보기 & 발송'}
@@ -412,7 +422,7 @@
               <!-- Stage 5 (EC-6): 재발송 — 기존 서명 링크 유지, sent_at 갱신 후 채팅 재발송 -->
               <button
                 class="btn-tpl-resend"
-                disabled={issueBlocked || isResending}
+                disabled={issueBlocked || approvalLocked || isResending}
                 title={issueBlocked ? `${issueBlockedLabel} 예약은 계약서를 재발송할 수 없습니다.` : undefined}
                 onclick={handleResend}
               >

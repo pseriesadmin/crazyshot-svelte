@@ -14,6 +14,8 @@ import { generateHTML } from '@tiptap/core'
 import type { JSONContent } from '@tiptap/core'
 import type { ContractSubstitutionData, ContractLineItem } from '$lib/types/contract-module'
 import { TIPTAP_CONTRACT_EXTENSIONS } from '$lib/components/cms/contract-editor/tiptapExtensions'
+// 2026-10-14: 변수값이 칩 위치의 글꼴·크기·굵기를 이어받도록(통합 편집기 모듈과 같은 규칙 공유)
+import { marksForChip } from '$lib/modules/doc-editor/core/chipMarks'
 
 /**
  * TipTap JSONContent 문서를 HTML 문자열로 변환한다.
@@ -105,7 +107,19 @@ export function substituteTiptapDoc(
       return expandTableRepeatRegion(node)
     }
 
-    return { ...node, content: node.content.map((n) => traverseNode(n, item)) }
+    const children = node.content
+    return {
+      ...node,
+      content: children.map((n, i) => {
+        const out = traverseNode(n, item)
+        // 칩 → 값 글자: 칩의 서식(없으면 주변 글자 서식)을 이어받아 값이 주변과 같은 글꼴·크기로 보이게 한다
+        if (n.type === 'mergeField' && out.type === 'text') {
+          const marks = marksForChip(children, i)
+          if (marks) return { ...out, marks }
+        }
+        return out
+      }),
+    }
   }
 
   /**

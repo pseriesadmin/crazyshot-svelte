@@ -86,7 +86,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const { data: templates } = await admin
     .from('contract_templates')
-    .select('id, title, status, created_at, authoring_mode')
+    .select('id, title, status, created_at, authoring_mode, auto_issue_default')
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
 
@@ -94,7 +94,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   if (selectedId) {
     const { data } = await admin
       .from('contract_templates')
-      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, html_issuer_signature_url, html_issuer_signature_width, html_issuer_signature_offset_x, html_issuer_signature_offset_y, contract_terms_text, privacy_terms_text, created_at, updated_at')
+      .select('id, title, content_blocks, specifications, status, requires_issuer_signature, authoring_mode, canvas_document, spreadsheet_document, html_issuer_signature_url, html_issuer_signature_width, html_issuer_signature_offset_x, html_issuer_signature_offset_y, contract_terms_text, privacy_terms_text, auto_issue_default, created_at, updated_at')
       .eq('id', selectedId)
       .is('deleted_at', null)
       .maybeSingle()
@@ -109,6 +109,29 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 }
 
 export const actions: Actions = {
+  // 전자계약 자동발행 표준양식 지정/해제(2026-10-15) — 즉시 저장(폼 저장 버튼과 별개). 켜면 다른 양식의 지정은 자동 해제(단독).
+  setAutoIssue: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { error: '권한 없음' })
+
+    const form = await request.formData()
+    const id = ((form.get('id') as string | null) ?? '').trim()
+    const on = form.get('on') === 'true'
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return fail(400, { error: '양식 ID가 올바르지 않습니다.' })
+
+    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const { data, error } = await admin.rpc('cms_set_auto_issue_template', { p_template_id: id, p_on: on })
+    if (error) return fail(500, { error: error.message })
+    const res = data as { ok: boolean; error?: string } | null
+    if (!res?.ok) {
+      const msg = res?.error === 'template_not_active' ? '사용 중(활성) 양식만 표준양식으로 지정할 수 있습니다.' : res?.error === 'template_not_found' ? '양식을 찾을 수 없습니다.' : '지정에 실패했습니다.'
+      return fail(400, { error: msg })
+    }
+    return { ok: true, on }
+  },
+
   create: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })

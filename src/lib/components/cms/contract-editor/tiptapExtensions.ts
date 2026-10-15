@@ -16,11 +16,13 @@ import TableCell from '@tiptap/extension-table-cell'
 import Image from '@tiptap/extension-image'
 import Underline from '@tiptap/extension-underline'
 import TextAlign from '@tiptap/extension-text-align'
-import { TextStyle } from '@tiptap/extension-text-style'
+import { TextStyle, FontSize, BackgroundColor } from '@tiptap/extension-text-style'
 import Color from '@tiptap/extension-color'
 import FontFamily from '@tiptap/extension-font-family'
 import Link from '@tiptap/extension-link'
 import { MergeFieldNode } from './nodes/MergeFieldNode'
+// P6-b(2026-10-14): 통합 편집기의 글자 크기·배경색·들여쓰기를 고객 서명 화면·미리보기에서도 그리기 위한 가산 등록
+import { Indent } from '$lib/modules/doc-editor/core/nodes/Indent'
 
 // ────────────────────────────────────────────────────────────────────────────
 // CustomImage 전용 파서 헬퍼
@@ -241,6 +243,9 @@ export const TIPTAP_CONTRACT_EXTENSIONS = [
   TextStyle,
   Color,
   FontFamily,
+  FontSize,
+  BackgroundColor,
+  Indent,
   Link.configure({ openOnClick: false }),
   Table.configure({ resizable: true }),
   CustomTableRow,       // TableRow → CustomTableRow (반복 영역 지정 지원, Stage 5)

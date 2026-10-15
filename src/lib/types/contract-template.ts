@@ -50,6 +50,11 @@ export interface ContractTemplate {
    */
   contract_terms_text?: string | null
   privacy_terms_text?: string | null
+  /**
+   * 전자계약 자동발행 표준양식 여부(Migration #717). true 인 양식은 (삭제되지 않은 것 기준) 최대 1개이며,
+   * 예약목록 '예약승인' 때 이 양식으로 계약서가 자동 발행·발송된다. 지정 없음(전부 false) = 수동 발행.
+   */
+  auto_issue_default?: boolean
 }
 
-export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode'>
+export type ContractTemplateSummary = Pick<ContractTemplate, 'id' | 'title' | 'status' | 'created_at' | 'authoring_mode' | 'auto_issue_default'>

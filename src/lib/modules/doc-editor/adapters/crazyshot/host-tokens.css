@@ -1,0 +1,22 @@
+/*
+ * host-tokens.css — doc-editor의 --de-* 디자인 토큰을 크레이지샷 CMS 토큰(--cs-*)에 연결한다.
+ * adapters/crazyshot 컴포넌트가 이 클래스를 가진 래퍼(display:contents) 안에서만 편집기를 렌더링한다.
+ * 다른 프로젝트는 이 파일 대신 자기 토큰으로 --de-* 를 정의하면 된다(미정의 시 모듈 내장 기본값).
+ */
+.cs-doc-editor-host {
+  --de-lilac: var(--cs-lilac);
+  --de-purple: var(--cs-purple);
+  --de-purple-hover: var(--cs-purple-hover);
+  --de-purple-soft: var(--cs-purple-op10);
+  --de-white: var(--cs-white);
+  --de-text: var(--cs-text);
+  --de-text-mid: var(--cs-text-mid);
+  --de-surface: var(--cs-surface-gray);
+  --de-danger: var(--cs-red-badge);
+  --de-disabled: var(--cs-disabled-button);
+  --de-radius-sm: var(--cms-radius-sm);
+  --de-radius-xs: var(--radius-sm);
+  --de-font-caption: var(--text-pc-script-12);
+  --de-font-body: var(--text-pc-body-14);
+  --de-font-title: var(--text-pc-title-16);
+}

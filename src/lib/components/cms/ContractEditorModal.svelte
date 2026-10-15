@@ -48,6 +48,9 @@
     '.xls',
     '.hwp',
     '.hwpx',
+    // .doc(구형 Word)는 직접 변환을 지원하지 않는다 — 선택은 허용하고 .docx 재저장 안내만 띄운다(onImportFileChange)
+    '.doc',
+    'application/msword',
   ].join(',')
   const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 
@@ -66,7 +69,9 @@
       csToast.error('파일 크기가 10MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.')
     } else {
       const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
+      if (ext === 'doc') {
+        csToast.warning('.doc(구형 Word) 파일은 직접 가져올 수 없어요. Word에서 "다른 이름으로 저장 → Word 문서(.docx)"로 저장한 뒤 다시 올려주세요.')
+      } else if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
         csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
       } else {
         importFile  = file
@@ -466,6 +471,7 @@
   <ContractImportModal
     initialFile={importFile}
     onclose={() => { showImport = false; importFile = null }}
+    onreselect={triggerImport}
     onImport={handleImport}
     onImportSpreadsheet={handleImportSpreadsheet}
   />

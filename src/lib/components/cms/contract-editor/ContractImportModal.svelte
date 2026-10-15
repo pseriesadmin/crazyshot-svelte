@@ -12,8 +12,7 @@
    * 지원 포맷:
    *   .docx  → mammoth HTML → TipTap setContent
    *   .xlsx  → 모든 시트 → SpreadsheetDocument → 스프레드시트 에디터 모드
-   *   .hwpx  → 실험 변환 → TipTap setContent
-   *   .hwp   → 안내 메시지
+   *   .hwpx / .hwp → hwp-convert 변환(동의 후 진행) → TipTap setContent (실패·암호·배포용은 안내 화면)
    */
 
   import { csToast } from '$lib/utils/toast'
@@ -22,7 +21,7 @@
     importWorkbookAsSpreadsheetDocument,
     countTotalRows,
   } from '$lib/utils/docImport/xlsxToSpreadsheetDocument'
-  import { FEATURE_HWPX_EXPERIMENTAL, importHwpx } from '$lib/utils/docImport/hwpxImport'
+  import { FEATURE_HWPX_EXPERIMENTAL, importHwpx, importHwp } from '$lib/utils/docImport/hwpxImport'
   import type { SpreadsheetDocument } from '$lib/types/contract-document'
 
   // --------------------------------------------------------------------------
@@ -36,9 +35,11 @@
     onImport: (result: { type: 'html'; html: string }) => void
     /** xlsx → SpreadsheetDocument (스프레드시트 에디터 모드 전환) */
     onImportSpreadsheet?: (doc: SpreadsheetDocument) => void
+    /** '다시 선택'·'다른 파일 선택' — 모달을 닫고 파일 선택창을 다시 연다(호출부가 파일 input 을 가지고 있음). 없으면 그냥 닫는다 */
+    onreselect?: () => void
   }
 
-  let { initialFile, onclose, onImport, onImportSpreadsheet }: Props = $props()
+  let { initialFile, onclose, onImport, onImportSpreadsheet, onreselect }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 상태
@@ -67,6 +68,7 @@
   let hwpxHtml         = $state('')
   let hwpxWarnings     = $state<string[]>([])
   let hwpxConsentGiven = $state(false)    // 사용자 동의 체크박스
+  let hwpError         = $state('')       // 변환 실패 이유(안내 화면에 표시)
 
   // --------------------------------------------------------------------------
   // 파일 라우팅 — 호출부에서 이미 검증된 initialFile을 확장자별로 분기 처리
@@ -79,13 +81,10 @@
     } else if (ext === 'xlsx' || ext === 'xls') {
       fileType = 'xlsx'
       processXlsxAsSpreadsheet(file)
-    } else if (ext === 'hwp') {
-      // P5-1: .hwp 구 바이너리 포맷 — 파싱 시도 없이 즉시 안내 모달
-      fileType = 'hwp'
-      step = 'hwp-notice'
-    } else if (ext === 'hwpx') {
-      // P5-1 + P5-2: .hwpx — feature-flag에 따라 분기
-      fileType = 'hwpx'
+    } else if (ext === 'hwp' || ext === 'hwpx') {
+      // .hwp(HWP 5.0 이진)·.hwpx 모두 hwp-convert 로 변환 — feature-flag 꺼짐 시 안내 모달
+      fileType = ext
+      hwpError = ''
       if (FEATURE_HWPX_EXPERIMENTAL) {
         hwpxConsentGiven = false
         step = 'hwpx-experimental'
@@ -152,14 +151,16 @@
   // --------------------------------------------------------------------------
   async function startHwpxExperimentalParse() {
     if (!selectedFile || !hwpxConsentGiven) return
+    hwpError = ''
     step = 'loading'
     try {
-      const result = await importHwpx(selectedFile)
+      const result = fileType === 'hwp' ? await importHwp(selectedFile) : await importHwpx(selectedFile)
       hwpxHtml     = result.html
       hwpxWarnings = result.warnings
       step         = 'hwpx-preview'
-    } catch (_err) {
-      // 파싱 실패 → 기본 안내 모달로 폴백 (console 출력 금지, 사용자에게 안내 화면 제공)
+    } catch (err) {
+      // 변환 실패 → 이유와 함께 안내 화면으로 폴백 (console 출력 금지)
+      hwpError = err instanceof Error ? err.message : ''
       step = 'hwp-notice'
     }
   }
@@ -168,6 +169,12 @@
     if (!hwpxHtml) return
     onImport({ type: 'html', html: hwpxHtml })
     onclose()
+  }
+
+  /** 같은 클릭 안에서 닫고 선택창을 연다 — 브라우저가 사용자 클릭으로 인정하는 동안 파일 선택창을 열어야 한다 */
+  function reselect() {
+    onclose()
+    onreselect?.()
   }
 
   // --------------------------------------------------------------------------
@@ -200,10 +207,10 @@
           <div class="hwp-notice-icon" aria-hidden="true">📄</div>
           <p class="cim-section-title">한글(.hwp/.hwpx) 직접 변환 안내</p>
           <p class="cim-desc">
-            {#if fileType === 'hwpx'}
-              선택한 <strong>.hwpx</strong> 파일은 현재 실험 변환에 실패했거나 기능이 비활성화되어 있습니다.
+            {#if hwpError}
+              {hwpError}
             {:else}
-              선택한 <strong>.hwp</strong> 파일은 구형 바이너리 포맷으로 직접 변환이 지원되지 않습니다.
+              선택한 <strong>.{fileType === 'hwpx' ? 'hwpx' : 'hwp'}</strong> 파일은 현재 직접 변환 기능이 비활성화되어 있습니다.
             {/if}
           </p>
           <div class="hwp-notice-steps">
@@ -217,7 +224,7 @@
           </div>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={onclose}>
+          <button type="button" class="btn-cancel" onclick={reselect}>
             다른 파일 선택
           </button>
           <button type="button" class="btn-action" onclick={onclose}>확인</button>
@@ -226,33 +233,21 @@
       {:else if step === 'hwpx-experimental'}
         <!-- P5-2: HWPX 실험 파싱 동의 단계 -->
         <div class="cim-section">
-          <p class="cim-section-title">HWPX 실험 변환</p>
-          <div class="warn-banner warn-banner--yellow">
-            <strong>⚠️ 실험적 기능</strong><br />
-            HWPX 파일을 HTML로 변환하는 기능은 실험 단계입니다.<br />
-            복잡한 서식(표·이미지·특수 글꼴·다단 등)이 손실되거나 깨질 수 있습니다.
-          </div>
+          <p class="cim-section-title">한글 문서 변환 (.{fileType === 'hwp' ? 'hwp' : 'hwpx'})</p>
           <p class="cim-desc">
             파일명: <strong>{selectedFile?.name ?? ''}</strong>
           </p>
-          <div class="hwpx-notice-alt">
-            <p class="notice-title">더 정확한 변환을 원한다면:</p>
-            <ol class="notice-list">
-              <li>한글(한컴오피스)에서 <strong>파일 → 다른 이름으로 저장</strong>.</li>
-              <li>파일 형식 <strong>Word 문서(.docx)</strong> 선택 후 재업로드.</li>
-            </ol>
-          </div>
           <label class="hwpx-consent-label">
             <input
               type="checkbox"
               bind:checked={hwpxConsentGiven}
-              aria-label="서식 손실 가능성을 이해했습니다 동의"
+              aria-label="차트·OLE 개체 등이 손실될 수 있음을 확인했습니다"
             />
-            서식 손실 가능성을 이해했으며, 실험 변환을 진행합니다.
+            표·글자 서식은 가져옵니다. 차트·OLE 개체 등은 빠질 수 있어요.
           </label>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={onclose}>
+          <button type="button" class="btn-cancel" onclick={reselect}>
             다른 파일 선택
           </button>
           <button
@@ -261,14 +256,14 @@
             onclick={startHwpxExperimentalParse}
             disabled={!hwpxConsentGiven}
           >
-            실험 변환 시작
+            변환 시작
           </button>
         </div>
 
       {:else if step === 'hwpx-preview'}
         <!-- P5-2: HWPX 변환 결과 미리보기 -->
         <div class="cim-section">
-          <p class="cim-section-title">HWPX 변환 결과 미리보기</p>
+          <p class="cim-section-title">한글 문서 변환 결과 미리보기</p>
           {#if hwpxWarnings.length > 0}
             <div class="warn-banner">
               <strong>변환 경고:</strong>
@@ -279,12 +274,12 @@
               </ul>
             </div>
           {/if}
-          <div class="docx-preview" aria-label="HWPX 변환 결과 미리보기">
+          <div class="docx-preview" aria-label="한글 문서 변환 결과 미리보기">
             {@html hwpxHtml}
           </div>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={() => { step = 'hwpx-experimental' }}>다시 선택</button>
+          <button type="button" class="btn-cancel" onclick={reselect}>다시 선택</button>
           <button type="button" class="btn-action" onclick={confirmHwpxImport}>
             이 내용으로 가져오기
           </button>
@@ -312,7 +307,7 @@
           </div>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={onclose}>다시 선택</button>
+          <button type="button" class="btn-cancel" onclick={reselect}>다시 선택</button>
           <button type="button" class="btn-action" onclick={confirmDocxImport}>
             이 내용으로 가져오기
           </button>
@@ -355,7 +350,7 @@
           </p>
         </div>
         <div class="cim-footer">
-          <button type="button" class="btn-cancel" onclick={onclose}>
+          <button type="button" class="btn-cancel" onclick={reselect}>
             다시 선택
           </button>
           <button type="button" class="btn-action" onclick={confirmXlsxSpreadsheetImport}>
