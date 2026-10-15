@@ -7,7 +7,6 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { syncNationalHolidays } from '$lib/server/holidaySync'
 import { toAreaFromRegionNames, attachZipRanges, type ZipRange } from '$lib/utils/deliveryArea'
 import { validateAddress } from '$lib/server/dhero'
-import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { Actions, PageServerLoad } from './$types'
 
 // database.ts에 신규 테이블/RPC 미등록 상태 — generate_typescript_types 이후 제거
@@ -72,13 +71,6 @@ export interface PickupPoint {
   address: string
   phone: string | null
   contact_person: string | null
-  is_active: boolean
-}
-
-export interface RentalConsentItem {
-  id: string
-  content: string
-  display_order: number
   is_active: boolean
 }
 
@@ -148,7 +140,7 @@ export const load: PageServerLoad = async ({ locals }) => {
   const supabase = locals.supabase
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const [periods, methods, branches, guide, consents, shippingRow, cutoffRow, holidays, discountTiers, policyRow, serviceInfoRow, deliveryAreas, zipRangeRes] = await Promise.all([
+  const [periods, methods, branches, shippingRow, cutoffRow, holidays, discountTiers, deliveryAreas, zipRangeRes] = await Promise.all([
     untypedFrom(supabase, 'rental_period_options')
       .select('id, name, display_order, is_active')
       .is('deleted_at', null)
@@ -164,16 +156,6 @@ export const load: PageServerLoad = async ({ locals }) => {
       .select('id, name, address, phone, contact_person, is_active')
       .is('deleted_at', null)
       .order('created_at'),
-
-    untypedFrom(supabase, 'rental_guide_settings')
-      .select('guide_text')
-      .limit(1)
-      .single(),
-
-    untypedFrom(supabase, 'rental_consent_items')
-      .select('id, content, display_order, is_active')
-      .is('deleted_at', null)
-      .order('display_order'),
 
     untypedFrom(supabase, 'rental_shipping_settings')
       .select('enable_round_trip, round_trip_fee, enable_delivery, delivery_fee, enable_return, return_fee, shipping_guide, locker_guide_text, max_rental_days')
@@ -195,16 +177,6 @@ export const load: PageServerLoad = async ({ locals }) => {
       .is('deleted_at', null)
       .order('display_order')
       .order('created_at'),
-
-    untypedFrom(supabase, 'rental_policy_settings')
-      .select('privacy_text, terms_text, refund_text')
-      .limit(1)
-      .single(),
-
-    untypedFrom(supabase, 'service_info_settings')
-      .select('company_name, ceo_name, biz_address, biz_reg_no, mail_order_biz_no, privacy_officer, ceo_email, cs_phone, business_hours')
-      .limit(1)
-      .single(),
 
     untypedFrom(supabase, 'delivery_service_areas')
       .select('id, sido, sigungu, lat, lng, postal_code, created_at')
@@ -237,25 +209,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     zipRows,
   ).map((a) => ({ ...a, zipCount: countByKey.get(`${a.sido}|${a.sigungu ?? ''}`) ?? 0 }))
 
-  type GuideRow = { guide_text: string | null }
-  type PolicyRow = { privacy_text: string; terms_text: string; refund_text: string }
-  const emptyServiceInfo: ServiceInfoSettings = {
-    company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
-    privacy_officer: '', ceo_email: '', cs_phone: '', business_hours: '',
-  }
-
   return {
     periods: ((periods as { data: RentalPeriodOption[] | null }).data ?? []),
     methods: ((methods as { data: RentalMethodOption[] | null }).data ?? []),
     branches: (branches.data ?? []) as PickupPoint[],
-    guideText: ((guide as { data: GuideRow | null }).data?.guide_text ?? ''),
-    consents: ((consents as { data: RentalConsentItem[] | null }).data ?? []),
     shippingSettings: ((shippingRow as { data: RentalShippingSettings | null }).data ?? null),
     cutoffSettings: ((cutoffRow as { data: DeliveryCutoffSettings | null }).data ?? null),
     holidays: ((holidays as { data: PublicHolidayRow[] | null }).data ?? []),
     discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
-    policySettings: ((policyRow as { data: PolicyRow | null }).data ?? { privacy_text: '', terms_text: '', refund_text: '' }),
-    serviceInfo: ((serviceInfoRow as { data: ServiceInfoSettings | null }).data ?? emptyServiceInfo),
     deliveryAreas: areasWithZips as DeliveryServiceArea[],
     catalogRegions,
   }
@@ -903,141 +864,6 @@ export const actions: Actions = {
       const message = err instanceof Error ? err.message : '동기화에 실패했습니다.'
       return fail(500, { error: message })
     }
-  },
-
-  // ─── 이용안내 ─────────────────────────────────
-  saveGuide: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-    const guideText = (data.get('guide_text') as string | null) ?? ''
-
-    if (guideText.length > 1000) return fail(400, { error: '안내문은 최대 1,000자까지 입력 가능합니다.' })
-
-    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_guide', {
-      p_guide_text: guideText,
-    })
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
-  },
-
-  // ─── 법적 고지 텍스트 ─────────────────────────
-  savePolicy: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-    const field = (data.get('policy_field') as string | null) ?? ''
-    const text = (data.get('policy_text') as string | null) ?? ''
-
-    if (!['privacy_text', 'terms_text', 'refund_text'].includes(field)) {
-      return fail(400, { error: '올바르지 않은 항목입니다.' })
-    }
-    if (text.length > 5000) return fail(400, { error: '내용은 최대 5,000자까지 입력 가능합니다.' })
-
-    const fieldToParam: Record<string, string> = {
-      privacy_text: 'p_privacy',
-      terms_text: 'p_terms',
-      refund_text: 'p_refund',
-    }
-    const params: Record<string, string> = { [fieldToParam[field]]: text }
-
-    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_policy_settings', params)
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
-  },
-
-  // ─── 서비스 기본 정보(사업자 정보, Migration #566) ─────
-  // PC 공통푸터·모바일 멤버십 푸터·표준계약서 임대인 정보 3곳이 이 값을 단일 소스로 참조한다
-  // (src/lib/services/serviceInfoSettings.ts). 9개 필드를 단일 폼으로 한 번에 저장.
-  saveServiceInfo: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-
-    const fields = {
-      company_name:      (data.get('company_name') as string | null)?.trim() ?? '',
-      ceo_name:           (data.get('ceo_name') as string | null)?.trim() ?? '',
-      biz_address:        (data.get('biz_address') as string | null)?.trim() ?? '',
-      biz_reg_no:         (data.get('biz_reg_no') as string | null)?.trim() ?? '',
-      mail_order_biz_no:  (data.get('mail_order_biz_no') as string | null)?.trim() ?? '',
-      privacy_officer:    (data.get('privacy_officer') as string | null)?.trim() ?? '',
-      ceo_email:          (data.get('ceo_email') as string | null)?.trim() ?? '',
-      cs_phone:           (data.get('cs_phone') as string | null)?.trim() ?? '',
-      business_hours:     (data.get('business_hours') as string | null)?.trim() ?? '',
-    }
-
-    for (const [key, value] of Object.entries(fields)) {
-      if (value.length > 200) return fail(400, { error: `${key} 항목은 최대 200자까지 입력 가능합니다.` })
-    }
-
-    const { error } = await untypedRpc(locals.supabase, 'upsert_service_info_settings', {
-      p_company_name: fields.company_name,
-      p_ceo_name: fields.ceo_name,
-      p_biz_address: fields.biz_address,
-      p_biz_reg_no: fields.biz_reg_no,
-      p_mail_order_biz_no: fields.mail_order_biz_no,
-      p_privacy_officer: fields.privacy_officer,
-      p_ceo_email: fields.ceo_email,
-      p_cs_phone: fields.cs_phone,
-      p_business_hours: fields.business_hours,
-    })
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
-  },
-
-  // ─── 필수 동의문 ──────────────────────────────
-  addConsent: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-    const content = (data.get('content') as string | null)?.trim() ?? ''
-    const count = parseInt(data.get('count') as string, 10)
-
-    if (!content) return fail(400, { error: '동의문 내용을 입력해주세요.' })
-    if (content.length > 200) return fail(400, { error: '동의문은 최대 200자까지 입력 가능합니다.' })
-    if (count >= 10) return fail(400, { error: '필수 동의문은 최대 10개까지 등록할 수 있습니다.' })
-
-    const { error } = await untypedRpc(locals.supabase, 'upsert_rental_consent_item', {
-      p_id: null,
-      p_content: content,
-      p_display_order: count,
-    })
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
-  },
-
-  deleteConsent: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-    const id = data.get('id') as string
-    const { error } = await untypedRpc(locals.supabase, 'delete_rental_consent_item', { p_id: id })
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
-  },
-
-  reorderConsents: async ({ request, locals }) => {
-    const { session } = await locals.safeGetSession()
-    if (!session) return fail(401, { error: '인증 필요' })
-    const cmsRole = await getCmsRoleForAction(locals)
-    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
-    const data = await request.formData()
-    const raw = data.get('ids')
-    if (!raw) return fail(400, { error: 'ids required' })
-    const ids = JSON.parse(raw as string) as string[]
-    const { error } = await untypedRpc(locals.supabase, 'reorder_rental_consent_items', { p_ids: ids })
-    if (error) return fail(500, { error: error.message })
-    return { success: true }
   },
 
   // ─── 배송료 우대설정 (최대 5개) ─────────────────

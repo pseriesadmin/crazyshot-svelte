@@ -1,10 +1,7 @@
 <script lang="ts">
-  import { enhance, deserialize } from '$app/forms'
-  import { invalidateAll } from '$app/navigation'
+  import { enhance } from '$app/forms'
   import FreeRentalItemSelector from '$lib/components/cms/subscription/FreeRentalItemSelector.svelte'
-  import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
-  import { csToast } from '$lib/utils/toast'
   import {
     BENEFIT_TYPES,
     BENEFIT_DEFS,
@@ -20,71 +17,6 @@
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
-
-  const POLICY_ITEM_MAX_LENGTH = 200
-  const POLICY_ITEM_MAX_COUNT = 20
-
-  let policyItems = $state(data.policyItems)
-  let newPolicyContent = $state('')
-  let editingPolicyId = $state<string | null>(null)
-  let editingPolicyContent = $state('')
-  let isPolicySaving = $state(false)
-
-  // 서버 재조회(add/edit/delete 후 invalidateAll) 시 로컬 상태 재동기화
-  $effect(() => {
-    policyItems = data.policyItems
-  })
-
-  async function submitPolicyAction(action: string, fields: Record<string, string>): Promise<boolean> {
-    isPolicySaving = true
-    const fd = new FormData()
-    for (const [k, v] of Object.entries(fields)) fd.set(k, v)
-    const res = await fetch(`?/${action}`, { method: 'POST', body: fd })
-    const result = deserialize(await res.text())
-    isPolicySaving = false
-
-    if (result.type === 'success') {
-      await invalidateAll()
-      return true
-    }
-    if (result.type === 'failure') {
-      csToast.error((result.data as { error?: string } | undefined)?.error ?? '처리에 실패했습니다.')
-    } else {
-      csToast.error('처리에 실패했습니다.')
-    }
-    return false
-  }
-
-  async function addPolicyItem(): Promise<void> {
-    const content = newPolicyContent.trim()
-    if (!content) return
-    const ok = await submitPolicyAction('addPolicyItem', { content })
-    if (ok) { newPolicyContent = ''; csToast.success('정책항목이 추가됐습니다.') }
-  }
-
-  function startEditPolicy(id: string, content: string): void {
-    editingPolicyId = id
-    editingPolicyContent = content
-  }
-  function cancelEditPolicy(): void {
-    editingPolicyId = null
-    editingPolicyContent = ''
-  }
-  async function saveEditPolicy(id: string): Promise<void> {
-    const content = editingPolicyContent.trim()
-    if (!content) return
-    const ok = await submitPolicyAction('updatePolicyItem', { id, content })
-    if (ok) { cancelEditPolicy(); csToast.success('정책항목이 수정됐습니다.') }
-  }
-  async function removePolicyItem(id: string): Promise<void> {
-    const ok = await submitPolicyAction('deletePolicyItem', { id })
-    if (ok) csToast.success('정책항목이 삭제됐습니다.')
-  }
-
-  async function persistPolicyOrder(): Promise<void> {
-    const orderedIds = policyItems.map((item) => item.id)
-    await submitPolicyAction('reorderPolicyItems', { ordered_ids: JSON.stringify(orderedIds) })
-  }
 
   // ─── 분류(조합그룹) + 코드 조합(콤보) — products/new와 동일 패턴 ─────────────
   let category = $state('')
@@ -423,79 +355,6 @@
       </section>
     {/if}
 
-    <!-- ⑤ 정책설정 -->
-    <section class="form-section">
-      <h2 class="section-title">⑤ 정책설정</h2>
-      <p class="section-desc">
-        정기결제 청구일은 고객이 실제로 구독을 시작한 날짜(가입일) 기준으로 매달 고정됩니다.
-        아래 정책항목은 특정 상품이 아닌 전체 구독 서비스에 공통 적용되며, <code>/members</code>
-        'Plans &amp; features' 하단 '정기구독 이용안내'에 그대로 노출됩니다.
-      </p>
-
-      <div class="policy-list">
-        {#if policyItems.length > 0}
-          <CmsDragList bind:items={policyItems} itemKey={(item) => item.id} onreorder={persistPolicyOrder} class="policy-drag-list">
-            {#snippet renderItem(item)}
-              <div class="policy-row">
-                {#if editingPolicyId === item.id}
-                  <div class="policy-edit-wrap">
-                    <textarea
-                      class="f-input f-textarea policy-edit-input"
-                      maxlength={POLICY_ITEM_MAX_LENGTH}
-                      bind:value={editingPolicyContent}
-                      rows="2"
-                    ></textarea>
-                    <span class="policy-counter" class:over={editingPolicyContent.length > POLICY_ITEM_MAX_LENGTH}>
-                      {editingPolicyContent.length}/{POLICY_ITEM_MAX_LENGTH}
-                    </span>
-                  </div>
-                  <div class="policy-row-actions">
-                    <button type="button" class="policy-btn policy-btn-primary" disabled={isPolicySaving || !editingPolicyContent.trim()} onclick={() => saveEditPolicy(item.id)}>저장</button>
-                    <button type="button" class="policy-btn" disabled={isPolicySaving} onclick={cancelEditPolicy}>취소</button>
-                  </div>
-                {:else}
-                  <span class="policy-content">{item.content}</span>
-                  <div class="policy-row-actions">
-                    <button type="button" class="policy-btn" disabled={isPolicySaving} onclick={() => startEditPolicy(item.id, item.content)}>수정</button>
-                    <button type="button" class="policy-btn policy-btn-danger" disabled={isPolicySaving} onclick={() => removePolicyItem(item.id)}>삭제</button>
-                  </div>
-                {/if}
-              </div>
-            {/snippet}
-          </CmsDragList>
-        {:else}
-          <p class="policy-empty">등록된 정책항목이 없습니다.</p>
-        {/if}
-      </div>
-
-      <div class="policy-add-wrap">
-        <div class="policy-add-input-wrap">
-          <input
-            type="text"
-            class="f-input policy-add-input"
-            placeholder="정책항목 내용 입력 (예: 정기결제는 매달 자동으로 청구됩니다)"
-            maxlength={POLICY_ITEM_MAX_LENGTH}
-            bind:value={newPolicyContent}
-            disabled={isPolicySaving || policyItems.length >= POLICY_ITEM_MAX_COUNT}
-            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPolicyItem() } }}
-          />
-          <span class="policy-counter" class:over={newPolicyContent.length > POLICY_ITEM_MAX_LENGTH}>
-            {newPolicyContent.length}/{POLICY_ITEM_MAX_LENGTH}
-          </span>
-        </div>
-        <button
-          type="button"
-          class="policy-btn policy-btn-primary"
-          disabled={isPolicySaving || !newPolicyContent.trim() || policyItems.length >= POLICY_ITEM_MAX_COUNT}
-          onclick={addPolicyItem}
-        >+ 추가</button>
-      </div>
-      <p class="policy-count-notice" class:over={policyItems.length >= POLICY_ITEM_MAX_COUNT}>
-        {policyItems.length}/{POLICY_ITEM_MAX_COUNT}개 등록됨
-        {#if policyItems.length >= POLICY_ITEM_MAX_COUNT}— 최대 개수에 도달했습니다{/if}
-      </p>
-    </section>
-
     <button type="submit" class="btn-submit" disabled={isLoading || comboRequiredButMissing}>
       {isLoading ? '등록 중...' : '구독 상품 등록'}
     </button>
@@ -582,39 +441,6 @@
     background: transparent; color: var(--cs-purple); font: var(--text-pc-script-12); cursor: pointer;
   }
   .btn-add-spec:hover, .spec-preset-chip:hover { background: rgba(59, 47, 138, 0.08); }
-
-  /* ── 정책항목 관리 ── */
-  .policy-list { display: flex; flex-direction: column; gap: 8px; }
-  .policy-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
-  .policy-row {
-    display: flex; align-items: center; gap: 12px; padding: 10px 14px; flex: 1; min-width: 0;
-    background: var(--cs-surface-gray); border-radius: var(--radius-sm);
-  }
-  .policy-content { flex: 1; font: var(--text-pc-body-14); color: var(--cs-text); word-break: break-word; }
-  .policy-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  .policy-edit-wrap { flex: 1; display: flex; align-items: flex-start; gap: 8px; }
-  .policy-edit-input { flex: 1; }
-
-  .policy-btn {
-    padding: 6px 14px; border: 1.5px solid var(--cs-lilac); border-radius: var(--radius-sm);
-    background: var(--cs-white); color: var(--cs-text-mid); font: var(--text-pc-script-12);
-    cursor: pointer; white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s;
-  }
-  .policy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .policy-btn-primary:not(:disabled) { border-color: var(--cs-purple); background: var(--cs-purple); color: var(--cs-white); }
-  .policy-btn-primary:not(:disabled):hover { opacity: 0.85; }
-  .policy-btn-danger:not(:disabled):hover { border-color: var(--cs-red-badge); background: var(--cs-red-badge); color: var(--cs-white); }
-
-  .policy-add-wrap { display: flex; align-items: center; gap: 10px; }
-  .policy-add-input-wrap { flex: 1; position: relative; display: flex; align-items: center; }
-  .policy-add-input { width: 100%; padding-right: 64px; }
-  .policy-counter {
-    font: var(--text-pc-descript-10); color: var(--cs-text-light); white-space: nowrap;
-  }
-  .policy-add-input-wrap .policy-counter { position: absolute; right: 14px; }
-  .policy-counter.over { color: var(--cs-red-badge); }
-  .policy-count-notice { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
-  .policy-count-notice.over { color: var(--cs-red-badge); }
 
   .benefit-cards { display: flex; flex-direction: column; gap: 14px; }
   .benefit-card { border: 1.5px solid var(--cs-surface-gray); border-radius: var(--radius-md); padding: 16px 18px; transition: border-color 0.15s; }
