@@ -2,10 +2,10 @@
   import MembersHero from '$lib/components/members/MembersHero.svelte'
   import PricingCards from '$lib/components/members/PricingCards.svelte'
   import FeaturesTable from '$lib/components/members/FeaturesTable.svelte'
-  import SubscriptionPolicyNotice from '$lib/components/members/SubscriptionPolicyNotice.svelte'
   import CommonBenefits from '$lib/components/members/CommonBenefits.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import MembersHeroBannerModal from '$lib/components/members/admin/MembersHeroBannerModal.svelte'
+  import MembersBenefitsPhotosModal from '$lib/components/members/admin/MembersBenefitsPhotosModal.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -13,6 +13,7 @@
 
   let selectedPlanId = $state<number | null>(data.plans[0]?.id ?? null)
   let showHeroBannerModal = $state(false)
+  let showBenefitsPhotosModal = $state(false)
 
   $effect(() => {
     if (!data.plans.some((p) => p.id === selectedPlanId)) {
@@ -46,15 +47,24 @@
       <FeaturesTable plans={data.plans} {selectedPlanId} onselect={handleSelectPlan} />
     </section>
 
-    <section class="pc-section" aria-label="정기구독 이용안내">
-      <SubscriptionPolicyNotice items={data.policyItems} />
-    </section>
-
     <section class="pc-section" aria-label="K-트레일 혜택">
-      <CommonBenefits policyItems={data.policyItems} serviceInfo={data.serviceInfo} />
+      <CommonBenefits
+        policyItems={data.policyItems}
+        serviceInfo={data.serviceInfo}
+        photos={data.benefitsPhotos}
+        isCms={data.isCms}
+        onEditPhotos={() => (showBenefitsPhotosModal = true)}
+      />
     </section>
   </div>
 </div>
+
+{#if showBenefitsPhotosModal && data.isCms}
+  <MembersBenefitsPhotosModal
+    initial={data.benefitsPhotos}
+    onclose={() => (showBenefitsPhotosModal = false)}
+  />
+{/if}
 
 {#if showHeroBannerModal}
   <MembersHeroBannerModal

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SubscriptionPolicyItem } from '$lib/types/database'
   import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
+  import { resolveBenefitsPhoto, type BenefitsPhotosSetting } from '$lib/utils/membersBenefitsPhotos'
 
   const EMPTY_SERVICE_INFO: ServiceInfoSettings = {
     company_name: '', ceo_name: '', biz_address: '', biz_reg_no: '', mail_order_biz_no: '',
@@ -11,9 +12,24 @@
     policyItems?: SubscriptionPolicyItem[]
     /** '서비스 기본 정보'(Migration #566) — PC 공통푸터와 동일한 단일 소스. 미전달 시 빈 값. */
     serviceInfo?: ServiceInfoSettings
+    /** 배경 사진 2장(상단·하단) 교체·초점 설정(cms_settings.members_benefits_photos) — 없으면 기본 사진·기본 초점 */
+    photos?: BenefitsPhotosSetting
+    /** CMS 관리자일 때만 PC 영역에 '배경 사진 관리' 버튼을 보인다(모바일에는 버튼·모달 없음) */
+    isCms?: boolean
+    onEditPhotos?: () => void
   }
 
-  let { policyItems = [], serviceInfo = EMPTY_SERVICE_INFO }: Props = $props()
+  let {
+    policyItems = [],
+    serviceInfo = EMPTY_SERVICE_INFO,
+    photos = { top: null, bottom: null },
+    isCms = false,
+    onEditPhotos,
+  }: Props = $props()
+
+  // 상단·하단 사진과 초점 — PC·모바일이 같은 값을 쓰고, 보이는 비율은 각 영역의 CSS(object-fit: cover)가 맞춘다
+  const photoTop = $derived(resolveBenefitsPhoto(photos, 'top'))
+  const photoBottom = $derived(resolveBenefitsPhoto(photos, 'bottom'))
 
   let openSNS = $state(false)
   let openLegal = $state(false)
@@ -22,9 +38,28 @@
 <!-- ── PC 공통 혜택 (≥1024px) ───────────────────────────────── -->
 <section class="benefits-pc" aria-label="K-트레일 혜택">
   <div class="benefits-pc-inner">
-    <!-- 배경 이미지 레이어 -->
-    <img src="/members/benefits-photo1.png" alt="" class="bg-photo bg-photo1" aria-hidden="true" />
-    <img src="/members/benefits-photo2.png" alt="" class="bg-photo bg-photo2" aria-hidden="true" />
+    <!-- 배경 이미지 레이어: 위 절반(상단 사진)·아래 절반(하단 사진) — 사진은 cover 로 채우고 초점(%)만 설정값을 따른다 -->
+    <img
+      src={photoTop.src}
+      alt=""
+      class="bg-photo bg-photo1"
+      aria-hidden="true"
+      style:object-position={`${photoTop.x}% ${photoTop.y}%`}
+    />
+    <img
+      src={photoBottom.src}
+      alt=""
+      class="bg-photo bg-photo2"
+      aria-hidden="true"
+      style:object-position={`${photoBottom.x}% ${photoBottom.y}%`}
+    />
+
+    <!-- 관리 버튼: 이 PC 블록(≥1024px)에서만 렌더링되므로 모바일에는 노출되지 않는다 -->
+    {#if isCms}
+      <button class="photos-edit-btn" onclick={onEditPhotos} aria-label="이용안내 배경 사진 관리">
+        ⚙ 배경 사진 관리
+      </button>
+    {/if}
 
     <!-- Writing 블록 -->
     <div class="writing-block">
@@ -51,7 +86,12 @@
 <section class="benefits-mobile" aria-label="K-트레일 혜택 모바일">
   <!-- 상단 사진 -->
   <div class="m-photo-top-wrap">
-    <img src="/members/mobile-cta1.png" alt="K-Trail 크리에이터 촬영" class="m-photo-top" />
+    <img
+      src={photoTop.src}
+      alt="카메라와 렌즈를 들고 웃는 크리에이터"
+      class="m-photo-top"
+      style:object-position={`${photoTop.x}% ${photoTop.y}%`}
+    />
   </div>
 
   <!-- 이용안내 영역 -->
@@ -71,7 +111,12 @@
 
   <!-- 하단 사진 -->
   <div class="m-photo-bot-wrap">
-    <img src="/members/benefits-photo2.png" alt="K-Trail 여행 촬영" class="m-photo-bot" />
+    <img
+      src={photoBottom.src}
+      alt="촬영 장비 모음"
+      class="m-photo-bot"
+      style:object-position={`${photoBottom.x}% ${photoBottom.y}%`}
+    />
   </div>
 
   <!-- 모바일 Footer -->
@@ -161,7 +206,10 @@
   .benefits-pc-inner {
     position: relative;
     width: 1240px;
-    height: 800px;
+    /* 고정 height 800px → min-height: 이용안내 항목이 많아도(최대 20개) 붉은 박스가 잘리지 않고 영역이 함께 늘어난다.
+       위아래 100px는 항목이 많아 박스가 800px 이상이 돼도 배경 사진이 가려지지 않도록 남기는 여백(항목이 적을 땐 기존과 동일). */
+    min-height: 800px;
+    padding: 100px 0;
     border-radius: var(--radius-2xl);
     overflow: hidden;
     display: flex;
@@ -171,24 +219,42 @@
     gap: 50px;
   }
 
+  /* 배경 사진 2장: 영역의 위 절반·아래 절반을 cover 로 채우고, 보이는 지점은 인라인 object-position(관리모달 초점 %)이 정한다.
+     영역 높이가 항목 수에 따라 늘어나도 사진은 같은 방식으로 비율에 맞춰 채워진다(이전의 높이 % 확대·이동 방식은 폐기). */
   .bg-photo {
     position: absolute;
+    left: 0;
+    width: 100%;
+    height: 50%;
+    object-fit: cover;
     pointer-events: none;
   }
 
-  .bg-photo1 {
-    height: 160.17%;
-    left: -2.1%;
-    top: -71.92%;
-    width: auto;
-  }
+  .bg-photo1 { top: 0; }
+  .bg-photo2 { bottom: 0; }
 
-  .bg-photo2 {
-    height: 170.07%;
-    left: -5.84%;
-    top: 47.89%;
-    width: auto;
+  /* CMS 관리자용 '배경 사진 관리' 버튼 — front 관리모달 버튼 표준(front-uiux.md §9-1-B): 200×50·BG 알파 40%·반경 20px·호버는 BG만.
+     이 버튼은 PC 블록(.benefits-pc, ≥1024px) 안에만 있어 모바일에는 노출되지 않는다. */
+  .photos-edit-btn {
+    position: absolute;
+    top: 20px;
+    right: 40px;
+    z-index: 5;
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: rgba(16, 11, 50, 0.4);
+    color: var(--cs-white);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
   }
+  .photos-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
   .writing-block {
     position: relative;
@@ -283,12 +349,13 @@
     border-top-right-radius: 50px;
   }
 
+  /* 2026-10-15: PC 반응형과 같은 사진·같은 초점 설정을 쓴다. 영역(폭 100%×높이 200px)을 cover 로 채우고, 보이는 지점은
+     인라인 object-position(관리모달 초점 %)이 정한다(이전 한복 관광 사진용 확대·이동 값은 제거). */
   .m-photo-top {
     position: absolute;
-    width: 158%;
-    height: 309%;
-    top: -86%;
-    left: -31%;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
   }
 
@@ -361,10 +428,9 @@
 
   .m-photo-bot {
     position: absolute;
-    width: 161%;
-    height: 314%;
-    top: -195%;
-    left: -14%;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
   }
 
