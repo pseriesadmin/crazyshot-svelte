@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { goto, invalidateAll, replaceState } from '$app/navigation'
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
@@ -18,7 +19,9 @@
   // '계약대기'(2026-08-20)는 실제 rr.status는 '신청대기'와 동일하게 hold이지만, 전자계약이
   // 발송됐으나 아직 서명되지 않은 건만 골라내는 별도 차원의 조건(contractPending)이라
   // value는 같고 contractPending만 다르게 구분한다 — selectFilter()/chip-active 판정 참고.
+  // '임시예약'(2026-10-15)은 장바구니에 담기만 하고 아직 예약신청을 제출하지 않은 건(draft) — 고객 구매 패턴 파악용 조회 칩이다. 맨 앞에 두되 진입 기본값은 그대로 '신청대기'.
   const STATUS_FILTERS: { label: string; value: string; contractPending?: boolean }[] = [
+    { label: '임시예약', value: 'draft' },
     { label: '신청대기', value: 'hold' },
     { label: '계약대기', value: 'hold', contractPending: true },
     { label: '취소',     value: 'cancelled' },
@@ -27,6 +30,7 @@
 
   const STATUS_LABEL: Record<string, string> = {
     pending:          '접수',
+    draft:            '임시',
     hold:             '신청대기',
     confirmed:        '계약완료',
     shipped:          '배송중',
@@ -41,6 +45,7 @@
 
   const STATUS_STYLE: Record<string, { bg: string; color: string }> = {
     pending:          { bg: 'rgba(102,102,102,0.10)', color: 'var(--cs-text-mid)' },
+    draft:            { bg: 'rgba(59,47,138,0.08)',   color: 'var(--cs-purple)' },
     hold:             { bg: 'rgba(245,158,11,0.12)',  color: 'var(--cs-warning)' },
     confirmed:        { bg: 'rgba(16,185,129,0.12)',  color: 'var(--cs-success-light)' },
     shipped:          { bg: 'rgba(14,165,233,0.12)',  color: 'var(--cs-info)' },
@@ -105,7 +110,17 @@
     if (contractPending) params.set('contract_pending', '1')
     else                 params.delete('contract_pending')
     params.delete('page')
+    params.delete('selected') // 칩 이동 시 열린 패널 선택은 해제 — 취소된 예약 링크의 칩 자동 전환(서버 리다이렉트)과 충돌하지 않게
     goto(`/cms/reservation?${params.toString()}`, { replaceState: true })
+  }
+
+  // 예약을 취소(거부)하면 '취소' 칩 목록으로 전환해 같은 예약의 패널을 다시 열고, 목록에서도 그 행이 보이게 한다
+  // (결제완료 이력이 있는 건은 서버가 대여현황 '취소·환불' 칩으로 다시 보낸다 — +page.server.ts)
+  async function openInCancelledList(id: number) {
+    await goto(`/cms/reservation?status=cancelled&selected=${id}`, { replaceState: true, invalidateAll: true })
+    selectedId = id
+    await tick()
+    document.querySelector('.table-wrap tr.selected')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
   function goPage(p: number) {
@@ -162,6 +177,10 @@
     return                             { label: '미발행',   cls: 'none' }
   }
 
+  function draftLabel(id: number): string {
+    return '임시-' + id
+  }
+
   function reservationNo(id: number): string {
     return 'CZ-' + String(id).padStart(5, '0')
   }
@@ -212,6 +231,7 @@
         <button
           class="chip"
           class:chip-all={f.value === ''}
+          class:chip-refund={f.value === 'cancelled'}
           class:chip-active={(data.status ?? '') === f.value && !!data.contractPending === !!f.contractPending}
           onclick={() => setStatus(f.value, f.contractPending)}
         >
@@ -299,7 +319,12 @@
                   {/if}
                 </td>
                 <td class="col-hide">
-                  <code class="rsv-code">{row.reservation_code ?? reservationNo(row.reservation_id)}</code>
+                  {#if row.status === 'draft'}
+                    <!-- 임시예약은 예약코드가 없다 — 예약신청 제출 시 주문 단위 통합 코드가 한 번만 발행된다. 구분용 표시 이름만 id로 만든다(저장 안 함) -->
+                    <code class="rsv-code">{draftLabel(row.reservation_id)}</code>
+                  {:else}
+                    <code class="rsv-code">{row.reservation_code ?? reservationNo(row.reservation_id)}</code>
+                  {/if}
                 </td>
                 <td><span class="customer-name">{row.customer_name ?? '-'}</span></td>
                 <td>
@@ -362,6 +387,7 @@
             onclose={closePanel}
             onrefresh={invalidateAll}
             onstatuschange={closePanel}
+            oncancelled={openInCancelledList}
             stepFilter={['hold', 'confirmed']}
             cmsRole={data.cmsRole}
             canChangeOrCancelReservation={data.canChangeOrCancelReservation}
@@ -452,6 +478,9 @@
   .chip:hover:not(.chip-active) { color: var(--cs-purple); }
   .chip-active { background: var(--cs-purple); color: var(--cs-white); }
   .chip-all:not(.chip-active) { background: transparent; }
+  /* '취소'는 일반 진행 단계와 구분되는 종료 상태 — 대여현황 '취소·환불' 칩과 동일: 미선택 시 극연한 레드(red-5%), 선택 시 레드(red-100) */
+  .chip-refund:not(.chip-active) { background: var(--cs-red-xlight); }
+  .chip-refund.chip-active { background: var(--cs-red); }
 
   .count-badge {
     font: var(--text-pc-script-12);

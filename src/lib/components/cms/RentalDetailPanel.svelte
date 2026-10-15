@@ -129,7 +129,7 @@
         /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
     onstatuschange?: () => void
     /** 이 예약이 취소(환불)로 확정된 직후 호출 — 대여현황이 '취소·환불' 목록으로 전환하는 용도(미지정 시 동작 없음) */
-    oncancelled?: (reservationId: number) => void
+    oncancelled?: (reservationId: number) => void | Promise<void>
     /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
@@ -251,10 +251,18 @@
   // 다른 헤더 버튼과 동일하게 1차 클릭=무장(토스트), 2차 클릭=실행. 예약 상태·결제는 바꾸지 않는다.
   let confirmCancelPending = $state(false)
   let isConfirmingCancel   = $state(false)
+  // 처리 완료 직후 목록이 갱신되기 전까지 버튼을 다시 누르지 못하게 막는다(연타로 같은 확인을 반복 요청하던 문제)
+  let confirmCancelDone    = $state(false)
+  let confirmCancelTimer: ReturnType<typeof setTimeout> | null = null
+  // 패널이 닫힐 때 자동 복귀 타이머가 남지 않게 정리한다
+  $effect(() => () => { if (confirmCancelTimer) clearTimeout(confirmCancelTimer) })
 
   async function handleConfirmCustomerCancel(): Promise<void> {
     if (!confirmCancelPending) {
       confirmCancelPending = true
+      // 눌렀는데 아무 일도 없어 보이지 않도록 버튼 글자가 바뀌고, 6초 안에 누르지 않으면 원래대로 돌아온다
+      if (confirmCancelTimer) clearTimeout(confirmCancelTimer)
+      confirmCancelTimer = setTimeout(() => { confirmCancelPending = false }, 6000)
       csToast.warning('고객이 취소한 예약입니다. 한번 더 누르면 취소를 확인 처리하고, 고객 마이페이지에서 "취소" 화면으로 이동합니다.')
       return
     }
@@ -266,16 +274,21 @@
         csToast.error(body.error ?? '취소확인 처리 중 오류가 발생했습니다.')
         return
       }
+      confirmCancelDone = true
       csToast.success('취소를 확인했습니다. 고객 화면에 "취소"로 반영됩니다.')
       // 목록을 새로고침하면 이 예약은 "취소중" 대상에서 빠지고 패널이 닫힌다(/cms/rentals 로더 참고)
-      onrefresh?.()
-      onstatuschange?.()
-      oncancelled?.(row.reservation_id)
+      if (oncancelled) {
+        await oncancelled(row.reservation_id)
+      } else {
+        onrefresh?.()
+        onstatuschange?.()
+      }
     } catch {
       csToast.error('네트워크 오류로 처리하지 못했습니다.')
     } finally {
       isConfirmingCancel   = false
       confirmCancelPending = false
+      if (confirmCancelTimer) { clearTimeout(confirmCancelTimer); confirmCancelTimer = null }
     }
   }
 
@@ -1272,7 +1285,7 @@
   }
 
   const STATUS_LABEL: Record<string, string> = {
-    pending: '접수', hold: '신청대기', confirmed: '계약완료',
+    pending: '접수', draft: '임시', hold: '신청대기', confirmed: '계약완료',
     shipped: '배송중', in_use: '대여중', return_requested: '반납요청',
     returned: '반납완료', completed: '완료', cancelled: '취소', damage_claimed: '파손신고',
     // expired(HOLD 30분 자동만료) — 2026-09-10 추가. /cms/reservation '취소' 탭이
@@ -1394,6 +1407,8 @@
   }
 
   function reservationCode(): string {
+    // 임시예약(draft)은 예약코드가 없다 — 예약신청 제출 시 주문 단위 통합 코드가 한 번만 발행된다(QR도 만들지 않음)
+    if (row.status === 'draft') return ''
     return row.reservation_code ?? `CZ-${String(row.reservation_id).padStart(5, '0')}`
   }
 
@@ -1767,14 +1782,14 @@
   <div class="panel-header">
     <div class="panel-title-wrap">
       <span class="panel-label">대여</span>
-      <span class="panel-id">{reservationCode()}</span>
+      <span class="panel-id">{row.status === 'draft' ? `임시-${row.reservation_id}` : reservationCode()}</span>
       <span class="panel-status">{rowStatusLabel}</span>
       {#if row.status === 'hold' && row.payment_confirmed_at}
         <span class="payment-contract-badge">결제완료 · 계약대기</span>
       {/if}
     </div>
     <div class="panel-header-actions">
-      {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold'}
+      {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold' && row.status !== 'draft'}
         <!-- 예약변경: hold(미결제)+계약 리셋 — 전액취소 후 재조정 가능하게 -->
         <form
           method="POST"
@@ -1836,8 +1851,13 @@
               } else {
                 csToast.error(actionErrorMessage(result))
               }
-              await update()
-              if (result.type === 'success') { onstatuschange?.(); oncancelled?.(row.reservation_id) }
+              if (result.type === 'success' && oncancelled) {
+                // 취소 칩 목록으로 먼저 전환(패널 유지) — 기존 목록을 먼저 새로고침하면 그 목록에 없는 행이라 패널이 닫혀 버린다
+                await oncancelled(row.reservation_id)
+              } else {
+                await update()
+                if (result.type === 'success') onstatuschange?.()
+              }
             }
           }}
         >
@@ -1854,7 +1874,7 @@
                 : row.cancel_pending
                   ? '고객이 취소를 요청한 예약입니다. 실행하면 결제금액이 전액 환불되고 예약이 취소됩니다'
                   : undefined}
-          >{isCancelling ? '처리 중...' : '예약취소'}</button>
+          >{isCancelling ? '처리 중...' : cancelPending ? '한번 더 누르면 취소' : '예약취소'}</button>
         </form>
       {/if}
       {#if row.cancel_pending && row.status === 'cancelled'}
@@ -1862,17 +1882,19 @@
         <button
           type="button"
           class="btn-header-action btn-header-action--danger"
-          disabled={isConfirmingCancel || !canChangeOrCancelReservation}
+          disabled={isConfirmingCancel || confirmCancelDone || !canChangeOrCancelReservation}
           title={!canChangeOrCancelReservation
             ? '예약변경 및 취소 권한이 없습니다'
             : '고객이 취소한 예약입니다. 눌러서 취소를 확인하면 고객 마이페이지에서 "취소" 화면으로 이동합니다'}
           onclick={handleConfirmCustomerCancel}
-        >{isConfirmingCancel ? '처리 중...' : '예약취소'}</button>
+        >{isConfirmingCancel ? '처리 중...' : confirmCancelDone ? '확인 완료' : confirmCancelPending ? '한번 더 누르면 확인' : '예약취소'}</button>
       {/if}
+      {#if row.status !== 'draft'}
       <div class="reservation-qr-wrap">
         <canvas bind:this={reservationQrCanvasEl} width="300" height="300" aria-label="예약 QR 코드"></canvas>
         <button class="qr-dl-btn" onclick={downloadReservationQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
       </div>
+      {/if}
       <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
     </div>
   </div>
