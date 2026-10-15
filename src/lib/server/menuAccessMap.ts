@@ -122,6 +122,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/cancel-reason',
       'src/routes/api/cms/reservations/[id]/confirm-cancel',
       'src/routes/api/cms/reservations/[id]/contract-data',
+      'src/routes/api/cms/reservations/[id]/contract-specs',
       'src/routes/api/cms/reservations/[id]/customer-docs',
       'src/routes/api/cms/reservations/[id]/detail',
       'src/routes/api/cms/reservations/[id]/dhero',
@@ -159,6 +160,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/revoke-doc-approval',
       'src/routes/api/cms/upload-doc',
       'src/routes/api/cms/customers/[id]/doc-url',
+      'src/routes/api/cms/customers/[id]/doc-request',
       'src/routes/cms/customers/addresses', // 고객 상세 패널 탭 조회
       'src/routes/cms/customers/chat-sessions', // 고객 상세 패널 탭 조회
       'src/routes/cms/customers/credit-audit', // 고객 상세 패널 탭 조회

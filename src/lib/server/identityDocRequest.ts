@@ -59,9 +59,19 @@ function maskDigits(text: string): string {
   return text.replace(/\d{7,}/g, (m) => '*'.repeat(m.length - 4) + m.slice(-4)).slice(0, 300)
 }
 
+export const IDENTITY_REREGISTER_CONTENT = '등록하신 본인증명 서류를 확인하기 어려워요. 개인정보 메뉴에서 다시 등록 부탁드립니다.'
+const FORCE_DEDUPE_MINUTES = 5
+
+export interface IdentityRequestOptions {
+  /** 관리자 수동 재등록 요청 — 서류 상태(승인대기·승인완료)와 무관하게 보내고, 중복 방지는 5분만 적용한다. */
+  force?: boolean
+  docType?: IdentityDocKind
+}
+
 export async function requestIdentityDocRegistration(
   admin: SupabaseClient,
   userId: string,
+  opts: IdentityRequestOptions = {},
 ): Promise<IdentityRequestResult> {
   try {
     const { data } = await admin
@@ -77,11 +87,14 @@ export async function requestIdentityDocRegistration(
     const withdrawal = profile?.withdrawal_status ?? 'none'
     if (withdrawal === 'requested' || withdrawal === 'purged') return { requested: false, reason: 'withdrawn' }
 
-    const gate = getDocGateStatus(profile)
-    if (gate === 'pending') return { requested: false, reason: 'gate_pending' }
-    if (gate === 'approved') return { requested: false, reason: 'gate_approved' }
+    const force = opts.force === true
+    if (!force) {
+      const gate = getDocGateStatus(profile)
+      if (gate === 'pending') return { requested: false, reason: 'gate_pending' }
+      if (gate === 'approved') return { requested: false, reason: 'gate_approved' }
+    }
 
-    const docType = docLandingKind(profile)
+    const docType = opts.docType ?? docLandingKind(profile)
 
     const { data: sessionId, error: sessionErr } = await admin.rpc('find_or_create_general_chat_session', {
       p_user_id: userId,
@@ -93,7 +106,7 @@ export async function requestIdentityDocRegistration(
     }
     const sid = sessionId as string
 
-    const since = new Date(Date.now() - DEDUPE_HOURS * 3600_000).toISOString()
+    const since = new Date(Date.now() - (force ? FORCE_DEDUPE_MINUTES * 60_000 : DEDUPE_HOURS * 3600_000)).toISOString()
     const { data: recent } = await admin
       .from('chat_messages')
       .select('id')
@@ -113,7 +126,7 @@ export async function requestIdentityDocRegistration(
     const { error: insertErr } = await admin.from('chat_messages').insert({
       session_id: sid,
       sender_type: 'admin',
-      content: customText || IDENTITY_REQUEST_CONTENT,
+      content: customText || (force ? IDENTITY_REREGISTER_CONTENT : IDENTITY_REQUEST_CONTENT),
       message_type: 'action_card',
       action_payload: payload,
       is_read: false,
@@ -129,8 +142,8 @@ export async function requestIdentityDocRegistration(
     // 푸시(채팅카드와 별개 경로 — service-operations.md §15) — 실패해도 요청은 성공
     try {
       await sendPushToUser(userId, 'identity_request', {
-        title: '본인증명 등록을 요청드려요',
-        body: '개인정보 메뉴에서 본인증명정보를 등록해주세요.',
+        title: force ? '본인증명 재등록을 요청드려요' : '본인증명 등록을 요청드려요',
+        body: force ? '등록하신 서류를 확인하기 어려워요. 개인정보 메뉴에서 다시 등록해주세요.' : '개인정보 메뉴에서 본인증명정보를 등록해주세요.',
         link,
       })
     } catch (e) {
@@ -143,7 +156,9 @@ export async function requestIdentityDocRegistration(
       try {
         const smsBody = customText
           ? `${SMS_BRAND_PREFIX}${customText}`
-          : '[크레이지샷] 예약 진행을 위해 본인증명정보를 등록해 주세요.'
+          : force
+            ? '[크레이지샷] 등록하신 본인증명 서류를 확인하기 어려워 재등록을 부탁드립니다.'
+            : '[크레이지샷] 예약 진행을 위해 본인증명정보를 등록해 주세요.'
         await sendSms(phone, `${smsBody}\n${SITE_URL}${link}`)
       } catch (e) {
         console.error('[identity-request] SMS 발송 실패(fail-soft):', maskDigits(e instanceof Error ? e.message : String(e)))

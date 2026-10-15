@@ -35,7 +35,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     .from('user_profiles')
     .select(
       'identity_doc_url, identity_type, identity_verified_at, identity_approved_at, ' +
-        'foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at',
+        'foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at, is_foreign, foreign_stay_type',
     )
     .eq('id', userId)
     .maybeSingle()
@@ -46,6 +46,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     identity_verified_at?: string | null; identity_approved_at?: string | null
     foreign_doc_url?: string | null; foreign_doc_urls?: string[] | null; foreign_type?: string[] | null
     foreign_verified_at?: string | null; foreign_approved_at?: string | null
+    is_foreign?: boolean | null; foreign_stay_type?: string | null
   }
 
   const identityCount = row.identity_doc_url?.length ?? 0
@@ -102,7 +103,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   return json({
     autoIssueEnabled, gate, requestedRecently, approveRequested, approved, approvalTracking,
-    identity: { state: identityState, count: identityCount, verifiedAt: row.identity_verified_at ?? null },
-    foreign: { state: foreignState, count: foreignCount, verifiedAt: row.foreign_verified_at ?? null },
+    userId,
+    isForeign: !!row.is_foreign,
+    // 서류 종류·시각만 내려준다(파일 URL·경로는 싣지 않는다 — 열람은 /api/cms/customers/[id]/doc-url의 서명 URL)
+    identity: { state: identityState, count: identityCount, verifiedAt: row.identity_verified_at ?? null, approvedAt: row.identity_approved_at ?? null, types: row.identity_type ?? null },
+    foreign: { state: foreignState, count: foreignCount, verifiedAt: row.foreign_verified_at ?? null, approvedAt: row.foreign_approved_at ?? null, types: row.foreign_type ?? null, stayType: row.foreign_stay_type ?? null },
   })
 }

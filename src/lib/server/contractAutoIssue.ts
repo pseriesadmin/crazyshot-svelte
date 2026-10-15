@@ -12,6 +12,7 @@
  * ⚠️ 양식 종류별 치환·표식 적용 로직은 ContractTemplatePreviewModal.applySelectedTemplate() 과 같은 규칙이다 — 한쪽을 바꾸면 다른 쪽도 확인할 것.
  */
 
+import { normalizeContractSpecs, mergeContractSpecs } from '$lib/utils/contractSpecs'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatKstDateDot } from '$lib/utils/kstDate'
 import {
@@ -118,8 +119,20 @@ export async function autoIssueContractOnApproval(deps: AutoIssueDeps, reservati
 
   // 2) 이 주문에 이미 계약서가 있으면(발송 전 초안 포함) 덮어쓰거나 중복 발행하지 않는다
   const ids = await orderReservationIds(admin, reservationId)
-  const { data: existing } = await admin.from('contracts').select('id').in('reservation_id', ids).is('deleted_at', null).limit(1).maybeSingle()
-  if (existing) return skip('contract_exists', '이 주문에는 이미 계약서가 있어 자동발행하지 않았어요.')
+  // 내용이 없고 발송된 적도 없는 빈 초안(예: 발행 모달만 열었다가 닫아 남은 행)은 '계약서 있음'으로 보지 않고 그 행을 재사용한다 — 빈 초안 때문에 자동발행이 막히던 문제(2026-10-15)
+  const { data: existingRows } = await admin
+    .from('contracts')
+    .select('id, title, content_blocks, canvas_document, spreadsheet_document, html_document')
+    .in('reservation_id', ids)
+    .is('deleted_at', null)
+  let reuseContractId: string | null = null
+  for (const row of (existingRows ?? []) as Array<{ id: string; title: string | null; content_blocks: unknown[] | null; canvas_document: unknown; spreadsheet_document: unknown; html_document: string | null }>) {
+    const hasContent = (row.content_blocks?.length ?? 0) > 0 || !!row.canvas_document || !!row.spreadsheet_document || !!row.html_document || !!row.title
+    const { data: sign } = await admin.from('contract_signings').select('sent_at, signed_at').eq('contract_id', row.id)
+    const used = ((sign ?? []) as Array<{ sent_at: string | null; signed_at: string | null }>).some(x => x.sent_at || x.signed_at)
+    if (hasContent || used) return skip('contract_exists', '이 주문에는 이미 계약서가 있어 자동발행하지 않았어요.')
+    if (!reuseContractId) reuseContractId = row.id
+  }
 
   // 3) 발행자 서명 필수 양식 — HTML 양식만 양식에 저장한 서명 이미지로 충족된다(그 외 종류는 발송 단계에서 항상 차단됨)
   if (tpl.requires_issuer_signature) {
@@ -140,7 +153,20 @@ export async function autoIssueContractOnApproval(deps: AutoIssueDeps, reservati
 
   // 5) 양식 종류별 치환 — 발행일은 발행 실행 순간의 한국 날짜(ContractTemplatePreviewModal 과 같음)
   const issueSubData = { ...subData, 계약서발행일: formatKstDateDot(now) } as ContractSubstitutionData
-  const specs = tpl.specifications ?? []
+  // 예약별 사전 등록 특약(Migration #720)을 양식 특약 뒤에 이어 붙인다 — 컬럼이 없거나 조회 실패면 양식 특약만 쓴다
+  let reservationSpecs: Array<{ key: string; value: string }> = []
+  try {
+    // 화면은 대표 행 기준으로 저장하므로 주문의 어느 예약에 저장돼 있어도 읽는다(자동발행 대상 id와 어긋나도 누락되지 않게)
+    const { data: rs, error: rsErr } = await admin.from('rental_reservations').select('id, contract_specifications').in('id', ids)
+    if (!rsErr) {
+      const rows = ((rs ?? []) as Array<{ id: number; contract_specifications?: unknown }>)
+      const own = rows.find(r => r.id === reservationId)
+      // 결정적 선택: 자기 예약 → 없으면 id가 가장 작은 예약의 값(조회 순서에 의존하지 않는다)
+      const pick = [own, ...[...rows].sort((a, b) => a.id - b.id)].find(r => r && normalizeContractSpecs(r.contract_specifications).length > 0)
+      reservationSpecs = normalizeContractSpecs(pick?.contract_specifications)
+    }
+  } catch { /* 사전 등록 특약 조회 실패 — 양식 특약만 사용 */ }
+  const specs = mergeContractSpecs(tpl.specifications, reservationSpecs)
   const isCanvas = mode === 'canvas'
   const isSpreadsheet = mode === 'spreadsheet'
   const isHtml = mode === 'html'
@@ -178,7 +204,7 @@ export async function autoIssueContractOnApproval(deps: AutoIssueDeps, reservati
 
   // 6) 계약서 생성 + 내용 저장(수동 발행과 같은 API 순서)
   const applied = await applyContractTemplate({
-    contractId: null,
+    contractId: reuseContractId,
     reservationId,
     title: tpl.title,
     contentBlocks: substitutedBlocks,

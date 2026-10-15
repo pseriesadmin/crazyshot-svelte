@@ -2,43 +2,33 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 /**
- * CustomerDetailPanel 재등록 박스 — 서류 종류 선택기가 각 박스 안에 있어야 한다 (2026-10-03, QA BLOCKING 회귀 방지)
- * 완료기준: 본인증명 박스에는 identity 선택기만, 외국인증명 박스에는 foreign 선택기만 있고, 두 선택기가 서로의 박스에 섞이지 않는다.
- * (컴포넌트 마운트 없이 소스 구조로 검증 — 선택기 블록이 잘못된 박스에 삽입된 사고를 잡는다)
+ * 서류 종류 선택기 배치 회귀 방지 (2026-10-03 QA BLOCKING → 2026-10-15 공용 컴포넌트 CustomerDocRows로 이관)
+ * 완료기준: 본인증명 박스에는 identity 선택지만, 외국인증명 박스에는 foreign 선택지만 연결되고, 하나의 공용 박스(snippet)가 종류별 상태로만 갈린다.
+ * (컴포넌트 마운트 없이 소스 구조로 검증)
  */
-const src = readFileSync('src/lib/components/cms/CustomerDetailPanel.svelte', 'utf-8')
+const rows = readFileSync('src/lib/components/cms/CustomerDocRows.svelte', 'utf-8')
+const panel = readFileSync('src/lib/components/cms/CustomerDetailPanel.svelte', 'utf-8')
+const rental = readFileSync('src/lib/components/cms/RentalDetailPanel.svelte', 'utf-8')
 
-function block(open: string, nextMarker: string): string {
-  const i = src.indexOf(open)
-  expect(i).toBeGreaterThan(-1)
-  const j = src.indexOf(nextMarker, i + open.length)
-  return src.slice(i, j > -1 ? j : undefined)
-}
-
-describe('CustomerDetailPanel — 재등록 박스 서류 종류 선택기 배치', () => {
-  const identityBox = block('{#if reuploadIdentityOpen}', '{#if reuploadForeignOpen}')
-  const foreignBox = block('{#if reuploadForeignOpen}', '<!-- 본인증명 파일 뷰어 -->')
-
-  it('본인증명 박스: identity 선택기 1개, foreign 선택기 없음', () => {
-    expect(identityBox.match(/<SuggestPicker/g)?.length).toBe(1)
-    expect(identityBox).toContain('bind:selectedId={reuploadIdentitySlot}')
-    expect(identityBox).toContain('options={IDENTITY_SLOT_OPTIONS}')
-    expect(identityBox).not.toContain('reuploadForeignSlot')
-    expect(identityBox).not.toContain('FOREIGN_SLOT_OPTIONS')
-    expect(identityBox).toContain('id="doc-slot-identity"')
+describe('서류 업로드 박스 — 서류 종류 선택기 배치', () => {
+  it('본인증명 박스는 identity 선택지, 외국인증명 박스는 foreign 선택지만 받는다', () => {
+    expect(rows).toContain("{@render uploadBox('identity', IDENTITY_SLOT_OPTIONS)}")
+    expect(rows).toContain("{@render uploadBox('foreign', FOREIGN_SLOT_OPTIONS)}")
+    expect(rows).not.toMatch(/uploadBox\('identity', FOREIGN/)
+    expect(rows).not.toMatch(/uploadBox\('foreign', IDENTITY/)
   })
-
-  it('외국인증명 박스: foreign 선택기 1개, identity 선택기 없음', () => {
-    expect(foreignBox.match(/<SuggestPicker/g)?.length).toBe(1)
-    expect(foreignBox).toContain('bind:selectedId={reuploadForeignSlot}')
-    expect(foreignBox).toContain('options={FOREIGN_SLOT_OPTIONS}')
-    expect(foreignBox).not.toContain('reuploadIdentitySlot')
-    expect(foreignBox).not.toContain('IDENTITY_SLOT_OPTIONS')
-    expect(foreignBox).toContain('id="doc-slot-foreign"')
+  it('공용 박스는 선택기 1개이고 종류별 상태(uploadSlot[type])에 바인딩된다', () => {
+    const snip = rows.slice(rows.indexOf('{#snippet uploadBox'), rows.indexOf('{/snippet}', rows.indexOf('{#snippet uploadBox')))
+    expect(snip.match(/<SuggestPicker/g)?.length).toBe(1)
+    expect(snip).toContain('bind:selectedId={uploadSlot[type]}')
+    expect(snip).toContain('{options}')
   })
-
   it('확인 버튼은 종류를 고르기 전에는 비활성(양쪽)', () => {
-    expect(identityBox).toContain('!reuploadIdentitySlot')
-    expect(foreignBox).toContain('!reuploadForeignSlot')
+    expect(rows).toContain('!uploadSlot[type]')
+  })
+  it('두 패널이 공용 컴포넌트를 쓰고 자체 업로드 박스를 다시 만들지 않는다', () => {
+    expect(panel).toContain('<CustomerDocRows')
+    expect(rental).toContain('<CustomerDocRows')
+    expect(panel).not.toContain('reuploadIdentityOpen')
   })
 })

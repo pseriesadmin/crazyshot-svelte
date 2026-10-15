@@ -10,6 +10,8 @@ import { autoIssueContractOnApproval } from '$lib/server/contractAutoIssue'
 interface Cfg {
   template?: Record<string, unknown> | null
   existingContract?: boolean
+  /** 내용·발송 이력이 없는 빈 초안 행(자동발행이 재사용해야 함) */
+  emptyDraft?: boolean
   orderSiblings?: number[]
 }
 
@@ -32,7 +34,11 @@ function fakeAdmin(cfg: Cfg): SupabaseClient {
     // order_items sibling 조회는 maybeSingle 없이 await 된다
     ;(api as { then?: unknown }).then = (resolve: (v: unknown) => void) => {
       if (state.table === 'order_items') resolve({ data: (cfg.orderSiblings ?? []).map((r) => ({ reservation_id: r })), error: null })
-      else resolve({ data: [], error: null })
+      else if (state.table === 'contracts') {
+        if (cfg.existingContract) resolve({ data: [{ id: 'c-old', title: '기존', content_blocks: [{}], canvas_document: null, spreadsheet_document: null, html_document: null }], error: null })
+        else if (cfg.emptyDraft) resolve({ data: [{ id: 'c-draft', title: null, content_blocks: [], canvas_document: null, spreadsheet_document: null, html_document: null }], error: null })
+        else resolve({ data: [], error: null })
+      } else resolve({ data: [], error: null })
     }
     return api
   }
@@ -88,6 +94,14 @@ describe('autoIssueContractOnApproval', () => {
     const r = await autoIssueContractOnApproval({ admin: fakeAdmin({ template: FLOW_TEMPLATE, existingContract: true, orderSiblings: [10, 11] }), fetch: fn }, 10)
     expect(r).toMatchObject({ status: 'skipped', reason: 'contract_exists' })
     expect(calls.length).toBe(0)
+  })
+
+  it('내용도 발송 이력도 없는 빈 초안만 있으면 건너뛰지 않고 그 초안을 재사용해 발행한다', async () => {
+    const { fn, calls } = fakeFetch()
+    const r = await autoIssueContractOnApproval({ admin: fakeAdmin({ template: FLOW_TEMPLATE, emptyDraft: true }), fetch: fn }, 10)
+    expect(r).toMatchObject({ status: 'sent', contractId: 'c-draft' })
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('init-contract'))).toBe(false)
+    expect(calls.some((c) => c.url === '/api/cms/contracts/c-draft/send-chat')).toBe(true)
   })
 
   it('발행자 서명 필수인데 서명을 충족할 수 없는 양식(문서형)은 계약서를 만들기 전에 건너뛴다', async () => {
