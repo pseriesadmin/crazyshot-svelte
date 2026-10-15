@@ -21,6 +21,7 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendPushToUser } from '$lib/server/push'
+import { buildIdentityRequestPayload, identityRequestActionUrl, IDENTITY_REQUEST_CONTENT } from '$lib/server/identityDocRequest'
 
 const DOC_BUCKET = 'user-documents'
 const DOC_VALID_MONTHS = 6
@@ -114,23 +115,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .eq('id', sessionId)
   }
 
-  // doc_type='foreign'이면 /account/profile의 본인증명·외국인증명 서브탭 중 외국인증명 탭으로
-  // 바로 랜딩하도록 ?doc=foreign을 실어보낸다(ProfileTabContent.svelte activeDocTab 초기값 참고)
-  const actionPayload = {
-    type: 'identity_request',
-    doc_type: docType,
-    button_label: '본인증명 등록요청',
-    action_url: docType === 'foreign'
-      ? '/account/profile?tab=profile&doc=foreign'
-      : '/account/profile?tab=profile',
-  }
+  // CTA 랜딩: 개인정보(/account/profile?tab=profile)의 본인증명(doc=identity) 또는 외국인증명(doc=foreign) 영역으로
+  // 바로 진입·스크롤한다(ProfileTabContent.svelte ?doc= 처리 참고). 고객 구매 흐름의 자동 요청
+  // (src/lib/server/identityDocRequest.ts)과 카드 정의를 공유해 두 경로가 어긋나지 않게 한다(2026-10-15).
+  const actionPayload = buildIdentityRequestPayload(docType)
 
   const { data: messageRaw, error: msgErr } = await admin
     .from('chat_messages')
     .insert({
       session_id:     sessionId,
       sender_type:    'admin',
-      content:        '개인정보 메뉴에서 본인증명정보를 등록 부탁드립니다.',
+      content:        IDENTITY_REQUEST_CONTENT,
       message_type:   'action_card',
       action_payload: actionPayload,
       is_read:        false,
@@ -163,7 +158,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   await sendPushToUser(userId, 'identity_request', {
     title: '본인증명 등록을 요청드려요',
     body: '개인정보 메뉴에서 본인증명정보를 등록해주세요.',
-    link: '/account/profile?tab=profile',
+    link: identityRequestActionUrl(docType),
   })
 
   return json({ ok: true, message: messageRaw, deleted_count: deletedDocCount })

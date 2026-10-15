@@ -21,8 +21,8 @@
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
-  import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/docApproval';
-  import { showDocGateToast } from '$lib/utils/docGateToast';
+  import { getDocGateStatus, type DocGateRow } from '$lib/utils/docApproval';
+  import { requestDocRegistrationIfNeeded } from '$lib/utils/docRequestClient';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
   import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
@@ -533,11 +533,11 @@
       .select('identity_doc_url, identity_type, identity_verified_at, identity_approved_at, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at')
       .eq('user_id', currentSession.user.id)
       .maybeSingle();
-    // 2026-10-02: 서류를 등록했어도 관리자가 CMS 고객정보에서 '승인'하기 전에는 예약 차단.
-    // (기존 판정은 identity_doc_url이 빈 배열[]이어도 truthy라 미등록 상태도 통과하던 결함이 있었다)
+    // 2026-10-15(Stephen 확정): 본인증명 미등록·승인 대기여도 장바구니 담기·예약신청을 막지 않는다(DB 차단도 Migration #716으로 해제).
+    // 차단 토스트 대신, 서류가 미등록(none)이면 서버가 기존 "본인증명 등록요청" 대화카드 + 푸시 + SMS로 등록을 요청한다
+    // (응답을 기다리지 않는다·24시간 중복 방지는 서버). 서류 확인은 이 요청과 관리자 예약 승인 단계에서 이뤄진다.
     const docGate = getDocGateStatus(verifyRow as DocGateRow | null);
-    // 2026-10-05: 미등록=[확인]→서류 탭(고객 유형별 identity|foreign), 승인 대기=[문의]→상담톡 — 장바구니와 공용 헬퍼
-    if (showDocGateToast(docGate, docLandingKind(verifyRow as DocGateRow | null))) return;
+    requestDocRegistrationIfNeeded(docGate);
 
     isReserving = true;
     trackCartAdd(data.productId);
