@@ -5,6 +5,7 @@ import type { PageServerLoad } from './$types'
 import type { SubscriptionPlanRow, TierBenefitRow } from '$lib/types/subscription'
 import type { SubscriptionPolicyItem } from '$lib/types/database'
 import { formatBenefitForDisplay } from '$lib/utils/subscriptionBenefits'
+import { BENEFITS_PHOTOS_SETTING_KEY, normalizeBenefitsPhotos } from '$lib/utils/membersBenefitsPhotos'
 
 export interface HeroBannerImageItem {
   url: string
@@ -46,6 +47,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
+  // 이용안내 영역 배경 사진 2장(상단·하단) 교체 설정 — 없거나 깨져 있으면 기본 사진(정규화 함수가 null 처리)
+  const { data: benefitsPhotosRow } = await locals.supabase
+    .from('cms_settings')
+    .select('value')
+    .eq('key', BENEFITS_PHOTOS_SETTING_KEY)
+    .maybeSingle()
+  const benefitsPhotos = normalizeBenefitsPhotos((benefitsPhotosRow as { value: unknown } | null)?.value)
+
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) {
     return {
@@ -57,6 +66,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       heroBannerUrl,
       heroBannerMainCopy,
       heroBannerSubCopy,
+      benefitsPhotos,
     }
   }
 
@@ -81,6 +91,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       heroBannerUrl,
       heroBannerMainCopy,
       heroBannerSubCopy,
+      benefitsPhotos,
     }
   }
 
@@ -130,5 +141,6 @@ export const load: PageServerLoad = async ({ locals }) => {
     heroBannerUrl,
     heroBannerMainCopy,
     heroBannerSubCopy,
+    benefitsPhotos,
   }
 }

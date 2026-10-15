@@ -19,11 +19,7 @@
     />
     {#if isCms}
       <button class="hero-edit-btn" onclick={onEditBanner} aria-label="배너 이미지 관리">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-        배너 관리
+        ⚙ 배너 관리
       </button>
     {/if}
     <!-- Layer 2: Red 오버레이 (가운데 밴드, 혼합 반경) -->
@@ -97,27 +93,28 @@
     overflow: hidden;
   }
 
+  /* CMS 관리자용 '배너 관리' 버튼 — front 관리모달 버튼 표준(front-uiux.md §9-1-B, 2026-10-15 적용):
+     200×50·BG 알파 40%·반경 20px·호버는 BG만·보더/그림자/블러 없음·글자 좌측 정렬. 이 버튼은 PC 블록(.hero-pc, ≥1024px) 안에만 있다. */
   .hero-edit-btn {
     position: absolute;
     top: 20px;
-    right: 20px;
+    right: 40px;
     z-index: 3;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 36px;
-    padding: 0 16px;
-    background: rgba(16, 11, 50, 0.55);
+    width: 200px;
+    height: 50px;
+    padding: 0 20px;
+    background: rgba(16, 11, 50, 0.4);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-md);
-    font-family: var(--font-kr);
-    font-size: 13px;
-    font-weight: 700;
+    border-radius: var(--radius-lg);
+    font: var(--text-pc-body-14);
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: pointer;
-    backdrop-filter: blur(4px);
   }
-  .hero-edit-btn:hover { background: rgba(16, 11, 50, 0.8); }
+  .hero-edit-btn:hover { background: rgba(16, 11, 50, 0.6); }
 
   /* Layer 1: 전폭 이미지 (원본: w-1244px h-774px left-[-4px] top-[-37px]) */
   .hero-char-img {
