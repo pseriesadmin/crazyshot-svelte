@@ -9,10 +9,15 @@
    */
 
   import { enhance, deserialize } from '$app/forms'
+  import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { csToast } from '$lib/utils/toast'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import ContractDocumentEditor from '$lib/components/cms/contract-editor/ContractDocumentEditor.svelte'
   import ContractFieldPanel from '$lib/components/cms/contract-editor/ContractFieldPanel.svelte'
+  // 문서 & 양식 통합 편집기(이식형 모듈) 어댑터 — flow 모드에서만 사용(2026-10-14, 플래그로 신구 전환)
+  import ContractFlowEditor from '$lib/modules/doc-editor/adapters/crazyshot/ContractFlowEditor.svelte'
+  import ContractFlowPanel from '$lib/modules/doc-editor/adapters/crazyshot/ContractFlowPanel.svelte'
   import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
   import ContractCanvasEditor from '$lib/components/cms/contract-editor/ContractCanvasEditor.svelte'
   import ContractSpreadsheetEditor from '$lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte'
@@ -27,13 +32,22 @@
     template:  ContractTemplate | null
     onclose?:  () => void
     onsaved?:  (id: string) => void
+    /** 자동발행 표준양식 지정/해제가 저장된 뒤(목록·패널 데이터 새로고침용) */
+    onautoissuechange?: () => void
   }
 
-  let { template = null, onclose, onsaved }: Props = $props()
+  let { template = null, onclose, onsaved, onautoissuechange }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 에디터 컴포넌트 참조
   // --------------------------------------------------------------------------
+  /**
+   * flow(문서형) 모드 편집기 선택 — true: 문서 & 양식 통합 편집기(src/lib/modules/doc-editor),
+   * false: 기존 ContractDocumentEditor + ContractFieldPanel(파일은 그대로 보존).
+   * 문제가 생기면 이 값을 false로 바꾸면 즉시 이전 화면으로 돌아간다(저장 포맷은 두 편집기가 동일).
+   */
+  const USE_UNIFIED_DOC_EDITOR = true
+
   let editorRef: {
     insertMergeField:   (attrs: MergeFieldAttrs) => void
     setEditorContent:   (content: string | JSONContent) => void
@@ -78,6 +92,47 @@
    * 기존(template!=null): template.authoring_mode에서 초기화 (이후 변경 불가)
    */
   let authoringMode           = $state<'flow' | 'canvas' | 'spreadsheet' | 'html' | null>(null)
+
+  // 전자계약 자동발행 표준양식(Migration #717) — 폼 저장과 별개로 토글 즉시 저장. 저장된 양식(id 있음)만 지정할 수 있다.
+  let autoIssueDefault        = $state(false)
+  // 우측 변수(필드) 패널 접기/펼치기 — 에디터(문서 뷰어) 영역을 넓게 쓰기 위함(2026-10-15). 선택은 브라우저에 기억.
+  const FIELD_PANEL_KEY = 'cs-contracts-fieldpanel-open'
+  let fieldPanelOpen = $state(true)
+  $effect(() => {
+    try { if (localStorage.getItem(FIELD_PANEL_KEY) === '0') fieldPanelOpen = false } catch { /* 저장소 접근 불가 시 기본값 */ }
+  })
+  function toggleFieldPanel() {
+    fieldPanelOpen = !fieldPanelOpen
+    try { localStorage.setItem(FIELD_PANEL_KEY, fieldPanelOpen ? '1' : '0') } catch { /* 저장 실패 무시 */ }
+  }
+  let autoIssueSaving         = $state(false)
+  async function toggleAutoIssue(): Promise<void> {
+    if (!template || autoIssueSaving) return
+    const next = !autoIssueDefault
+    autoIssueSaving = true
+    try {
+      const fd = new FormData()
+      fd.set('id', template.id)
+      fd.set('on', String(next))
+      const response = await fetch('?/setAutoIssue', { method: 'POST', body: fd })
+      const result = deserialize(await response.text())
+      if (result.type === 'success') {
+        autoIssueDefault = next
+        csToast.success(next
+          ? '자동발행 표준양식으로 지정되었습니다. 예약승인 시 이 양식으로 전자계약이 자동 발행됩니다. (다른 양식의 지정은 해제됩니다)'
+          : '자동발행 표준양식이 해제되었습니다. 예약승인 후 계약서는 직접 선택해 발행합니다.')
+        onautoissuechange?.()
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { error?: string } | undefined)?.error ?? '자동발행 표준양식을 저장하지 못했습니다.')
+      } else {
+        csToast.error('자동발행 표준양식을 저장하지 못했습니다.')
+      }
+    } catch {
+      csToast.error('자동발행 표준양식을 저장하지 못했습니다.')
+    } finally {
+      autoIssueSaving = false
+    }
+  }
   // spreadsheet 에디터 강제 재마운트 키 (새 xlsx 임포트 시 increments)
   let spreadsheetMountKey     = $state(0)
   // html 모드 발행자 서명·직인 이미지 URL/너비(Migration #450/#451) — $effect 동기화는 위 Pattern 1과 동일
@@ -129,6 +184,7 @@
       : [{ key: '', value: '' }]
     const nextTitle = template?.title ?? ''
     const nextRequiresIssuerSignature = template?.requires_issuer_signature ?? false
+    const nextAutoIssueDefault = template?.auto_issue_default ?? false
     // 모드 초기화: 기존 템플릿이면 authoring_mode 사용, 신규면 null(미선택)
     const nextAuthoringMode = template
       ? ((template.authoring_mode as 'flow' | 'canvas' | 'spreadsheet' | 'html') ?? 'flow')
@@ -145,6 +201,7 @@
     specs                     = nextSpecs
     title                     = nextTitle
     requiresIssuerSignature   = nextRequiresIssuerSignature
+    autoIssueDefault          = nextAutoIssueDefault
     authoringMode             = nextAuthoringMode
     htmlIssuerSignatureUrl    = nextHtmlIssuerSignatureUrl
     htmlIssuerSignatureWidth  = nextHtmlIssuerSignatureWidth
@@ -227,6 +284,9 @@
     '.xls',
     '.hwp',
     '.hwpx',
+    // .doc(구형 Word)는 직접 변환을 지원하지 않는다 — 선택은 허용하고 .docx 재저장 안내만 띄운다(onImportFileChange)
+    '.doc',
+    'application/msword',
   ].join(',')
   const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 
@@ -245,7 +305,9 @@
       csToast.error('파일 크기가 10MB를 초과합니다. 더 작은 파일로 다시 시도해주세요.')
     } else {
       const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
+      if (ext === 'doc') {
+        csToast.warning('.doc(구형 Word) 파일은 직접 가져올 수 없어요. Word에서 "다른 이름으로 저장 → Word 문서(.docx)"로 저장한 뒤 다시 올려주세요.')
+      } else if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
         csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
       } else {
         importFile  = file
@@ -830,19 +892,38 @@
     <div class="field-row field-row--toggle">
       <span class="f-label">발행자 서명·직인 필수</span>
       <div class="toggle-wrap">
-        <button
-          type="button"
-          class="toggle-btn"
-          class:on={requiresIssuerSignature}
-          onclick={() => { requiresIssuerSignature = !requiresIssuerSignature }}
-          aria-pressed={requiresIssuerSignature}
-          aria-label="발행자 서명·직인 필수 여부 전환"
-        >
-          <span class="toggle-knob"></span>
-        </button>
-        <span class="toggle-label">
-          {requiresIssuerSignature ? '필수 (서명·직인 없으면 발송 차단)' : '선택 (서명·직인 없어도 발송 가능)'}
-        </span>
+        <CmsHelpBubble text={requiresIssuerSignature ? '필수: 발행자 서명·직인이 없으면 계약서 발송이 차단됩니다.' : '선택: 발행자 서명·직인이 없어도 계약서를 발송할 수 있습니다.'}>
+          <button
+            type="button"
+            class="toggle-btn"
+            class:on={requiresIssuerSignature}
+            onclick={() => { requiresIssuerSignature = !requiresIssuerSignature }}
+            aria-pressed={requiresIssuerSignature}
+            aria-label="발행자 서명·직인 필수 여부 전환"
+          >
+            <span class="toggle-knob"></span>
+          </button>
+          <span class="toggle-label">{requiresIssuerSignature ? '필수' : '선택'}</span>
+        </CmsHelpBubble>
+      </div>
+      <!-- 전자계약 자동발행 표준양식(2026-10-15, Stephen 지시) — ON: 이 양식이 예약목록 '예약승인' 때 자동 발행·발송된다(단독 1개).
+           OFF: 기존처럼 계약서 양식을 직접 선택해 발행. 폼 저장과 별개로 토글 즉시 저장. -->
+      <div class="toggle-wrap auto-issue-wrap">
+        <span class="f-label">자동발행 표준양식</span>
+        <CmsHelpBubble text={!template ? '양식을 저장한 뒤에 자동발행 표준양식으로 지정할 수 있어요.' : autoIssueDefault ? 'ON: 예약목록에서 예약승인을 하면 이 양식으로 전자계약이 자동 발행·발송됩니다. (전체 양식 중 1개만 지정)' : 'OFF: 예약승인 후 계약서 양식을 직접 선택해 발행합니다.'}>
+          <button
+            type="button"
+            class="toggle-btn"
+            class:on={autoIssueDefault}
+            onclick={toggleAutoIssue}
+            disabled={!template || autoIssueSaving}
+            aria-pressed={autoIssueDefault}
+            aria-label="전자계약 자동발행 표준양식 지정 전환"
+          >
+            <span class="toggle-knob"></span>
+          </button>
+          <span class="toggle-label">{!template ? '저장 후 지정' : autoIssueDefault ? 'ON' : 'OFF'}</span>
+        </CmsHelpBubble>
       </div>
       <!-- 2026-09-08 후속 — Stephen 지시: "'서명 & 직인 이미지 등록' 버튼 UI만을 구현된
            로직 그대로 이 토글 행 레이아웃 내부로 이동 재배치할 것". 아래 field-row--sig-upload
@@ -867,6 +948,10 @@
            (openHtmlSigPicker/showHtmlSigPicker/htmlSigAssets/selectHtmlSigAsset)은
            변경 없이 그대로 재사용 — 팝오버 위치 기준(position:relative)만 이 인라인
            wrapper(.html-sig-picker-inline)로 이관. -->
+      <!-- 2026-10-14: 이 버튼이 저장하는 '발행자 서명 이미지'(html_issuer_signature_*)는 HTML 고정 템플릿(html 모드)의
+           서명 칸에만 쓰인다. 문서형(flow) 양식은 편집기 툴바의 '서명/직인'으로 본문에 직접 넣으므로 이 버튼은
+           아무 효과가 없어(눌러도 본문에 반영 안 됨) html 모드에서만 노출한다(Stephen 지시). -->
+      {#if authoringMode === 'html'}
       <div class="html-sig-picker-inline" bind:this={htmlSigPickerEl}>
         <button
           type="button"
@@ -905,6 +990,7 @@
           </div>
         {/if}
       </div>
+      {/if}
       <!-- 2026-09-08 후속 제거 — 기존 .toggle-hint("이 양식으로 계약을 발행할 때...
            필수로 만듭니다")는 바로 왼쪽 toggle-label이 이미 상태별로 동일 의미를
            동적으로 보여주고 있어(예: "필수 (서명·직인 없으면 발송 차단)") 순수 중복
@@ -1032,7 +1118,12 @@
             />
           {/key}
         </div>
-        <div class="panel-col">
+        <div class="panel-col" class:collapsed={!fieldPanelOpen}>
+          <div class="panel-col-head">
+            <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
+              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+            </button>
+          </div>
           <ContractFieldPanel
             onInsertField={(attrs: MergeFieldAttrs) => {
               const ok = spreadsheetEditorRef?.insertTextAtSelection(`{{${attrs.variable}}}`)
@@ -1135,7 +1226,12 @@
             {/if}
           </div>
         </div>
-        <div class="panel-col">
+        <div class="panel-col" class:collapsed={!fieldPanelOpen}>
+          <div class="panel-col-head">
+            <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
+              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+            </button>
+          </div>
           <ContractFieldPanel
             onInsertField={() => {}}
             htmlMode={true}
@@ -1148,24 +1244,54 @@
           />
         </div>
       {:else}
-        <!-- flow 모드: TipTap 에디터 + 필드 패널 2단 레이아웃 -->
-        <div class="editor-col">
-          {#key template?.id ?? '__new__'}
-            <ContractDocumentEditor
-              bind:this={editorRef}
-              initialContent={docInit.initialContent}
-              initialHtml={docInit.initialHtml}
-              onchange={() => { flowContentDirty = true }}
+        <!-- flow 모드: TipTap 에디터 + 필드 패널 2단 레이아웃 (USE_UNIFIED_DOC_EDITOR로 신구 전환) -->
+        {#if USE_UNIFIED_DOC_EDITOR}
+          <div class="editor-col">
+            {#key template?.id ?? '__new__'}
+              <ContractFlowEditor
+                bind:this={editorRef}
+                initialContent={docInit.initialContent}
+                initialHtml={docInit.initialHtml}
+                onchange={() => { flowContentDirty = true }}
+              />
+            {/key}
+          </div>
+          <div class="panel-col" class:collapsed={!fieldPanelOpen}>
+          <div class="panel-col-head">
+            <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
+              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+            </button>
+          </div>
+            <ContractFlowPanel
+              onInsertField={(attrs: MergeFieldAttrs) => editorRef?.insertMergeField(attrs)}
+              specifications={specs}
+              onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
             />
-          {/key}
-        </div>
-        <div class="panel-col">
-          <ContractFieldPanel
-            onInsertField={(attrs: MergeFieldAttrs) => editorRef?.insertMergeField(attrs)}
-            specifications={specs}
-            onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
-          />
-        </div>
+          </div>
+        {:else}
+          <div class="editor-col">
+            {#key template?.id ?? '__new__'}
+              <ContractDocumentEditor
+                bind:this={editorRef}
+                initialContent={docInit.initialContent}
+                initialHtml={docInit.initialHtml}
+                onchange={() => { flowContentDirty = true }}
+              />
+            {/key}
+          </div>
+          <div class="panel-col" class:collapsed={!fieldPanelOpen}>
+          <div class="panel-col-head">
+            <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
+              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+            </button>
+          </div>
+            <ContractFieldPanel
+              onInsertField={(attrs: MergeFieldAttrs) => editorRef?.insertMergeField(attrs)}
+              specifications={specs}
+              onSpecsChange={(s: { key: string; value: string }[]) => { specs = s }}
+            />
+          </div>
+        {/if}
       {/if}
     </div>
   </form>
@@ -1237,6 +1363,7 @@
   <ContractImportModal
     initialFile={importFile}
     onclose={() => { showImport = false; importFile = null }}
+    onreselect={triggerImport}
     onImport={handleImport}
     onImportSpreadsheet={handleImportSpreadsheet}
   />
@@ -1360,6 +1487,13 @@
     flex-shrink: 0;
   }
   .toggle-btn.on { background: var(--cs-purple); }
+  .toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* 자동발행 표준양식 토글 — 발행자 서명 필수 토글 오른쪽에 구분선과 함께 배치 */
+  .auto-issue-wrap {
+    padding-left: 14px;
+    margin-left: 6px;
+    border-left: 1px solid var(--cs-lilac);
+  }
   .toggle-knob {
     position: absolute;
     top: 3px;
@@ -1421,6 +1555,27 @@
     min-width: 0;
   }
 
+  .panel-col-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .panel-col-head .close-btn {
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .panel-col-head .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
+  .panel-col.collapsed {
+    width: 36px;
+  }
+  .panel-col.collapsed > :global(:not(.panel-col-head)) { display: none; }  /* 자식 컴포넌트(ContractFieldPanel)의 루트는 이 컴포넌트 범위 밖이라 :global 필요 */
+  .panel-col.collapsed .panel-col-head { justify-content: center; padding: 4px 0; border-bottom: none; }
+  .panel-col { transition: width 0.2s ease; }
   .panel-col {
     width: 220px;
     flex-shrink: 0;
