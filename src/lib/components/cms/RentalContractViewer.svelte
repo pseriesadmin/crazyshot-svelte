@@ -9,6 +9,7 @@
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import { csToast } from '$lib/utils/toast'
 
+  import ReservationContractSpecs from '$lib/components/cms/ReservationContractSpecs.svelte'
   interface Props {
     contractId:       string | null
     contractPdfUrl:   string | null
@@ -347,6 +348,11 @@
     <div class="banner banner-none">
       계약서 미생성 — 양식을 선택해 발송하세요
     </div>
+  {/if}
+
+  <!-- 계약 특약 사전 등록 — 계약서가 생성되기 전(예약승인 전 포함)에 이 예약 건만의 특약을 미리 저장한다(2026-10-15). 발행 시 양식 '특약사항'에 이어 붙는다. -->
+  {#if !isRentalView && !signingsentAt && !customerSignedAt && !contentCheckLoading}
+    <ReservationContractSpecs {reservationId} onsaved={(updated) => { if (updated) onrefresh() }} disabled={issueBlocked} disabledReason={`${issueBlockedLabel} 예약은 특약을 등록할 수 없어요.`} />
   {/if}
 
   <!-- 계약서 양식 목록 (예약현황 전용 — 대여현황에서는 발행 자체를 숨김).

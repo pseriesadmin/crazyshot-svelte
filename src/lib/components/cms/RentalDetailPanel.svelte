@@ -6,6 +6,7 @@
   import { csToast } from '$lib/utils/toast'
   import { sanitizeLockerInput } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
+  import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
@@ -132,13 +133,15 @@
     onstatuschange?: () => void
     /** 이 예약이 취소(환불)로 확정된 직후 호출 — 대여현황이 '취소·환불' 목록으로 전환하는 용도(미지정 시 동작 없음) */
     oncancelled?: (reservationId: number) => void | Promise<void>
+    /** 예약취소 실행 시작(true)·실패로 끝남(false) — 부모가 취소 중 패널을 닫지 않게 한다 */
+    oncancelstate?: (pending: boolean) => void
     /** 예약승인으로 전자계약이 자동 발행·발송된 직후 호출 — 예약현황이 '계약대기' 칩 목록으로 전환해 같은 예약의 패널을 다시 연다(미지정 시 현재 목록 유지) */
     oncontractsent?: (reservationId: number) => void | Promise<void>
     /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -440,8 +443,8 @@
 
   // 고객정보 탭 — 본인증명·외국인증명 등록·승인 상태(2026-10-15). 탭을 열 때 한 번 조회하고, 예약이 바뀌면 다시 조회한다.
   type CustomerDocState = 'none' | 'incomplete' | 'pending' | 'approved'
-  interface CustomerDocInfo { state: CustomerDocState; count: number; verifiedAt: string | null }
-  let customerDocs = $state<{ identity: CustomerDocInfo; foreign: CustomerDocInfo; autoIssueEnabled?: boolean; gate?: 'none' | 'pending' | 'approved'; requestedRecently?: boolean; approveRequested?: boolean; approved?: boolean; approvalTracking?: boolean } | null>(null)
+  interface CustomerDocInfo { state: CustomerDocState; count: number; verifiedAt: string | null; approvedAt?: string | null; types?: string[] | null; stayType?: string | null }
+  let customerDocs = $state<{ userId?: string; isForeign?: boolean; identity: CustomerDocInfo; foreign: CustomerDocInfo; autoIssueEnabled?: boolean; gate?: 'none' | 'pending' | 'approved'; requestedRecently?: boolean; approveRequested?: boolean; approved?: boolean; approvalTracking?: boolean } | null>(null)
   let customerDocsLoading = $state(false)
   let customerDocsFetchedForId = $state<number | null>(null)
   let customerDocsFetchedKey: string | null = null
@@ -465,39 +468,12 @@
       .finally(() => { customerDocsLoading = false })
   })
 
-  // 고객정보 탭에서 서류 승인 — 고객 관리 패널의 승인과 같은 API를 쓴다. 승인 직후 '예약승인'을 눌렀던 예약은 서버가 전자계약을 자동 발행·발송한다(Migration #718).
-  let approvingDocType = $state<'identity' | 'foreign' | null>(null)
-
-  async function approveCustomerDoc(type: 'identity' | 'foreign'): Promise<void> {
-    if (approvingDocType) return
-    approvingDocType = type
-    try {
-      const res = await fetch('/api/cms/approve-doc', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: row.user_id, type }),
-      })
-      const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; contractsSent?: number; contractsSkipped?: string[] }
-      if (data.ok) {
-        csToast.success(data.contractsSent ? `승인 처리되었습니다. 예약승인 대기 중이던 전자계약 ${data.contractsSent}건을 고객에게 발송했어요.` : '승인 처리되었습니다.')
-        for (const m of data.contractsSkipped ?? []) csToast.warning(m)
-        // 서류 상태 행 다시 조회 + 목록 새로고침('승인대기'→'승인완료'·'계약대기' 이동 반영)
-        customerDocsFetchedKey = null
-        customerDocsFetchedForId = null
-        customerDocs = null
-        onrefresh?.()
-      } else {
-        csToast.error(data.error ?? '승인 실패')
-      }
-    } catch {
-      csToast.error('네트워크 오류가 발생했습니다.')
-    } finally {
-      approvingDocType = null
-    }
-  }
-
-  const CUSTOMER_DOC_STATE_LABEL: Record<CustomerDocState, string> = {
-    none: '미등록', incomplete: '필수 서류 미비', pending: '승인대기', approved: '승인완료',
+  // 서류 승인·재등록·승인취소 뒤 — 서류 행을 다시 조회하고 목록을 새로고침한다('승인대기'→'승인완료'·'계약대기' 이동 반영, 승인 직후 자동 발행은 서버가 처리).
+  function refreshCustomerDocs(): void {
+    customerDocsFetchedKey = null
+    customerDocsFetchedForId = null
+    customerDocs = null
+    onrefresh?.()
   }
 
   // PG 취소 실행 상태(Toss 결제 조회 실시간 연동) — 결제정보 탭 "PG 결제 정보" 하단에 표시
@@ -1910,10 +1886,17 @@
   }
   const rejectEnhance: SubmitFunction = () => {
     isSubmitting = true
+    oncancelstate?.(true)
     return async ({ result, update }) => {
       isSubmitting = false
-      if (result.type === 'success') csToast.success('예약이 거부되었습니다.')
-      else csToast.error(actionErrorMessage(result))
+      if (result.type === 'success') csToast.success('예약이 취소되었습니다.')
+      else { csToast.error(actionErrorMessage(result)); oncancelstate?.(false) }
+      // 신청대기 예약의 [예약취소](구 거부)도 하단 [예약취소]와 같이 '취소' 칩 목록으로 전환하며 패널을 유지한다 — 취소사유를 이어서 등록할 수 있게.
+      // (먼저 update()로 현재 목록을 새로고침하면 그 목록에서 행이 사라져 패널이 닫힌다)
+      if (result.type === 'success' && oncancelled) {
+        await oncancelled(row.reservation_id)
+        return
+      }
       await update()
       if (result.type === 'success') onstatuschange?.()
     }
@@ -1995,6 +1978,7 @@
             }
             isCancelling = true
             isSubmitting = true
+            oncancelstate?.(true)
             return async ({ result, update }) => {
               isCancelling = false
               isSubmitting = false
@@ -2006,6 +1990,7 @@
                 }
               } else {
                 csToast.error(actionErrorMessage(result))
+                oncancelstate?.(false)
               }
               if (result.type === 'success' && oncancelled) {
                 // 취소 칩 목록으로 먼저 전환(패널 유지) — 기존 목록을 먼저 새로고침하면 그 목록에 없는 행이라 패널이 닫혀 버린다
@@ -3074,37 +3059,30 @@
             </div>
           </div>
         </div>
-        <!-- 본인증명·외국인증명 등록 상태 — 고객 관리 패널의 '본인 증명' 행과 같은 배치(라벨 + 상태, 승인완료는 배지) -->
-        {#each [
-          { label: '본인 증명', type: 'identity' as const, info: customerDocs?.identity },
-          { label: '외국인 증명', type: 'foreign' as const, info: customerDocs?.foreign },
-        ] as doc (doc.label)}
-          <div class="info-row">
-            <span class="info-label">{doc.label}</span>
-            {#if customerDocsLoading && !customerDocs}
-              <span class="doc-state-empty">조회 중…</span>
-            {:else if !doc.info || doc.info.state === 'none'}
-              <span class="doc-state-empty">미등록</span>
-            {:else if doc.info.state === 'approved'}
-              <span class="doc-state-badge doc-state-ok">{CUSTOMER_DOC_STATE_LABEL.approved}</span>
-              <span class="doc-state-meta">{doc.info.count}개 · {doc.info.verifiedAt ? doc.info.verifiedAt.slice(0, 10) : '-'}</span>
-            {:else}
-              <span class="doc-state-badge doc-state-warn">{CUSTOMER_DOC_STATE_LABEL[doc.info.state]}</span>
-              <span class="doc-state-meta">{doc.info.count}개{doc.info.verifiedAt ? ` · ${doc.info.verifiedAt.slice(0, 10)}` : ''}</span>
-            {/if}
-            <!-- 고객 관리 패널과 같은 승인 동작 — 필수 서류를 갖춘 승인대기 건에만 [승인], 미비하면 안내 문구 (서버 /api/cms/approve-doc이 manager 이상·필수 조합을 다시 검사) -->
-            {#if doc.info?.state === 'pending' && canManagePaymentAndLocker}
-              <button
-                type="button"
-                class="btn-approve"
-                disabled={approvingDocType !== null}
-                onclick={() => approveCustomerDoc(doc.type)}
-              >{approvingDocType === doc.type ? '처리 중...' : '승인'}</button>
-            {:else if doc.info?.state === 'incomplete'}
-              <span class="doc-incomplete-hint">필수 서류 미비</span>
-            {/if}
+        <!-- 본인증명·외국인증명 — 고객 관리 패널과 같은 공용 컴포넌트(CustomerDocRows): 유형 배지·등록일·승인 + 파일 보기/다운로드/재등록 -->
+        {#if customerDocsLoading && !customerDocs}
+          <div class="info-row"><span class="info-label">본인 증명</span><span class="doc-state-empty">조회 중…</span></div>
+        {:else if customerDocs?.userId}
+          <div class="doc-rows-host">
+            <CustomerDocRows
+              userId={customerDocs.userId}
+              identityCount={customerDocs.identity.count}
+              identityTypes={customerDocs.identity.types ?? null}
+              identityVerifiedAt={customerDocs.identity.verifiedAt}
+              identityApprovedAt={customerDocs.identity.approvedAt ?? null}
+              isForeign={!!customerDocs.isForeign}
+              foreignCount={customerDocs.foreign.count}
+              foreignTypes={customerDocs.foreign.types ?? null}
+              foreignStayType={customerDocs.foreign.stayType ?? null}
+              foreignVerifiedAt={customerDocs.foreign.verifiedAt}
+              foreignApprovedAt={customerDocs.foreign.approvedAt ?? null}
+              canManage={canManagePaymentAndLocker}
+              onchanged={refreshCustomerDocs}
+            />
           </div>
-        {/each}
+        {:else}
+          <div class="info-row"><span class="info-label">본인 증명</span><span class="doc-state-empty">서류 정보를 불러오지 못했습니다.</span></div>
+        {/if}
       </div>
     {/if}
 
@@ -3537,24 +3515,8 @@
      예약변경은 동일 구조의 퍼플 버전으로 짝을 맞춤(같은 헤더 버튼 그룹 내 크기 통일). */
   /* 고객정보 탭 서류 상태 — 고객 관리 패널(.info-val-empty·.badge-approved)과 같은 색 언어 */
   .doc-state-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); }
-  .doc-state-badge {
-    display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
-    border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700;
-  }
-  .doc-state-ok   { background: rgba(16,185,129,0.10); color: var(--cs-success-light); }
-  .doc-state-warn { background: rgba(245,158,11,0.12); color: var(--cs-warning); }
-  /* 서류 승인 버튼·안내 — 고객 관리 패널(.btn-approve·.doc-incomplete-hint)과 같은 규격 */
-  .btn-approve {
-    margin-left: auto; min-width: 78px; text-align: center; flex-shrink: 0;
-    font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
-    border: 1px solid var(--cs-text-mid); border-radius: var(--cms-radius-sm);
-    background: var(--cs-surface-gray); color: var(--cs-text-mid);
-    cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
-  }
-  .btn-approve:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
-  .btn-approve:disabled { opacity: 0.5; cursor: default; }
-  .doc-incomplete-hint { margin-left: auto; flex-shrink: 0; font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-warning); }
-  .doc-state-meta { margin-left: 8px; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  /* 본인·외국인 증명 서류 행(공용 CustomerDocRows) — 이 패널의 info-row 규격(padding 10px 14px·라벨 96px)에 맞춤 */
+  .doc-rows-host { --dr-row-pad: 10px 14px; --dr-label-w: 96px; --dr-indent: 122px; --dr-row-border: var(--cs-lilac); --dr-label-weight: 700; display: flex; flex-direction: column; }
 
   .btn-header-action {
     height: 44px;

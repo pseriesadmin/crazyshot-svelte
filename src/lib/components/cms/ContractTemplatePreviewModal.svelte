@@ -154,6 +154,9 @@
    * html형 미리보기 문서 — existing 모드는 저장된 html_document 그대로,
    * template 모드는 subData가 있으면 변수 치환 후 표시.
    */
+  // 예약별 사전 등록 특약(Migration #720) — 양식 특약 뒤에 이어 붙여 발행한다
+  let reservationSpecs = $state<SpecRow[]>([])
+
   const previewHtmlDocument = $derived<string | null>(
     contentMode === 'existing'
       ? (isHtmlDocument(existingHtmlDocument) ? (existingHtmlDocument as string) : null)
@@ -166,7 +169,7 @@
                 selectedTemplate.html_issuer_signature_offset_x,
                 selectedTemplate.html_issuer_signature_offset_y,
               )
-              const withNotes = applySpecialNotesMarker(withSig, selectedTemplate.specifications)
+              const withNotes = applySpecialNotesMarker(withSig, [...(selectedTemplate.specifications ?? []), ...reservationSpecs])
               const withContractTerms = applyContractTermsMarker(withNotes, selectedTemplate.contract_terms_text)
               const withPrivacyTerms  = applyPrivacyTermsMarker(withContractTerms, selectedTemplate.privacy_terms_text)
               return subData ? substituteHtmlDocument(withPrivacyTerms, subData) : withPrivacyTerms
@@ -302,6 +305,10 @@
 
         templates = (await tplRes.json()) as TemplateSummary[]
         subData   = (await subRes.json()) as ContractSubstitutionData
+        try {
+          const specRes = await fetch(`/api/cms/reservations/${reservationId}/contract-specs`)
+          if (specRes.ok) reservationSpecs = ((await specRes.json()) as { specifications?: SpecRow[] }).specifications ?? []
+        } catch { reservationSpecs = [] }
       }
 
       // 기존 계약서 편집 내용 확인 (편집 보존 목적 — contractId가 있을 때만)
@@ -434,7 +441,7 @@
     const isCanvas      = selectedTemplate.authoring_mode === 'canvas'
     const isSpreadsheet = selectedTemplate.authoring_mode === 'spreadsheet'
     const isHtml         = selectedTemplate.authoring_mode === 'html'
-    const specs           = specsOverride ?? (selectedTemplate.specifications ?? [])
+    const specs           = specsOverride ?? [...(selectedTemplate.specifications ?? []), ...reservationSpecs]
     const contractTerms    = contractTermsOverride !== undefined ? contractTermsOverride : selectedTemplate.contract_terms_text
     const privacyTerms     = privacyTermsOverride  !== undefined ? privacyTermsOverride  : selectedTemplate.privacy_terms_text
     // canvas / spreadsheet / html 모드는 content_blocks가 빈 배열 — substituteVariables 적용 불필요.
@@ -658,7 +665,7 @@
 
     const currentSpecs = contentMode === 'existing'
       ? existingSpecifications
-      : (selectedTemplate?.specifications ?? [])
+      : [...(selectedTemplate?.specifications ?? []), ...reservationSpecs]
     editingSpecs = currentSpecs.length > 0
       ? currentSpecs.map((s) => ({ ...s }))
       : [{ key: '', value: '' }]

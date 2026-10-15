@@ -65,6 +65,8 @@
   // 이후 선택/해제는 openPanel()/closePanel()이 직접 제어(재동기화 effect 없음)
   let selectedId   = $state<number | null>(data.selectedId ?? null)
   let selectedRow  = $state<RentalListRow | null>(null)
+  // 예약취소를 실행하는 동안(취소 칩 목록으로 전환 전)에는 목록 새로고침(실시간 갱신 등)으로 그 행이 현재 목록에서 사라져도 패널을 닫지 않는다 — 취소사유 등록을 이어서 할 수 있게(2026-10-15)
+  let keepOpenId   = $state<number | null>(null)
 
   $effect(() => { searchInput = data.search ?? '' })
   $effect(() => { dateFrom = data.dateFrom ?? '' })
@@ -74,6 +76,8 @@
       const updated = data.rentals.find(r => r.reservation_id === selectedId)
       if (updated) {
         selectedRow = updated
+      } else if (keepOpenId === selectedId) {
+        // 취소 진행 중 — 패널 유지(목록 전환이 끝나면 해제)
       } else {
         // RSV-A-C1: 상태 변경 후 invalidateAll로 목록이 갱신됐는데 해당 row가 더 이상
         // 현재 필터에 없으면(예: 승인 → hold 목록에서 사라짐) 패널을 자동으로 닫는다.
@@ -117,8 +121,11 @@
   // 예약을 취소(거부)하면 '취소' 칩 목록으로 전환해 같은 예약의 패널을 다시 열고, 목록에서도 그 행이 보이게 한다
   // (결제완료 이력이 있는 건은 서버가 대여현황 '취소·환불' 칩으로 다시 보낸다 — +page.server.ts)
   async function openInCancelledList(id: number) {
+    keepOpenId = id
+    try {
     await goto(`/cms/reservation?status=cancelled&selected=${id}`, { replaceState: true, invalidateAll: true })
     selectedId = id
+    } finally { keepOpenId = null }
     await tick()
     document.querySelector('.table-wrap tr.selected')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
@@ -399,6 +406,7 @@
             onrefresh={invalidateAll}
             onstatuschange={closePanel}
             oncancelled={openInCancelledList}
+            oncancelstate={(pending) => { keepOpenId = pending ? selectedId : null }}
             oncontractsent={openInContractPending}
             stepFilter={['hold', 'confirmed']}
             cmsRole={data.cmsRole}

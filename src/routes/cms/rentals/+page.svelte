@@ -70,6 +70,8 @@
   // 이후 선택/해제는 openPanel()/closePanel()이 직접 제어(재동기화 effect 없음)
   let selectedId  = $state<number | null>(data.selectedId ?? null)
   let selectedRow = $state<RentalListRow | null>(null)
+  // 예약취소 실행 중에는 목록 새로고침으로 행이 사라져도 패널을 닫지 않는다(취소사유 등록 유지, 2026-10-15)
+  let keepOpenId  = $state<number | null>(null)
 
   $effect(() => { searchInput = data.search ?? '' })
 
@@ -77,7 +79,7 @@
     if (selectedId != null) {
       const updated = data.rentals.find(r => r.reservation_id === selectedId)
       if (updated) selectedRow = updated
-      else closePanel()
+      else if (keepOpenId !== selectedId) closePanel()
     }
   })
 
@@ -143,8 +145,11 @@
 
   // 관리자가 예약을 취소(환불)하면 그 예약이 있는 '취소·환불' 목록으로 전환해 같은 예약을 다시 연다
   async function openInCancelledList(id: number) {
-    await goto(`/cms/rentals?status=cancelled_refunded&selected=${id}`, { replaceState: true, invalidateAll: true })
-    selectedId = id
+    keepOpenId = id
+    try {
+      await goto(`/cms/rentals?status=cancelled_refunded&selected=${id}`, { replaceState: true, invalidateAll: true })
+      selectedId = id
+    } finally { keepOpenId = null }
     await scrollSelectedRowIntoView()
   }
 
@@ -336,6 +341,7 @@
             onclose={closePanel}
             onrefresh={invalidateAll}
             oncancelled={openInCancelledList}
+            oncancelstate={(pending) => { keepOpenId = pending ? selectedId : null }}
             isRentalView={true}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
             cmsRole={data.cmsRole}

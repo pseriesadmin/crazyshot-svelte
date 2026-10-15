@@ -405,7 +405,9 @@ export function updateSpecialNotesInHtml(
   specifications: { key: string; value: string }[] | null | undefined,
 ): string {
   if (!SPECIAL_NOTES_CELL_REGEX.test(html)) return html
-  return html.replace(SPECIAL_NOTES_CELL_REGEX, `$1${formatSpecialNotesText(specifications)}$3`)
+  const text = formatSpecialNotesText(specifications)
+  // 함수형 치환 — 문자열 치환은 특약 내용의 `$&`·`$1` 등을 치환 패턴으로 해석해 HTML이 깨진다
+  return html.replace(SPECIAL_NOTES_CELL_REGEX, (_m, open: string, _body: string, close: string) => open + text + close)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
