@@ -7,6 +7,7 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { isContractIssueBlockedByApproval, CONTRACT_APPROVAL_REQUIRED_MESSAGE } from '$lib/server/contractApprovalGuard'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
@@ -33,6 +34,11 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
   if (isContractIssueBlocked(res.status)) {
     return json({ error: '취소되었거나 만료된 예약은 계약서를 발행할 수 없습니다.' }, { status: 422 })
+  }
+
+  // 예약승인 전 신청대기 예약은 계약서를 만들 수 없다(화면 잠금의 서버 집행, 2026-10-15)
+  if (await isContractIssueBlockedByApproval(admin, reservationId)) {
+    return json({ error: CONTRACT_APPROVAL_REQUIRED_MESSAGE }, { status: 409 })
   }
 
   // 2026-08-31(Stephen 확정): '예약' 단위 = '주문' 단위 — 장바구니에 상품이 몇 개 담기든

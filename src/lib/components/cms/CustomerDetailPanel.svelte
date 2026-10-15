@@ -1080,10 +1080,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: row.user_id, type }),
       })
-      const data = await res.json() as { ok: boolean; error?: string }
+      const data = await res.json() as { ok: boolean; error?: string; contractsSent?: number; contractsSkipped?: string[] }
 
       if (data.ok) {
-        csToast.success('승인 처리되었습니다.')
+        csToast.success(data.contractsSent ? `승인 처리되었습니다. 예약승인 대기 중이던 전자계약 ${data.contractsSent}건을 고객에게 발송했어요.` : '승인 처리되었습니다.')
+        for (const m of data.contractsSkipped ?? []) csToast.warning(m)
         await invalidateAll()
       } else {
         csToast.error(data.error ?? '승인 실패')

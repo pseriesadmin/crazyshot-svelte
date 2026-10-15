@@ -98,3 +98,47 @@ describe('/cms/chat 요청 버튼 노출', () => {
     expect(r).toContain('doc-request-btn')
   })
 })
+
+// ── 승인 상태 반영(2026-10-15): 승인 취소·재승인 대기 고객이 '등록완료'로 보이던 결함 ─────────────────
+describe('본인증명 승인 상태 표시', () => {
+  const REQUIRED = ['resident', 'resident_copy']
+  function renderApproval(opts: { type?: string[] | null; verifiedAt: string; approvedAt: string | null | undefined; phone?: string }): string {
+    const profile = {
+      name: '테스트', phone: opts.phone ?? '01048602303', is_student: false, is_foreign: false,
+      identity_type: opts.type === undefined ? REQUIRED : opts.type,
+      identity_doc_url: ['a.pdf', 'b.pdf'], identity_verified_at: opts.verifiedAt,
+      foreign_doc_url: null, foreign_doc_urls: null, foreign_verified_at: null,
+      ...(opts.approvedAt === undefined ? {} : { identity_approved_at: opts.approvedAt }),
+    }
+    const { body } = render(CustomerDetailPanel, {
+      props: { detail: { profile, subscription: null, reservations: [] }, summary: null, isLoading: false, onrequestdoc: () => {} },
+    })
+    return body
+  }
+  const now = new Date().toISOString()
+  const earlier = new Date(Date.now() - 3600_000).toISOString()
+
+  it('승인 취소(승인 시각 없음) → 승인대기로 표시하고 요청 버튼은 숨긴다', () => {
+    const h = row(renderApproval({ verifiedAt: now, approvedAt: null }), '본인증명')
+    expect(h).toContain('승인대기')
+    expect(h).not.toContain('등록완료')
+    expect(h).not.toContain('doc-request-btn')
+  })
+  it('등록 이후 승인됨 → 승인완료', () => {
+    expect(row(renderApproval({ verifiedAt: earlier, approvedAt: now }), '본인증명')).toContain('승인완료')
+  })
+  it('승인 후 재제출(등록일이 승인보다 최신) → 승인대기', () => {
+    expect(row(renderApproval({ verifiedAt: now, approvedAt: earlier }), '본인증명')).toContain('승인대기')
+  })
+  it('필수 서류 조합 미충족 → 필수 서류 미비 + 요청 버튼 노출', () => {
+    const h = row(renderApproval({ type: ['resident'], verifiedAt: now, approvedAt: null }), '본인증명')
+    expect(h).toContain('필수 서류 미비')
+    expect(h).toContain('doc-request-btn')
+  })
+  it('승인 시각 필드가 없는 응답 → 기존처럼 등록완료', () => {
+    expect(row(renderApproval({ verifiedAt: now, approvedAt: undefined }), '본인증명')).toContain('등록완료')
+  })
+  it('전화번호는 하이픈을 넣어 표시한다', () => {
+    expect(renderApproval({ verifiedAt: now, approvedAt: now })).toContain('010-4860-2303')
+  })
+})

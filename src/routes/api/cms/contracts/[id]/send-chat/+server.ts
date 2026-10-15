@@ -10,6 +10,7 @@ import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { checkIssuerSignatureRequired } from '$lib/contract-signature/issuerSignatureCheck'
 import { sendCardSms, sendPushToUser } from '$lib/server/push'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
+import { isContractIssueBlockedByApproval, CONTRACT_APPROVAL_REQUIRED_MESSAGE } from '$lib/server/contractApprovalGuard'
 import { findUnresolvedVariables, applyDocumentQrMarker } from '$lib/utils/contract-substitution'
 import { buildQrDataUrl } from '$lib/utils/qrIssue'
 import { stampIssueDateInHtml } from '$lib/utils/contractIssueDate'
@@ -63,6 +64,11 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
     if (isContractIssueBlocked(reservation?.status)) {
       return json({ error: '취소되었거나 만료된 예약은 계약서를 발송할 수 없습니다.' }, { status: 422 })
+    }
+
+    // 예약승인 전 신청대기 예약은 계약서를 발송할 수 없다(화면 잠금의 서버 집행, 2026-10-15)
+    if (await isContractIssueBlockedByApproval(admin, contract.reservation_id)) {
+      return json({ error: CONTRACT_APPROVAL_REQUIRED_MESSAGE }, { status: 409 })
     }
   }
 

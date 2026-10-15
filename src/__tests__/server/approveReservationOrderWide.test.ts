@@ -3,15 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: vi.fn(async () => null), requireAnyMenuAccessApi: vi.fn(async () => null), requireMenuAccessAction: vi.fn(async () => null) }))
 
 /**
- * TDD — approveReservation 액션: 주문 1건 = 목록 1행(Migration 618) — 대표 행 승인 시 같은 주문의
- * 신청대기(hold) 형제 상품도 함께 승인한다.
- *
- * 완료기준(B-START):
- *   정상 동작   : 대표 예약을 승인하면 같은 주문의 hold 형제가 모두 update_reservation_status('confirmed') 된다.
- *   막아야 할 것 : hold가 아닌 형제(취소·만료·이미 confirmed 등)는 건드리지 않는다. 주문에 속하지 않은 예약은
- *                형제 조회 없이 자기 자신만 승인한다.
- *   실패했을 때  : 형제 승인이 실패해도 대표 승인 결과·알림 흐름을 막지 않는다(fail-soft).
- *
+ * approveReservation 액션: 주문 1건 = 목록 1행(Migration 618) — 대표 행에서 '예약승인'을 누르면 같은 주문의 신청대기(hold) 형제 상품 전체가 대상이다.
+ * 2026-10-15(Stephen 확정): '예약승인'은 예약을 확정(confirmed)하지 않는다 — 계약완료는 고객의 전자계약 서명 + 결제 후에만 자동 전환(§9).
+ *   정상 동작   : 서류 미승인이면 같은 주문의 hold 형제 전부에 승인 요청 표식을 남긴다(서류 승인 시 자동 발행 대상).
+ *   막아야 할 것 : 어떤 경우에도 update_reservation_status('confirmed')·승인 알림을 호출하지 않는다. hold가 아닌 형제·다른 주문은 건드리지 않는다.
+ *   실패했을 때  : 신청대기 예약이 하나도 없으면 400.
  * 대상: src/routes/cms/reservation/+page.server.ts approveReservation
  */
 
@@ -31,6 +27,7 @@ interface Tables {
   holdIds: number[]                               // status='hold'인 예약 id
 }
 let tables: Tables = { orderOf: {}, itemsOfOrder: {}, holdIds: [] }
+const updates: Array<{ table: string; values: Record<string, unknown>; filters: Record<string, unknown> }> = []
 
 // from('order_items') / from('rental_reservations') 최소 체인 모킹
 function makeFrom(table: string) {
@@ -41,6 +38,8 @@ function makeFrom(table: string) {
     eq: (k: string, v: unknown) => { filters[k] = v; return builder },
     in: (k: string, v: unknown) => { filters[k] = v; return builder },
     is: () => builder,
+    not: () => builder,
+    update: (values: Record<string, unknown>) => { updates.push({ table, values, filters }); return builder },
     order: () => builder,
     limit: () => builder,
     maybeSingle: async () => {
@@ -95,6 +94,7 @@ vi.mock('$lib/server/clearIssuedContractHelper', () => ({
   clearIssuedContractContent: vi.fn(), discardSentContract: vi.fn(), cancelIssuedContract: vi.fn(),
 }))
 vi.mock('$lib/utils/cmsPermissions', () => ({ hasSettingsAccess: () => true }))
+vi.mock('$lib/server/identityDocRequest', () => ({ requestIdentityDocRegistration: vi.fn(async () => ({ requested: true, reason: 'sent' })) }))
 
 function makeFormData(values: Record<string, string>): FormData {
   const fd = new FormData()
@@ -119,71 +119,69 @@ function approvedIds(): number[] {
     .map(([, args]) => (args as { p_reservation_id: number }).p_reservation_id)
 }
 
-describe('approveReservation — 주문 단위 일괄 승인(Migration 618)', () => {
+function markedIds(): number[] {
+  const m = updates.find((u) => u.table === 'rental_reservations' && 'approve_requested_at' in u.values)
+  return ((m?.filters['id'] as number[]) ?? []).slice().sort()
+}
+
+describe('approveReservation — 주문 단위 승인 요청(Migration 618·718, 확정하지 않음)', () => {
   beforeEach(() => {
     mockRpc.mockReset()
     mockResolvePlan.mockReset()
     mockSendApproval.mockReset()
+    updates.length = 0
     mockGetCmsRoleForAction.mockResolvedValue('manager')
     mockRpc.mockResolvedValue({ data: { ok: true }, error: null })
-    mockResolvePlan.mockResolvedValue({ mode: 'single' })
-    mockSendApproval.mockResolvedValue(undefined)
     tables = { orderOf: {}, itemsOfOrder: {}, holdIds: [] }
   })
 
-  it('Happy: 대표(10) 승인 시 같은 주문의 hold 형제(11) 도 함께 승인된다', async () => {
+  it('Happy: 대표(10)에서 예약승인 → 같은 주문의 hold 형제(11)까지 승인 요청 표식을 남기고 확정하지는 않는다', async () => {
     tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11] }, holdIds: [10, 11] }
     const result = await approve(10)
-    expect(result).toEqual({ ok: true })
-    expect(approvedIds().sort()).toEqual([10, 11])
+    expect(result).toMatchObject({ ok: true, identityRequested: true })
+    expect(markedIds()).toEqual([10, 11])
+    expect(approvedIds()).toEqual([])
+    expect(mockSendApproval).not.toHaveBeenCalled()
   })
 
-  it('경계: hold가 아닌 형제(12, 이미 취소·만료 등)는 승인하지 않는다', async () => {
+  it('경계: hold가 아닌 형제(12, 이미 취소·만료 등)에는 표식을 남기지 않는다', async () => {
     tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11, 12] }, holdIds: [10, 11] }
     await approve(10)
-    expect(approvedIds().sort()).toEqual([10, 11])
-    expect(approvedIds()).not.toContain(12)
+    expect(markedIds()).toEqual([10, 11])
   })
 
-  it('주문에 속하지 않은 단일 예약은 자기 자신만 승인한다', async () => {
-    tables = { orderOf: {}, itemsOfOrder: {}, holdIds: [] }
+  it('주문에 속하지 않은 단일 예약은 자기 자신만 대상이다', async () => {
+    tables = { orderOf: {}, itemsOfOrder: {}, holdIds: [10] }
     await approve(10)
-    expect(approvedIds()).toEqual([10])
+    expect(markedIds()).toEqual([10])
+    expect(approvedIds()).toEqual([])
   })
 
-  it('fail-soft: 형제 승인 RPC가 예외를 던져도 대표 승인은 성공으로 응답하고 알림 판단은 계속된다', async () => {
-    tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11] }, holdIds: [10, 11] }
-    mockRpc.mockImplementation(async (_fn: string, args: { p_reservation_id: number }) => {
-      if (args.p_reservation_id === 11) throw new Error('boom')
-      return { data: { ok: true }, error: null }
-    })
-    const result = await approve(10)
-    expect(result).toEqual({ ok: true })
-    expect(mockResolvePlan).toHaveBeenCalledWith(expect.anything(), 10)
-  })
-
-  it('대표 승인 자체가 실패하면(ok:false) 형제는 건드리지 않고 400을 반환한다', async () => {
-    tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11] }, holdIds: [10, 11] }
-    mockRpc.mockResolvedValue({ data: { ok: false, error: '처리 실패' }, error: null })
-    const result = await approve(10)
-    expect(result).toMatchObject({ status: 400 })
-    expect(approvedIds()).toEqual([10])
-  })
-
-  it('M-1: 요청한 대표(10)가 이미 confirmed여도 주문 안의 hold 형제(11)를 승인한다(400으로 끝나지 않음)', async () => {
+  it('요청한 대표(10)가 이미 hold가 아니어도 주문 안의 hold 형제(11)가 대상이다(400으로 끝나지 않음)', async () => {
     tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11] }, holdIds: [11] }
     const result = await approve(10)
-    expect(result).toEqual({ ok: true })
-    expect(approvedIds()).toEqual([11])
-    // 알림 판단은 실제로 승인된 예약(11) 기준
-    expect(mockResolvePlan).toHaveBeenCalledWith(expect.anything(), 11)
+    expect(result).toMatchObject({ ok: true })
+    expect(markedIds()).toEqual([11])
   })
 
-  it('주문 안에 hold가 하나도 없으면 요청 예약을 그대로 시도해 RPC의 에러를 돌려준다', async () => {
-    tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10, 11] }, holdIds: [] }
-    mockRpc.mockResolvedValue({ data: { ok: false, error: '이미 처리된 예약' }, error: null })
+  it('주문 안에 hold가 하나도 없으면 400 — 확정 RPC를 시도하지 않는다', async () => {
+    tables = { orderOf: { 10: 45 }, itemsOfOrder: { 45: [10] }, holdIds: [] }
     const result = await approve(10)
     expect(result).toMatchObject({ status: 400 })
-    expect(approvedIds()).toEqual([10])
+    expect(mockRpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('updateStatus — 서명·결제 없는 계약완료 직접 전환 차단', () => {
+  it("status='confirmed' 요청은 400으로 거절하고 RPC를 부르지 않는다", async () => {
+    mockRpc.mockReset()
+    mockGetCmsRoleForAction.mockResolvedValue('manager')
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    const r = await actions.updateStatus({
+      request: { formData: async () => makeFormData({ reservation_id: '10', status: 'confirmed' }) },
+      locals: makeLocals(),
+    } as never)
+    expect(r).toMatchObject({ status: 400 })
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 })

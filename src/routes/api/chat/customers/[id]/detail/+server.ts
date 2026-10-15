@@ -26,5 +26,17 @@ export const GET = async ({ params, locals }: RequestEvent<{ id: string }>) => {
 
   if (error) return json({ error: error.message }, { status: 500 })
 
-  return json({ detail: data })
+  // 본인증명·외국인증명 승인 상태 판정에 필요한 항목(승인 시각·서류 종류)을 함께 내려준다.
+  // get_chat_customer_detail RPC는 등록 파일·등록일만 반환해, 승인 취소·재승인 대기를 화면이 알 수 없었다(2026-10-15). 조회 실패는 무시(기존 응답 유지).
+  const detail = data as { profile?: Record<string, unknown> | null } | null
+  if (detail?.profile) {
+    const { data: docRow } = await admin
+      .from('user_profiles')
+      .select('identity_approved_at, foreign_approved_at, foreign_type')
+      .eq('id', params.id)
+      .maybeSingle()
+    if (docRow) Object.assign(detail.profile, docRow)
+  }
+
+  return json({ detail })
 }

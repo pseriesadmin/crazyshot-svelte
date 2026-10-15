@@ -123,6 +123,14 @@
     document.querySelector('.table-wrap tr.selected')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }
 
+  // 예약승인으로 전자계약이 발송되면 그 예약은 '계약대기' 칩 목록으로 옮겨진다 — 같은 예약의 패널을 열어 둔 채 해당 칩으로 전환하고 목록에서 그 행이 보이게 한다
+  async function openInContractPending(id: number) {
+    await goto(`/cms/reservation?status=hold&contract_pending=1&selected=${id}`, { replaceState: true, invalidateAll: true })
+    selectedId = id
+    await tick()
+    document.querySelector('.table-wrap tr.selected')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+
   function goPage(p: number) {
     const params = new URLSearchParams(window.location.search)
     params.set('page', p.toString())
@@ -294,6 +302,9 @@
                   {#if row.cancel_pending}
                     <!-- 고객 취소 요청 대기(서명+결제 후 취소 요청) — 패널 헤더 [예약취소] 실행 시 전액 환불·취소 -->
                     <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
+                  {:else if row.status === 'hold' && !row.signing_sent_at && data.contractPending}
+                    <!-- '계약대기' 칩에서 계약서가 아직 발송되지 않은 행 = 예약승인만 된 예약(승인 시각, Migration #719) — 신청대기와 구분해 표시 -->
+                    <span class="status-badge" style="background:rgba(16,185,129,0.12);color:var(--cs-success-light)">승인완료 · 계약 미발송</span>
                   {:else if !(row.status === 'hold' && row.signing_sent_at)}
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
                       {row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status)}
@@ -388,6 +399,7 @@
             onrefresh={invalidateAll}
             onstatuschange={closePanel}
             oncancelled={openInCancelledList}
+            oncontractsent={openInContractPending}
             stepFilter={['hold', 'confirmed']}
             cmsRole={data.cmsRole}
             canChangeOrCancelReservation={data.canChangeOrCancelReservation}

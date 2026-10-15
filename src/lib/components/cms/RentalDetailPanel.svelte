@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { enhance } from '$app/forms'
+  import type { SubmitFunction } from '@sveltejs/kit'
   import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import { sanitizeLockerInput } from '$lib/utils/lockerFields'
@@ -130,11 +132,13 @@
     onstatuschange?: () => void
     /** 이 예약이 취소(환불)로 확정된 직후 호출 — 대여현황이 '취소·환불' 목록으로 전환하는 용도(미지정 시 동작 없음) */
     oncancelled?: (reservationId: number) => void | Promise<void>
+    /** 예약승인으로 전자계약이 자동 발행·발송된 직후 호출 — 예약현황이 '계약대기' 칩 목록으로 전환해 같은 예약의 패널을 다시 연다(미지정 시 현재 목록 유지) */
+    oncontractsent?: (reservationId: number) => void | Promise<void>
     /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -433,6 +437,68 @@
         if (fetchedForId === id) { paymentError = '결제 정보를 불러오지 못했습니다.'; paymentLoading = false }
       })
   })
+
+  // 고객정보 탭 — 본인증명·외국인증명 등록·승인 상태(2026-10-15). 탭을 열 때 한 번 조회하고, 예약이 바뀌면 다시 조회한다.
+  type CustomerDocState = 'none' | 'incomplete' | 'pending' | 'approved'
+  interface CustomerDocInfo { state: CustomerDocState; count: number; verifiedAt: string | null }
+  let customerDocs = $state<{ identity: CustomerDocInfo; foreign: CustomerDocInfo; autoIssueEnabled?: boolean; gate?: 'none' | 'pending' | 'approved'; requestedRecently?: boolean; approveRequested?: boolean; approved?: boolean; approvalTracking?: boolean } | null>(null)
+  let customerDocsLoading = $state(false)
+  let customerDocsFetchedForId = $state<number | null>(null)
+  let customerDocsFetchedKey: string | null = null
+
+  $effect(() => {
+    if (activeTab !== 'customer' && !(row.status === 'hold' && !isRentalView)) return
+    const id = row.reservation_id
+    // 다시 조회하는 조건 = 예약이 바뀌었거나, 목록 새로고침으로 예약 상태·계약서 발송 여부가 바뀐 경우(서류 승인·자동발행 뒤 '승인대기' 표식이 바뀐 것을 따라가도록).
+    // ⛔ 로딩 플래그는 untrack으로 읽는다 — 이 effect가 로딩 플래그를 읽고 쓰면 조회가 끝날 때마다 effect가 다시 돌아 무한 재조회가 된다(QA B-1).
+    const key = `${id}:${row.status}:${row.signing_sent_at ?? ''}`
+    if (untrack(() => customerDocsLoading)) return
+    if (customerDocsFetchedKey === key) return
+    if (customerDocsFetchedForId !== id) customerDocs = null
+    customerDocsFetchedKey = key
+    customerDocsFetchedForId = id
+    customerDocsLoading = true
+    fetch(`/api/cms/reservations/${id}/customer-docs`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (customerDocsFetchedForId === id) customerDocs = d })
+      .catch(() => { if (customerDocsFetchedForId === id) customerDocs = null })
+      .finally(() => { customerDocsLoading = false })
+  })
+
+  // 고객정보 탭에서 서류 승인 — 고객 관리 패널의 승인과 같은 API를 쓴다. 승인 직후 '예약승인'을 눌렀던 예약은 서버가 전자계약을 자동 발행·발송한다(Migration #718).
+  let approvingDocType = $state<'identity' | 'foreign' | null>(null)
+
+  async function approveCustomerDoc(type: 'identity' | 'foreign'): Promise<void> {
+    if (approvingDocType) return
+    approvingDocType = type
+    try {
+      const res = await fetch('/api/cms/approve-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: row.user_id, type }),
+      })
+      const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; contractsSent?: number; contractsSkipped?: string[] }
+      if (data.ok) {
+        csToast.success(data.contractsSent ? `승인 처리되었습니다. 예약승인 대기 중이던 전자계약 ${data.contractsSent}건을 고객에게 발송했어요.` : '승인 처리되었습니다.')
+        for (const m of data.contractsSkipped ?? []) csToast.warning(m)
+        // 서류 상태 행 다시 조회 + 목록 새로고침('승인대기'→'승인완료'·'계약대기' 이동 반영)
+        customerDocsFetchedKey = null
+        customerDocsFetchedForId = null
+        customerDocs = null
+        onrefresh?.()
+      } else {
+        csToast.error(data.error ?? '승인 실패')
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      approvingDocType = null
+    }
+  }
+
+  const CUSTOMER_DOC_STATE_LABEL: Record<CustomerDocState, string> = {
+    none: '미등록', incomplete: '필수 서류 미비', pending: '승인대기', approved: '승인완료',
+  }
 
   // PG 취소 실행 상태(Toss 결제 조회 실시간 연동) — 결제정보 탭 "PG 결제 정보" 하단에 표시
   interface PgStatusResp {
@@ -1774,6 +1840,84 @@
     const ts = lastSentMap.get(notifySentKey(rid, type))
     return ts != null && Date.now() - ts < RECENT_NOTIFY_TTL_MS
   }
+
+  // 승인하기·거부 — 패널 헤더와 하단 액션 영역이 같은 동작을 공유한다(헤더에 중복 배치, 2026-10-15)
+  // '예약승인' 버튼 상태(2026-10-15) — 자동발행 표준양식이 켜져 있을 때만 단계별로 바뀐다(꺼져 있으면 기존 '예약승인' 그대로).
+  //   done: 계약서가 이미 고객에게 발송됨 → '승인완료' / waiting: 서류 승인 대기·등록요청 발송 후 대기 → '승인대기' / ready: '예약승인'
+  let approveRequestedLocally = $state(false)
+  $effect(() => { void row.reservation_id; approveRequestedLocally = false })
+  const approveState = $derived.by((): 'ready' | 'waiting' | 'done' => {
+    if (!(row.status === 'hold' && !isRentalView)) return 'ready'
+    // 승인완료 = 예약승인을 실행했거나(approved_at, Migration #719) 계약서가 이미 고객에게 발송된 예약
+    if (row.signing_sent_at || customerDocs?.approved) return 'done'
+    if (customerDocs?.gate === 'approved') return 'ready'
+    // 예약승인을 눌러 서류 승인을 기다리는 예약만 '승인대기'(DB 표식 approve_requested_at 또는 방금 누른 화면 상태) — 누르지 않은 예약은 '예약승인'을 눌러 요청할 수 있어야 한다
+    return customerDocs?.approveRequested || approveRequestedLocally ? 'waiting' : 'ready'
+  })
+  // 계약서 탭 발행·발송 잠금 — 예약승인 전(신청대기·예약현황)에는 전자계약을 발행·발송할 수 없다. 서류 상태 조회 전(null)에는 잠그지 않는다.
+  // approvalTracking=false(승인 시각 컬럼이 없는 환경)면 잠그지 않는다 — 마이그레이션 미적용 때 계약서를 못 보내는 일 방지
+  const contractApprovalLocked = $derived(row.status === 'hold' && !isRentalView && customerDocs !== null && customerDocs.approvalTracking !== false && approveState !== 'done')
+  const approveLabel = $derived(approveState === 'done' ? '승인완료' : approveState === 'waiting' ? '승인대기' : '예약승인')
+
+  const approveEnhance: SubmitFunction = () => {
+    isSubmitting = true
+    return async ({ result, update }) => {
+      isSubmitting = false
+      let keepPanelOpen = false
+      if (result.type === 'success') {
+        customerDocsFetchedKey = null // 승인 상태(approved_at·표식)가 바뀌었으니 목록 새로고침 때 서류 상태를 다시 조회한다
+        const d = (result.data ?? {}) as { contractIssued?: boolean; contractSkipped?: string; contractExists?: boolean; identityRequested?: boolean; identityRequestSent?: boolean; identityPending?: boolean; contractNotIssued?: boolean; approvedManual?: boolean }
+        if (d.identityRequested) {
+          if (d.identityRequestSent === false) csToast.warning('승인 대기로 표시했어요. 24시간 안에 이미 등록요청을 보냈거나 발송 대상이 아니라 새 카드는 보내지 않았습니다. 서류가 승인되면 계약서가 자동 발송됩니다.')
+          else csToast.success('본인증명정보 등록요청을 고객에게 발송했습니다. 서류 승인 후 다시 예약승인을 눌러주세요.')
+          approveRequestedLocally = true
+          keepPanelOpen = true
+        } else if (d.identityPending) {
+          csToast.warning('본인증명정보 승인 대기 중입니다. 서류를 승인한 뒤 다시 예약승인을 눌러주세요.')
+          keepPanelOpen = true
+        } else if (d.contractIssued) {
+          csToast.success('계약서가 고객에게 발송되었습니다. 서명·결제가 끝나면 예약이 확정됩니다.')
+          keepPanelOpen = true
+          if (oncontractsent) {
+            // 신청대기 목록에서는 이 건이 '계약대기'로 빠지므로, 먼저 계약대기 칩으로 전환해 패널을 유지한다(기존 목록을 먼저 새로고침하면 패널이 닫힌다)
+            await oncontractsent(row.reservation_id)
+            return
+          }
+        } else if (d.approvedManual) {
+          // 자동발행 표준양식이 없는 경우 — 승인은 완료, 예약은 '계약대기' 칩으로 옮겨지고 계약서 탭에서 전자계약을 수동 발행·발송한다
+          csToast.success('예약승인이 완료되었습니다. 계약서 탭에서 전자계약을 발행·발송해 주세요.')
+          keepPanelOpen = true
+          if (oncontractsent) { await oncontractsent(row.reservation_id); return }
+        } else if (d.contractNotIssued) {
+          // 자동발행을 못 한 경우 — 승인은 완료(예약은 확정하지 않음), 사유를 해결하거나 계약서 탭에서 직접 발행한다
+          csToast.warning(`${d.contractSkipped ?? '계약서를 자동발행하지 못했어요.'} 예약승인은 완료됐습니다. 계약서 탭에서 직접 발행·발송해 주세요.`)
+          keepPanelOpen = true
+          if (oncontractsent) { await oncontractsent(row.reservation_id); return }
+        } else if (d.contractExists) {
+          csToast.warning(d.contractSkipped ?? '이 주문에는 이미 계약서가 있어요.')
+          keepPanelOpen = true
+        } else {
+          csToast.success('예약이 승인되었습니다.')
+          // 자동발행 표준양식이 있는데 발행하지 못한 경우 — 승인은 진행됐고, 계약서는 '계약서' 탭에서 직접 발행한다
+          if (d.contractSkipped) csToast.warning(d.contractSkipped)
+        }
+      } else csToast.error(actionErrorMessage(result))
+      // RSV-NAV-1(2026-09-08): update()가 완전히 끝난 뒤에만 onstatuschange?.() 실행 — 동시 발화 시 CMS 전체화면 로딩 오버레이가 풀리지 않는 현상 방지
+      await update()
+      // 예약 상태가 바뀌지 않은 결과(등록요청·승인대기·계약 발송)는 패널을 닫지 않는다 — 버튼이 '승인대기'·'승인완료'로 바뀐 것을 바로 보여준다
+      if (result.type === 'success' && !keepPanelOpen) onstatuschange?.()
+    }
+  }
+  const rejectEnhance: SubmitFunction = () => {
+    isSubmitting = true
+    return async ({ result, update }) => {
+      isSubmitting = false
+      if (result.type === 'success') csToast.success('예약이 거부되었습니다.')
+      else csToast.error(actionErrorMessage(result))
+      await update()
+      if (result.type === 'success') onstatuschange?.()
+    }
+  }
 </script>
 
 <div class="panel">
@@ -1789,6 +1933,18 @@
       {/if}
     </div>
     <div class="panel-header-actions">
+      {#if row.status === 'hold' && !isRentalView}
+        <!-- 승인하기·거부 — 하단 액션 영역과 동일 동작을 헤더에도 중복 배치(헤더 버튼 규격 .btn-header-action 그대로) -->
+        <form method="POST" action="/cms/reservation?/approveReservation" use:enhance={approveEnhance}>
+          <input type="hidden" name="reservation_id" value={row.reservation_id} />
+          <button type="submit" class="btn-header-action" disabled={isSubmitting || approveState !== 'ready'}>{approveLabel}</button>
+        </form>
+        <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
+          <input type="hidden" name="reservation_id" value={row.reservation_id} />
+          <input type="hidden" name="status" value="cancelled" />
+          <button type="submit" class="btn-header-action btn-header-action--danger" disabled={isSubmitting}>예약취소</button>
+        </form>
+      {/if}
       {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold' && row.status !== 'draft'}
         <!-- 예약변경: hold(미결제)+계약 리셋 — 전액취소 후 재조정 가능하게 -->
         <form
@@ -2723,51 +2879,17 @@
           {#if orderSiblings.length > 0}
             <p class="order-batch-note">
               이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 하나의 예약입니다.
-              승인하기를 누르면 주문의 모든 상품이 함께 승인되고 알림이 한 번에 발송됩니다.
+              예약승인을 누르면 주문의 모든 상품이 함께 처리되고, 계약서는 주문당 1건으로 고객에게 한 번에 발송됩니다.
             </p>
           {/if}
-          <form
-            method="POST"
-            action="/cms/reservation?/approveReservation"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') csToast.success('예약이 승인되었습니다.')
-                else csToast.error(actionErrorMessage(result))
-                // RSV-NAV-1(2026-09-08): update()(내부적으로 invalidateAll 수행)가 완전히
-                // 끝난 뒤에만 onstatuschange?.()(closePanel의 goto())를 실행 — 예전엔 이 둘이
-                // 동시에(순서 보장 없이) 발화해 CMS 레이아웃의 전체화면 로딩 오버레이
-                // (isNavigating, +layout.svelte)가 풀리지 않는 "무한로딩" 현상을 유발했다.
-                // 서버 처리·DB 반영 자체는 항상 정상 완료돼 있었고(새로고침 시 결과 반영 확인),
-                // 순수 클라이언트 네비게이션 경합 문제였다 — 중복 호출이던 onrefresh()는 제거
-                // (update()가 이미 동일하게 invalidateAll을 수행하므로 불필요).
-                await update()
-                if (result.type === 'success') onstatuschange?.()
-              }
-            }}
-          >
+          <form method="POST" action="/cms/reservation?/approveReservation" use:enhance={approveEnhance}>
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <button type="submit" class="btn-primary" disabled={isSubmitting}>승인하기</button>
+            <button type="submit" class="btn-primary" disabled={isSubmitting || approveState !== 'ready'}>{approveLabel}</button>
           </form>
-          <form
-            method="POST"
-            action="/cms/reservation?/updateStatus"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') csToast.success('예약이 거부되었습니다.')
-                else csToast.error(actionErrorMessage(result))
-                // RSV-NAV-1 — 위 승인하기와 동일 수정(순서 보장 + onrefresh 중복 제거)
-                await update()
-                if (result.type === 'success') onstatuschange?.()
-              }
-            }}
-          >
+          <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
             <input type="hidden" name="status" value="cancelled" />
-            <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>거부</button>
+            <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>예약취소</button>
           </form>
 
         <!-- 대여 라이프사이클 — 한 주문에 상품이 여러 개(주문 1건 = 1행, Migration 618, Q1 B안):
@@ -2952,6 +3074,37 @@
             </div>
           </div>
         </div>
+        <!-- 본인증명·외국인증명 등록 상태 — 고객 관리 패널의 '본인 증명' 행과 같은 배치(라벨 + 상태, 승인완료는 배지) -->
+        {#each [
+          { label: '본인 증명', type: 'identity' as const, info: customerDocs?.identity },
+          { label: '외국인 증명', type: 'foreign' as const, info: customerDocs?.foreign },
+        ] as doc (doc.label)}
+          <div class="info-row">
+            <span class="info-label">{doc.label}</span>
+            {#if customerDocsLoading && !customerDocs}
+              <span class="doc-state-empty">조회 중…</span>
+            {:else if !doc.info || doc.info.state === 'none'}
+              <span class="doc-state-empty">미등록</span>
+            {:else if doc.info.state === 'approved'}
+              <span class="doc-state-badge doc-state-ok">{CUSTOMER_DOC_STATE_LABEL.approved}</span>
+              <span class="doc-state-meta">{doc.info.count}개 · {doc.info.verifiedAt ? doc.info.verifiedAt.slice(0, 10) : '-'}</span>
+            {:else}
+              <span class="doc-state-badge doc-state-warn">{CUSTOMER_DOC_STATE_LABEL[doc.info.state]}</span>
+              <span class="doc-state-meta">{doc.info.count}개{doc.info.verifiedAt ? ` · ${doc.info.verifiedAt.slice(0, 10)}` : ''}</span>
+            {/if}
+            <!-- 고객 관리 패널과 같은 승인 동작 — 필수 서류를 갖춘 승인대기 건에만 [승인], 미비하면 안내 문구 (서버 /api/cms/approve-doc이 manager 이상·필수 조합을 다시 검사) -->
+            {#if doc.info?.state === 'pending' && canManagePaymentAndLocker}
+              <button
+                type="button"
+                class="btn-approve"
+                disabled={approvingDocType !== null}
+                onclick={() => approveCustomerDoc(doc.type)}
+              >{approvingDocType === doc.type ? '처리 중...' : '승인'}</button>
+            {:else if doc.info?.state === 'incomplete'}
+              <span class="doc-incomplete-hint">필수 서류 미비</span>
+            {/if}
+          </div>
+        {/each}
       </div>
     {/if}
 
@@ -3236,6 +3389,7 @@
         signingsentAt={row.signing_sent_at}
         reservationId={row.reservation_id}
         reservationStatus={row.status}
+        approvalLocked={contractApprovalLocked}
         productName={row.product_name}
         productCode={row.product_code}
         productCategory={row.product_category}
@@ -3381,6 +3535,27 @@
   /* 삭제 안전장치 토스트 표준(cms-uiux.md §0-10-B) — 전역 클래스가 아니라 화면마다
      ProductDetailPanel.svelte .btn-danger 정본을 그대로 복사하는 scoped 스타일.
      예약변경은 동일 구조의 퍼플 버전으로 짝을 맞춤(같은 헤더 버튼 그룹 내 크기 통일). */
+  /* 고객정보 탭 서류 상태 — 고객 관리 패널(.info-val-empty·.badge-approved)과 같은 색 언어 */
+  .doc-state-empty { font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .doc-state-badge {
+    display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
+    border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700;
+  }
+  .doc-state-ok   { background: rgba(16,185,129,0.10); color: var(--cs-success-light); }
+  .doc-state-warn { background: rgba(245,158,11,0.12); color: var(--cs-warning); }
+  /* 서류 승인 버튼·안내 — 고객 관리 패널(.btn-approve·.doc-incomplete-hint)과 같은 규격 */
+  .btn-approve {
+    margin-left: auto; min-width: 78px; text-align: center; flex-shrink: 0;
+    font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
+    border: 1px solid var(--cs-text-mid); border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
+  }
+  .btn-approve:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .btn-approve:disabled { opacity: 0.5; cursor: default; }
+  .doc-incomplete-hint { margin-left: auto; flex-shrink: 0; font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-warning); }
+  .doc-state-meta { margin-left: 8px; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+
   .btn-header-action {
     height: 44px;
     padding: 0 20px;

@@ -122,6 +122,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/cancel-reason',
       'src/routes/api/cms/reservations/[id]/confirm-cancel',
       'src/routes/api/cms/reservations/[id]/contract-data',
+      'src/routes/api/cms/reservations/[id]/customer-docs',
       'src/routes/api/cms/reservations/[id]/detail',
       'src/routes/api/cms/reservations/[id]/dhero',
       'src/routes/api/cms/reservations/[id]/dhero/cancel',

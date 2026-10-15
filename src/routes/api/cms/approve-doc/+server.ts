@@ -19,8 +19,9 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { sendPushToUser } from '$lib/server/push'
 import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
+import { autoIssueAfterDocApproval, type DocApprovalAutoIssueSummary } from '$lib/server/autoIssueOnDocApproval'
 
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async ({ request, locals, fetch }) => {
   const denied = await requireMenuAccessApi(locals, 'customers.list')
   if (denied) return denied
   const { session } = await locals.safeGetSession()
@@ -97,5 +98,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     console.error('[cms/approve-doc] identity_approved 카드 발송 실패(fail-soft):', e instanceof Error ? e.message : e)
   }
 
-  return json({ ok: true, approved_at: result.approved_at })
+  // '예약승인'을 눌렀던(승인 대기 중이던) 예약에 한해 전자계약을 자동 발행·발송한다(2026-10-15, Stephen 확정) — 실패해도 서류 승인 결과에는 영향 없다(fail-soft).
+  let contracts: DocApprovalAutoIssueSummary = { sent: 0, skippedMessages: [] }
+  try {
+    contracts = await autoIssueAfterDocApproval({ admin, fetch }, userId)
+  } catch (e) {
+    console.error('[cms/approve-doc] 승인 후 계약서 자동발행 실패(fail-soft):', e instanceof Error ? e.message : e)
+  }
+
+  return json({ ok: true, approved_at: result.approved_at, contractsSent: contracts.sent, contractsSkipped: contracts.skippedMessages })
 }
