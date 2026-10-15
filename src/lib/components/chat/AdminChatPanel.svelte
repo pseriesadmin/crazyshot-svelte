@@ -51,6 +51,9 @@
       foreign_verified_at: string | null
       foreign_doc_url: string | null
       foreign_doc_urls: string[] | null
+      identity_approved_at?: string | null
+      foreign_approved_at?: string | null
+      foreign_type?: string[] | null
     }
     subscription: { plan_name: string | null } | null
     reservations: Array<{

@@ -7,10 +7,10 @@ import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
-import { sendApprovalNotifications } from '$lib/server/sendApprovalNotifications'
+import { requestIdentityDocRegistration } from '$lib/server/identityDocRequest'
+import { getDocGateStatus, type DocGateStatus, type DocGateRow } from '$lib/utils/docApproval'
 import { clearIssuedContractContent, discardSentContract, cancelIssuedContract } from '$lib/server/clearIssuedContractHelper'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
-import { resolveApprovalNotifyPlan } from '$lib/server/reservationApprovalNotify'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
@@ -23,6 +23,7 @@ import { attachCancelPending } from '$lib/server/attachCancelPending'
 import { resolveRepresentativeReservationId } from '$lib/server/resolveOrderRepresentative'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
+import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult } from '$lib/server/contractAutoIssue'
 
 export interface RentalListRow {
   /** 고객이 취소했고 관리자 취소확인 전("예약취소" 배지·헤더 [예약취소]=취소확인) — /cms/rentals 로더가 부착 */
@@ -189,6 +190,17 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // 총 건수는 링크 예약 행을 앞에 붙이기 "전" 원 목록 기준으로 확정(붙인 행의 total_count는 항상 1)
   const totalCount = rentals[0]?.total_count ?? 0
   // 링크로 연 취소 예약이 이 페이지(30건)에 없으면 그 행만 따로 가져와 맨 위에 붙인다 — 목록에 없으면 패널이 열리자마자 닫힌다(총 건수·페이지 수는 영향 없음)
+  // 계약대기 칩도 같은 보정 — 방금 계약서를 발송한 예약이 다음 페이지에 있어도 패널이 열려 있게 한다
+  if (contractPending && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
+    const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
+      p_status: null, p_search: null, p_date_from: null, p_date_to: null,
+      p_page: 1, p_per_page: 1, p_include_statuses: ['hold'], p_reservation_id: selectedId,
+      p_group_by_order: true,
+    })
+    if (selErr) console.error('[cms/reservation] 계약대기 링크 예약 조회 실패:', selErr.message)
+    const one = ((selOne ?? []) as RentalListRow[])[0]
+    if (one) rentals.unshift(one)
+  }
   if (isCancelledTab && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
     const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
       p_status: null, p_search: null, p_date_from: null, p_date_to: null,
@@ -219,7 +231,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 }
 
 export const actions: Actions = {
-  approveReservation: async ({ request, locals }) => {
+  approveReservation: async ({ request, locals, fetch }) => {
     const denied = await requireMenuAccessAction(locals, 'rental.reservation')
     if (denied) return denied
     const { session } = await locals.safeGetSession()
@@ -257,40 +269,101 @@ export const actions: Actions = {
 
     // 주(主) 승인 대상 — 요청한 예약이 hold면 그것, 아니면 주문 내 첫 hold(없으면 요청 예약 그대로 시도해 기존 에러를 돌려준다)
     const primaryId = holdIds.includes(reservationId) ? reservationId : (holdIds[0] ?? reservationId)
-    const { data: result, error } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: primaryId,
-      p_new_status:     'confirmed',
-    })
 
-    if (error) return fail(500, { message: error.message })
-    const res = result as { ok: boolean; error?: string } | null
-    if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
-
-    // 나머지 hold 형제 — 개별 실패는 건너뛰되(fail-soft) 흔적은 남긴다. 알림 판단(아래)이 실제 상태를 다시 읽는다.
-    for (const sid of holdIds.filter((id) => id !== primaryId)) {
+    // 본인증명정보 미등록 고객이면 등록요청(기존 identity_request 카드 + 푸시 + SMS, CMS 안내문장 반영)을 함께 보낸다(2026-10-15, Stephen 확정).
+    // 서류 승인대기·승인완료·탈퇴 계정, 24시간 내 같은 카드가 있는 경우는 헬퍼가 건너뛴다. 실패해도 승인 결과에는 영향 없다(fail-soft).
+    // 반환값 = 요청 카드가 실제로 발송됐는지(24시간 내 중복·탈퇴 계정·오류면 false — 화면 안내가 실제 발송과 어긋나지 않게, QA MINOR 3)
+    const sendIdentityRequest = async (): Promise<boolean> => {
       try {
-        const { data: sr, error: se } = await admin.rpc('update_reservation_status', {
-          p_reservation_id: sid,
-          p_new_status:     'confirmed',
-        })
-        const sres = sr as { ok: boolean; error?: string } | null
-        if (se || !sres?.ok) {
-          console.error('[cms/reservation] approveReservation 형제 승인 실패:', sid, se?.message ?? sres?.error)
-        }
-      } catch (err) {
-        console.error('[cms/reservation] approveReservation 형제 승인 예외:', sid, err)
-      }
+        const { data: ownerRow } = await admin
+          .from('rental_reservations').select('user_id').eq('id', primaryId).maybeSingle()
+        const ownerId = (ownerRow as { user_id: string | null } | null)?.user_id
+        if (ownerId) return (await requestIdentityDocRegistration(admin, ownerId)).requested
+      } catch { /* 등록요청 발송 실패는 무시 */ }
+      return false
+    }
+    // 승인 요청 표식 비우기(계약서 발송·확정으로 더는 대기하지 않는 예약) — 옛 표식이 남아 다음 서류 승인 때 뜻밖에 자동 발송되는 일을 막는다(QA MINOR 1, fail-soft)
+    const clearApproveRequested = async (): Promise<void> => {
+      try {
+        await admin.from('rental_reservations').update({ approve_requested_at: null }).in('id', holdIds).not('approve_requested_at', 'is', null)
+      } catch { /* 무시 */ }
     }
 
-    // 예약 승인 채팅 알림 + 고객 푸시 — 공용 헬퍼로 통합 (NTF-C2 수정, 2026-08-31)
-    // mode='hold'(같은 주문의 다른 상품 미승인)이면 채팅·푸시 둘 다 보류 — service-operations.md §4/§15
-    // fail-soft(2026-09-08 수정) — updateStatus 액션과 동일한 무한로딩 결함 방지(예약 id 139
-    // 사례). 상태전이는 이미 위에서 성공했으므로 알림 실패가 "승인하기" 버튼 응답을 막으면 안 됨.
+    // '예약승인'은 예약을 확정하지 않는다(Stephen 2026-10-15) — 계약완료(confirmed)는 고객의 전자계약 서명 + 결제가 모두 끝났을 때만 자동으로 된다(§9, try_confirm_reservation).
+    // 이 액션은 서류 상태에 따라 '고객에게 무엇을 요청할지'만 결정한다:
+    //   ① 본인증명정보 미등록·필수 서류 미비 → 등록요청(채팅 카드·푸시·SMS) 발송 + 승인 요청 표식, 화면 버튼은 '승인대기'
+    //   ② 서류는 등록했으나 승인 대기 → 안내만(서류 승인 시 표식이 있는 예약에 계약서 자동 발행·발송)
+    //   ③ 서류 승인 완료 → 자동발행 표준양식(양식 화면의 토글 ON)으로 계약서를 만들어 고객에게 서명 요청(채팅 카드·푸시·SMS)까지 자동 발송, 예약은 신청대기 유지
+    //   표준양식이 없거나 자동발행을 못 하면 확정하지 않는다 — 승인완료(approved_at)로 기록하고 관리자가 계약서 탭에서 수동 발행·발송한다.
+    if (holdIds.length === 0) return fail(400, { message: '신청대기 상태의 예약이 아니어서 예약승인을 할 수 없어요.' })
+
+    let gate: DocGateStatus = 'none'
     try {
-      const notifyPlan = await resolveApprovalNotifyPlan(admin, primaryId)
-      await sendApprovalNotifications(admin, primaryId, notifyPlan)
-    } catch { /* 승인 알림 발송 실패는 무시 */ }
-    return { ok: true }
+      const { data: ownerRow } = await admin
+        .from('rental_reservations').select('user_id').eq('id', primaryId).maybeSingle()
+      const ownerId = (ownerRow as { user_id: string | null } | null)?.user_id
+      if (ownerId) {
+        const { data: prof } = await admin
+          .from('user_profiles')
+          .select(
+            'identity_doc_url, identity_type, identity_verified_at, identity_approved_at, ' +
+              'foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at',
+          )
+          .eq('id', ownerId)
+          .maybeSingle()
+        gate = getDocGateStatus(prof as DocGateRow | null)
+      }
+    } catch (err) {
+      console.error('[cms/reservation] approveReservation 서류 상태 조회 실패:', reservationId, err)
+    }
+
+    // 서류가 승인될 때까지 기다리는 예약 표식 — 관리자가 고객 서류를 승인하면 이 표식이 있는 예약에만 계약서가 자동 발행·발송된다(Migration #718, fail-soft)
+    const markApproveRequested = async (): Promise<void> => {
+      try {
+        await admin.from('rental_reservations').update({ approve_requested_at: new Date().toISOString() }).in('id', holdIds)
+      } catch { /* 표식 기록 실패는 무시 — 서류 승인 후 다시 예약승인을 누르면 된다 */ }
+    }
+    if (gate === 'pending') {
+      await markApproveRequested()
+      return { ok: true, identityPending: true }
+    }
+    if (gate !== 'approved') {
+      await markApproveRequested()
+      const requestSent = await sendIdentityRequest()
+      return { ok: true, identityRequested: true, identityRequestSent: requestSent }
+    }
+
+    // 서류 승인 완료 고객 — '예약승인' 완료를 기록한다(approved_at, Migration #719). 이 값이 있으면 화면 버튼은 '승인완료', 예약은 '계약대기' 칩으로 옮겨지고,
+    // 예약의 계약서 탭에서 전자계약을 발행·발송할 수 있게 된다(승인 전에는 발행 불가). 자동발행이 되든 안 되든(토글 OFF·실패 포함) 승인 자체는 완료다.
+    try {
+      await admin.from('rental_reservations').update({ approved_at: new Date().toISOString() }).in('id', holdIds).is('approved_at', null)
+    } catch { /* 기록 실패는 무시 — 다시 예약승인을 누르면 된다 */ }
+
+    if (!(await hasAutoIssueTemplate(admin))) {
+      // 자동발행 표준양식이 꺼져 있으면 관리자가 계약서 탭에서 수동으로 발행·발송한다
+      await clearApproveRequested()
+      return { ok: true, approvedManual: true }
+    }
+
+    let autoIssue: AutoIssueResult
+    try {
+      autoIssue = await autoIssueContractOnApproval({ admin, fetch }, primaryId)
+    } catch (err) {
+      console.error('[cms/reservation] approveReservation 계약서 자동발행 예외:', reservationId, err)
+      autoIssue = { status: 'skipped', reason: 'issue_failed', message: '계약서 자동발행 중 오류가 발생해 자동발행하지 못했어요.' }
+    }
+    if (autoIssue.status === 'sent') {
+      await clearApproveRequested()
+      return { ok: true, contractIssued: true, contractTitle: autoIssue.templateTitle }
+    }
+    // 이미 계약서가 있는 주문은 다시 눌러도 새로 만들지 않는다
+    if (autoIssue.status === 'skipped' && autoIssue.reason === 'contract_exists') {
+      await clearApproveRequested()
+      return { ok: true, contractExists: true, contractSkipped: autoIssue.message }
+    }
+    // 그 밖의 건너뜀(양식 문제·발송 실패·일시 오류 등)도 확정하지 않는다 — 승인은 완료(approved_at)됐으므로 계약서 탭에서 직접 발행하도록 사유만 안내
+    await clearApproveRequested()
+    return { ok: true, contractNotIssued: true, contractSkipped: autoIssue.status === 'skipped' ? autoIssue.message : '계약서를 자동발행하지 못했어요.' }
   },
 
   // 플랜 §3: 예약변경 — Toss 결제 취소 → revert_reservation_order_to_hold
@@ -441,6 +514,13 @@ export const actions: Actions = {
     const data      = await request.formData()
     const reservationId = Number(data.get('reservation_id'))
     const newStatus     = data.get('status') as string
+
+    // 계약완료(confirmed)로의 직접 전환은 이 액션으로 하지 않는다(Stephen 2026-10-15) — 서명·결제 없이 신청대기를 확정하는 경로를 서버에서 막는다.
+    // 계약완료는 고객의 전자계약 서명 + 결제가 모두 끝났을 때만 try_confirm_reservation이 자동 전환한다(service-operations.md §9).
+    // (confirmed 이후 단계 전환 shipped·in_use 등은 영향 없음 — 이 값으로 들어오는 정상 화면 호출은 없다)
+    if (newStatus === 'confirmed') {
+      return fail(400, { message: '계약완료는 고객의 전자계약 서명과 결제가 모두 끝나야 자동으로 전환돼요. 직접 변경할 수 없습니다.' })
+    }
 
     // cancelled 분기 — Defect 1·2 수정 (2026-09-14)
     // Defect 1: 이전 코드는 cancel_reservation_payment(순수 SQL RPC)만 호출해

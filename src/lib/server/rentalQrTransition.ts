@@ -22,6 +22,11 @@ const AUTO_NOTIFY: Partial<Record<string, string>> = {
   returned:         'rental_complete',
 }
 
+// QR 스캔·수동 반출입으로 전이할 수 있는 상태만 허용한다(2026-10-15, sp3 2차 검수 M-1).
+// ⛔ 'confirmed'(계약완료)는 허용하지 않는다 — 서명·결제 없이 신청대기를 계약완료로 올리는 서버 경로가 되기 때문이다(service-operations.md §9).
+//    계약완료는 고객의 서명 + 결제 후 try_confirm_reservation만 전환한다. 취소·파손 등도 이 경로의 책임이 아니다.
+export const QR_ALLOWED_NEW_STATUSES: ReadonlySet<string> = new Set(['shipped', 'in_use', 'return_requested', 'returned', 'completed'])
+
 export interface RentalQrTransitionResult {
   ok: boolean
   message?: string
@@ -34,6 +39,7 @@ export async function processRentalQrTransition(
 ): Promise<RentalQrTransitionResult> {
   const { reservationId, newStatus, productId, userId } = params
   if (!reservationId || !newStatus) return { ok: false, message: '잘못된 요청' }
+  if (!QR_ALLOWED_NEW_STATUSES.has(newStatus)) return { ok: false, message: '잘못된 요청' }
 
   const { data: result, error: rpcErr } = await admin.rpc('update_reservation_status', {
     p_reservation_id: reservationId,

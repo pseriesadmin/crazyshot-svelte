@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { identityRequiredMet, foreignRequiredMet } from '$lib/utils/docApproval'
   import MoreDotsIconButton from '$lib/components/common/MoreDotsIconButton.svelte'
 
   // GSD-6: P2-1 고객 상세정보 패널 — get_chat_customer_detail RPC 응답 렌더링
@@ -33,6 +34,10 @@
       foreign_verified_at: string | null
       foreign_doc_url: string | null
       foreign_doc_urls: string[] | null
+      /** 승인 시각·외국인 서류 종류 — 없으면(구 응답) 승인 상태를 판정하지 않고 '등록완료'로 표시 */
+      identity_approved_at?: string | null
+      foreign_approved_at?: string | null
+      foreign_type?: string[] | null
     }
     subscription: {
       plan_name: string | null
@@ -72,20 +77,47 @@
     return expiresAt.getTime() < Date.now()
   }
 
-  type DocStatus = { registered: boolean; expired: boolean; count: number }
+  // 서류 상태 — 필수 서류 조합 충족 여부와 관리자 승인 여부까지 반영한다(2026-10-15).
+  //   none: 미등록 / incomplete: 일부만 등록(필수 조합 미충족) / pending: 등록했으나 승인 대기(승인 취소·재제출 포함) / approved: 승인 완료
+  //   승인 시각 필드가 응답에 없으면(approvedAt === undefined) 승인 판정 없이 기존처럼 등록 여부만 본다('registered').
+  type DocState = 'none' | 'incomplete' | 'pending' | 'approved' | 'registered'
+  type DocStatus = { state: DocState; registered: boolean; expired: boolean; count: number }
 
-  function docStatus(urls: string[] | null | undefined, verifiedAt: string | null): DocStatus {
+  function docStatus(
+    urls: string[] | null | undefined,
+    verifiedAt: string | null,
+    approvedAt: string | null | undefined,
+    requiredMet: boolean,
+  ): DocStatus {
     const count = urls?.length ?? 0
     const registered = count > 0
     const expired = registered && isDocExpired(verifiedAt)
-    return { registered, expired, count }
+    let state: DocState = 'none'
+    if (registered) {
+      if (approvedAt === undefined) state = 'registered'
+      else if (!requiredMet) state = 'incomplete'
+      else if (approvedAt && (!verifiedAt || approvedAt >= verifiedAt)) state = 'approved'
+      else state = 'pending'
+    }
+    return { state, registered, expired, count }
   }
 
-  let identityStatus = $derived(docStatus(detail?.profile.identity_doc_url, detail?.profile.identity_verified_at ?? null))
-  let foreignStatus  = $derived(docStatus(detail?.profile.foreign_doc_urls, detail?.profile.foreign_verified_at ?? null))
+  // 요청 버튼: 미등록·필수 서류 미비·만료일 때만(승인대기·승인완료는 이미 등록한 상태)
+  function needsRequest(st: DocStatus): boolean {
+    return !st.registered || st.expired || st.state === 'incomplete'
+  }
+
+  let identityStatus = $derived(docStatus(
+    detail?.profile.identity_doc_url, detail?.profile.identity_verified_at ?? null,
+    detail?.profile.identity_approved_at, identityRequiredMet(detail?.profile.identity_type),
+  ))
+  let foreignStatus  = $derived(docStatus(
+    detail?.profile.foreign_doc_urls, detail?.profile.foreign_verified_at ?? null,
+    detail?.profile.foreign_approved_at, foreignRequiredMet(detail?.profile.foreign_type),
+  ))
 
   const STATUS_KO: Record<string, string> = {
-    hold: '신청대기', confirmed: '계약완료', shipped: '반출중', in_use: '대여중',
+    draft: '임시', hold: '신청대기', confirmed: '계약완료', shipped: '반출중', in_use: '대여중',
     return_requested: '반납중', returned: '반납완료', completed: '완료', cancelled: '취소', expired: '만료',
     damage_claimed: '파손신고',
   }
@@ -99,6 +131,16 @@
     if (score >= 70) return 'score-mid'
     if (score >= 50) return 'score-low'
     return 'score-critical'
+  }
+
+  // 전화번호 표시 — 숫자만 저장된 값에 하이픈을 넣어 보여 준다(CMS 고객 패널 formatPhone과 같은 규칙, 표시 전용)
+  function fmtPhone(raw: string | null | undefined): string {
+    const d = (raw ?? '').replace(/[^0-9]/g, '')
+    if (!d) return '—'
+    if (d.length <= 3) return d
+    if (d.length <= 7) return `${d.slice(0, 3)}-${d.slice(3)}`
+    if (d.length <= 11) return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`
+    return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7, 11)}`
   }
 
   function fmtDate(iso: string | null): string {
@@ -142,7 +184,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">전화번호</span>
-          <span class="info-value">{detail?.profile.phone ?? '—'}</span>
+          <span class="info-value">{fmtPhone(detail?.profile.phone)}</span>
         </div>
         <div class="info-row">
           <span class="info-label">회원코드</span>
@@ -183,12 +225,18 @@
           <span class="info-value doc-value">
             {#if identityStatus.expired}
               <span class="doc-status doc-expired">만료됨</span>
+            {:else if identityStatus.state === 'approved'}
+              <span class="doc-status doc-ok">승인완료 ({identityStatus.count}개, {fmtDate(detail?.profile.identity_verified_at ?? null)})</span>
+            {:else if identityStatus.state === 'pending'}
+              <span class="doc-status doc-pending">승인대기 ({identityStatus.count}개, {fmtDate(detail?.profile.identity_verified_at ?? null)})</span>
+            {:else if identityStatus.state === 'incomplete'}
+              <span class="doc-status doc-expired">필수 서류 미비 ({identityStatus.count}개)</span>
             {:else if identityStatus.registered}
               <span class="doc-status doc-ok">등록완료 ({identityStatus.count}개, {fmtDate(detail?.profile.identity_verified_at ?? null)})</span>
             {:else}
               <span class="doc-status doc-none">미등록</span>
             {/if}
-            {#if !identityStatus.registered || identityStatus.expired}
+            {#if needsRequest(identityStatus)}
               <button
                 type="button"
                 class="doc-request-btn"
@@ -203,12 +251,18 @@
           <span class="info-value doc-value">
             {#if foreignStatus.expired}
               <span class="doc-status doc-expired">만료됨</span>
+            {:else if foreignStatus.state === 'approved'}
+              <span class="doc-status doc-ok">승인완료 ({foreignStatus.count}개, {fmtDate(detail?.profile.foreign_verified_at ?? null)})</span>
+            {:else if foreignStatus.state === 'pending'}
+              <span class="doc-status doc-pending">승인대기 ({foreignStatus.count}개, {fmtDate(detail?.profile.foreign_verified_at ?? null)})</span>
+            {:else if foreignStatus.state === 'incomplete'}
+              <span class="doc-status doc-expired">필수 서류 미비 ({foreignStatus.count}개)</span>
             {:else if foreignStatus.registered}
               <span class="doc-status doc-ok">등록완료 ({foreignStatus.count}개, {fmtDate(detail?.profile.foreign_verified_at ?? null)})</span>
             {:else}
               <span class="doc-status doc-none">미등록</span>
             {/if}
-            {#if !foreignStatus.registered || foreignStatus.expired}
+            {#if needsRequest(foreignStatus)}
               <button
                 type="button"
                 class="doc-request-btn"
@@ -401,6 +455,7 @@
   .doc-status.doc-ok      { color: var(--cs-success-light); }
   .doc-status.doc-none    { color: var(--cs-text-light); }
   .doc-status.doc-expired { color: var(--cs-warning); }
+  .doc-status.doc-pending { color: var(--cs-warning); white-space: nowrap; }
 
   /* cms-uiux.md §0-10-F DetailPanel 전용 버튼 — 소형(행 단위 실행 버튼) */
   .doc-request-btn {
@@ -450,6 +505,7 @@
   }
 
   /* 대여 상태별 색상 (rental-lifecycle.md 기준) */
+  .status-draft            { background: rgba(59,47,138,0.08); color: var(--cs-purple); }
   .status-hold             { background: rgba(255,69,0,0.1);  color: var(--cs-orange); }
   .status-confirmed        { background: rgba(59,47,138,0.1); color: var(--cs-purple); }
   .status-shipped,
