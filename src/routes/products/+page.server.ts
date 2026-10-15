@@ -1,16 +1,17 @@
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
-import { attachCardPrices, fetchGridRows, mapGridRows, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
+import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
   const urlCategory = url.searchParams.get('category') ?? 'all'
-  // "전체" 목록 무한스크롤 — 처음 INFINITE_INITIAL개만 서버에서 내려주고, 이후 10개씩은 클라이언트가
-  // 목록 전용 엔드포인트(/products/_more)로 가져온다(페이지 전체 load 재실행 없음). 카테고리 미선택(all)에서만 적용.
+  // 목록 무한스크롤 — 처음 INFINITE_INITIAL개만 서버에서 내려주고, 이후 10개씩은 클라이언트가
+  // 목록 전용 엔드포인트(/products/_more)로 가져온다(페이지 전체 load 재실행 없음).
+  // 2026-10-15: '전체'뿐 아니라 카테고리를 선택한 목록도 같은 무한스크롤(노출 수량 상한 없음)로 동작한다.
   const INFINITE_INITIAL = 20
-  const infiniteMode = urlCategory === 'all'
-  const infiniteLimit = infiniteMode ? INFINITE_INITIAL : 0
+  const infiniteMode = true
+  const infiniteLimit = INFINITE_INITIAL
   // 랜덤 순서 시드 — 이후 추가 조회에서도 같은 순서를 유지하려고 클라이언트가 그대로 다시 보낸다
   const seed = url.searchParams.get('seed') ?? Math.random().toString(36).slice(2, 10)
 
@@ -35,7 +36,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const settings = ((settingsRaw as unknown) as Record<string, unknown>) ?? {}
 
   type HeroSettings     = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
-  type GridSettings     = { category: string; count: number; sort: string }
+  type GridSettings     = { category: string; count: number; sort: string; fixedProducts?: { id: string; order: number }[]; fixedByCategory?: Record<string, { id: string; order: number }[]> }
   type MdSettings       = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
   type CatSettings      = { items: { code_id: string; icon_key: string; sort_order: number }[] }
   type KeywordsSettings = { items: string[] }
@@ -87,6 +88,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 모바일 목록·카테고리 선택 시 목록은 기존 CMS 그리드 설정 개수 그대로 사용
   const mobileGridCount = gridSettings.count === 0 ? 100 : (gridSettings.count || 16)
 
+  // 지금 그리드에 적용할 카테고리 — URL ?category= 가 CMS 그리드 설정보다 우선(null = 전체)
+  const gridCategory: string | null = resolveCategoryCase(
+    urlCategory !== 'all'
+      ? urlCategory
+      : (gridSettings.category === 'all' ? null : gridSettings.category),
+    CMS_CATEGORIES.map((c) => c.id),
+  )
+
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)
 
@@ -99,14 +108,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
     // 상품 그리드 — 노출 기준: CMS 노출 순서 설정(최신/랜덤/조회수/렌탈 많은 순, PC·모바일 공통)
     // URL ?category= 파라미터가 CMS 그리드 설정보다 우선. RPC 실패 시 search_products(최신순)로 폴백(공용 모듈)
-    fetchGridRows(locals.supabase, {
-      category: urlCategory !== 'all'
-        ? urlCategory
-        : (gridSettings.category === 'all' ? null : gridSettings.category),
+    // 노출 순서가 '고정노출 정렬'이면 관리자가 지정한 상품을 지정 순서대로 맨 앞에 두고 나머지는 조회수순으로 잇는다
+    fetchGridRowsWithFixed(locals.supabase, {
+      category: gridCategory,
       sort: resolveGridSort(gridSettings.sort),
       limit: infiniteMode ? infiniteLimit : mobileGridCount,
       seed,
       userId: session?.user.id ?? null,
+      // 고정 목록은 지금 보여 줄 카테고리(전체 포함)별로 따로 설정된 것을 쓴다
+      fixedIds: gridSettings.sort === GRID_SORT_FIXED ? pickFixedIdsForCategory(gridSettings, gridCategory) : [],
     }),
 
     // MD 추천 픽

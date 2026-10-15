@@ -294,7 +294,7 @@
     loadingMore = true
     try {
       const res = await fetch(
-        `/products/_more?offset=${gridAll.length}&limit=${INFINITE_STEP}&seed=${encodeURIComponent(listSeed)}`,
+        `/products/_more?offset=${gridAll.length}&limit=${INFINITE_STEP}&seed=${encodeURIComponent(listSeed)}${data.urlCategory && data.urlCategory !== 'all' ? `&category=${encodeURIComponent(data.urlCategory)}` : ''}`,
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as { products: ProductCard[]; wishedIds: string[]; hasMore: boolean }

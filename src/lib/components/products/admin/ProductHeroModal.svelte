@@ -64,7 +64,6 @@
 
   const BANNER_KEY = 'product_page_category_banners'
   const isHero = settingKey === 'product_page_hero'
-  let selectedOpen = $state(true)
   // 카테고리 배너 행 아코디언 — 기본 닫힘(행이 길어 목록 파악이 어려움), 펼친 행의 category_id 목록
   let openBanners = $state<string[]>([])
   function toggleBanner(id: string): void {
@@ -381,22 +380,20 @@
     <div class="group-wrap">
     <div class="section">
       <p class="section-label">노출 방식</p>
-      <div class="radio-group">
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="fixed" checked={mode === 'fixed'} onchange={() => (mode = 'fixed')} />
-          <span>고정 순서</span>
-        </label>
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="random" checked={mode === 'random'} onchange={() => (mode = 'random')} />
-          <span>랜덤 노출</span>
-        </label>
+      <div class="combo-wrap" role="group" aria-label="노출 방식">
+        <button type="button" class="combo-btn" class:combo-btn-active={mode === 'fixed'} aria-pressed={mode === 'fixed'} onclick={() => (mode = 'fixed')}>
+          <span class="combo-label">고정 순서</span>
+        </button>
+        <button type="button" class="combo-btn" class:combo-btn-active={mode === 'random'} aria-pressed={mode === 'random'} onclick={() => (mode = 'random')}>
+          <span class="combo-label">랜덤 노출</span>
+        </button>
       </div>
     </div>
 
     <!-- 상품 추가 + 선택된 상품 — 카드형 그룹 -->
     <div class="group-products">
     <div class="section">
-      <p class="section-label">상품 추가 <span class="count-badge">{selected.length}/{MAX_ITEMS}</span></p>
+      <p class="section-label">상품 추가 <span class="count-badge count-badge-end">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
         <SuggestPicker
           id="product-search"
@@ -442,29 +439,16 @@
     <!-- 선택된 상품 목록 (드래그 순서) -->
     {#if selected.length > 0}
       <div class="section">
-        <!-- 아코디언 — 화살표는 공통 ChevronIcon(방향: 열림=up / 닫힘=down) -->
-        <button
-          type="button"
-          class="acc-head"
-          aria-expanded={selectedOpen}
-          aria-controls="selected-products-panel"
-          onclick={() => (selectedOpen = !selectedOpen)}
-        >
-          <span class="section-label">선택된 상품 <span class="acc-hint">드래그로 순서 변경</span></span>
-          <ChevronIcon direction={selectedOpen ? 'up' : 'down'} />
-        </button>
-        {#if selectedOpen}
-          <div id="selected-products-panel">
-            <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
-              {#snippet renderItem(item)}
-                <div class="selected-row">
-                  <span class="selected-name">{item.name}</span>
-                  <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
-                </div>
-              {/snippet}
-            </CmsDragList>
-          </div>
-        {/if}
+        <div id="selected-products-panel">
+          <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
+            {#snippet renderItem(item)}
+              <div class="selected-row">
+                <span class="selected-name">{item.name}</span>
+                <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
+              </div>
+            {/snippet}
+          </CmsDragList>
+        </div>
       </div>
     {:else}
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
@@ -669,7 +653,6 @@
     text-align: left;
   }
   .acc-head--row { width: auto; flex: 1; gap: 8px; justify-content: space-between; } /* 카테고리명 좌 · 화살표 우측 끝 */
-  .acc-hint { font-size: 11px; color: var(--cs-text-light); }
 
   /* front 관리모달 섹션 라벨 표준(front-uiux.md §9-2-A ③) */
   .section-label {
@@ -682,6 +665,8 @@
     gap: 6px;
   }
 
+  .count-badge-end { margin-left: auto; } /* 상품 추가 개수 배지 — 우측 끝 */
+
   .count-badge {
     background: rgba(59, 47, 138, 0.1);
     color: var(--cs-purple);
@@ -690,9 +675,38 @@
     font-size: 11px;
   }
 
-  .radio-group {
+  /* 콤보 버튼 선택 그룹 — front-uiux.md §16 표준(PC 기본 + 모바일 오버라이드) */
+  /* 상품 그리드 설정 모달의 노출 순서 콤보와 같은 규격: 버튼 폭 동일(가장 긴 버튼 기준) · 행/열 간격 12px/6px · 라벨 --text-pc-script-12 */
+  .combo-wrap {
+    display: inline-grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px 6px;
+    align-self: flex-start;
+  }
+  .combo-btn {
     display: flex;
-    gap: 16px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: var(--radius-xl);
+    border: 1.5px solid #DCDCDC;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.18s;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .combo-btn:hover { background: #F5F4FA; } /* 호버는 BG 색상 변경만 */
+  .combo-btn-active,
+  .combo-btn-active:hover {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+  }
+  .combo-label { font: var(--text-pc-script-12); color: var(--cs-text); }
+  .combo-btn-active .combo-label { color: #fff; }
+  @media (max-width: 640px) {
+    .combo-btn   { padding: 8px 12px; }
   }
 
   .radio-opt {
@@ -844,8 +858,15 @@
   /* 카드형 — 카테고리 배너 행(.banner-row)과 동일한 연보라 카드 */
   .group-products {
     display: flex; flex-direction: column; gap: 16px;
-    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;
+    background: var(--cs-lilac); border-radius: var(--radius-md); padding: 20px;
   }
+  /* 상품 모달 카드 — 상품 그리드 모달 '고정노출 설정' 카드와 동일 규격(패딩 20px · 제목 12px/700/보조색 · 입력창↔목록 여백 12px) */
+  .group-products .section-label {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+  #selected-products-panel { margin-top: 12px; }
   .banner-row {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;
