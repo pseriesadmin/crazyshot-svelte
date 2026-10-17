@@ -61,7 +61,12 @@
   })
 </script>
 
-<div style="max-width: 900px; margin: 0 auto; padding: 16px" data-groups={groupCount}>
+<!-- ?scroll=1 : CMS 폼 영역처럼 안쪽 여백(20px)이 있는 스크롤 상자 안에 편집기를 둔다(도구줄 고정 위치 검증) -->
+<div
+  id="e2e-scroller"
+  style={page.url.searchParams.get('scroll') === '1' ? 'height: 600px; overflow: auto; padding: 20px; background: #ECEBF4' : 'max-width: 900px; margin: 0 auto; padding: 16px'}
+  data-groups={groupCount}
+>
   {#if which === 'viewer'}
     <button type="button" id="open-viewer" onclick={() => { vOpen = true }}>뷰어 열기</button>
     {#if vOpen}

@@ -124,6 +124,48 @@ test.describe('상품설명 편집기(RichContentEditor)', () => {
     await expect(page.locator('.rc-host .ProseMirror .rc-images')).not.toHaveAttribute('data-width', '100')
   })
 
+  test('안쪽 여백이 있는 스크롤 상자 안에서도 서식 도구줄이 스크롤 영역 맨 위에 딱 붙는다(위 틈 없음)', async ({ page }) => {
+    await page.goto(URL_RICH + '&n=2&scroll=1')
+    await page.locator('.rc-host .ProseMirror .rc-fig img').first().waitFor()
+    const box = page.locator('#e2e-scroller')
+    const wrap = page.locator('.rc-toolbar-wrap')
+    const topOf = async (loc: typeof box) => (await loc.boundingBox())!.y
+    // 스크롤 전: 여백 20px 아래에 도구줄(원래 위치)
+    expect(Math.round((await topOf(wrap)) - (await topOf(box)))).toBe(20)
+    await box.evaluate((el) => { el.scrollTop = 400 })
+    await expect.poll(async () => Math.round((await topOf(wrap)) - (await topOf(box)))).toBe(0) // 스크롤 영역 맨 위에 붙음
+    // 도구줄 위쪽 경계 바로 위(스크롤 영역 맨 위 1px)에 편집 내용이 비치지 않는다 = 그 지점의 맨 앞 요소가 도구줄
+    const hit = await page.evaluate(() => {
+      const b = document.querySelector('#e2e-scroller')!.getBoundingClientRect()
+      const el = document.elementFromPoint(b.x + 200, b.y + 2)
+      return !!el?.closest('.rc-toolbar-wrap')
+    })
+    expect(hit).toBe(true)
+  })
+
+  test('아래쪽 끝 손잡이를 끌어 편집 영역을 넓히고, 방향키·더블클릭으로 조절·복귀', async ({ page }) => {
+    await open(page, URL_RICH, '.rc-host .ProseMirror')
+    const wrap = page.locator('.rc-canvas-wrap')
+    const grip = page.getByRole('separator', { name: /편집 영역 높이 조절/ })
+    await expect(grip).toBeVisible()
+    const h0 = (await wrap.boundingBox())!.height
+    await grip.evaluate((el) => el.scrollIntoView({ block: 'center' })) // 고정 도구줄에 가려지지 않고, 끌 위치까지 화면 안에 있게(화면 가운데)
+    const g = (await grip.boundingBox())!
+    await drag(page, { x: g.x + g.width / 2, y: g.y + g.height / 2 }, { x: g.x + g.width / 2, y: g.y + g.height / 2 + 300 })
+    await expect.poll(async () => Math.round((await wrap.boundingBox())!.height - h0)).toBe(300) // 끈 만큼 정확히 넓어짐
+    // 방향키: 아래 +40
+    await grip.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect.poll(async () => Math.round((await wrap.boundingBox())!.height - h0)).toBe(340)
+    // 더블클릭: 기본 높이(내용이 더 길면 내용 높이)로 복귀
+    await grip.dblclick()
+    await expect.poll(async () => Math.round((await wrap.boundingBox())!.height)).toBeLessThanOrEqual(Math.round(h0) + 1)
+    // 편집 영역이 넓어져도 편집기는 정상 동작(글 입력)
+    await page.locator('.rc-host .ProseMirror p').first().click()
+    await page.keyboard.type('ok')
+    await expect(page.locator('.rc-host .ProseMirror')).toContainText('ok')
+  })
+
   test('이미지 더블클릭 → 공통 뷰어 열림, 편집 모드 진입, 닫기', async ({ page }) => {
     await open(page, URL_RICH, '.rc-host .ProseMirror')
     const c = await center(page, IMG)
