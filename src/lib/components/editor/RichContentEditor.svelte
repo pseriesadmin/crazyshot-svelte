@@ -71,6 +71,55 @@
   let syncTimer: ReturnType<typeof setTimeout> | undefined
   let blurTimer: ReturnType<typeof setTimeout> | undefined
   let toolbarWrap = $state<HTMLDivElement | null>(null)
+  // 서식 도구줄이 스크롤 영역 맨 위에 딱 붙도록 하는 보정값(px, 0 또는 음수).
+  // sticky는 "스크롤 영역의 안쪽 여백을 뺀 위치"에 멈추므로, 스크롤 영역(예: CMS 폼 영역)에 위 여백이 있으면 도구줄 위로 그만큼 틈이 생겨
+  // 스크롤된 내용이 비쳐 보였다. 가장 가까운 스크롤 영역의 위 여백만큼 음수로 당겨 틈을 없앤다(창 스크롤이면 0).
+  let stickyTop = $state(0)
+
+  // ── 편집 영역 높이 조절 — 캔버스 아래쪽 끝(손잡이)을 끌어 영역을 넓힌다 ──────────
+  // 높이는 "최소 높이"로만 준다: 내용이 더 길면 내용만큼 늘어나고, 손잡이로 내용보다 더 넓게 키울 수 있다(빈 공간 확보). 더블클릭하면 기본 높이로 돌아간다.
+  const CANVAS_MIN_H = 320
+  const CANVAS_MAX_H = 4000
+  let canvasMinH = $state(CANVAS_MIN_H)
+  let growing = $state<{ startY: number; startH: number } | null>(null)
+  const clampH = (h: number) => Math.min(Math.max(Math.round(h), CANVAS_MIN_H), CANVAS_MAX_H)
+  function startGrow(e: PointerEvent) {
+    if (e.button !== 0 || !canvasWrap) return
+    e.preventDefault()
+    growing = { startY: e.clientY, startH: canvasWrap.getBoundingClientRect().height }
+    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  }
+  function moveGrow(e: PointerEvent) {
+    const g = growing
+    if (!g) return
+    canvasMinH = clampH(g.startH + (e.clientY - g.startY))
+  }
+  function endGrow() { growing = null }
+  function growKey(e: KeyboardEvent) {
+    const cur = canvasWrap ? canvasWrap.getBoundingClientRect().height : canvasMinH
+    if (e.key === 'ArrowDown') { e.preventDefault(); canvasMinH = clampH(cur + 40) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); canvasMinH = clampH(Math.max(cur - 40, CANVAS_MIN_H)) }
+    else if (e.key === 'Home') { e.preventDefault(); canvasMinH = CANVAS_MIN_H }
+  }
+  function measureStickyTop() {
+    if (!toolbarWrap) return
+    let el: HTMLElement | null = toolbarWrap.parentElement
+    while (el && el !== document.body && el !== document.documentElement) {
+      const cs = getComputedStyle(el)
+      if (/(auto|scroll)/.test(cs.overflowY)) {
+        stickyTop = -(parseFloat(cs.paddingTop) || 0)
+        return
+      }
+      el = el.parentElement
+    }
+    stickyTop = 0
+  }
+  $effect(() => {
+    if (!toolbarWrap) return
+    measureStickyTop()
+    window.addEventListener('resize', measureStickyTop)
+    return () => window.removeEventListener('resize', measureStickyTop)
+  })
   let canvasWrap = $state<HTMLDivElement | null>(null)
   let ctxStyle = $state('top: 0px; left: 0px')
   let photoInput: HTMLInputElement
@@ -1242,7 +1291,7 @@
 
   <!-- ═════════ PC / 태블릿 툴바 ═════════ -->
   {#if !isMobile && !readonly}
-    <div class="rc-toolbar-wrap" bind:this={toolbarWrap} role="toolbar" aria-label="서식 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
+    <div class="rc-toolbar-wrap" style:top="{stickyTop}px" bind:this={toolbarWrap} role="toolbar" aria-label="서식 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       <div class="rc-toolbar rc-toolbar-fmt">
         <button type="button" class="rc-btn" aria-label="실행취소" title="실행취소 (Ctrl+Z)" disabled={!canHistory('undo')} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
         <button type="button" class="rc-btn" aria-label="다시실행" title="다시실행 (Ctrl+Shift+Z)" disabled={!canHistory('redo')} onclick={() => editor?.chain().focus().redo().run()}>{@render icon('redo')}</button>
@@ -1298,7 +1347,7 @@
   {/if}
 
   <!-- ═════════ 편집 캔버스 ═════════ -->
-  <div class="rc-canvas-wrap" bind:this={canvasWrap}>
+  <div class="rc-canvas-wrap" bind:this={canvasWrap} style:--rc-min-h="{canvasMinH}px">
     <div class="rc-host" bind:this={host}></div>
   {#if handleBox && groupAttrs && !readonly && showResizeHandles}
     {@const showL = allowedHandleSide('l', groupAttrs.align)}
@@ -1383,6 +1432,30 @@
 
     {#if !editor}<p class="rc-loading" role="status">에디터를 불러오는 중…</p>{/if}
   </div>
+
+  {#if !readonly && !isMobile}
+    <!-- 편집 영역 높이 조절 손잡이(아래쪽 끝) — 끌면 영역이 넓어지고, 더블클릭·Home은 기본 높이 -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -- 포커스·키보드로 조절하는 separator(윈도우 분할 막대 패턴) -->
+    <div
+      class="rc-grow"
+      class:rc-grow-active={growing !== null}
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="편집 영역 높이 조절 (위·아래 방향키, Home은 기본 높이)"
+      aria-valuenow={canvasMinH}
+      aria-valuemin={CANVAS_MIN_H}
+      aria-valuemax={CANVAS_MAX_H}
+      tabindex="0"
+      title="끌어서 편집 영역 넓히기 (더블클릭: 기본 높이)"
+      onmousedown={(e) => e.preventDefault()}
+      onpointerdown={startGrow}
+      onpointermove={moveGrow}
+      onpointerup={endGrow}
+      onpointercancel={endGrow}
+      ondblclick={() => (canvasMinH = CANVAS_MIN_H)}
+      onkeydown={growKey}
+    ><span class="rc-grow-bar" aria-hidden="true"></span></div>
+  {/if}
 
   {#if showKeywords}
     <KeywordTagInput bind:keywords {readonly} />
@@ -1740,8 +1813,23 @@
   .rc-chipbtn-wide { width: 100%; margin-top: 8px; }
 
   /* ── 캔버스 ── */
-  .rc-canvas-wrap { position: relative; min-height: 320px; }
-  .rc-host { min-height: 320px; }
+  .rc-canvas-wrap { position: relative; min-height: var(--rc-min-h, 320px); }
+  .rc-host { min-height: var(--rc-min-h, 320px); }
+  /* 편집 영역 높이 조절 손잡이 — 면(fill)만 쓴다(윤곽선·그림자 없음), 호버는 배경색 변경만 */
+  .rc-grow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    cursor: ns-resize;
+    touch-action: none;
+    user-select: none;
+    background: var(--cs-surface-gray);
+    border-top: 1px solid var(--cs-border);
+  }
+  .rc-grow:hover, .rc-grow:focus-visible, .rc-grow-active { background: var(--cs-purple-op10); outline: none; }
+  .rc-grow-bar { width: 44px; height: 4px; border-radius: 2px; background: var(--cs-border); }
+  .rc-grow:hover .rc-grow-bar, .rc-grow:focus-visible .rc-grow-bar, .rc-grow-active .rc-grow-bar { background: var(--cs-purple); }
   .rc-loading {
     position: absolute;
     inset: 0;
@@ -1754,7 +1842,7 @@
     pointer-events: none;
   }
   .rc-host :global(.rc-canvas) {
-    min-height: 320px;
+    min-height: var(--rc-min-h, 320px);
     padding: 16px 20px 40px;
     outline: none;
     background: var(--cs-surface-gray);

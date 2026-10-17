@@ -48,6 +48,47 @@
    */
   const USE_UNIFIED_DOC_EDITOR = true
 
+  // ── 편집 영역 높이 조절 — 에디터 아래쪽 끝 손잡이를 끌어 영역을 넓힌다(null = 화면 높이에 맞춤) ──
+  // 계약서 화면은 화면 높이에 맞춰진 고정 레이아웃이라 낮은 화면에서는 캔버스가 좁다. 손잡이로 키우면 에디터 영역이 그만큼 커지고
+  // 패널 안에서 위아래로 스크롤되며(저장·삭제 버튼 줄은 아래에 고정), 더블클릭·Home 키로 화면 높이 맞춤으로 돌아간다.
+  // 에디터(doc-editor 모듈) 내부는 건드리지 않고 이 호스트의 감싸는 영역 높이만 바꾼다.
+  const EDITOR_MIN_H = 240
+  const EDITOR_MAX_H = 4000
+  let editorLayoutEl = $state<HTMLDivElement | null>(null)
+  let growH = $state<number | null>(null)
+  // 스크린리더가 읽는 현재 높이(실측) — 높이를 키우기 전(화면 높이 맞춤)에도 값이 있도록 편집 영역 크기를 따라간다
+  let layoutH = $state(0)
+  $effect(() => {
+    const el = editorLayoutEl
+    if (!el) return
+    const read = () => { layoutH = Math.round(el.getBoundingClientRect().height) }
+    read()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
+  let growing = $state<{ startY: number; startH: number } | null>(null)
+  const clampEditorH = (h: number) => Math.min(Math.max(Math.round(h), EDITOR_MIN_H), EDITOR_MAX_H)
+  function startGrow(e: PointerEvent) {
+    if (e.button !== 0 || !editorLayoutEl) return
+    e.preventDefault()
+    growing = { startY: e.clientY, startH: editorLayoutEl.getBoundingClientRect().height }
+    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  }
+  function moveGrow(e: PointerEvent) {
+    const g = growing
+    if (!g) return
+    growH = clampEditorH(g.startH + (e.clientY - g.startY))
+  }
+  function endGrow() { growing = null }
+  function growKey(e: KeyboardEvent) {
+    const cur = editorLayoutEl ? editorLayoutEl.getBoundingClientRect().height : (growH ?? EDITOR_MIN_H)
+    if (e.key === 'ArrowDown') { e.preventDefault(); growH = clampEditorH(cur + 40) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); growH = clampEditorH(cur - 40) }
+    else if (e.key === 'Home') { e.preventDefault(); growH = null }
+  }
+
   let editorRef: {
     insertMergeField:   (attrs: MergeFieldAttrs) => void
     setEditorContent:   (content: string | JSONContent) => void
@@ -808,7 +849,7 @@
   }
 </script>
 
-<div class="template-panel">
+<div class="template-panel" class:ct-grown={growH !== null}>
   <!-- 헤더 -->
   <div class="panel-header">
     <span class="panel-title">{template ? '계약서 양식 수정' : '계약서 양식 등록'}</span>
@@ -1062,7 +1103,7 @@
     {/if}
 
     <!-- 에디터 영역 — 모드별 분기 -->
-    <div class="editor-layout">
+    <div class="editor-layout" bind:this={editorLayoutEl} style={growH !== null ? `flex: none; height: ${growH}px;` : undefined}>
       {#if authoringMode === null}
         <!-- 신규 작성: 모드 미선택 → 모드 선택 UI -->
         <div class="mode-select">
@@ -1295,6 +1336,29 @@
         {/if}
       {/if}
     </div>
+    {#if authoringMode !== null}
+      <!-- 편집 영역 높이 조절 손잡이(아래쪽 끝) — 끌면 영역이 넓어지고, 더블클릭·Home은 화면 높이 맞춤 -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -- 포커스·키보드로 조절하는 separator(윈도우 분할 막대 패턴) -->
+      <div
+        class="ct-grow"
+        class:ct-grow-active={growing !== null}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="편집 영역 높이 조절 (위·아래 방향키, Home은 화면 높이 맞춤)"
+        aria-valuenow={layoutH > 0 ? layoutH : undefined}
+        aria-valuemin={Math.min(EDITOR_MIN_H, layoutH > 0 ? layoutH : EDITOR_MIN_H)}
+        aria-valuemax={EDITOR_MAX_H}
+        tabindex="0"
+        title="끌어서 편집 영역 넓히기 (더블클릭: 화면 높이에 맞춤)"
+        onmousedown={(e) => e.preventDefault()}
+        onpointerdown={startGrow}
+        onpointermove={moveGrow}
+        onpointerup={endGrow}
+        onpointercancel={endGrow}
+        ondblclick={() => (growH = null)}
+        onkeydown={growKey}
+      ><span class="ct-grow-bar" aria-hidden="true"></span></div>
+    {/if}
   </form>
 
   <!--
@@ -1591,6 +1655,26 @@
     border: none;
     border-radius: 0;
   }
+
+  /* 편집 영역 높이 조절 손잡이 — 면(fill)만 사용, 호버·포커스는 배경색 변경만 */
+  .ct-grow {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    cursor: ns-resize;
+    touch-action: none;
+    user-select: none;
+    background: var(--cs-surface-gray);
+  }
+  .ct-grow:hover, .ct-grow:focus-visible, .ct-grow-active { background: var(--cs-purple-op10); outline: none; }
+  .ct-grow-bar { width: 44px; height: 4px; border-radius: 2px; background: var(--cs-lilac); }
+  .ct-grow:hover .ct-grow-bar, .ct-grow:focus-visible .ct-grow-bar, .ct-grow-active .ct-grow-bar { background: var(--cs-purple); }
+  /* 높이를 키운 상태: 패널 안에서 스크롤하고, 저장·삭제 버튼 줄은 항상 아래에 보이게 고정 */
+  .template-panel.ct-grown { overflow-y: auto; }
+  .template-panel.ct-grown form { flex: none; overflow: visible; }
+  .template-panel.ct-grown .panel-actions { position: sticky; bottom: 0; z-index: 5; background: var(--cs-white); }
 
   .panel-actions {
     display: flex;
