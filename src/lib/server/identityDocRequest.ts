@@ -54,6 +54,55 @@ interface RequestProfileRow extends DocGateRow {
   withdrawal_status?: string | null
 }
 
+/** SMS 발송 기록을 남길 예약 — 지정값 우선, 없으면 취소·만료를 뺀 가장 최근 예약(예약 상세 '알림발송' 탭이 예약 번호로 기록을 찾기 때문). 예약이 없으면 null(기록 생략). */
+async function resolveSmsLogReservationId(admin: SupabaseClient, userId: string, explicit?: number): Promise<number | null> {
+  try {
+    // 지정 예약은 요청 대상 고객의 예약일 때만 쓴다(다른 고객 예약에 기록이 심기는 것 방지) — 아니면 최근 진행 예약으로 대체
+    if (explicit != null) {
+      const { data: own } = await admin
+        .from('rental_reservations').select('id').eq('id', explicit).eq('user_id', userId).maybeSingle()
+      if ((own as { id: number } | null)?.id != null) return explicit
+    }
+    const { data } = await admin
+      .from('rental_reservations')
+      .select('id')
+      .eq('user_id', userId)
+      .not('status', 'in', '(cancelled,expired)')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    return (data as { id: number } | null)?.id ?? null
+  } catch {
+    return null
+  }
+}
+
+/** 문자 발송 결과를 sms_notification_logs에 남긴다(fail-soft — 기록 실패가 요청을 막지 않는다). */
+async function logIdentityRequestSms(
+  admin: SupabaseClient,
+  reservationId: number | null,
+  userId: string,
+  phone: string,
+  status: 'sent' | 'failed',
+  errorMessage?: string,
+): Promise<void> {
+  if (reservationId == null) return
+  try {
+    const phoneMasked = phone.length >= 8 ? phone.slice(0, -4).replace(/\d/g, '*') + phone.slice(-4) : '****'
+    const { error } = await admin.from('sms_notification_logs').insert({
+      reservation_id: reservationId,
+      user_id: userId,
+      notify_type: 'identity_request',
+      phone_masked: phoneMasked,
+      status,
+      ...(errorMessage ? { error_message: maskDigits(errorMessage) } : {}),
+    })
+    if (error) console.error('[identity-request] 문자 발송 기록 저장 실패(fail-soft):', maskDigits(error.message ?? String(error)))
+  } catch (e) {
+    console.error('[identity-request] 문자 발송 기록 예외(fail-soft):', maskDigits(e instanceof Error ? e.message : String(e)))
+  }
+}
+
 /** 에러 메시지에 섞일 수 있는 연속 숫자(전화번호 등)를 가려 로그에 남긴다. */
 function maskDigits(text: string): string {
   return text.replace(/\d{7,}/g, (m) => '*'.repeat(m.length - 4) + m.slice(-4)).slice(0, 300)
@@ -66,6 +115,8 @@ export interface IdentityRequestOptions {
   /** 관리자 수동 재등록 요청 — 서류 상태(승인대기·승인완료)와 무관하게 보내고, 중복 방지는 5분만 적용한다. */
   force?: boolean
   docType?: IdentityDocKind
+  /** 문자 발송 기록(sms_notification_logs, 예약 필수)을 연결할 예약 — 없으면 고객의 가장 최근 진행 예약을 찾는다 */
+  reservationId?: number
 }
 
 export async function requestIdentityDocRegistration(
@@ -159,7 +210,17 @@ export async function requestIdentityDocRegistration(
           : force
             ? '[크레이지샷] 등록하신 본인증명 서류를 확인하기 어려워 재등록을 부탁드립니다.'
             : '[크레이지샷] 예약 진행을 위해 본인증명정보를 등록해 주세요.'
-        await sendSms(phone, `${smsBody}\n${SITE_URL}${link}`)
+        const logReservationId = await resolveSmsLogReservationId(admin, userId, opts.reservationId)
+        try {
+          await sendSms(phone, `${smsBody}\n${SITE_URL}${link}`, {
+            ...(logReservationId != null ? { reservationId: String(logReservationId) } : {}),
+            notifyType: 'identity_request',
+          })
+          await logIdentityRequestSms(admin, logReservationId, userId, phone, 'sent')
+        } catch (smsErr) {
+          await logIdentityRequestSms(admin, logReservationId, userId, phone, 'failed', smsErr instanceof Error ? smsErr.message : String(smsErr))
+          throw smsErr
+        }
       } catch (e) {
         console.error('[identity-request] SMS 발송 실패(fail-soft):', maskDigits(e instanceof Error ? e.message : String(e)))
       }

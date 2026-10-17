@@ -25,7 +25,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const userId = params.id
   if (!UUID_RE.test(userId)) return json({ ok: false, error: '잘못된 사용자 ID' }, { status: 400 })
-  const body = await request.json().catch(() => null) as { type?: string } | null
+  const body = await request.json().catch(() => null) as { type?: string; reservation_id?: number } | null
   const type = body?.type === 'foreign' ? 'foreign' : body?.type === 'identity' ? 'identity' : null
   if (!type) return json({ ok: false, error: '잘못된 문서 유형' }, { status: 400 })
 
@@ -33,7 +33,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류' }, { status: 500 })
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
-  const result = await requestIdentityDocRegistration(admin, userId, { force: true, docType: type })
+  const result = await requestIdentityDocRegistration(admin, userId, { force: true, docType: type, ...(Number.isInteger(body?.reservation_id) && (body?.reservation_id as number) > 0 ? { reservationId: body?.reservation_id as number } : {}) })
   if (result.requested) return json({ ok: true })
   if (result.reason === 'recently_requested') return json({ ok: false, error: '방금 이미 재등록을 요청했어요. 잠시 후 다시 시도해주세요.' }, { status: 429 })
   if (result.reason === 'withdrawn') return json({ ok: false, error: '탈퇴 처리된 고객입니다.' }, { status: 409 })

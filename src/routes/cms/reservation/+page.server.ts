@@ -278,7 +278,7 @@ export const actions: Actions = {
         const { data: ownerRow } = await admin
           .from('rental_reservations').select('user_id').eq('id', primaryId).maybeSingle()
         const ownerId = (ownerRow as { user_id: string | null } | null)?.user_id
-        if (ownerId) return (await requestIdentityDocRegistration(admin, ownerId)).requested
+        if (ownerId) return (await requestIdentityDocRegistration(admin, ownerId, { reservationId: primaryId })).requested
       } catch { /* 등록요청 발송 실패는 무시 */ }
       return false
     }
