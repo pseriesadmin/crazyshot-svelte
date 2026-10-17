@@ -21,6 +21,6 @@ export default defineConfig({
 		// 발생했다(CMS 전역 정밀검증 v3 STAGE 2 발견). 실제 프로젝트 코드는 항상 src/ 기준.
 		// *.mount.test.ts는 jsdom 컴포넌트 전용 설정(vitest.component.config.ts, `npm run test:component`)으로만 실행한다.
 		// 기본 설정에서는 Svelte가 서버 빌드로 해석돼 mount()가 실패하므로 제외한다.
-		exclude: ['**/node_modules/**', '**/.git/**', '**/.claude/worktrees/**', '**/*.mount.test.ts']
+		exclude: ['**/node_modules/**', '**/.git/**', '**/.claude/worktrees/**', '**/*.mount.test.ts', 'e2e/**']  // e2e/는 Playwright 전용(npm run test:e2e)
 	}
 });

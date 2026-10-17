@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation'
-  import { resizeProductImage } from '$lib/utils/imageResize'
+  import { resizeProductImage, shrinkImageToLimit } from '$lib/utils/imageResize'
   import OcrScanner from '$lib/components/common/OcrScanner.svelte'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -20,7 +21,8 @@
   let cameraInputEl = $state<HTMLInputElement | null>(null)
 
   // 이미지 확대 보기
-  let lightboxUrl = $state<string | null>(null)
+  let viewerOpen = $state(false)
+  let viewerIndex = $state(0)
 
   // 이미지 삭제
   let deleteImageIdx = $state<number | null>(null)
@@ -441,7 +443,15 @@
       // 새 스캔 이미지(blob:)가 있으면 Storage에 먼저 업로드
       let persistedLabelUrl: string | null = null
       if (labelImageUrl?.startsWith('blob:')) {
-        const blob = await fetch(labelImageUrl).then(r => r.blob())
+        const original = await fetch(labelImageUrl).then(r => r.blob())
+        // 서버 업로드 상한(4MB)을 넘는 카메라 원본은 올리기 전에 자동으로 줄인다(4MB 이하면 원본 그대로)
+        let blob: Blob
+        try {
+          blob = await shrinkImageToLimit(original)
+        } catch (e) {
+          assetSaveError = e instanceof Error ? e.message : '이미지를 줄이지 못했어요.'
+          return
+        }
         const ext = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg'
         const fd = new FormData()
         fd.append('type', 'label')
@@ -573,7 +583,7 @@
                 <button
                   type="button"
                   class="image-expand-btn"
-                  onclick={() => { lightboxUrl = url }}
+                  onclick={() => { viewerIndex = i; viewerOpen = true }}
                   aria-label="이미지 확대"
                 >
                   <img src={thumbUrl(url)} alt="상품 이미지 {i + 1}" class="image-thumb" loading="lazy" />
@@ -607,11 +617,14 @@
             </div>
           {/if}
 
-          <!-- 라이트박스 -->
-          {#if lightboxUrl}
-            <div class="lightbox-backdrop" onclick={() => { lightboxUrl = null }} role="presentation">
-              <img src={lightboxUrl} alt="이미지 확대" class="lightbox-img" />
-            </div>
+          <!-- 이미지 뷰어(공통 MediaViewer) -->
+          {#if viewerOpen}
+            <MediaViewer
+              items={imageUrls.map((u, i) => ({ url: u, thumbUrl: thumbUrl(u), name: `상품 이미지 ${i + 1}` }))}
+              bind:index={viewerIndex}
+              title="상품 이미지"
+              onclose={() => { viewerOpen = false }}
+            />
           {/if}
         {/if}
 
@@ -1186,24 +1199,6 @@
     font-size: 10px;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
-  }
-
-  /* 라이트박스 */
-  .lightbox-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 300;
-    background: rgba(16,11,50,0.92);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .lightbox-img {
-    max-width: 94vw;
-    max-height: 88vh;
-    object-fit: contain;
-    border-radius: var(--cms-radius-sm);
   }
 
   /* item 5: 상단 촬영 버튼 — 탭별 공통 */

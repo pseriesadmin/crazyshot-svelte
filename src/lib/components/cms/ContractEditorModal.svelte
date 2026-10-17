@@ -401,6 +401,7 @@
             <ContractSpreadsheetEditor
               bind:this={spreadsheetEditorRef}
               initialDoc={spreadsheetDocInit}
+              onUploadImage={uploadCanvasBackground}
             />
           {/key}
         </div>

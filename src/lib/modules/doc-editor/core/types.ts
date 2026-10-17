@@ -75,3 +75,14 @@ export interface SignatureAsset {
   imageUrl: string
   isDefault?: boolean
 }
+
+/** DocEditor 의 onEditImage 로 넘기는 정보 — images 는 문서 안 모든 이미지(문서 순서), index 는 그중 눌린 이미지 */
+export interface EditImageInfo {
+  src: string
+  /** 눌린 이미지의 src 만 교체(너비·정렬·겹치기 위치 등 다른 속성은 유지) */
+  replace: (newSrc: string) => void
+  /** true=도구줄 '편집'(뷰어를 편집 모드로), false=더블클릭(보기) */
+  startEdit: boolean
+  images: { src: string; alt: string; replace: (newSrc: string) => void }[]
+  index: number
+}

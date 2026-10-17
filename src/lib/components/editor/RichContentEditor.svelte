@@ -13,11 +13,14 @@
   import { NodeSelection } from '@tiptap/pm/state'
   import type { ContentBlock, ImageAlign, ImageItem, ImageLayout } from '$lib/types/content-editor'
   import { extractYoutubeId, IMAGE_WIDTH_MAX, IMAGE_WIDTH_MIN, normalizeImageAlign, normalizeImageWidth } from '$lib/types/content-editor'
-  import { resizeProductImage } from '$lib/utils/imageResize'
+  import { resizeProductImage, shrinkImageToLimit } from '$lib/utils/imageResize'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
   import { buildSandboxedPreviewDoc } from '$lib/utils/previewSanitize'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import type { MediaViewerItem } from '$lib/types/media-viewer'
+  import { allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, createHandlePref, handleSpanXOf, IMAGE_BAR_HEIGHT } from '$lib/modules/doc-editor/core/imageTools'
   import KeywordTagInput from './KeywordTagInput.svelte'
   import '$lib/styles/rich-content.css'
 
@@ -170,6 +173,64 @@
       .replace(/mso-[^;"]*;?/gi, '')
   }
 
+  // ── 사진 더블클릭 → 공통 이미지 뷰어(편집 포함) ──────────────
+  // 문서 안의 모든 사진묶음의 사진을 문서 순서대로 한 목록으로 뷰어에 넘긴다(썸네일 정렬에 문서 전체 사진이 나열된다).
+  // 더블클릭한 사진부터 보이고, 편집 결과는 새 파일로 올려 그 사진 자리(묶음·순번)만 교체한다(캡션·대표 표시·배치 유지).
+  type ViewerRef = { pos: number; idx: number }
+  let viewer = $state<{ items: MediaViewerItem[]; index: number; refs: ViewerRef[] } | null>(null)
+
+  function onHostDblClick(e: MouseEvent) {
+    if (readonly || !editor) return
+    const fig = (e.target as HTMLElement | null)?.closest<HTMLElement>('figure.rc-fig')
+    if (!fig) return
+    const items: MediaViewerItem[] = []
+    const refs: ViewerRef[] = []
+    let index = 0
+    editor.state.doc.descendants((n, p) => {
+      if (n.type.name !== 'imageGroup') return true
+      const dom = editor?.view.nodeDOM(p)
+      const isClicked = dom instanceof HTMLElement && dom.contains(fig)
+      ;((n.attrs.images as ImageItem[]) ?? []).forEach((im, k) => {
+        if (isClicked && k === (Number(fig.dataset.idx) || 0)) index = items.length
+        items.push({ url: im.url, name: im.alt || `사진 ${items.length + 1}` })
+        refs.push({ pos: p, idx: k })
+      })
+      return false
+    })
+    if (items.length === 0) return
+    e.preventDefault()
+    viewer = { items, index, refs }
+  }
+
+  async function saveEditedImage(i: number, blob: Blob): Promise<boolean> {
+    const v = viewer
+    if (!v || !editor || readonly) return false
+    const ref = v.refs[i]
+    const oldUrl = v.items[i]?.url
+    if (!ref || !oldUrl) return false
+    const up = await uploadOne(new File([blob], 'edited.webp', { type: 'image/webp' }))
+    if (!up) return false
+    // 업로드하는 사이 문서가 바뀔 수 있어, 같은 자리(없으면 같은 순번·같은 주소)의 사진이 든 묶음을 문서에서 다시 찾는다
+    const hit = (n: { type: { name: string }; attrs: Record<string, unknown> } | null) => !!n && n.type.name === 'imageGroup' && (n.attrs.images as ImageItem[])[ref.idx]?.url === oldUrl
+    let pos = hit(editor.state.doc.nodeAt(ref.pos)) ? ref.pos : -1
+    if (pos < 0) {
+      editor.state.doc.descendants((n, p) => {
+        if (pos >= 0) return false
+        if (hit(n)) { pos = p; return false }
+        return true
+      })
+    }
+    const node = pos >= 0 ? editor.state.doc.nodeAt(pos) : null
+    if (!node) {
+      csToast.error('편집한 사진을 문서에서 찾지 못해 반영하지 못했어요.')
+      return false
+    }
+    const imgs = (node.attrs.images as ImageItem[]).map((im, k) => (k === ref.idx ? { ...im, url: up.url } : im))
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, images: imgs }))
+    viewer = { ...v, items: v.items.map((it, k) => (k === i ? { ...it, url: up.url } : it)), refs: v.refs.map((r, k) => (k === i ? { ...r, pos } : r)) }
+    return true
+  }
+
   // ── 이미지 업로드 ───────────────────────────────────
   async function uploadOne(file: File): Promise<ImageItem | null> {
     if (!file.type.startsWith('image/')) {
@@ -187,7 +248,9 @@
       return null
     }
     try {
-      const { thumb, large } = await resizeProductImage(file)
+      const { thumb, large: resizedLarge } = await resizeProductImage(file)
+      // 1200×900 WebP는 보통 1MB 안팎이지만, 서버 상한(4MB)을 넘으면 화질·크기를 더 줄여서 올린다(상한 이하면 그대로)
+      const large = await shrinkImageToLimit(resizedLarge, { mime: 'image/webp' })
       const fd = new FormData()
       fd.append('product_id', uploadPrefix)
       fd.append('thumb', new File([thumb], 'thumb.webp', { type: 'image/webp' }))
@@ -289,6 +352,13 @@
     return false
   }
 
+  // 실행취소·다시실행 가능 여부 — tick(문서 변경 알림)을 읽어야 변경 때마다 다시 계산된다.
+  // (tick 없이 editor.can()만 쓰면 처음 값(불가)에 고정돼 두 버튼이 계속 비활성으로 남았다)
+  function canHistory(kind: 'undo' | 'redo'): boolean {
+    void tick
+    return editor ? editor.can()[kind]() : false
+  }
+
   function canDo(cmd: 'mergeCells' | 'splitCell'): boolean {
     void tick
     return editor ? editor.can()[cmd]() : false
@@ -365,6 +435,7 @@
     const imgs = [...groupAttrs.images]
     ;[imgs[i], imgs[j]] = [imgs[j], imgs[i]]
     activeImgIdx = j
+    activeImgPos = selectedNode()?.pos ?? null // 위치도 함께 기록해야 curIdx()가 이동한 사진을 계속 따라간다(없으면 0번으로 돌아가 앞으로/뒤로가 한 번밖에 안 먹는다)
     updateGroup({ images: imgs })
   }
 
@@ -420,12 +491,127 @@
       .run()
   }
 
-  const WIDTH_PRESETS = [25, 33, 50, 75, 100]
-  let imgWidthLive = $state<number | null>(null) // 슬라이더를 끄는 동안의 미리 보기 값(놓으면 적용)
+  // ── 사진 묶음 폭 — 끌어서 크기 조절(선택한 묶음 모서리 점) ──────────
+  // 사진 크기를 정하는 유일한 방법이다(예전의 '사진 크기·정렬' 시트는 이 기능·서식 도구줄 정렬과 중복·충돌해 제거). 정렬은 서식 도구줄의 정렬 버튼이 맡는다.
+  // 정렬에 맞춰 손잡이가 나타난다: 가운데=네 모서리(중심 기준 대칭), 왼쪽=오른쪽 모서리, 오른쪽=왼쪽 모서리.
+  // 끄는 동안은 화면 스타일만 바꾸고(문서 변경 없음), 놓을 때 한 번만 문서에 반영한다(되돌리기 한 단계).
+  // vy = 손잡이의 세로 위치(편집 영역 기준) — 사진이 화면보다 길어도 손잡이가 보이도록 "지금 화면에 보이는 부분"의 가운데로 잡는다
+  let handleBox = $state<{ xL: number; xR: number; yTop: number; yBottom: number } | null>(null)
+  let handleDom: HTMLElement | null = null
+  // 크기 조절 점 표시 여부 — 이미지 도구줄의 크기 아이콘으로 켜고 끈다(기본 표시, 선택은 이 브라우저에 기억)
+  const handlePref = createHandlePref('rc-image-resize-handles')
+  let showResizeHandles = $state(true)
+  function toggleResizeHandles() {
+    showResizeHandles = !showResizeHandles
+    handlePref.write(showResizeHandles)
+  }
+  let resizing = $state<{ side: 'l' | 'r'; align: ImageAlign; rect: DOMRect; pw: number; w: number; dom: HTMLElement } | null>(null)
 
-  function setImgWidth(w: number) {
-    imgWidthLive = null
-    updateGroup({ width: normalizeImageWidth(w) })
+  // 화면에서 실제로 보이는 세로 범위 — 위는 상단 서식 도구줄(sticky) 아래, 아래는 화면 끝
+  function visibleBand() {
+    return visibleBandOf(toolbarWrap ? toolbarWrap.getBoundingClientRect().bottom : 0, window.innerHeight)
+  }
+  const BAR_H = IMAGE_BAR_HEIGHT
+  /** 선택 도구줄의 세로 위치(화면 기준) — 계산은 공통 모듈(imageTools) */
+  function barPlacement(r: DOMRect): { topV: number; inside: boolean } {
+    return barPlacementOf(r, visibleBand(), BAR_H)
+  }
+
+  function measureHandleBox(dom: HTMLElement) {
+    if (!canvasWrap) return
+    handleDom = dom
+    const r = dom.getBoundingClientRect()
+    const w = canvasWrap.getBoundingClientRect()
+    // 묶음이 화면 밖이면 손잡이도 보이지 않는다(가장자리에 엉뚱하게 붙어 있지 않게)
+    const span = handleSpanOf(r, visibleBand(), BAR_H)
+    if (!span) { handleBox = null; return }
+    const { yTop, yBottom } = span
+    const { xL, xR } = handleSpanXOf(r, window.innerWidth)
+    handleBox = { xL: xL - w.left, xR: xR - w.left, yTop: yTop - w.top, yBottom: yBottom - w.top }
+  }
+
+  function remeasureHandles() {
+    if (resizing || !handleDom || !handleBox || !handleDom.isConnected) return
+    measureHandleBox(handleDom)
+  }
+
+  $effect(() => {
+    void tick
+    if (resizing) return
+    if (readonly || !editor || !canvasWrap || ctxKind !== 'image' || !groupAttrs) {
+      handleBox = null
+      return
+    }
+    const sel = selectedNode()
+    const dom = sel ? editor.view.nodeDOM(sel.pos) : null
+    if (dom instanceof HTMLElement) measureHandleBox(dom)
+    else handleBox = null
+  })
+
+  // 사진이 나중에 로드되거나(lazy) 위쪽 내용 때문에 높이가 바뀌면 선택 도구줄·손잡이 위치가 어긋난다
+  // (처음 측정 시점의 사진 높이가 0이라 아래쪽 모서리 손잡이가 위쪽에 붙어 있던 결함). 문서 영역 크기가 바뀔 때마다 다시 계산시킨다.
+  $effect(() => {
+    if (!editor || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => { tick += 1 })
+    ro.observe(editor.view.dom)
+    return () => ro.disconnect()
+  })
+
+  // 화면이 어느 상자 안에서 스크롤되든(캡처 단계) 손잡이를 지금 보이는 부분에 맞춰 따라오게 한다
+  $effect(() => {
+    let raf = 0
+    const h = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => { raf = 0; tick += 1 }) // 도구줄·손잡이 위치 다시 계산(프레임당 1회)
+    }
+    window.addEventListener('scroll', h, true)
+    return () => { window.removeEventListener('scroll', h, true); if (raf) cancelAnimationFrame(raf) }
+  })
+
+  function startResize(e: PointerEvent, side: 'l' | 'r') {
+    if (!editor || !groupAttrs || e.button !== 0) return
+    const sel = selectedNode()
+    const dom = sel ? editor.view.nodeDOM(sel.pos) : null
+    if (!(dom instanceof HTMLElement)) return
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = dom.getBoundingClientRect()
+    const cur = groupAttrs.width
+    resizing = { side, align: groupAttrs.align, rect, pw: rect.width / (cur / 100), w: cur, dom }
+    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  }
+  function moveResize(e: PointerEvent) {
+    const r = resizing
+    if (!r) return
+    const raw = pointerExtent(r.align, false, e.clientX, r.rect) / r.pw
+    const w = normalizeImageWidth(raw * 100)
+    resizing = { ...r, w }
+    r.dom.style.width = `${w}%`
+    measureHandleBox(r.dom)
+  }
+  function endResize(commit: boolean) {
+    const r = resizing
+    if (!r) return
+    resizing = null
+    if (commit && r.w !== groupAttrs?.width) updateGroup({ width: r.w })
+    else r.dom.style.width = ''   // 변경 없음/취소 → 문서 값으로 복구(다시 그려질 때 스타일 재적용)
+    if (!commit) tick += 1
+  }
+
+  // 서식 도구줄의 정렬 버튼: 사진 묶음이 선택돼 있으면 묶음 정렬(왼쪽·가운데·오른쪽)로, 아니면 글 정렬로 동작한다.
+  // (글 정렬 명령은 사진 묶음 노드에 적용되지 않아 사진이 선택된 상태에서는 아무 일도 일어나지 않았다)
+  function alignActive(v: string): boolean {
+    if (groupAttrs) return v !== 'justify' && groupAttrs.align === v
+    return act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })
+  }
+  function applyAlign(v: string) {
+    if (!editor) return
+    if (groupAttrs) {
+      if (v === 'justify') return // 사진에는 양쪽 정렬이 없다
+      setImgAlign(v as ImageAlign)
+      return
+    }
+    editor.chain().focus().setTextAlign(v).run()
   }
 
   function setImgAlign(a: ImageAlign) {
@@ -765,7 +951,6 @@
     }
     if (name === 'link' && editor) linkUrl = (editor.getAttributes('link').href as string | undefined) ?? ''
     if (name === 'video') videoErr = ''
-    if (name === 'imgsize') imgWidthLive = null
     if (name === 'alt' && groupAttrs) altText = groupAttrs.images[curIdx()]?.alt ?? ''
     if (e) {
       // 눌린 버튼 바로 아래(공간이 없으면 위)에 띄운다 — 툴바가 2줄이어도 첫 줄을 덮지 않는다
@@ -839,15 +1024,14 @@
     if (!anchor) return
     const r = anchor.getBoundingClientRect()
     const w = canvasWrap.getBoundingClientRect()
-    const BAR_H = 48
-    const above = r.top - w.top - BAR_H - 4
-    const top = above >= 0 ? above : r.bottom - w.top + 4
+    const top = barPlacement(r).topV - w.top
     const left = Math.max(8, r.left - w.left)
     ctxStyle = `top: ${Math.round(top)}px; left: ${Math.round(left)}px`
   })
 
   // ── 생명주기 ────────────────────────────────────────
   onMount(() => {
+    showResizeHandles = handlePref.read()
     let destroyed = false
     const mq = window.matchMedia('(max-width: 767px)')
     isMobile = mq.matches
@@ -921,6 +1105,7 @@
       })
       tick += 1
       host.addEventListener('pointerdown', onHostPointerDown)
+      host.addEventListener('dblclick', onHostDblClick)
     })()
 
     return () => {
@@ -934,6 +1119,7 @@
       }
       clearTimeout(blurTimer)
       host?.removeEventListener('pointerdown', onHostPointerDown)
+      host?.removeEventListener('dblclick', onHostDblClick)
       endImgDrag(false)
       mq.removeEventListener('change', onMq)
       vv?.removeEventListener('resize', updateKb)
@@ -953,7 +1139,17 @@
   const tableActive = $derived(ctxKind === 'table')
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onKeyDownWindow} onscroll={() => { if (sheet && !isMobile) sheet = null }} />
+<svelte:window onresize={() => { tick += 1 }} onpointerdown={onWindowPointerDown} onkeydown={onKeyDownWindow} onscroll={() => { if (sheet && !isMobile) sheet = null }} />
+
+{#if viewer}
+  <MediaViewer
+    items={viewer.items}
+    bind:index={viewer.index}
+    title="사진"
+    onclose={() => { viewer = null }}
+    onSave={saveEditedImage}
+  />
+{/if}
 
 {#snippet icon(name: string)}
   {#if name === 'alignLeft'}
@@ -1025,7 +1221,8 @@
   {:else if name === 'clear'}
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 4h10M9 4l-2 12M6 16h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.5 12.5l5 5M17.5 12.5l-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
   {:else if name === 'imgWidth'}
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="5" y="4.5" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M1.5 9H4M14 9h2.5M3 7.5L1.5 9 3 10.5M15 7.5L16.5 9 15 10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <!-- 사진 크기: 속이 빈 사각 윤곽 + 네 모서리 점(크기 조절 점과 같은 모양) -->
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="4.5" y="4.5" width="9" height="9" rx="0.8" stroke="currentColor" stroke-width="1.4"/><rect x="2.4" y="2.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/><rect x="12.4" y="2.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/><rect x="2.4" y="12.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/><rect x="12.4" y="12.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/></svg>
   {:else if name === 'groupSplit'}
     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="2.5" y="1.5" width="13" height="5" rx="1.3" fill="currentColor"/><rect x="2.5" y="11.5" width="13" height="5" rx="1.3" fill="currentColor"/><path d="M2 9h14" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"/></svg>
   {:else if name === 'groupMerge'}
@@ -1047,8 +1244,8 @@
   {#if !isMobile && !readonly}
     <div class="rc-toolbar-wrap" bind:this={toolbarWrap} role="toolbar" aria-label="서식 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       <div class="rc-toolbar rc-toolbar-fmt">
-        <button type="button" class="rc-btn" aria-label="실행취소" title="실행취소 (Ctrl+Z)" disabled={!editor || !editor.can().undo()} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
-        <button type="button" class="rc-btn" aria-label="다시실행" title="다시실행 (Ctrl+Shift+Z)" disabled={!editor || !editor.can().redo()} onclick={() => editor?.chain().focus().redo().run()}>{@render icon('redo')}</button>
+        <button type="button" class="rc-btn" aria-label="실행취소" title="실행취소 (Ctrl+Z)" disabled={!canHistory('undo')} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
+        <button type="button" class="rc-btn" aria-label="다시실행" title="다시실행 (Ctrl+Shift+Z)" disabled={!canHistory('redo')} onclick={() => editor?.chain().focus().redo().run()}>{@render icon('redo')}</button>
         <span class="rc-sep"></span>
 
         <button type="button" class="rc-btn rc-btn-wide rc-drop" data-sheet-btn aria-label="서체" disabled={!editor} onclick={(e) => openSheet('font', e)}>{curFamilyLabel()}<ChevronIcon size={5} direction="down" color="var(--cs-text-dark)" /></button>
@@ -1070,7 +1267,7 @@
         <span class="rc-sep"></span>
 
         {#each [['left', 'alignLeft', '왼쪽 정렬'], ['center', 'alignCenter', '가운데 정렬'], ['right', 'alignRight', '오른쪽 정렬'], ['justify', 'alignJustify', '양쪽 정렬']] as [v, ic, label] (v)}
-          <button type="button" class="rc-btn" aria-label={label} title={label} aria-pressed={act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })} class:rc-btn-active={act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })} disabled={!editor} onclick={() => editor?.chain().focus().setTextAlign(v).run()}>{@render icon(ic)}</button>
+          <button type="button" class="rc-btn" aria-label={label} title={groupAttrs && v === 'justify' ? '사진에는 적용되지 않아요' : label} aria-pressed={alignActive(v)} class:rc-btn-active={alignActive(v)} disabled={!editor || (!!groupAttrs && v === 'justify')} onclick={() => applyAlign(v)}>{@render icon(ic)}</button>
         {/each}
         <span class="rc-sep"></span>
 
@@ -1103,6 +1300,34 @@
   <!-- ═════════ 편집 캔버스 ═════════ -->
   <div class="rc-canvas-wrap" bind:this={canvasWrap}>
     <div class="rc-host" bind:this={host}></div>
+  {#if handleBox && groupAttrs && !readonly && showResizeHandles}
+    {@const showL = allowedHandleSide('l', groupAttrs.align)}
+    {@const showR = allowedHandleSide('r', groupAttrs.align)}
+    {#each [['nw', 'l', 0, 0], ['ne', 'r', 1, 0], ['sw', 'l', 0, 1], ['se', 'r', 1, 1]] as [corner, side, cx, cy] (corner)}
+      {#if side === 'l' ? showL : showR}
+        <div
+          class="rc-resize rc-resize-{corner}"
+          role="slider"
+          tabindex="-1"
+          aria-label="사진 크기 조절"
+          aria-orientation="horizontal"
+          aria-valuemin={IMAGE_WIDTH_MIN}
+          aria-valuemax={IMAGE_WIDTH_MAX}
+          aria-valuenow={resizing?.w ?? groupAttrs.width}
+          title="모서리를 끌어 크기 조절"
+          style={`left:${(cx as number) === 0 ? handleBox.xL : handleBox.xR}px;top:${(cy as number) === 0 ? handleBox.yTop : handleBox.yBottom}px;`}
+          onmousedown={(e) => e.preventDefault()}
+          onpointerdown={(e) => startResize(e, side as 'l' | 'r')}
+          onpointermove={moveResize}
+          onpointerup={() => endResize(true)}
+          onpointercancel={() => endResize(false)}
+        ></div>
+      {/if}
+    {/each}
+    {#if resizing}
+      <div class="rc-resize-badge" style={`left:${(handleBox.xL + handleBox.xR) / 2}px;top:${(handleBox.yTop + handleBox.yBottom) / 2}px;`}>{groupAttrs.images.length > 1 ? `묶음 전체 ${resizing.w}%` : `${resizing.w}%`}</div>
+    {/if}
+  {/if}
   {#if ctxKind && !readonly}
     <div class="rc-ctx" style={ctxStyle} role="toolbar" aria-label="선택 항목 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       {#if ctxKind === 'image' && groupAttrs}
@@ -1116,7 +1341,15 @@
         <button type="button" class="rc-ib" aria-label="뒤로" title="뒤로" disabled={curIdx() >= groupAttrs.images.length - 1} onclick={() => moveImage(1)}><ChevronIcon size={6} direction="right" color="currentColor" /></button>
         <span class="rc-ctx-count" title="선택한 묶음의 사진을 끌어서 순서를 바꿀 수 있어요">{curIdx() + 1}/{groupAttrs.images.length}</span>
         <button type="button" class="rc-ib" data-sheet-btn aria-label="사진 설명(대체 텍스트)" title="사진 설명(대체 텍스트)" onclick={(e) => openSheet('alt', e)}>{@render icon('alt')}</button>
-        <button type="button" class="rc-ib" class:rc-ib-on={groupAttrs.width < 100 || groupAttrs.align !== 'center'} data-sheet-btn aria-label="사진 크기·정렬" title="사진 크기·정렬" onclick={(e) => openSheet('imgsize', e)}>{@render icon('imgWidth')}</button>
+        <button
+          type="button"
+          class="rc-ib"
+          class:rc-ib-on={showResizeHandles}
+          aria-pressed={showResizeHandles}
+          aria-label="크기 조절 점 표시/숨김"
+          title={showResizeHandles ? '크기 조절 점 숨기기' : '크기 조절 점 보이기'}
+          onclick={toggleResizeHandles}
+        >{@render icon('imgWidth')}</button>
         <button type="button" class="rc-ib rc-ib-danger" aria-label="이 사진 삭제" title="이 사진 삭제" onclick={removeImage}>{@render icon('trash')}</button>
         <span class="rc-sep"></span>
         <button type="button" class="rc-ib" aria-label="사진 추가" title="사진 추가" onclick={() => addToGroupInput.click()}>{@render icon('plus')}</button>
@@ -1169,7 +1402,7 @@
     >
       <div class="rc-sheet-head">
         <span class="rc-sheet-title">
-          {({ font: '서체', size: '글자 크기', color: '글자색', bg: '배경색', para: '문단 유형', align: '정렬', link: '링크', alt: '사진 설명', imgsize: '사진 크기·정렬', video: '동영상', emoji: '이모지', table: '표 삽입', more: '더보기' } as Record<string, string>)[sheet] ?? ''}
+          {({ font: '서체', size: '글자 크기', color: '글자색', bg: '배경색', para: '문단 유형', align: '정렬', link: '링크', alt: '사진 설명', video: '동영상', emoji: '이모지', table: '표 삽입', more: '더보기' } as Record<string, string>)[sheet] ?? ''}
         </span>
         <button type="button" class="rc-sheet-close" aria-label="닫기" onclick={() => (sheet = null)}>✕</button>
       </div>
@@ -1208,7 +1441,7 @@
       {:else if sheet === 'align'}
         <div class="rc-chips">
           {#each [['left', 'alignLeft', '왼쪽'], ['center', 'alignCenter', '가운데'], ['right', 'alignRight', '오른쪽'], ['justify', 'alignJustify', '양쪽']] as [v, ic, label] (v)}
-            <button type="button" class="rc-btn rc-btn-wide" aria-label={label + ' 정렬'} onclick={() => { editor?.chain().focus().setTextAlign(v).run(); sheet = null }}>{@render icon(ic)}<span>{label}</span></button>
+            <button type="button" class="rc-btn rc-btn-wide" aria-label={label + ' 정렬'} onclick={() => { applyAlign(v); sheet = null }}>{@render icon(ic)}<span>{label}</span></button>
           {/each}
         </div>
       {:else if sheet === 'link'}
@@ -1219,24 +1452,6 @@
             {#if act('link')}<button type="button" class="rc-chipbtn" onclick={removeLink}>링크 해제</button>{/if}
           </div>
         </form>
-      {:else if sheet === 'imgsize' && groupAttrs}
-        <div class="rc-chips" role="group" aria-label="폭 프리셋">
-          {#each WIDTH_PRESETS as w (w)}
-            <button type="button" class="rc-chipbtn" class:rc-chipbtn-on={groupAttrs.width === w} aria-pressed={groupAttrs.width === w} onclick={() => setImgWidth(w)}>{w === 100 ? '전체' : `${w}%`}</button>
-          {/each}
-        </div>
-        <label class="rc-range">
-          <span class="rc-range-cap">폭 {imgWidthLive ?? groupAttrs.width}%</span>
-          <input type="range" min={IMAGE_WIDTH_MIN} max={IMAGE_WIDTH_MAX} step="5" value={groupAttrs.width} aria-label="사진 묶음 폭(%)"
-            oninput={(e) => (imgWidthLive = Number(e.currentTarget.value))}
-            onchange={(e) => setImgWidth(Number(e.currentTarget.value))} />
-        </label>
-        <div class="rc-chips" role="group" aria-label="정렬">
-          {#each [['left', 'alignLeft', '왼쪽'], ['center', 'alignCenter', '가운데'], ['right', 'alignRight', '오른쪽']] as [v, ic, label] (v)}
-            <button type="button" class="rc-btn rc-btn-wide" class:rc-btn-active={groupAttrs.align === v} aria-pressed={groupAttrs.align === v} aria-label={`${label} 정렬`} onclick={() => setImgAlign(v as ImageAlign)}>{@render icon(ic)}<span>{label}</span></button>
-          {/each}
-        </div>
-        <p class="rc-hint">폭이 전체(100%)보다 작을 때 정렬이 적용돼요.</p>
       {:else if sheet === 'alt'}
         <form class="rc-form" onsubmit={(e) => { e.preventDefault(); applyAlt() }}>
           <input class="rc-input" type="text" maxlength="120" placeholder="사진을 설명하는 짧은 글(시각장애·검색에 사용)" bind:value={altText} aria-label="사진 설명" />
@@ -1284,8 +1499,8 @@
   {#if showMobileBar}
     <div class="rc-mbar" style={`bottom: ${kb}px; padding-bottom: ${kb > 0 ? 0 : 'env(safe-area-inset-bottom)'}`} role="toolbar" aria-label="서식 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       <div class="rc-mbar-scroll">
-        <button type="button" class="rc-btn" aria-label="실행취소" disabled={!editor || !editor.can().undo()} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
-        <button type="button" class="rc-btn" aria-label="다시실행" disabled={!editor || !editor.can().redo()} onclick={() => editor?.chain().focus().redo().run()}>{@render icon('redo')}</button>
+        <button type="button" class="rc-btn" aria-label="실행취소" disabled={!canHistory('undo')} onclick={() => editor?.chain().focus().undo().run()}>{@render icon('undo')}</button>
+        <button type="button" class="rc-btn" aria-label="다시실행" disabled={!canHistory('redo')} onclick={() => editor?.chain().focus().redo().run()}>{@render icon('redo')}</button>
         <button type="button" class="rc-btn" aria-label="사진" disabled={!editor} onclick={() => photoInput.click()}>{@render icon('photo')}</button>
         <button type="button" class="rc-btn" aria-label="굵게" aria-pressed={act('bold')} class:rc-btn-active={act('bold')} onclick={() => editor?.chain().focus().toggleBold().run()}><b>B</b></button>
         <button type="button" class="rc-btn" aria-label="기울임" aria-pressed={act('italic')} class:rc-btn-active={act('italic')} onclick={() => editor?.chain().focus().toggleItalic().run()}><i>I</i></button>
@@ -1435,6 +1650,34 @@
     overflow-x: auto;
   }
   .rc-ctx > * { flex-shrink: 0; }
+  /* 사진 크기 조절 손잡이 — 면(fill)만 사용, 호버는 배경색만 변경 */
+  .rc-resize {
+    position: absolute;
+    z-index: 7;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    border-radius: 4px;
+    background: var(--cs-purple);
+    touch-action: none;
+    transition: background 0.12s;
+  }
+  .rc-resize-nw, .rc-resize-se { cursor: nwse-resize; }
+  .rc-resize-ne, .rc-resize-sw { cursor: nesw-resize; }
+  .rc-resize::before { content: ''; position: absolute; inset: -12px; } /* 터치 타겟 확대 */
+  .rc-resize:hover { background: var(--cs-purple-hover); }
+  .rc-resize-badge {
+    position: absolute;
+    z-index: 9;
+    transform: translate(-50%, -50%);
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    background: var(--cs-dark);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    pointer-events: none;
+  }
   .rc-ctx-count { padding: 0 6px; font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-purple); }
   .rc-ib {
     position: relative;
@@ -1673,9 +1916,6 @@
     cursor: pointer;
   }
   .rc-swatch:hover { opacity: 0.8; }
-  .rc-range { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
-  .rc-range-cap { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-dark); }
-  .rc-range input[type='range'] { width: 100%; accent-color: var(--cs-purple); }
   .rc-hint { margin: 8px 0 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
   .rc-form { display: flex; flex-direction: column; gap: 8px; }
   .rc-form-row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }

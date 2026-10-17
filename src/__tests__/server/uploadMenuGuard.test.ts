@@ -18,7 +18,7 @@ const anyGuard = vi.fn()
 vi.mock('$lib/server/requireMenuAccess', () => ({ requireAnyMenuAccessApi: (...a: unknown[]) => anyGuard(...a) }))
 
 import { UPLOAD_MENU_KEYS } from '$lib/server/uploadMenuKeys'
-import { DELETE } from '../../routes/api/cms/upload/+server'
+import { DELETE, POST } from '../../routes/api/cms/upload/+server'
 
 const src = readFileSync(join(process.cwd(), 'src/routes/api/cms/upload/+server.ts'), 'utf-8')
 const BASE = 'https://t.supabase.co/storage/v1/object/public/product-images/'
@@ -62,5 +62,43 @@ describe('DELETE 동작', () => {
     const res = (await del('log/../abc/large_1.webp')) as Response
     expect(res.status).toBe(403)
     expect(anyGuard).toHaveBeenCalled()
+  })
+})
+
+describe('POST 용량 상한 4MB(파일 1건당)', () => {
+  beforeEach(() => anyGuard.mockReset())
+  const OVER_LIMIT = 5 * 1024 * 1024 // 상한(4MB)을 넘는 크기(이전 5MB 상한이었다면 통과했을 5MB)
+  const webp = (bytes: number, name: string) => new File([new Uint8Array(bytes)], name, { type: 'image/webp' })
+  const post = (fd: FormData) =>
+    POST({ request: new Request('http://x', { method: 'POST', body: fd }), locals: { safeGetSession: async () => ({ session: { user: { id: 'u' } } }) } } as never)
+
+  it('상품 이미지: large가 4MB 초과면 413(저장소에 닿기 전에 거절)', async () => {
+    const fd = new FormData()
+    fd.set('product_id', 'log/u1')
+    fd.set('thumb', webp(10, 't.webp'))
+    fd.set('large', webp(OVER_LIMIT, 'l.webp'))
+    await expect(post(fd)).rejects.toMatchObject({ status: 413 })
+  })
+  it('상품 이미지: thumb가 4MB 초과여도 413', async () => {
+    const fd = new FormData()
+    fd.set('product_id', 'log/u1')
+    fd.set('thumb', webp(OVER_LIMIT, 't.webp'))
+    fd.set('large', webp(10, 'l.webp'))
+    await expect(post(fd)).rejects.toMatchObject({ status: 413 })
+  })
+  it('자산 라벨 이미지: 4MB 초과면 413', async () => {
+    anyGuard.mockResolvedValue(null)
+    const fd = new FormData()
+    fd.set('type', 'label')
+    fd.set('asset_id', 'a1')
+    fd.set('image', new File([new Uint8Array(OVER_LIMIT)], 'x.jpg', { type: 'image/jpeg' }))
+    await expect(post(fd)).rejects.toMatchObject({ status: 413 })
+  })
+  it('4MB 이하는 상한에 걸리지 않고 저장 단계까지 간다', async () => {
+    const fd = new FormData()
+    fd.set('product_id', 'log/u1')
+    fd.set('thumb', webp(10, 't.webp'))
+    fd.set('large', webp(1024, 'l.webp'))
+    await expect(post(fd)).rejects.toThrow('storage reached') // mock이 저장소 단계에서 throw
   })
 })

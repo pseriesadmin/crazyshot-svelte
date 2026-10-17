@@ -23,6 +23,10 @@ import { requireAnyMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { UPLOAD_MENU_KEYS } from '$lib/server/uploadMenuKeys'
 
 const BUCKET = 'product-images'
+// 파일 1건당 서버 상한 4MB(2026-10-17, Stephen 지시 5MB → 검수 후 4MB — Vercel 요청 본문 한도 약 4.5MB보다 작게). 브라우저가 이미 1200×900 WebP로 줄여 보내므로 정상 업로드는 이 값보다 훨씬 작다 —
+// 서버를 직접 호출해 큰 파일을 올리는 경로(특히 로그인만 하면 쓸 수 있는 log/ 경로)를 막는다.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+const MAX_UPLOAD_LABEL = '4MB'
 
 // ── 업로드 ────────────────────────────────────────────────────
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -54,6 +58,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     const imageFile = formData.get('image') as File | null
     const assetId   = (formData.get('asset_id') as string | null)?.trim()
     if (!imageFile || !assetId) throw error(400, 'image / asset_id 필수')
+    if (imageFile.size > MAX_UPLOAD_BYTES) throw error(413, `파일 크기는 ${MAX_UPLOAD_LABEL} 이하여야 합니다.`)
 
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
     const ext = imageFile.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg'
@@ -78,6 +83,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
   if (thumbFile.type !== 'image/webp' || largeFile.type !== 'image/webp') {
     throw error(400, 'WebP 형식만 허용됩니다.')
+  }
+  if (thumbFile.size > MAX_UPLOAD_BYTES || largeFile.size > MAX_UPLOAD_BYTES) {
+    throw error(413, `파일 크기는 ${MAX_UPLOAD_LABEL} 이하여야 합니다.`)
   }
 
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')

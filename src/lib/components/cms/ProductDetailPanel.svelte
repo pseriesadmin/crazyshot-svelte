@@ -12,6 +12,7 @@
   import type { ContentBlock } from '$lib/types/content-editor'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { buildProductQrPayload, renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   import { normalizeKeyValueList, serializeKeyValueList } from '$lib/utils/keyValueList'
@@ -370,7 +371,8 @@
   let showUrlInput = $state(false)
   let urlInputVal = $state('')
   let fileInputEl = $state<HTMLInputElement | null>(null)
-  let lightboxUrl = $state<string | null>(null)
+  let viewerOpen = $state(false)
+  let viewerIndex = $state(0)
   let holdTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   // 이미지 그리드 드래그 순서 변경 상태
   let imgDragIdx = $state<number | null>(null)
@@ -711,8 +713,42 @@
     }
   }
 
-  function openLightbox(url: string) { lightboxUrl = url }
-  function closeLightbox() { lightboxUrl = null }
+  // 공통 이미지·문서 뷰어(MediaViewer) — 현재 이미지 목록을 그대로 넘긴다
+  const viewerItems = $derived(
+    localImages.filter(Boolean).map((u, i) => ({ url: largeUrl(u), thumbUrl: thumbUrl(u), name: `${localBasic.name || product.name} 이미지 ${i + 1}` }))
+  )
+  function openLightbox(url: string) {
+    const i = localImages.filter(Boolean).indexOf(url)
+    viewerIndex = i >= 0 ? i : 0
+    viewerOpen = true
+  }
+  function closeLightbox() { viewerOpen = false }
+  // 뷰어 안 이미지 편집 저장 — 편집본을 새 파일로 올려 같은 자리의 이미지를 교체하고, 이전 파일은 저장소에서 정리한다
+  async function saveEditedImage(i: number, blob: Blob): Promise<boolean> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return false }
+    if (isAnySaving || isUploading) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return false }
+    const list = localImages.filter(Boolean)
+    const oldUrl = list[i]
+    if (!oldUrl) return false
+    const newUrl = await uploadFile(new File([blob], 'edited.webp', { type: 'image/webp' }))
+    if (!newUrl) { csToast.error(uploadError ?? '편집 이미지 업로드에 실패했습니다.'); return false }
+    // 업로드 API가 배열 끝에 새 주소를 이어 붙여 두므로, 같은 자리 교체본으로 배열 전체를 다시 저장한다
+    localImages = list.map((u, idx) => (idx === i ? newUrl : u))
+    await autoSave()
+    fetch('/api/cms/upload', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ largeUrl: oldUrl }),
+    }).catch(() => { /* 정리 실패는 화면에 영향 없음 */ })
+    return true
+  }
+  // 뷰어 안 삭제 — 기존 이미지 제거(자동 저장 + 저장소 정리)와 같은 경로. 저장 중이면 막는다
+  async function deleteFromViewer(i: number): Promise<boolean> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return false }
+    if (isAnySaving || isUploading) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return false }
+    await removeImageAndSave(i)
+    return true
+  }
 
   // 대표이미지: image_urls[0] = 대표 (2초 홀드로 설정)
   function startHold(url: string) {
@@ -3271,19 +3307,16 @@
   </div>
 {/if}
 
-<!-- 라이트박스 모달 -->
-{#if lightboxUrl}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div
-    class="lightbox-backdrop"
-    onclick={closeLightbox}
-  >
-    <button type="button" class="lightbox-close" onclick={closeLightbox} aria-label="닫기">✕</button>
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="lightbox-img-wrap" onclick={(e) => e.stopPropagation()}>
-      <img src={largeUrl(lightboxUrl)} alt="확대 이미지" class="lightbox-img" />
-    </div>
-  </div>
+<!-- 이미지 뷰어(공통 MediaViewer) -->
+{#if viewerOpen}
+  <MediaViewer
+    items={viewerItems}
+    bind:index={viewerIndex}
+    title="상품 이미지"
+    onclose={closeLightbox}
+    onDelete={isChildProduct ? undefined : deleteFromViewer}
+    onSave={isChildProduct ? undefined : saveEditedImage}
+  />
 {/if}
 
 <style>
@@ -4006,48 +4039,6 @@
     padding: 20px 0;
     text-align: center;
   }
-
-  /* ─── 라이트박스 ─────────────────────────────────── */
-
-  .lightbox-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 500;
-    background: rgba(16,11,50,0.88);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 32px;
-    cursor: zoom-out;
-  }
-  .lightbox-img-wrap {
-    max-width: 90vw;
-    max-height: 90vh;
-    cursor: default;
-  }
-  .lightbox-img {
-    max-width: 100%;
-    max-height: 90vh;
-    object-fit: contain;
-    border-radius: var(--cms-radius-md);
-    display: block;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
-  }
-  .lightbox-close {
-    position: fixed;
-    top: 20px; right: 24px;
-    width: 44px; height: 44px;
-    border: 2px solid rgba(255,255,255,0.4);
-    border-radius: 50%;
-    background: rgba(16,11,50,0.65);
-    color: var(--cs-white);
-    font-size: 18px;
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.12s, border-color 0.12s;
-    z-index: 501;
-  }
-  .lightbox-close:hover { background: var(--cs-red-badge); border-color: var(--cs-red-badge); }
 
   /* ── 이력 탭 ──────────────────────────────────────── */
   .history-empty {

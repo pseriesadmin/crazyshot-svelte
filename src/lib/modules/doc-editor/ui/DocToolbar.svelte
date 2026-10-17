@@ -50,6 +50,33 @@
     return $editorStore?.isActive(name, attrs) ?? false
   }
 
+  // 서식 도구줄의 정렬 버튼: 이미지가 선택돼 있으면 이미지 정렬(왼쪽·가운데·오른쪽)로, 아니면 글 정렬로 동작한다(RichContentEditor 이관).
+  // (글 정렬 명령은 이미지 노드에 적용되지 않아 이미지가 선택된 상태에서는 아무 일도 일어나지 않았다)
+  function selectedImage(): { pos: number; attrs: Record<string, unknown> } | null {
+    const sel = $editorStore?.state.selection
+    return sel instanceof NodeSelection && sel.node.type.name === 'image' ? { pos: sel.from, attrs: sel.node.attrs as Record<string, unknown> } : null
+  }
+  function alignDisabled(v: string): boolean {
+    const im = selectedImage()
+    return !!im && (v === 'justify' || !!im.attrs['overlay']) // 이미지에는 양쪽 정렬이 없고, 겹치기 이미지는 정렬이 적용되지 않는다
+  }
+  function alignActive(v: string): boolean {
+    const im = selectedImage()
+    if (im) return !im.attrs['overlay'] && v !== 'justify' && ((im.attrs['align'] as string | undefined) || 'center') === v
+    return act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })
+  }
+  function applyAlign(v: string) {
+    const e = $editorStore
+    if (!e) return
+    const im = selectedImage()
+    if (im) {
+      if (alignDisabled(v)) return
+      e.view.dispatch(e.state.tr.setNodeMarkup(im.pos, undefined, { ...im.attrs, align: v }))
+      return
+    }
+    e.chain().focus().setTextAlign(v).run()
+  }
+
   function curSize(): number {
     const v = $editorStore?.getAttributes('textStyle')['fontSize'] as string | undefined
     const n = v ? parseFloat(v) : NaN
@@ -289,7 +316,7 @@
     <span class="dt-sep"></span>
 
     {#each [['left', 'alignLeft', '왼쪽 정렬'], ['center', 'alignCenter', '가운데 정렬'], ['right', 'alignRight', '오른쪽 정렬'], ['justify', 'alignJustify', '양쪽 정렬']] as [v, ic, label] (v)}
-      <button type="button" class="dt-btn" aria-label={label} title={label} aria-pressed={act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })} class:dt-btn-active={act('paragraph', { textAlign: v }) || act('heading', { textAlign: v })} disabled={!$editorStore} onclick={() => $editorStore?.chain().focus().setTextAlign(v).run()}><Icon name={ic} /></button>
+      <button type="button" class="dt-btn" aria-label={label} title={label} aria-pressed={alignActive(v)} class:dt-btn-active={alignActive(v)} disabled={!$editorStore || alignDisabled(v)} onclick={() => applyAlign(v)}><Icon name={ic} /></button>
     {/each}
     <span class="dt-sep"></span>
 

@@ -1115,6 +1115,7 @@
               bind:this={spreadsheetEditorRef}
               initialDoc={_importedSpreadsheetDoc ?? spreadsheetDocInit}
               onchange={() => { spreadsheetContentDirty = true }}
+              onUploadImage={uploadCanvasBackground}
             />
           {/key}
         </div>
