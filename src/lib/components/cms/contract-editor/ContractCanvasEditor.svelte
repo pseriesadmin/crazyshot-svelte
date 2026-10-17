@@ -22,6 +22,8 @@
   import { csToast } from '$lib/utils/toast'
   import ContractCanvasFieldPalette from './ContractCanvasFieldPalette.svelte'
   import { hasSignatureField } from '$lib/types/contract-document'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { fieldStyle, getContentRectPx } from '$lib/utils/canvasLetterbox'
   import type {
     CanvasDocument,
@@ -184,6 +186,54 @@
       img.onerror = () => reject(new Error('이미지 크기를 읽을 수 없습니다.'))
       img.src     = url
     })
+  }
+
+  // --------------------------------------------------------------------------
+  // 이미지 더블클릭 → 공통 이미지 뷰어(편집 포함)
+  // 배경 페이지와 발행자 이미지(서명·직인) 전체가 한 목록으로 열려 썸네일 정렬에 모두 나열된다.
+  // 배경 페이지는 크기·방향이 바뀌면 필드 위치가 어긋나므로 명암·컬러감만 편집할 수 있고, 발행자 이미지는 모든 편집 메뉴를 쓴다.
+  // 편집 결과는 새 파일로 올려(onUploadPage) 해당 페이지·필드의 이미지 주소만 교체한다(공용 서명·직인 자산 원본은 그대로).
+  // --------------------------------------------------------------------------
+  type ViewerRef = { kind: 'page' | 'field'; id: string }
+  let viewer = $state<{ items: MediaViewerItem[]; refs: ViewerRef[]; index: number } | null>(null)
+
+  function openViewer(target: ViewerRef) {
+    const items: MediaViewerItem[] = []
+    const refs: ViewerRef[] = []
+    pages.forEach((p, i) => {
+      items.push({ url: p.imageUrl, name: `계약서 배경 페이지 ${i + 1}`, editTools: ['light', 'tone'] })
+      refs.push({ kind: 'page', id: p.id })
+    })
+    for (const f of fields) {
+      if (f.type === 'issuer-image' && f.imageUrl) {
+        items.push({ url: f.imageUrl, name: f.label || '발행자 이미지' })
+        refs.push({ kind: 'field', id: f.id })
+      }
+    }
+    const index = Math.max(refs.findIndex((r) => r.kind === target.kind && r.id === target.id), 0)
+    if (items.length === 0) return
+    viewer = { items, refs, index }
+  }
+
+  async function saveViewerImage(i: number, blob: Blob): Promise<boolean> {
+    const v = viewer
+    const ref = v?.refs[i]
+    if (!v || !ref || readonly) return false
+    try {
+      const url = await uploadPageBlob(blob, `edited_${Date.now()}.webp`)
+      if (ref.kind === 'page') {
+        // 페이지 크기 정보도 새 이미지에 맞춘다(명암·컬러감 편집은 크기가 같지만, 큰 이미지는 편집 중 축소될 수 있다)
+        const size = await getImageSize(url).catch(() => null)
+        pages = pages.map((p) => (p.id === ref.id ? { ...p, imageUrl: url, ...(size ? { width: size.w, height: size.h } : {}) } : p))
+      } else {
+        fields = fields.map((f) => (f.id === ref.id ? { ...f, imageUrl: url } : f))
+      }
+      viewer = { ...v, items: v.items.map((it, k) => (k === i ? { ...it, url } : it)) }
+      return true
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '편집한 이미지를 저장하지 못했습니다.')
+      return false
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -431,6 +481,7 @@
               class="canvas-page"
               class:placing={!!placingType}
               onclick={(e) => onPageClick(e, page)}
+              ondblclick={() => { if (!placingType) openViewer({ kind: 'page', id: page.id }) }}
             >
               <!-- 배경 이미지 — object-fit:contain으로 A4 프레임 안에 레터박스 표시 -->
               <img
@@ -449,6 +500,7 @@
                   class:selected={selectedFieldId === field.id}
                   style={fieldStyle(field, page)}
                   onclick={(e) => selectField(field.id, e)}
+                  ondblclick={(e) => { if (field.type === 'issuer-image' && field.imageUrl) { e.stopPropagation(); openViewer({ kind: 'field', id: field.id }) } }}
                   onpointerdown={(e) => onFieldPointerDown(e, field)}
                   role="button"
                   tabindex="0"
@@ -494,6 +546,16 @@
     </div>
   </div>
 </div>
+
+{#if viewer}
+  <MediaViewer
+    items={viewer.items}
+    bind:index={viewer.index}
+    title="계약서 이미지"
+    onclose={() => { viewer = null }}
+    onSave={readonly ? undefined : saveViewerImage}
+  />
+{/if}
 
 <style>
   .canvas-editor {

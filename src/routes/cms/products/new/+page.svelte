@@ -1,4 +1,5 @@
 <script lang="ts">
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import { enhance } from '$app/forms'
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
@@ -558,7 +559,8 @@
   let showUrlInput = $state(false)
   let urlInputVal = $state('')
   let fileInputEl = $state<HTMLInputElement | null>(null)
-  let lightboxUrl = $state<string | null>(null)
+  let viewerOpen = $state(false)
+  let viewerIndex = $state(0)
   // 이미지 그리드 드래그 순서 변경 상태
   let imgDragIdx = $state<number | null>(null)
   let imgOverIdx = $state<number | null>(null)
@@ -682,8 +684,17 @@
       }).catch(() => {})
     }
   }
-  function openLightbox(url: string) { lightboxUrl = url }
-  function closeLightbox() { lightboxUrl = null }
+  const viewerItems = $derived(imageUrls.filter(Boolean).map((u, i) => ({ url: u, thumbUrl: thumbUrl(u), name: `상품 이미지 ${i + 1}` })))
+  function openLightbox(url: string) {
+    const i = imageUrls.filter(Boolean).indexOf(url)
+    viewerIndex = i >= 0 ? i : 0
+    viewerOpen = true
+  }
+  function closeLightbox() { viewerOpen = false }
+  async function deleteFromViewer(i: number): Promise<boolean> {
+    removeImage(i)
+    return true
+  }
 
   // ── 콘텐츠 에디터 ──────────────────────────────────
   let contentBlocks = $state<ContentBlock[]>([])
@@ -1788,11 +1799,8 @@
     </div>
   </form>
 
-  {#if lightboxUrl}
-    <div class="lightbox-backdrop" onclick={closeLightbox} role="dialog" aria-modal="true" aria-label="이미지 확대">
-      <button class="lightbox-close" onclick={closeLightbox} aria-label="닫기">✕</button>
-      <img src={lightboxUrl} alt="이미지 확대" class="lightbox-img" />
-    </div>
+  {#if viewerOpen}
+    <MediaViewer items={viewerItems} bind:index={viewerIndex} title="상품 이미지" onclose={closeLightbox} onDelete={deleteFromViewer} />
   {/if}
 </div>
 
@@ -2112,20 +2120,6 @@
 
   .empty-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
 
-  .lightbox-backdrop {
-    position: fixed; inset: 0; z-index: 500;
-    background: rgba(16,11,50,0.85);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .lightbox-img { max-width: 90vw; max-height: 85vh; object-fit: contain; border-radius: var(--radius-sm); }
-  .lightbox-close {
-    position: absolute; top: 20px; right: 24px;
-    background: rgba(255,255,255,0.15); border: none; color: white;
-    width: 40px; height: 40px; border-radius: 50%;
-    font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: background 0.12s;
-  }
-  .lightbox-close:hover { background: rgba(255,255,255,0.3); }
 
   /* 공통 버튼 (스펙 행 삭제 / 스펙 항목 추가) */
   .remove-btn {

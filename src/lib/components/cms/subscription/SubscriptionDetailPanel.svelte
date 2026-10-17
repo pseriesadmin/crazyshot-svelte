@@ -1,4 +1,5 @@
 <script lang="ts">
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import { untrack } from 'svelte'
   import { invalidateAll } from '$app/navigation'
   import { enhance, deserialize } from '$app/forms'
@@ -223,6 +224,9 @@
 
   async function deleteImage(imageUrl: string): Promise<void> {
     if (!confirm('이미지를 삭제할까요?')) return
+    await removeImageFile(imageUrl)
+  }
+  async function removeImageFile(imageUrl: string): Promise<boolean> {
     const res = await fetch('/api/cms/subscriptions/upload', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -231,15 +235,17 @@
     if (res.ok) {
       await invalidateAll()
       csToast.success('이미지가 삭제됐습니다.')
-    } else {
-      csToast.error('이미지 삭제에 실패했습니다.')
+      return true
     }
+    csToast.error('이미지 삭제에 실패했습니다.')
+    return false
   }
 
   // ── 이미지 탭 — 드래그&드롭 + 라이트박스 (ProductDetailPanel과 동일 UX) ──
   let isImageDragging = $state(false)
   let imageDragCounter = 0
-  let lightboxUrl = $state<string | null>(null)
+  let viewerOpen = $state(false)
+  let viewerIndex = $state(0)
 
   function handleImageDragEnter(e: DragEvent): void {
     e.preventDefault()
@@ -258,8 +264,17 @@
     const files = e.dataTransfer?.files
     if (files?.length) void uploadImages(files)
   }
-  function openLightbox(url: string): void { lightboxUrl = url }
-  function closeLightbox(): void { lightboxUrl = null }
+  const viewerItems = $derived((plan.image_urls ?? []).map((u, i) => ({ url: u, name: `구독 상품 이미지 ${i + 1}` })))
+  function openLightbox(url: string): void {
+    const i = (plan.image_urls ?? []).indexOf(url)
+    viewerIndex = i >= 0 ? i : 0
+    viewerOpen = true
+  }
+  function closeLightbox(): void { viewerOpen = false }
+  async function deleteFromViewer(i: number): Promise<boolean> {
+    const url = (plan.image_urls ?? [])[i]
+    return url ? removeImageFile(url) : false
+  }
 
   async function saveContent(): Promise<void> {
     // 대기 중인 편집(디바운스 250ms)을 즉시 반영하고 직렬화 누락 여부를 점검 — 변경이 없으면 원본 그대로
@@ -563,13 +578,8 @@
         </div>
       {/if}
 
-      {#if lightboxUrl}
-        <div class="lightbox-overlay" role="dialog" aria-modal="true" aria-label="이미지 확대 보기" onclick={closeLightbox} onkeydown={(e) => { if (e.key === 'Escape') closeLightbox() }} tabindex="-1">
-          <button type="button" class="lightbox-close" onclick={closeLightbox} aria-label="닫기">✕</button>
-          <div class="lightbox-img-wrap" onclick={(e) => e.stopPropagation()} role="presentation">
-            <img src={lightboxUrl} alt="확대 이미지" class="lightbox-img" />
-          </div>
-        </div>
+      {#if viewerOpen}
+        <MediaViewer items={viewerItems} bind:index={viewerIndex} title="구독 상품 이미지" onclose={closeLightbox} onDelete={deleteFromViewer} />
       {/if}
 
       {#if activeTab === 'specs'}
@@ -825,24 +835,6 @@
   }
   .img-item-view:hover .img-item-overlay { opacity: 1; }
 
-  /* ─── 라이트박스 ─────────────────────────────────── */
-  .lightbox-overlay {
-    position: fixed; inset: 0; z-index: 500; background: rgba(16,11,50,0.88);
-    display: flex; align-items: center; justify-content: center; padding: 32px; cursor: zoom-out;
-  }
-  .lightbox-img-wrap { max-width: 90vw; max-height: 90vh; cursor: default; }
-  .lightbox-img {
-    max-width: 100%; max-height: 90vh; object-fit: contain; border-radius: var(--radius-lg);
-    display: block; box-shadow: 0 8px 40px rgba(0,0,0,0.5);
-  }
-  .lightbox-close {
-    position: fixed; top: 20px; right: 24px; width: 44px; height: 44px;
-    border: 2px solid rgba(255,255,255,0.4); border-radius: 50%; background: rgba(16,11,50,0.65);
-    color: var(--cs-white); font-size: 18px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.12s, border-color 0.12s; z-index: 501;
-  }
-  .lightbox-close:hover { background: var(--cs-red-badge); border-color: var(--cs-red-badge); }
 
   .close-btn {
     margin-left: auto; flex-shrink: 0;

@@ -30,6 +30,8 @@
     DEFAULT_IMAGE_OVERLAY_WIDTH,
   } from '$lib/types/sheet-format'
   import { csToast } from '$lib/utils/toast'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
   import { fitColumnWidthsToTarget } from '$lib/utils/docImport/fitColumnWidths'
   import { ensureMaterialIconsFont } from '$lib/utils/loadMaterialIconsFont'
@@ -49,9 +51,14 @@
      * "수정 저장" 버튼의 활성/비활성(isDirty) 판정에 사용한다. 2026-08-28 Stephen 요청.
      */
     onchange?: () => void
+    /**
+     * 셀 위 서명/직인 이미지를 공통 이미지 뷰어에서 편집한 결과를 올리는 콜백(Blob → 저장소 URL).
+     * 셀 값은 `cs-image://너비:X:Y:URL` 마커 문자열이라 data URL을 넣을 수 없어 업로드가 필수다 — 없으면 뷰어는 보기 전용이다.
+     */
+    onUploadImage?: (blob: Blob, fileName: string) => Promise<string>
   }
 
-  let { initialDoc = null, readonly = false, onchange }: Props = $props()
+  let { initialDoc = null, readonly = false, onchange, onUploadImage }: Props = $props()
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 내부 duck-type 인터페이스 (jspreadsheet-ce 런타임 import 없이 타입 안전성 유지)
@@ -795,7 +802,63 @@
     wrap.addEventListener('dblclick', (e: MouseEvent) => {
       e.preventDefault()
       e.stopPropagation()
+      // 이미지 자체를 더블클릭하면 공통 이미지 뷰어를 연다(크기 입력창·툴바 안 더블클릭은 제외)
+      if (!bar.contains(e.target as Node)) openOverlayViewer({ ws, x, y })
     })
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 셀 위 이미지(서명/직인) 더블클릭 → 공통 이미지 뷰어(편집 포함)
+  // 모든 시트의 오버레이 이미지를 시트·행·열 순서로 한 목록에 모아 썸네일 정렬에 나열한다.
+  // 편집 결과는 onUploadImage로 올린 뒤 그 셀의 마커에서 URL만 교체한다(너비·위치 보존, 공용 서명·직인 자산 원본은 그대로).
+  // ─────────────────────────────────────────────────────────────────────────────
+  type OverlayRef = { sheet: number; x: number; y: number }
+  let viewer = $state<{ items: MediaViewerItem[]; refs: OverlayRef[]; index: number } | null>(null)
+
+  function openOverlayViewer(target: { ws: JssWorksheetInstance; x: number; y: number }): void {
+    const parent = spreadsheetParent
+    if (!parent) return
+    const items: MediaViewerItem[] = []
+    const refs: OverlayRef[] = []
+    let index = 0
+    parent.worksheets.forEach((w, si) => {
+      if (!isWorksheetLike(w)) return
+      w.getData().forEach((row, y) => {
+        row.forEach((v, x) => {
+          const str = v == null ? '' : String(v)
+          if (!hasImageOverlay(str)) return
+          const { imageUrl } = splitCellImageOverlay(str)
+          if (!imageUrl) return
+          if (w === target.ws && x === target.x && y === target.y) index = items.length
+          items.push({ url: imageUrl, name: `서명/직인 이미지 ${items.length + 1}` })
+          refs.push({ sheet: si, x, y })
+        })
+      })
+    })
+    if (items.length === 0) return
+    viewer = { items, refs, index }
+  }
+
+  async function saveOverlayImage(i: number, blob: Blob): Promise<boolean> {
+    const v = viewer
+    const ref = v?.refs[i]
+    const oldUrl = v?.items[i]?.url
+    if (!v || !ref || !oldUrl || !onUploadImage || readonly) return false
+    try {
+      const url = await onUploadImage(blob, `edited_${Date.now()}.webp`)
+      const w = spreadsheetParent?.worksheets[ref.sheet]
+      if (!isWorksheetLike(w)) throw new Error('시트를 찾지 못했습니다.')
+      const raw = w.getValueFromCoords(ref.x, ref.y)
+      const parts = splitCellImageOverlay(raw == null ? '' : String(raw))
+      // 편집하는 사이 셀의 이미지가 바뀌었으면(삭제·교체) 엉뚱한 셀을 덮어쓰지 않는다
+      if (parts.imageUrl !== oldUrl) throw new Error('편집하는 사이 셀의 이미지가 바뀌어 반영하지 못했습니다.')
+      w.setValueFromCoords(ref.x, ref.y, parts.text + toImageOverlayMarker(url, parts.width, parts.offsetX, parts.offsetY))
+      viewer = { ...v, items: v.items.map((it, k) => (k === i ? { ...it, url } : it)) }
+      return true
+    } catch (err) {
+      csToast.error(err instanceof Error ? err.message : '편집한 이미지를 저장하지 못했습니다.')
+      return false
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1754,6 +1817,16 @@
     class:is-ready={initialized}
   ></div>
 </div>
+
+{#if viewer}
+  <MediaViewer
+    items={viewer.items}
+    bind:index={viewer.index}
+    title="서명/직인 이미지"
+    onclose={() => { viewer = null }}
+    onSave={readonly || !onUploadImage ? undefined : saveOverlayImage}
+  />
+{/if}
 
 <style>
   /*

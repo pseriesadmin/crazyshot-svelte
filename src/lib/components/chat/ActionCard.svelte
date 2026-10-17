@@ -6,6 +6,8 @@
   import { csToast } from '$lib/utils/toast'
   import { smsNotifyTypesForCard } from '$lib/utils/smsCardTypes'
   import { mediaThumbUrl } from '$lib/utils/cannedBlocks'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import type { MediaViewerItem } from '$lib/types/media-viewer'
 
   interface Props {
     payload: ActionPayload
@@ -85,19 +87,18 @@
       ? payload.media.filter((m) => (m.type === 'youtube' ? /^[\w-]{11}$/.test(m.videoId) : m.type === 'image' && /^(?:https?:\/\/|\/(?!\/))/i.test(m.url)))
       : []
   )
-  let lightboxIdx = $state<number | null>(null)
-  let lightboxItem = $derived(lightboxIdx !== null ? (mediaItems[lightboxIdx] ?? null) : null)
+  // 확대·재생은 공통 이미지·영상 뷰어(MediaViewer)로 연다 — 카드 안 이미지·동영상 전체가 썸네일 정렬에 나열된다.
+  // (뷰어는 body로 옮겨 렌더링되므로 채팅창 transform 안 fixed 어긋남 문제가 없다)
+  let viewerIdx = $state<number | null>(null)
+  let viewerItems = $derived<MediaViewerItem[]>(
+    mediaItems.map((m, i) =>
+      m.type === 'youtube'
+        ? { url: `https://youtu.be/${m.videoId}`, type: 'youtube', videoId: m.videoId, thumbUrl: mediaThumbUrl(m), name: `동영상 ${i + 1}` }
+        : { url: m.url, type: 'image', name: m.alt || `이미지 ${i + 1}` }
+    )
+  )
   // 썸네일만 있는 카드(대표 이미지·버튼 문구·링크 없음) — 버튼을 숨긴다(서버가 button_label을 빈 문자열로 보낸다)
   let hideCta = $derived(payload.type === 'canned_cta' && payload.button_label === '' && !payload.action_url)
-  // 확대 화면은 채팅창(transform 조상) 밖인 body로 옮겨 렌더링한다 — position:fixed가 뷰포트 기준이 되게(ui-mobile.md "CSS transform + position:fixed 충돌")
-  function portal(node: HTMLElement): { destroy: () => void } {
-    document.body.appendChild(node)
-    return { destroy: () => node.remove() }
-  }
-  function onLightboxKey(e: KeyboardEvent): void {
-    if (lightboxIdx !== null && e.key === 'Escape') lightboxIdx = null
-  }
-
   // CTA 버튼 레이블 + 색상 결정
   let ctaLabel = $derived(payload.button_label ?? ctaDefaults(payload.type).label)
   let ctaColor = $derived(payload.button_color ?? ctaDefaults(payload.type).color)
@@ -515,7 +516,7 @@
         <button
           type="button"
           class="media-thumb"
-          onclick={() => (lightboxIdx = i)}
+          onclick={() => (viewerIdx = i)}
           aria-label={m.type === 'youtube' ? '동영상 재생' : (m.alt || '이미지 크게 보기')}
         >
           <img src={mediaThumbUrl(m)} alt={m.type === 'image' ? m.alt : ''} loading="lazy" />
@@ -529,8 +530,6 @@
 {#snippet scriptText()}
   {#if script}<p class="card-script">{script}</p>{/if}
 {/snippet}
-
-<svelte:window onkeydown={onLightboxKey} />
 
 <div class="action-card" class:expired={isBlocked}>
   <!-- GSD-17: product_link 전용 렌더링 (썸네일+상품명+가격+상세보기 링크) -->
@@ -762,25 +761,8 @@
     </div>
   {/if}
 
-  {#if lightboxItem}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="lb-backdrop" use:portal onclick={() => (lightboxIdx = null)} role="presentation">
-      <div class="lb-box" role="dialog" aria-modal="true" aria-label="첨부 크게 보기" tabindex="-1" onclick={(e) => e.stopPropagation()}>
-        <button type="button" class="lb-close" onclick={() => (lightboxIdx = null)} aria-label="닫기">✕</button>
-        {#if lightboxItem.type === 'image'}
-          <img class="lb-img" src={lightboxItem.url} alt={lightboxItem.alt} />
-        {:else}
-          <iframe
-            class="lb-video"
-            src="https://www.youtube.com/embed/{lightboxItem.videoId}?autoplay=1"
-            title="동영상"
-            allow="autoplay; encrypted-media; picture-in-picture"
-            allowfullscreen
-          ></iframe>
-        {/if}
-      </div>
-    </div>
+  {#if viewerIdx !== null}
+    <MediaViewer items={viewerItems} bind:index={viewerIdx} title="첨부" onclose={() => (viewerIdx = null)} downloadable={false} />
   {/if}
 
   <!-- 만료(또는 취소·발행취소) 오버레이 -->
@@ -937,36 +919,6 @@
     background: rgba(16, 11, 50, 0.35);
     font-size: 18px;
   }
-  /* 확대 보기 — body로 옮겨 렌더링되므로 :global */
-  :global(.lb-backdrop) {
-    position: fixed;
-    inset: 0;
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: rgba(16, 11, 50, 0.85);
-  }
-  :global(.lb-box) { position: relative; max-width: min(960px, 100%); max-height: 100%; display: flex; }
-  :global(.lb-img) { max-width: 100%; max-height: calc(100vh - 40px); object-fit: contain; border-radius: 12px; }
-  :global(.lb-video) { width: min(960px, calc(100vw - 40px)); aspect-ratio: 16 / 9; border: none; border-radius: 12px; background: #000; }
-  :global(.lb-close) {
-    position: absolute;
-    top: -14px;
-    right: -14px;
-    width: 44px;
-    height: 44px;
-    border: none;
-    border-radius: 50%;
-    background: var(--cs-white);
-    color: var(--cs-text);
-    font-size: 18px;
-    font-weight: 700;
-    cursor: pointer;
-  }
-  :global(.lb-close:hover) { background: var(--cs-red-badge); color: var(--cs-white); }
-
   .cta-btn {
     border: none;
     border-radius: 10px;

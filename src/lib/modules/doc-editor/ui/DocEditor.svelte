@@ -20,9 +20,10 @@
 
   import { CustomImage, DOC_EDITOR_EXTENSIONS } from '../core/extensions'
   import { isTiptapDocBlock } from '../core/types'
-  import type { DocJSON, TiptapDocBlock, MergeFieldAttrs, SignatureAsset } from '../core/types'
+  import type { DocJSON, TiptapDocBlock, MergeFieldAttrs, SignatureAsset, EditImageInfo } from '../core/types'
   import { fillMissingTableColwidths } from '../core/table-colwidth'
   import { cleanPastedHtml } from '../core/pasteClean'
+  import { IMAGE_RESIZE_CORNERS, allowedHandleSide, pointerExtent, createHandlePref, type ImageAlignKey } from '../core/imageTools'
   import { createPlaceholder } from './placeholderExtension'
   import { ensureIconFont } from './iconFont'
   import { validateImageFile } from './imageFile'
@@ -50,6 +51,11 @@
     notify?: (message: string, level: 'warning' | 'error' | 'info') => void
     /** 이미지 업로드 — 지정하면 서버 업로드 URL을 쓰고, 없으면 data URL로 문서에 인라인한다. */
     uploadImage?: (file: File) => Promise<{ url: string }>
+    /**
+     * 문서에 삽입된 이미지를 더블클릭하거나 이미지 도구줄의 '편집'을 눌렀을 때 호출(편집 가능 상태에서만). startEdit=true(도구줄 '편집')면 호스트가 뷰어를 편집 모드로 바로 연다. 호스트가 이미지 뷰어·편집기를 띄우고,
+     * 편집이 끝나면 replace(새 주소)로 그 이미지의 src를 교체한다(너비·정렬 등 다른 속성은 유지). 미지정 시 더블클릭 동작 없음.
+     */
+    onEditImage?: (info: EditImageInfo) => void
     /** 서명/직인 자산 목록 제공자 — 없으면 서명/직인 버튼이 비활성(목록 비어 있음) */
     listSignatureAssets?: () => Promise<SignatureAsset[]>
     /** 기능 개별 on/off (기본 전부 on) */
@@ -67,6 +73,7 @@
     onchange,
     notify,
     uploadImage,
+    onEditImage,
     listSignatureAssets,
     features: featuresProp = {},
     iconFontUrl,
@@ -83,15 +90,25 @@
   // --------------------------------------------------------------------------
   // 이미지 NodeView — 에디터 전용 (generateHTML/tiptapRender.ts 경로에서는 미사용)
   //
-  // 선택된 이미지 위에 플로팅 툴바를 표시:
-  //   • 프리셋 버튼 (소 100px / 중 200px / 대 400px)
-  //   • 너비 직접 입력 (px)
-  //   • 정렬 버튼 (← 가운데 →)
+  // 선택된 이미지 위에 플로팅 툴바를 표시(2026-10-16 정리 — RichContentEditor와 같은 기준):
+  //   • 겹치기(텍스트 위에 띄우기) · 편집(공통 뷰어) · ALT(사진 설명) · 크기 조절 점 표시/숨김 · 삭제
+  //   • 크기는 모서리 점 드래그, 정렬은 상단 서식 도구줄의 정렬 버튼이 맡는다(예전의 소·중·대 프리셋·너비 입력·정렬 버튼은 이와 중복·충돌해 제거).
   //
   // CustomImage.extend()로 width·align 속성 정의는 그대로 상속하고
   // addNodeView()만 추가. generateHTML() 측은 CustomImage 그대로 사용하므로
   // 저장된 너비·정렬 스타일이 고객 서명 화면에서도 정확히 렌더링된다.
   // --------------------------------------------------------------------------
+
+  // 크기 조절 점 표시 여부 — 이미지 도구줄의 크기 아이콘으로 켜고 끈다(기본 표시, 선택은 이 브라우저에 기억).
+  // 문서 안 모든 이미지가 같은 설정을 따르므로, 각 이미지 NodeView의 손잡이 갱신 함수를 모아 두고 전환 때 한꺼번에 부른다.
+  const handlePref = createHandlePref('de-image-resize-handles')
+  let resizeHandlesOn = handlePref.read()
+  const handleLayouts = new Set<() => void>()
+  function toggleResizeHandles(): void {
+    resizeHandlesOn = !resizeHandlesOn
+    handlePref.write(resizeHandlesOn)
+    handleLayouts.forEach((fn) => fn())
+  }
 
   const ImageWithNodeView = CustomImage.extend({
     addNodeView() {
@@ -169,76 +186,6 @@
           return s
         }
 
-        // ── 프리셋 크기 버튼 ──
-        const presets = [
-          { label: '소', px: 100 },
-          { label: '중', px: 200 },
-          { label: '대', px: 400 },
-        ] as const
-
-        presets.forEach(({ label, px }) => {
-          const btn = mkBtn(`${label}(${px})`, `너비 ${px}px`)
-          btn.addEventListener('mousedown', (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            dispatchAttrs({ width: px })
-          })
-          bar.appendChild(btn)
-        })
-
-        bar.appendChild(mkSep())
-
-        // ── 너비 직접 입력 ──
-        const widthInput = document.createElement('input')
-        widthInput.type = 'number'
-        widthInput.min = '20'
-        widthInput.max = '1200'
-        widthInput.placeholder = 'px'
-        widthInput.style.cssText =
-          'width:56px;height:24px;padding:0 4px;border:1px solid var(--de-lilac, #ECEBF4);' +
-          'border-radius:6px;font-size:11px;color:var(--de-text, #100B32);outline:none;box-sizing:border-box;flex-shrink:0'
-
-        widthInput.addEventListener('keydown', (e) => {
-          e.stopPropagation()
-          if (e.key === 'Enter') {
-            const w = parseInt(widthInput.value, 10)
-            if (w > 0 && w !== currentAttrs['width']) dispatchAttrs({ width: w })
-          }
-        })
-        widthInput.addEventListener('blur', () => {
-          // 값이 그대로면 아무것도 하지 않는다 — 같은 값을 다시 쓰면 문서가 바뀐 것으로 처리돼 저장 버튼이 켜진다
-          const w = parseInt(widthInput.value, 10)
-          if (w > 0 && w !== currentAttrs['width']) dispatchAttrs({ width: w })
-        })
-        bar.appendChild(widthInput)
-
-        bar.appendChild(mkSep())
-
-        // ── 정렬 버튼 ──
-        const alignDefs = [
-          { label: '←', value: 'left', title: '왼쪽 정렬' },
-          { label: '가운데', value: 'center', title: '가운데 정렬' },
-          { label: '→', value: 'right', title: '오른쪽 정렬' },
-        ] as const
-
-        const alignBtns: Array<{ btn: HTMLButtonElement; value: string }> = []
-        alignDefs.forEach(({ label, value, title }) => {
-          const btn = mkBtn(label, title)
-          btn.addEventListener('mousedown', (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            // 너비 입력란에 미확정 값이 있으면 함께 반영
-            const inputW = parseInt(widthInput.value, 10)
-            const patch: Record<string, unknown> = { align: value }
-            if (inputW > 0 && inputW !== currentAttrs['width']) patch['width'] = inputW
-            dispatchAttrs(patch)
-          })
-          bar.appendChild(btn)
-          alignBtns.push({ btn, value })
-        })
-
-        bar.appendChild(mkSep())
-
         // ── 겹치기(overlay) 토글 버튼 ──
         const overlayBtn = mkBtn('겹치기', '텍스트 위에 겹치기 — 드래그로 위치 조정')
         overlayBtn.addEventListener('mousedown', (e) => {
@@ -268,6 +215,104 @@
 
         bar.appendChild(mkSep())
 
+        // ── 문서 안 모든 이미지(문서 순서) — 뷰어의 썸네일 정렬에 전부 나열되고, 어느 이미지든 편집 저장 시 그 자리의 src만 교체된다 ──
+        function collectImages(): { images: EditImageInfo['images']; index: number } {
+          const images: EditImageInfo['images'] = []
+          let index = 0
+          const myPos = typeof getPos === 'function' ? getPos() : undefined
+          extEditor.state.doc.descendants((n, p) => {
+            if (n.type.name !== 'image') return true
+            const src = (n.attrs['src'] as string) || ''
+            if (p === myPos) index = images.length
+            // cur = 이 이미지의 현재 src(교체할 때마다 갱신 — 같은 이미지를 뷰어에서 여러 번 편집해도 계속 같은 자리를 찾는다)
+            let cur = src
+            images.push({
+              src,
+              alt: (n.attrs['alt'] as string) || '',
+              // 위치가 밀렸을 수 있어 교체 시점에 같은 위치·같은 src 를 확인하고, 아니면 같은 src 의 첫 이미지를 찾는다
+              replace: (newSrc: string) => {
+                const { state, dispatch } = extEditor.view
+                const same = (m: { type: { name: string }; attrs: Record<string, unknown> } | null | undefined) => !!m && m.type.name === 'image' && m.attrs['src'] === cur
+                let at = same(state.doc.nodeAt(p)) ? p : -1
+                if (at < 0) state.doc.descendants((m, q) => { if (at < 0 && same(m)) at = q; return at < 0 })
+                const target = at >= 0 ? state.doc.nodeAt(at) : null
+                if (target) {
+                  dispatch(state.tr.setNodeMarkup(at, undefined, { ...target.attrs, src: newSrc }))
+                  cur = newSrc
+                }
+              },
+            })
+            return false
+          })
+          return { images, index }
+        }
+
+        // ── 이미지 편집(RichContentEditor 이미지 도구 이관) ──
+        // '편집' = 공통 이미지 뷰어를 편집 모드로 연다(자르기·명암·컬러감·배경색·회전). 저장하면 같은 이미지의 src만 교체되고 너비·정렬·겹치기 위치는 유지된다.
+        const editBtn = mkBtn('', '이미지 편집 — 자르기·명암·컬러감·배경색·회전')
+        editBtn.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 18 18" fill="none" aria-hidden="true" style="vertical-align:-1px;margin-right:3px">' +
+          '<path d="M3 15l.7-3.3L12.4 3a1.6 1.6 0 0 1 2.3 2.3L6 14l-3 1zM10.8 4.6l2.6 2.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>편집'
+        editBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const src = (currentAttrs['src'] as string) || ''
+          if (!onEditImage || !extEditor.isEditable || !src) return
+          onEditImage({ src, replace: (newSrc: string) => dispatchAttrs({ src: newSrc }), startEdit: true, ...collectImages() })
+        })
+        bar.appendChild(editBtn)
+
+        // ── 사진 설명(ALT) — 시각장애 보조기기·검색에 쓰이는 대체 텍스트 ──
+        const altBtn = mkBtn('ALT', '사진 설명(대체 텍스트)')
+        const altInput = document.createElement('input')
+        altInput.type = 'text'
+        altInput.maxLength = 120
+        altInput.placeholder = '사진 설명'
+        altInput.style.cssText =
+          'display:none;width:140px;height:24px;padding:0 6px;border:1px solid var(--de-lilac, #ECEBF4);' +
+          'border-radius:6px;font-size:11px;color:var(--de-text, #100B32);outline:none;box-sizing:border-box;flex-shrink:0'
+        function applyAlt(): void {
+          const v = altInput.value.trim()
+          altInput.style.display = 'none'
+          if (v !== ((currentAttrs['alt'] as string | undefined) ?? '')) dispatchAttrs({ alt: v })
+        }
+        altBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          if (altInput.style.display === 'none') {
+            altInput.value = (currentAttrs['alt'] as string | undefined) ?? ''
+            altInput.style.display = 'block'
+            altInput.focus()
+          } else {
+            applyAlt()
+          }
+        })
+        altInput.addEventListener('keydown', (e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { e.preventDefault(); applyAlt() }
+          else if (e.key === 'Escape') { altInput.style.display = 'none' }
+        })
+        altInput.addEventListener('blur', applyAlt)
+        // 도구줄 크기 아이콘(속이 빈 사각 윤곽 + 네 모서리 점) — 크기 조절 점 표시/숨김 전환
+        const handleToggleBtn = mkBtn('', '크기 조절 점 숨기기')
+        handleToggleBtn.setAttribute('aria-label', '크기 조절 점 표시/숨김')
+        handleToggleBtn.innerHTML =
+          '<svg width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true" style="vertical-align:-2px">' +
+          '<rect x="4.5" y="4.5" width="9" height="9" rx="0.8" stroke="currentColor" stroke-width="1.4"/>' +
+          '<rect x="2.4" y="2.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/><rect x="12.4" y="2.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/>' +
+          '<rect x="2.4" y="12.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/><rect x="12.4" y="12.4" width="3.2" height="3.2" rx="0.7" fill="currentColor"/></svg>'
+        handleToggleBtn.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          toggleResizeHandles()
+        })
+
+        bar.appendChild(altBtn)
+        bar.appendChild(altInput)
+        bar.appendChild(handleToggleBtn)
+
+        bar.appendChild(mkSep())
+
         // ── 삭제 버튼 (2026-08-16 — 기존엔 이미지 선택 시 삭제 수단이 전혀 없어
         //    "선택 후 Delete/Backspace 키" 외 발견 불가능했음. jspreadsheet-ce 스프레드시트
         //    모드 오버레이 삭제 버튼과 동일한 발견성으로 통일) ──
@@ -288,8 +333,113 @@
         })
         bar.appendChild(deleteBtn)
 
+        // ── 모서리 크기 조절 손잡이(RichContentEditor 이관) ──
+        // 선택된 이미지의 모서리 점을 끌면 너비(px)가 바뀌고, 놓을 때 한 번만 문서에 반영한다(되돌리기 한 단계).
+        // 가운데 정렬은 네 모서리(중심 기준 대칭), 왼쪽 정렬·겹치기는 오른쪽 모서리, 오른쪽 정렬은 왼쪽 모서리만 나온다.
+        const CORNERS = IMAGE_RESIZE_CORNERS
+        let imgSelected = false
+        let resizeState: { side: 'l' | 'r'; rect: DOMRect; scale: number; w: number } | null = null
+
+        const sizeBadge = document.createElement('div')
+        sizeBadge.style.cssText =
+          'display:none;position:absolute;transform:translate(-50%,-50%);padding:3px 8px;border-radius:8px;' +
+          'background:var(--de-dark, #100B32);color:#fff;font-size:11px;font-weight:700;pointer-events:none;z-index:102'
+
+        const handleEls = CORNERS.map((c) => {
+          const el = document.createElement('div')
+          el.setAttribute('data-de-resize', c.id)
+          el.setAttribute('role', 'slider')
+          el.setAttribute('aria-label', '이미지 크기 조절')
+          el.title = '모서리를 끌어 크기 조절'
+          el.style.cssText =
+            'display:none;position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:3px;' +
+            `background:var(--de-purple, #3B2F8A);z-index:101;touch-action:none;cursor:${c.cursor}`
+          return { ...c, el }
+        })
+
+        function sideAllowed(side: 'l' | 'r'): boolean {
+          const a = ((currentAttrs['align'] as string | undefined) || 'center') as ImageAlignKey
+          return allowedHandleSide(side, a, !!currentAttrs['overlay'])
+        }
+
+        /** 이미지의 현재 모서리 위치(outer 기준)에 손잡이를 놓고, 선택 상태·정렬에 맞게 보이거나 숨긴다 */
+        function layoutHandles(): void {
+          handleEls.forEach((h) => {
+            const show = imgSelected && resizeHandlesOn && sideAllowed(h.side)
+            h.el.style.display = show ? 'block' : 'none'
+            h.el.style.left = `${img.offsetLeft + h.cx * img.offsetWidth}px`
+            h.el.style.top = `${img.offsetTop + h.cy * img.offsetHeight}px`
+          })
+          // 도구줄 크기 아이콘 상태(켜짐=강조) 동기화
+          handleToggleBtn.dataset['state'] = resizeHandlesOn ? 'active' : ''
+          handleToggleBtn.setAttribute('aria-pressed', String(resizeHandlesOn))
+          handleToggleBtn.title = resizeHandlesOn ? '크기 조절 점 숨기기' : '크기 조절 점 보이기'
+          handleToggleBtn.style.background = resizeHandlesOn ? 'var(--de-purple-wash, rgba(59,47,138,0.1))' : 'transparent'
+          handleToggleBtn.style.borderColor = resizeHandlesOn ? 'var(--de-purple, #3B2F8A)' : 'transparent'
+          handleToggleBtn.style.color = resizeHandlesOn ? 'var(--de-purple, #3B2F8A)' : 'var(--de-text, #100B32)'
+        }
+
+        function startResize(e: PointerEvent, side: 'l' | 'r'): void {
+          if (!extEditor.isEditable) return
+          e.preventDefault()
+          e.stopPropagation()
+          const rect = img.getBoundingClientRect()
+          const scale = zoomScale()
+          resizeState = { side, rect, scale, w: Math.round(rect.width / scale) }
+          ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+        }
+        function moveResize(e: PointerEvent): void {
+          const r = resizeState
+          if (!r) return
+          const align = ((currentAttrs['align'] as string | undefined) || 'center') as ImageAlignKey
+          const raw = pointerExtent(align, !!currentAttrs['overlay'], e.clientX, r.rect) / r.scale
+          const w = Math.min(1200, Math.max(20, Math.round(raw)))
+          resizeState = { ...r, w }
+          img.style.width = `${w}px`
+          layoutHandles()
+          sizeBadge.textContent = `${w}px`
+          sizeBadge.style.left = `${img.offsetLeft + img.offsetWidth / 2}px`
+          sizeBadge.style.top = `${img.offsetTop + img.offsetHeight / 2}px`
+          sizeBadge.style.display = 'block'
+        }
+        function endResize(commit: boolean): void {
+          const r = resizeState
+          resizeState = null
+          sizeBadge.style.display = 'none'
+          if (!r) return
+          if (commit && r.w !== currentAttrs['width']) dispatchAttrs({ width: r.w })
+          else applyAttrs() // 변경 없음·취소 → 문서 값으로 화면 복구
+        }
+        handleEls.forEach((h) => {
+          h.el.addEventListener('pointerdown', (e: PointerEvent) => startResize(e, h.side))
+          h.el.addEventListener('pointermove', moveResize)
+          h.el.addEventListener('pointerup', () => endResize(true))
+          h.el.addEventListener('pointercancel', () => endResize(false))
+          h.el.addEventListener('mousedown', (e) => e.preventDefault()) // 포커스·선택 유지
+        })
+        const isHandle = (t: EventTarget | null): boolean => handleEls.some((h) => h.el === t) // 배지는 pointer-events:none
+
+        img.addEventListener('load', layoutHandles)
+        // 창 크기·화면 확대/축소·max-width:100% 로 이미지 표시 크기가 바뀌어도 손잡이가 모서리에 붙어 있게 한다
+        const sizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => layoutHandles()) : null
+        sizeObserver?.observe(img)
+        handleLayouts.add(layoutHandles)
+
         outer.appendChild(img)
         outer.appendChild(bar)
+        handleEls.forEach((h) => outer.appendChild(h.el))
+        outer.appendChild(sizeBadge)
+
+        // ── 더블클릭 → 호스트의 이미지 뷰어·편집기 호출(편집 가능 상태에서만) ──
+        outer.addEventListener('dblclick', (e: MouseEvent) => {
+          if (!onEditImage || !extEditor.isEditable) return
+          if (bar.contains(e.target as Node) || isHandle(e.target)) return   // 플로팅 툴바·크기 손잡이 조작은 제외
+          const src = (currentAttrs['src'] as string) || ''
+          if (!src) return
+          e.preventDefault()
+          e.stopPropagation()
+          onEditImage({ src, replace: (newSrc: string) => dispatchAttrs({ src: newSrc }), startEdit: false, ...collectImages() })
+        })
 
         // ── 겹치기 드래그 (ContractCanvasEditor.onFieldPointerDown 패턴) ──
         outer.addEventListener('pointerdown', (e: PointerEvent) => {
@@ -304,7 +454,7 @@
           // 발화하지 않게 된다(document 캡처단계 디버그 리스너로 직접 확인: pointerdown은
           // 도달하지만 mousedown은 로그에 전혀 안 찍힘, click은 찍히지만 이 버튼들은 click을
           // 안 씀). preventDefault를 추가했다가 실사용 검증 중 이 결함을 직접 재현해 원복함.
-          if (bar.contains(e.target as Node)) return
+          if (bar.contains(e.target as Node) || isHandle(e.target)) return
           e.preventDefault()
           e.stopPropagation()
           outer.setPointerCapture(e.pointerId)
@@ -393,25 +543,6 @@
             outer.style.cssText = 'position:relative;display:block;clear:both'
           }
 
-          // 너비 입력 값 동기화
-          widthInput.value = w ? String(w) : ''
-
-          // 정렬 버튼 활성 상태 (overlay 시 비활성화)
-          alignBtns.forEach(({ btn, value }) => {
-            const active = !overlay && align === value
-            btn.dataset['state'] = active ? 'active' : ''
-            btn.style.opacity = overlay ? '0.4' : '1'
-            if (active) {
-              btn.style.background = 'var(--de-purple-wash, rgba(59,47,138,0.1))'
-              btn.style.borderColor = 'var(--de-purple, #3B2F8A)'
-              btn.style.color = 'var(--de-purple, #3B2F8A)'
-            } else {
-              btn.style.background = 'transparent'
-              btn.style.borderColor = 'transparent'
-              btn.style.color = 'var(--de-text, #100B32)'
-            }
-          })
-
           // 겹치기 버튼 활성 상태
           overlayBtn.dataset['state'] = overlay ? 'active' : ''
           if (overlay) {
@@ -423,6 +554,13 @@
             overlayBtn.style.borderColor = 'transparent'
             overlayBtn.style.color = 'var(--de-text, #100B32)'
           }
+          // ALT 버튼: 사진 설명이 있으면 강조
+          const hasAlt = !!(currentAttrs['alt'] as string | undefined)
+          altBtn.dataset['state'] = hasAlt ? 'active' : ''
+          altBtn.style.background = hasAlt ? 'var(--de-purple-wash, rgba(59,47,138,0.1))' : 'transparent'
+          altBtn.style.borderColor = hasAlt ? 'var(--de-purple, #3B2F8A)' : 'transparent'
+          altBtn.style.color = hasAlt ? 'var(--de-purple, #3B2F8A)' : 'var(--de-text, #100B32)'
+          layoutHandles()
         }
 
         applyAttrs()
@@ -439,18 +577,22 @@
             img.style.outline = '2px solid var(--de-purple, #3B2F8A)'
             img.style.outlineOffset = '2px'
             bar.style.display = 'flex'
+            imgSelected = true
+            layoutHandles()
           },
           deselectNode() {
             img.style.outline = ''
             img.style.outlineOffset = ''
             bar.style.display = 'none'
+            imgSelected = false
+            layoutHandles()
           },
           /**
            * 툴바 내 이벤트는 ProseMirror 로 전파하지 않음 (input 타이핑 보호).
            * overlay 모드에서 포인터 이벤트는 드래그 핸들러가 처리 — PM에 전파 차단.
            */
           stopEvent(event: Event) {
-            if (bar.contains(event.target as Node)) return true
+            if (bar.contains(event.target as Node) || isHandle(event.target)) return true
             if (
               currentAttrs['overlay'] &&
               (event.type === 'pointerdown' ||
@@ -460,7 +602,10 @@
             ) return true
             return false
           },
-          destroy() { /* 정리 없음 */ },
+          destroy() {
+            sizeObserver?.disconnect()
+            handleLayouts.delete(layoutHandles)
+          },
         }
       }
     },

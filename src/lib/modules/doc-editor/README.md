@@ -69,6 +69,7 @@ TipTap 기반 문서·양식 편집기입니다. 표·반복행·이미지·서�
 | `onchange` | `() => void` | 내용 변경 알림(첫 로드 시 1회 호출될 수 있음 — 호출부가 로드 직후 dirty 를 초기화) |
 | `notify` | `(msg, 'warning'\|'error'\|'info') => void` | 토스트 연결(없으면 무음) |
 | `uploadImage` | `(file) => Promise<{url}>` | 이미지 업로더(없으면 data URL 인라인) |
+| `onEditImage` | `(EditImageInfo) => void` (`{src, replace, startEdit, images, index}`) | 삽입된 이미지 더블클릭(startEdit=false) 또는 이미지 도구줄 '편집'(startEdit=true) 시 호출(편집 가능 상태). 호스트가 뷰어·편집기를 띄우고 `replace(새 src)`로 교체 |
 | `listSignatureAssets` | `() => Promise<SignatureAsset[]>` | 서명/직인 목록 제공자 |
 | `features` | `Partial<DocEditorFeatures>` | `fontColor·link·table·repeatRow·image·signature·source·zoom·paragraph·divider·emoji·fontSize·bgColor·indent` on/off(기본 전부 on). `fontSize·bgColor·indent` 는 렌더 쪽도 `FontSize·BackgroundColor·Indent` 확장을 등록해야 보이므로, 별도 렌더 집합을 쓰는 호스트는 그 등록 전까지 끄세요 |
 | `placeholder` | `string` | 빈 문서 안내 문구(마운트 시점 값만 반영) |

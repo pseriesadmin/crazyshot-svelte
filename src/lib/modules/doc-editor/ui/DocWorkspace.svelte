@@ -9,7 +9,7 @@
   import type { Snippet } from 'svelte'
   import DocEditor from './DocEditor.svelte'
   import VariablePanel from './VariablePanel.svelte'
-  import type { DocJSON, MergeFieldAttrs, SignatureAsset, TiptapDocBlock, VariableCatalog } from '../core/types'
+  import type { DocJSON, EditImageInfo, MergeFieldAttrs, SignatureAsset, TiptapDocBlock, VariableCatalog } from '../core/types'
   import type { DocEditorFeatures } from './features'
 
   interface Props {
@@ -24,6 +24,7 @@
     onchange?: () => void
     notify?: (message: string, level: 'warning' | 'error' | 'info') => void
     uploadImage?: (file: File) => Promise<{ url: string }>
+    onEditImage?: (info: EditImageInfo) => void
     listSignatureAssets?: () => Promise<SignatureAsset[]>
     features?: Partial<DocEditorFeatures>
     iconFontUrl?: string | null

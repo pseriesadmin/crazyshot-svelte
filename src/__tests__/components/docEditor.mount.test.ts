@@ -370,14 +370,29 @@ describe('DocEditor — mount', () => {
     }
   })
 
-  it('너비 입력란에서 값을 바꾸지 않고 나가도 문서가 바뀐 것으로 처리되지 않는다', async () => {
+  it('이미지 도구줄에는 크기·정렬 중복 메뉴(프리셋·너비 입력·정렬 버튼)가 없고, 편집·ALT·크기 점 전환·삭제·겹치기만 있다', async () => {
+    mountEditor({ initialContent: IMG_DOC })
+    await ready()
+    const titles = [...target.querySelectorAll<HTMLButtonElement>('.ProseMirror button')].map((b) => b.title)
+    expect(titles.some((x) => x.startsWith('너비'))).toBe(false)
+    expect(titles.some((x) => x.endsWith('정렬'))).toBe(false)
+    expect(target.querySelector('.ProseMirror input[type="number"]')).toBeNull()
+    expect(titles.some((x) => x.startsWith('이미지 편집'))).toBe(true)
+    expect(titles.some((x) => x.startsWith('사진 설명'))).toBe(true)
+    expect(titles.some((x) => x.startsWith('크기 조절 점'))).toBe(true)
+    expect(titles.some((x) => x.startsWith('이미지 삭제'))).toBe(true)
+    expect(titles.some((x) => x.startsWith('텍스트 위에 겹치기'))).toBe(true)
+  })
+
+  it('ALT 입력란에서 값을 바꾸지 않고 나가도 문서가 바뀐 것으로 처리되지 않는다', async () => {
     const onchange = vi.fn()
     mountEditor({ initialContent: IMG_DOC, onchange })
     await ready()
     await wait(30)
     onchange.mockClear()
-    const input = target.querySelector<HTMLInputElement>('.ProseMirror input[type="number"]')!
-    expect(input.value).toBe('200')
+    const altBtn = [...target.querySelectorAll<HTMLButtonElement>('.ProseMirror button')].find((b) => b.title.startsWith('사진 설명'))!
+    altBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    const input = target.querySelector<HTMLInputElement>('.ProseMirror input[placeholder="사진 설명"]')!
     input.dispatchEvent(new FocusEvent('blur'))
     await wait(10)
     expect(onchange).not.toHaveBeenCalled()

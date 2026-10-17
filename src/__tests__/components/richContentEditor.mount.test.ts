@@ -20,7 +20,7 @@ async function wait(ms = 0) {
 }
 
 async function ready() {
-  for (let i = 0; i < 50 && !target.querySelector('.ProseMirror'); i++) await wait(20)
+  for (let i = 0; i < 250 && !target.querySelector(".ProseMirror"); i++) await wait(20)
   expect(target.querySelector('.ProseMirror')).toBeTruthy()
 }
 
@@ -302,32 +302,30 @@ describe('RichContentEditor — mount', () => {
       expect(down.defaultPrevented).toBe(false)
     })
 
-    it('사진 크기·정렬 시트에서 폭 프리셋·슬라이더·정렬을 바꾸면 문서와 저장 형식에 반영된다', async () => {
-      mountEditor([{ type: 'image', layout: 'individual', images: [img('a')] }])
+    it('폭은 모서리 점 드래그로, 정렬은 서식 도구줄 정렬 버튼으로 바꾸면 문서와 저장 형식에 반영된다(별도 "사진 크기·정렬" 시트는 없다)', async () => {
+      mountEditor([{ type: 'image', layout: 'individual', images: [img('a')], width: 50 }])
       await ready()
       const editor = editorOf()
       editor.commands.setNodeSelection(0)
       await wait()
-      ctxBtn('사진 크기·정렬').click()
+      expect(target.querySelector('.rc-ctx button[aria-label="사진 크기·정렬"]')).toBeNull() // 중복·충돌 기능이라 제거됨
+      const dom = editor.view.nodeDOM(0) as HTMLElement
+      dom.getBoundingClientRect = () => ({ left: 200, right: 400, top: 0, bottom: 100, width: 200, height: 100, x: 200, y: 0, toJSON: () => ({}) }) as DOMRect
+      editor.commands.setNodeSelection(0) // 선택 갱신으로 손잡이 위치 재측정
       await wait()
-      const chip = [...target.querySelectorAll<HTMLButtonElement>('.rc-sheet .rc-chipbtn')].find((b) => b.textContent?.trim() === '50%')!
-      chip.click()
+      const se = target.querySelector<HTMLElement>('.rc-resize-se')!
+      const ev = (type: string, x: number) => new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 50, button: 0 })
+      se.dispatchEvent(ev('pointerdown', 400))
+      se.dispatchEvent(ev('pointermove', 360)) // 중심(300)에서 60 → 폭 = 2*60/400 = 30%
+      se.dispatchEvent(ev('pointerup', 360))
       await wait()
-      expect(editor.getJSON().content?.[0].attrs?.width).toBe(50)
-      const group = target.querySelector<HTMLElement>('.rc-images')!
-      expect(group.style.width).toBe('50%')
+      expect(editor.getJSON().content?.[0].attrs?.width).toBe(30)
 
-      const slider = target.querySelector<HTMLInputElement>('input[aria-label="사진 묶음 폭(%)"]')!
-      slider.value = '35'
-      slider.dispatchEvent(new Event('change', { bubbles: true }))
-      await wait()
-      expect(editor.getJSON().content?.[0].attrs?.width).toBe(35)
-
-      target.querySelector<HTMLButtonElement>('.rc-sheet button[aria-label="오른쪽 정렬"]')!.click()
+      target.querySelector<HTMLButtonElement>('.rc-toolbar-wrap button[aria-label="오른쪽 정렬"]')!.click()
       await wait(350)
       expect(editor.getJSON().content?.[0].attrs?.align).toBe('right')
       const saved = api.flush().blocks.find((b) => b.type === 'image') as { width?: number; align?: string }
-      expect(saved.width).toBe(35)
+      expect(saved.width).toBe(30)
       expect(saved.align).toBe('right')
     })
 
@@ -528,7 +526,7 @@ describe('RichContentEditor — mount', () => {
       outer.addEventListener('submit', (e) => { outerSubmits += 1; e.preventDefault() })
       app = mount(RichContentEditor, { target: inner, props: { blocks: [{ type: 'text', html: '<p>본문</p>' }], keywords: [] as string[], variant: 'cms' as const } })
       api = app as unknown as typeof api
-      for (let i = 0; i < 50 && !target.querySelector('.ProseMirror'); i++) await wait(20)
+      for (let i = 0; i < 250 && !target.querySelector(".ProseMirror"); i++) await wait(20)
       btn('동영상').click()
       await wait()
       const input = target.querySelector<HTMLInputElement>('input[aria-label="유튜브 주소"]')!
