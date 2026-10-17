@@ -181,6 +181,10 @@ export interface CsRecord {
   status: CsRecordStatus
   summary: string | null
   admin_note: string | null
+  /** 등록한 관리자 id — 기존 메모·자동 요약은 null */
+  created_by?: string | null
+  /** 서버가 목록 조회 때 붙이는 등록 관리자 아이디(이메일 앞부분) */
+  created_by_label?: string | null
   created_at: string
   updated_at: string
 }
