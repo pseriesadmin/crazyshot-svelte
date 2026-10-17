@@ -173,6 +173,20 @@ export const actions: Actions = {
     const reservationId = Number(data.get('reservation_id'))
     const notifyType    = data.get('notify_type') as string
 
+    // 수동 알림은 해당 대여 단계에서만 보낸다(화면 버튼 활성 규칙 RentalDetailPanel NOTIFY_BUTTONS와 동일 — 화면만 막으면 직접 호출로 우회된다)
+    const NOTIFY_ALLOWED_STATUSES: Record<string, readonly string[]> = {
+      shipment_notify:     ['confirmed'],
+      return_remind:       ['in_use', 'return_requested'],
+      return_registration: ['return_requested'],
+      rental_complete:     ['returned'],
+    }
+    const allowed = NOTIFY_ALLOWED_STATUSES[notifyType]
+    if (allowed) {
+      const { data: stRow } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+      const st = (stRow as { status?: string } | null)?.status
+      if (!st || !allowed.includes(st)) return fail(400, { message: '이 알림은 현재 예약 단계에서 보낼 수 없습니다.' })
+    }
+
     const { data: result, error } = await admin.rpc('send_rental_chat_notification', {
       p_reservation_id: reservationId,
       p_notify_type:    notifyType,

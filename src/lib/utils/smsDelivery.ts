@@ -43,6 +43,7 @@ export const NOTIFY_TYPE_LABEL: Record<string, string> = {
   return_remind: '반납 예정 안내',
   reservation_cancelled: '예약 취소 안내',
   locker_guide: '무인보관함 안내',
+  identity_request: '본인증명 등록요청',
 }
 
 export interface SolapiMsgLite {

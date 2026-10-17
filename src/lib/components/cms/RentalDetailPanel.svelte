@@ -1471,24 +1471,16 @@
     downloadQrWithLabel(reservationQrCanvasEl, null, `qr-${code}.png`)
   }
 
-  const NOTIFY_TYPE_MAP: Record<string, string> = {
-    confirmed:        'shipment_notify',
-    in_use:           'return_remind',
-    return_requested: 'return_registration',
-    returned:         'rental_complete',
-  }
-
-  let notifyType = $derived(NOTIFY_TYPE_MAP[row.status] ?? null)
-
-  function chatNotifyLabel(type: string): string {
-    const map: Record<string, string> = {
-      shipment_notify:     '반출 알림 발송 💬',
-      return_remind:       '반납 예정 알림 💬',
-      return_registration: '반납 정보 요청 💬',
-      rental_complete:     '대여 종료 알림 💬',
-    }
-    return map[type] ?? '알림 발송 💬'
-  }
+  // 수동 채팅 알림 버튼 — 대여 단계 전체에 걸쳐 모두 노출하고, 해당 단계에서만 활성화한다(2026-10-16, Stephen 확정).
+  // 서버(rentals/+page.server.ts sendChatNotify)가 같은 단계 규칙(NOTIFY_ALLOWED_STATUSES)을 다시 검사한다.
+  // return_remind = 반납 요청(사진 등록 링크 카드) / return_registration = 반납 방법 선택 카드(대여중 이후엔 고객 쪽 만료 표시).
+  const NOTIFY_BUTTONS: ReadonlyArray<{ type: string; label: string; statuses: readonly string[]; stageHint: string }> = [
+    { type: 'shipment_notify',     label: '반출 알림 발송 💬',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
+    { type: 'return_remind',       label: '반납 요청 💬',       statuses: ['in_use', 'return_requested'],     stageHint: '대여중·반납접수 단계에서 사용할 수 있어요' },
+    { type: 'return_registration', label: '반납 정보 요청 💬',  statuses: ['return_requested'],               stageHint: '반납접수 단계에서 사용할 수 있어요' },
+    { type: 'rental_complete',     label: '대여 종료 알림 💬',  statuses: ['returned'],                       stageHint: '반납완료 단계에서 사용할 수 있어요' },
+  ]
+  const NOTIFY_VISIBLE = $derived(!['cancelled', 'damage_claimed', 'completed', 'expired', 'hold', 'draft', 'pending'].includes(row.status))
 
   // ── 운송장 정보 (lazy-fetch, rental 탭 오픈 시 조회) ──────────────────────
   let trackingFetchedForId = $state<number | null>(null)
@@ -2983,41 +2975,45 @@
         {/if}
 
         <!-- 채팅 알림 발송 — action-section과 한 행으로 병렬 정렬(2026-09-14) -->
-        {#if notifyType && row.status !== 'cancelled' && row.status !== 'damage_claimed'}
-          <form
-            method="POST"
-            action="/cms/rentals?/sendChatNotify"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') {
-                  csToast.success('채팅 알림을 발송했습니다.')
-                  if (notifyType) markNotifySent(row.reservation_id, notifyType)
-                } else {
-                  csToast.error('알림 발송에 실패했습니다.')
-                }
-                await update()
-              }
-            }}
-          >
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="notify_type" value={notifyType} />
-            <button
-              type="submit"
-              class="btn-notify"
-              disabled={isSubmitting}
-              onclick={(e) => {
-                if (notifyType && wasRecentlySent(row.reservation_id, notifyType)) {
-                  if (!window.confirm('이미 최근에 발송된 알림입니다. 다시 보내시겠습니까?')) {
-                    e.preventDefault()
+        {#if NOTIFY_VISIBLE}
+          {#each NOTIFY_BUTTONS as nb (nb.type)}
+            {@const stageOk = nb.statuses.includes(row.status)}
+            <form
+              method="POST"
+              action="/cms/rentals?/sendChatNotify"
+              use:enhance={() => {
+                isSubmitting = true
+                return async ({ result, update }) => {
+                  isSubmitting = false
+                  if (result.type === 'success') {
+                    csToast.success('채팅 알림을 발송했습니다.')
+                    markNotifySent(row.reservation_id, nb.type)
+                  } else {
+                    csToast.error(actionErrorMessage(result))
                   }
+                  await update()
                 }
               }}
             >
-              {chatNotifyLabel(notifyType)}
-            </button>
-          </form>
+              <input type="hidden" name="reservation_id" value={row.reservation_id} />
+              <input type="hidden" name="notify_type" value={nb.type} />
+              <button
+                type="submit"
+                class="btn-notify"
+                disabled={isSubmitting || !stageOk}
+                title={stageOk ? undefined : nb.stageHint}
+                onclick={(e) => {
+                  if (wasRecentlySent(row.reservation_id, nb.type)) {
+                    if (!window.confirm('이미 최근에 발송된 알림입니다. 다시 보내시겠습니까?')) {
+                      e.preventDefault()
+                    }
+                  }
+                }}
+              >
+                {nb.label}
+              </button>
+            </form>
+          {/each}
         {/if}
       </div>
       </div>
@@ -3077,6 +3073,7 @@
               foreignVerifiedAt={customerDocs.foreign.verifiedAt}
               foreignApprovedAt={customerDocs.foreign.approvedAt ?? null}
               canManage={canManagePaymentAndLocker}
+              reservationId={row.reservation_id}
               onchanged={refreshCustomerDocs}
             />
           </div>

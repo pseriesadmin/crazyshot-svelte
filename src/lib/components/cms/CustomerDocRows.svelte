@@ -29,6 +29,8 @@
     /** manager 이상 — 승인·재등록 버튼 노출(서버가 다시 검사한다) */
     canManage?: boolean
     foreignLabel?: string
+    /** 예약 패널에서 쓸 때 현재 예약 — 재요청 문자 발송 기록을 그 예약의 '알림발송' 탭에 남긴다 */
+    reservationId?: number
     /** 승인·재등록·승인취소 성공 후 호출 — 부모가 데이터를 다시 불러온다 */
     onchanged?: () => void | Promise<void>
   }
@@ -36,7 +38,7 @@
     userId, memberCode = null,
     identityCount, identityTypes, identityVerifiedAt, identityApprovedAt,
     isForeign, foreignCount, foreignTypes, foreignStayType = null, foreignVerifiedAt, foreignApprovedAt,
-    canManage = true, foreignLabel = '외국인 증명', onchanged,
+    canManage = true, foreignLabel = '외국인 증명', reservationId, onchanged,
   }: Props = $props()
 
   type DocType = 'identity' | 'foreign'
@@ -98,7 +100,7 @@
       const res = await fetch(`/api/cms/customers/${userId}/doc-request`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify({ type, ...(reservationId ? { reservation_id: reservationId } : {}) }),
       })
       const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null
       if (data?.ok) csToast.success('고객에게 재등록 요청을 보냈어요. (채팅 카드·푸시·문자)')

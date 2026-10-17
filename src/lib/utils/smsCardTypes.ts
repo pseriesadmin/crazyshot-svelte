@@ -13,6 +13,7 @@ const DIRECT_TYPES = [
   'shipment_notify',
   'tracking_notify',
   'return_remind',
+  'identity_request',
 ] as const
 
 export function smsNotifyTypesForCard(cardType: string | null | undefined): string[] {
