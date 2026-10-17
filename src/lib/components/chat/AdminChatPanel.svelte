@@ -27,6 +27,8 @@
   import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
+  import { CS_MEMO_MAX, checkCsMemo } from '$lib/utils/csMemo'
+  import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -263,13 +265,16 @@
   let isDeleting = $state(false)
   let flashingSessionIds = $state<Set<string>>(new Set())
 
-  // CS-A1: CS 상담기록 상태
-  let csRecord = $state<CsRecord | null>(null)
+  // CS-A1: 상담 메모 목록(최신 등록순) — 2026-10-17 단일 덮어쓰기 → 단문 메모 무한 등록 목록으로 확장
+  let csRecords = $state<CsRecord[]>([])
   let csSummaryDraft = $state('')
   let isSavingCsRecord = $state(false)
-  let csSaveResult = $state<'saved' | 'error' | null>(null)
-  let isDeletingCsRecord = $state(false)
-  let csDeleteConfirming = $state(false)
+  // 모두 삭제 — CMS 표준 '삭제 안전 토스트'(1차 클릭 경고 토스트 + 무장, 2차 클릭 실제 삭제)
+  const csMemoDelete = createDeleteSafetyToast({
+    warningMessage: '한번 더 누르면 상담 메모가 삭제됩니다.',
+    successMessage: '상담 메모가 삭제됐습니다.',
+    errorMessage: '상담 메모 삭제에 실패했습니다.',
+  })
 
   // GSD-5: 고객 상세정보 패널
   let customerDetail = $state<CustomerDetailData | null>(null)
@@ -680,78 +685,59 @@
     // 열람만으로 배정하면 긴급 판정·긴급 푸시가 무력화된다(service-operations.md §13 ④)
   }
 
-  // CS-A1: 세션 선택 시 기존 CS 기록 로드
+  // CS-A1: 세션 선택 시 상담 메모 목록 로드(세션이 바뀌면 입력 중이던 내용·쓰기 상태 초기화)
   $effect(() => {
     const sid = selectedSessionId
-    if (!sid) {
-      csRecord = null
-      csSummaryDraft = ''
-      csSaveResult = null
-      csDeleteConfirming = false
-      return
-    }
-    csRecord = null
+    csRecords = []
     csSummaryDraft = ''
-    csSaveResult = null
-    csDeleteConfirming = false
+    if (!sid) return
     fetch(`/api/chat/sessions/${sid}/cs-record`)
       .then((r) => r.ok ? r.json() : null)
-      .then((d: { record: CsRecord | null } | null) => {
-        if (d?.record) {
-          csRecord = d.record
-          csSummaryDraft = d.record.summary ?? ''
-        }
+      .then((d: { records?: CsRecord[]; record?: CsRecord | null } | null) => {
+        if (selectedSessionId !== sid || !d) return  // 응답이 늦게 와서 다른 세션이 선택된 뒤면 무시
+        csRecords = d.records ?? (d.record ? [d.record] : [])
       })
       .catch(() => {})
   })
 
   async function handleSaveCsRecord(): Promise<void> {
-    if (!selectedSessionId || isSavingCsRecord) return
-    const trimmed = csSummaryDraft.trim()
-    if (!trimmed) return
+    const sid = selectedSessionId
+    if (!sid || isSavingCsRecord) return
+    const checked = checkCsMemo(csSummaryDraft)
+    if (!checked.ok) { csToast.warning(checked.error); return }
     isSavingCsRecord = true
-    csSaveResult = null
     try {
-      const res = await fetch(`/api/chat/sessions/${selectedSessionId}/cs-record`, {
+      const res = await fetch(`/api/chat/sessions/${sid}/cs-record`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: trimmed, status: 'in_progress' }),
+        body: JSON.stringify({ summary: checked.text, status: 'in_progress' }),
       })
       if (res.ok) {
-        const { record } = await res.json()
-        if (record) csRecord = record
-        csSaveResult = 'saved'
-        setTimeout(() => { csSaveResult = null }, 2500)
+        const { record } = await res.json() as { record: CsRecord | null }
+        // 저장 중에 다른 세션으로 옮겼다면 화면(목록·입력란)은 건드리지 않는다 — 메모는 서버에 올바른 세션으로 저장됨
+        if (selectedSessionId === sid) {
+          if (record) csRecords = [record, ...csRecords]  // 최신 메모가 맨 위
+          csSummaryDraft = ''
+        }
       } else {
-        csSaveResult = 'error'
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        csToast.error(d.error ?? '상담 메모 저장에 실패했습니다.')
       }
     } finally {
       isSavingCsRecord = false
     }
   }
 
-  // 2단계 확인 삭제(TASK-DELETE-TOAST 패턴과 동일) — 1차 클릭: 확인 상태로 전환 후 4초 뒤 자동 해제
-  // 2차 클릭(확인 상태에서): 실제 삭제 실행
-  async function handleDeleteCsRecord(): Promise<void> {
-    if (!selectedSessionId || isDeletingCsRecord) return
-    if (!csDeleteConfirming) {
-      csDeleteConfirming = true
-      setTimeout(() => { csDeleteConfirming = false }, 4000)
-      return
-    }
-    csDeleteConfirming = false
-    isDeletingCsRecord = true
-    try {
-      const res = await fetch(`/api/chat/sessions/${selectedSessionId}/cs-record`, {
-        method: 'DELETE',
-      })
-      if (res.ok) {
-        csRecord = null
-        csSummaryDraft = ''
-      }
-    } finally {
-      isDeletingCsRecord = false
-    }
+  // 메모 1건 삭제 — 같은 삭제 안전 토스트(메모별 키로 무장 상태 구분)
+  async function handleDeleteCsRecord(recId: string): Promise<void> {
+    const sid = selectedSessionId
+    if (!sid) return
+    await csMemoDelete.handleAction(`item:${recId}`, async () => {
+      const res = await fetch(`/api/chat/sessions/${sid}/cs-record?id=${encodeURIComponent(recId)}`, { method: 'DELETE' })
+      if (!res.ok) return false
+      if (selectedSessionId === sid) csRecords = csRecords.filter((r) => r.id !== recId)
+      return true
+    })
   }
 
   // GSD-12: 북마크 토글 — API 호출 + 로컬 메시지 배열 is_bookmarked 동기화
@@ -1451,65 +1437,52 @@
         />
       </div>
 
-      <!-- CS-A1: 상담 요약 기록 -->
+      <!-- CS-A1: 상담 메모 카드 — 목록(최신순, 메모별 삭제) + 입력 한 행. 단문 100자 이내 무한 등록 -->
       <div class="cs-record-section">
-        <div class="cs-record-header">
-          <span class="cs-record-label">상담 메모</span>
-          {#if csRecord?.updated_at}
-            <span class="cs-record-saved-at">{formatDateTime(csRecord.updated_at)} 저장됨</span>
-          {/if}
-        </div>
-        <div class="cs-record-input-row">
-          <div class="cs-record-textarea-wrap">
-            <textarea
-              class="cs-record-textarea"
-              placeholder="상담 요약 또는 메모를 남기세요…"
-              rows={2}
-              bind:value={csSummaryDraft}
-              disabled={isSavingCsRecord}
-              aria-label="상담 메모 입력"
-            ></textarea>
-            <div class="cs-record-actions">
+        <!-- 목록 스크롤 영역 — 년월일시는 saved-at 폰트, 메모 내용은 label 폰트 토큰 -->
+        <div class="cs-record-list" role="list" aria-label="상담 메모 목록">
+          {#each csRecords as rec (rec.id)}
+            <div class="cs-record-item" role="listitem">
+              <span class="cs-record-saved-at">{formatDateTime(rec.created_at)}</span>
+              {#if rec.created_by_label}<span class="cs-record-saved-at cs-record-by">{rec.created_by_label}</span>{/if}
+              <span class="cs-record-text">{rec.summary}</span>
               <button
-                class="act-btn act-add"
-                onclick={handleSaveCsRecord}
-                disabled={isSavingCsRecord || !csSummaryDraft.trim()}
-                aria-label="상담 메모 저장"
-                title="상담 메모 저장"
+                type="button"
+                class="act-btn act-del cs-record-item-del"
+                class:act-del--confirming={csMemoDelete.pendingKey === `item:${rec.id}`}
+                onclick={() => handleDeleteCsRecord(rec.id)}
+                disabled={csMemoDelete.busyKey !== null}
+                aria-label="상담 메모 삭제"
+                title={csMemoDelete.pendingKey === `item:${rec.id}` ? '한 번 더 누르면 삭제됩니다' : '상담 메모 삭제'}
               >
-                {#if isSavingCsRecord}
-                  <span class="act-add-status">저장 중</span>
-                {:else if csSaveResult === 'saved'}
-                  <span class="act-add-status">저장됨 ✓</span>
-                {:else if csSaveResult === 'error'}
-                  <span class="act-add-status act-add-status--error">오류</span>
-                {:else}
-                  <span class="act-add-status">저장</span>
-                {/if}
-              </button>
-            </div>
-          </div>
-
-          <!-- 삭제는 저장과 바로 붙어있으면 오클릭 위험이 커서(Stephen 지적) 메모 레이아웃
-               바깥 우측으로 완전히 분리 배치 — 시각적 거리로 실수 방지 -->
-          {#if csRecord}
-            <button
-              class="act-btn act-del cs-record-delete-outer"
-              class:act-del--confirming={csDeleteConfirming}
-              onclick={handleDeleteCsRecord}
-              disabled={isDeletingCsRecord}
-              aria-label={csDeleteConfirming ? '상담 메모 삭제 확인' : '상담 메모 삭제'}
-              title={csDeleteConfirming ? '한 번 더 클릭하면 삭제됩니다' : '상담 메모 삭제'}
-            >
-              {#if csDeleteConfirming}
-                <span class="act-del-confirm-label">확인</span>
-              {:else}
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
                   <path d="M2 3h8M4.5 3V2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M3 3l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L9 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-              {/if}
-            </button>
-          {/if}
+              </button>
+            </div>
+          {:else}
+            <p class="cs-record-empty">등록된 상담 메모가 없습니다. 아래 입력란에 메모를 남기세요.</p>
+          {/each}
+        </div>
+
+        <!-- 메모 입력 — 목록 아래 한 행: 입력란 + 저장(우측 끝). 항상 노출되어 바로 입력할 수 있다 -->
+        <div class="cs-record-compose">
+          <textarea
+            class="cs-record-textarea"
+            placeholder="단문 메모를 남기세요 (100자 이내)…"
+            rows={2}
+            maxlength={CS_MEMO_MAX}
+            bind:value={csSummaryDraft}
+            disabled={isSavingCsRecord}
+            aria-label="상담 메모 입력"
+          ></textarea>
+          <button
+            type="button"
+            class="cs-record-save"
+            onclick={handleSaveCsRecord}
+            disabled={isSavingCsRecord || !csSummaryDraft.trim()}
+            aria-label="상담 메모 저장"
+          >{isSavingCsRecord ? '저장 중' : '저장'}</button>
         </div>
       </div>
     {/if}
@@ -2185,44 +2158,24 @@
   }
 
   /* ── CS-A1 상담 메모 섹션 ── */
+  /* 상담 메모 영역 전체 = 카드 하나 — 연한 회색 면(--cs-surface-gray) + 카드 반경 '중' 20px(cms-uiux 라운드값 정책), 안쪽 메모는 흰 카드 */
   .cs-record-section {
-    padding: 10px 24px 16px;
+    /* 위쪽 여백 = 답변 입력창(chat-input-wrap)과의 간격 */
+    margin: var(--spacing-3) 24px 16px;
+    padding: 14px 16px;
     flex-shrink: 0;
-    /* 상단 경계선 대신 하단(불투명 흰색)에서 위로 갈수록 투명해지는 그라데이션으로 자연스럽게 구분 */
-    background: linear-gradient(to top, var(--cs-white), transparent);
+    border-radius: var(--radius-lg);
+    background: var(--cs-surface-gray);
   }
 
-  .cs-record-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-  }
 
-  .cs-record-label {
-    font: var(--text-pc-script-12);
-    font-weight: 700;
-    color: var(--cs-text-mid);
-  }
 
   .cs-record-saved-at {
     font: var(--text-pc-script-12);
     color: var(--cs-text-light);
   }
 
-  /* 저장(add)은 텍스트영역 내부, 삭제(del)는 오클릭 방지를 위해 레이아웃 바깥 우측으로 분리 —
-     ChatInput.svelte의 .input-pill 패턴은 저장 버튼에만 적용 */
-  .cs-record-input-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
 
-  .cs-record-textarea-wrap {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-  }
 
   .cs-record-textarea {
     width: 100%;
@@ -2230,8 +2183,7 @@
     border: none;
     /* uiux-index.md CMS 카드 라운드값 "중" = 20px(var(--radius-lg)) */
     border-radius: var(--radius-lg);
-    /* 상하좌 16px 통일(좌우 기준값으로 확장) — 우측만 저장 버튼 공간 확보용으로 40px 유지 */
-    padding: 16px 40px 16px 16px;
+    padding: 12px 16px;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
     /* 가장 옅은 퍼플 bg 토큰(cms-uiux.md 허용 범위 0.04~0.12 중 최저값) */
@@ -2241,27 +2193,79 @@
     transition: background 0.15s;
     box-sizing: border-box;
   }
+  /* 입력 중(포커스) — 흰 면 + 퍼플 아웃라인(cms-uiux.md §7-7 입력 필드 포커스 표준) */
   .cs-record-textarea:focus {
     background: var(--cs-white);
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
   }
   .cs-record-textarea:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
 
-  .cs-record-actions {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
-    display: flex;
-    gap: 4px;
-  }
 
-  /* 삭제 버튼 — 저장 버튼과 시각적 거리를 벌려 오클릭 방지 */
-  .cs-record-delete-outer {
-    flex-shrink: 0;
+
+
+  /* 메모 입력 — 목록 아래 한 행(입력란 + 글자수 + 저장), 저장은 우측 끝 */
+  .cs-record-compose {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
   }
+  .cs-record-compose .cs-record-textarea { flex: 1; min-width: 0; width: auto; }
+  /* 안내 문장(placeholder) — 옅은 텍스트 토큰 */
+  .cs-record-textarea::placeholder { color: var(--cs-text-light); font-weight: 400; }
+  /* 저장 — 초소형 라운드 버튼형(cms-uiux.md §0-10-C): pill·테두리 없음·11px/600·패딩 5px 10px.
+     카드 배경(--cs-surface-gray)과 같은 색이 되지 않도록 기본 면만 흰색(--cs-white)으로 둔다 — hover 반전은 표준 그대로 */
+  .cs-record-save {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .cs-record-save:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .cs-record-save:disabled { opacity: 0.5; cursor: default; }
+
+  /* 메모 목록 — 영역 안에서 스크롤(약 3건 높이), 최신 메모가 맨 위 */
+  .cs-record-list {
+    max-height: 96px;  /* 행 24px + 간격 10px 기준 약 3행이 보이고 나머지는 스크롤 */
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  /* 메모 1건 = 배경 없는 단순 행(날짜 · 내용 · 삭제) */
+  .cs-record-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .cs-record-item .cs-record-saved-at { flex-shrink: 0; white-space: pre; }
+  /* 등록 관리자 아이디 — 년월일시와 같은 옅은 토큰, 길면 말줄임 */
+  .cs-record-item .cs-record-by { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 메모 내용 폰트 토큰(12px/700/text-mid) */
+  .cs-record-text {
+    flex: 1;
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  /* 메모별 삭제 — 목록 행 우측 끝, 행 높이를 키우지 않게 작게 */
+  .cs-record-item .cs-record-item-del { flex-shrink: 0; align-self: center; height: 24px; padding: 0 6px; }
+  .cs-record-empty { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
 
   /* CMS 표준 아이콘형 액션 버튼(act-del) 공통 베이스 — project_cms_delete_button_standard 준수 */
   .act-btn {
@@ -2281,13 +2285,6 @@
   }
   .act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* 저장 = '추가' 아이콘 버튼 (act-add) — act-del과 동일 베이스, 퍼플 계열 hover */
-  .act-add:hover:not(:disabled) {
-    background: rgba(59, 47, 138, 0.08);
-    color: var(--cs-purple);
-  }
-  .act-add-status { white-space: nowrap; }
-  .act-add-status--error { color: var(--cs-red-badge); }
 
   /* 삭제 아이콘 버튼 (act-del 표준 그대로) */
   .act-del:hover:not(:disabled) {
@@ -2299,7 +2296,6 @@
     background: rgba(255, 53, 53, 0.08);
     color: var(--cs-red-badge);
   }
-  .act-del-confirm-label { white-space: nowrap; }
 
   /* ── 삭제 버튼 (close-session-btn과 동일 스타일) ── */
   .delete-session-btn {

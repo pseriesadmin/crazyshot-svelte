@@ -570,7 +570,7 @@
     />
 
     <!-- pill 컨테이너 — Figma node 2497:8792 -->
-    <div class="input-pill">
+    <div class="input-pill" class:input-pill--admin={isAdmin}>
       <!-- 텍스트 입력 -->
       <textarea
         class="input-field"
@@ -608,8 +608,8 @@
             {disabled}
             type="button"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="35" height="35" viewBox="0 0 35 35" fill="none" aria-hidden="true">
-              <path d="M17.1886 13.8969C17.5791 13.5064 18.2123 13.5064 18.6028 13.8969C18.9933 14.2874 18.9933 14.9206 18.6028 15.3111L14.4309 19.483C13.8639 20.05 13.831 21.0045 14.4309 21.6044C15.0308 22.2042 15.9852 22.1713 16.5522 21.6044L24.3304 13.8262C25.932 12.2246 25.8444 9.68333 24.3304 8.16933C22.8164 6.65533 20.2751 6.5677 18.6735 8.16933L10.8953 15.9475C8.3446 18.4982 8.39217 22.6367 10.8953 25.1399C13.3985 27.6431 17.537 27.6906 20.0877 25.1399L24.2597 20.968C24.6502 20.5774 25.2833 20.5774 25.6739 20.968C26.0644 21.3585 26.0644 21.9917 25.6739 22.3822L21.5019 26.5541C18.1628 29.8933 12.7581 29.8311 9.48112 26.5541C6.20409 23.2771 6.14197 17.8724 9.48112 14.5333L17.2593 6.75512C19.6646 4.3498 23.4705 4.48104 25.7446 6.75512C28.0187 9.02919 28.1499 12.8351 25.7446 15.2404L17.9664 23.0186C16.6393 24.3456 14.4202 24.4221 13.0167 23.0186C11.6131 21.615 11.6896 19.3959 13.0167 18.0688L17.1886 13.8969Z" fill="#A0A1B0"/>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="19" viewBox="0 0 32 33" fill="none" aria-hidden="true">
+              <path d="M30.5 15.7453L17.3107 28.8124C13.6937 32.3958 7.82958 32.3958 4.21268 28.8124C0.595773 25.229 0.595774 19.4192 4.21268 15.8358L16.874 3.2917C19.2853 0.902766 23.1948 0.902766 25.606 3.2917C28.0173 5.68064 28.0173 9.55387 25.606 11.9428L12.965 24.4668C11.7593 25.6612 9.80461 25.6612 8.59898 24.4668C7.39334 23.2723 7.39334 21.3357 8.59898 20.1412L20.1232 8.72379" stroke="currentColor" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           {#if isAdmin}
@@ -621,9 +621,9 @@
               aria-expanded={showProductSearchPopup}
               type="button"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="35" height="35" viewBox="0 0 35 35" fill="none" aria-hidden="true">
-                <circle cx="15" cy="15" r="7.5" stroke="currentColor" stroke-width="2"/>
-                <line x1="21" y1="21" x2="28" y2="28" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 35 36" fill="none" aria-hidden="true">
+                <circle cx="18.94" cy="15.92" r="12.9" stroke="currentColor" stroke-width="5.6"/>
+                <path d="M9.6 25.4L2.6 32.7" stroke="currentColor" stroke-width="5.6" stroke-linecap="round"/>
               </svg>
             </button>
             <button
@@ -634,10 +634,9 @@
               aria-expanded={showCouponPopup}
               type="button"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="35" height="35" viewBox="0 0 35 35" fill="none" aria-hidden="true">
-                <rect x="5" y="11" width="25" height="13" rx="3" stroke="currentColor" stroke-width="2"/>
-                <line x1="17.5" y1="11" x2="17.5" y2="24" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/>
-                <circle cx="17.5" cy="17.5" r="2.5" fill="currentColor"/>
+              <svg xmlns="http://www.w3.org/2000/svg" width="19" height="18" viewBox="0 0 25 23" fill="none" aria-hidden="true">
+                <path d="M23.5 10.5V5.5A3.5 3.5 0 0 0 20 2H5A3.5 3.5 0 0 0 1.5 5.5V15A3.5 3.5 0 0 0 5 18.5H13" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M1.5 8h22M20 13.5v8M16 17.5h8" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
           {/if}
@@ -824,6 +823,18 @@
     gap: 8px;
   }
 
+  /* 관리자(CMS) 답변 입력 — 상담 메모 입력란과 같은 면 토큰(옅은 퍼플 0.04), 입력 중(포커스)엔 흰 면 + 퍼플 아웃라인.
+     고객 채팅(isAdmin=false)은 기존 --cs-surface-gray 그대로 */
+  .input-pill--admin {
+    background: rgba(59, 47, 138, 0.04);
+    transition: background 0.15s;
+  }
+  .input-pill--admin:focus-within {
+    background: var(--cs-white);
+    outline: 2px solid var(--cs-purple);
+    outline-offset: -2px;
+  }
+
   /* pill 우측 아이콘 공통 (첨부/전송 토글) */
   .icon-right {
     width: 35px;
@@ -890,9 +901,14 @@
     flex-shrink: 0;
   }
 
+  /* 파일 첨부 버튼 — 아이콘이 currentColor 선 아이콘이라 색을 여기서 지정 */
+  .attach-btn {
+    color: var(--cs-text-mid);
+  }
+
   /* 상품검색 버튼 */
   .search-btn {
-    color: #A0A1B0;
+    color: var(--cs-text-mid);
   }
 
   .search-btn.active {
@@ -964,10 +980,28 @@
 
   /* 쿠폰 버튼 */
   .coupon-btn {
-    color: #A0A1B0;
+    color: var(--cs-text-mid);
   }
   .coupon-btn.active {
     color: var(--cs-purple, #3B2F8A);
+  }
+
+  /* 굵은 선이 viewBox 가장자리를 넘어가도 잘리지 않게 */
+  .attach-btn svg,
+  .search-btn svg,
+  .coupon-btn svg {
+    overflow: visible;
+  }
+
+  /* 아이콘 3종(첨부·상품검색·쿠폰) 호버/열림 — 원형 퍼플 면 + 퍼플 선으로 확실히 반응(배경·색만 변경, 아웃라인·그림자 없음) */
+  .attach-btn:hover:not(:disabled),
+  .search-btn:hover:not(:disabled),
+  .coupon-btn:hover:not(:disabled),
+  .search-btn.active,
+  .coupon-btn.active {
+    opacity: 1;
+    color: var(--cs-purple);
+    background: rgba(59, 47, 138, 0.12);
   }
 
   /* 쿠폰 팝업 — 상품검색 팝업과 동일 앵커링 패턴 */
