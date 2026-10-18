@@ -307,6 +307,42 @@ test.describe('상품설명 편집기(RichContentEditor)', () => {
     await checkAll('큰 이미지', false)
   })
 
+  for (const [vw, vh, scroll] of [[1000, 800, false], [1280, 900, false], [1280, 900, true]] as const) {
+    test(`오른쪽 정렬한 작은 이미지 묶음에서도 이미지 도구줄이 화면(·스크롤 상자) 가로 안에 있다 — 창 ${vw}px${scroll ? ' + 스크롤 상자' : ''}`, async ({ page }) => {
+      await page.setViewportSize({ width: vw, height: vh })
+      await open(page, URL_RICH + '&n=2' + (scroll ? '&scroll=1' : ''), '.rc-host .ProseMirror')
+      const c = await center(page, IMG)
+      await page.mouse.click(c.x, c.y)
+      await page.mouse.click(c.x, c.y)
+      await expect(page.locator('.rc-resize')).toHaveCount(4)
+      for (let i = 0; i < 3; i++) { // 폭 약 20~25%로 줄이기
+        const se = (await page.locator('.rc-resize-se').boundingBox())!
+        await drag(page, { x: se.x + se.width / 2, y: se.y + se.height / 2 }, { x: se.x - 300, y: se.y + se.height / 2 }, 3)
+      }
+      await expect.poll(async () => Number(await page.locator('.rc-host .ProseMirror .rc-images').getAttribute('data-width'))).toBeLessThan(40)
+      await page.getByRole('button', { name: '오른쪽 정렬' }).first().click()
+      await expect(page.locator('.rc-host .ProseMirror .rc-images')).toHaveAttribute('data-align', 'right')
+      await page.locator('.rc-host .ProseMirror .rc-images').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+      // 위치가 자리 잡은 뒤 도구줄 가로 범위를 측정
+      await expect.poll(async () => {
+        const r = await page.evaluate(() => {
+          const bar = document.querySelector('.rc-ctx')!.getBoundingClientRect()
+          const sc = document.querySelector('#e2e-scroller')!.getBoundingClientRect()
+          const g = document.querySelector('.rc-images')!.getBoundingClientRect()
+          const useBox = new URLSearchParams(location.search).get('scroll') === '1'
+          return { l: bar.left, r: bar.right, boxL: useBox ? sc.left : 0, boxR: useBox ? sc.right : innerWidth, gl: g.left, gr: g.right }
+        })
+        return r.l >= r.boxL - 0.5 && r.r <= r.boxR + 0.5 && r.gl > r.boxR * 0.4 // 이미지가 실제로 오른쪽에 있는 조건에서 도구줄이 범위 안
+      }, { timeout: 5000 }).toBe(true)
+      // 도구줄 맨 오른쪽 버튼(묶음 삭제)이 눌린다 = 화면 밖·상자 밖에 가려지지 않았다
+      const lastBtn = page.locator('.rc-ctx button').last()
+      const b = (await lastBtn.boundingBox())!
+      const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('button') === document.querySelector('.rc-ctx button:last-of-type') || !!document.elementFromPoint(x, y)?.closest('.rc-ctx'), [b.x + b.width / 2, b.y + b.height / 2])
+      expect(hit).toBe(true)
+      expect(b.x + b.width).toBeLessThanOrEqual(vw)
+    })
+  }
+
   test('끌기를 점 밖에서 놓아도 끌기가 끝나고 점이 유지된다(손을 놓은 위치가 점이 아니어도)', async ({ page }) => {
     await open(page, URL_RICH, '.rc-host .ProseMirror')
     const c = await center(page, IMG)

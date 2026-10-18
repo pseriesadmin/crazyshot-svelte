@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  IMAGE_RESIZE_CORNERS, allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, handleSpanXOf, intersectClipBoxes, createHandlePref,
+  IMAGE_RESIZE_CORNERS, allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, handleSpanXOf, barLeftOf, intersectClipBoxes, createHandlePref,
 } from '../../../lib/modules/doc-editor/core/imageTools'
 
 describe('imageTools — 두 편집기 공통 이미지 도구 계산', () => {
@@ -86,6 +86,19 @@ describe('imageTools — 두 편집기 공통 이미지 도구 계산', () => {
     expect(handleSpanXOf({ left: 40, right: 1240 }, 1280, 14, clip)).toEqual({ xL: 54, xR: 1086 })
     // 상자 밖으로 완전히 밀려난 묶음은 점 없음
     expect(handleSpanOf({ top: 700, bottom: 1200 }, visibleBandOf(60, 900, clip))).toBeNull()
+  })
+
+  it('도구줄 가로 위치: 대상 왼쪽에 맞추되 보이는 영역 오른쪽을 넘으면 왼쪽으로 당긴다', () => {
+    const bounds = { left: 0, right: 1000 }
+    expect(barLeftOf(300, 560, bounds)).toBe(300) // 충분히 들어오면 대상 왼쪽 그대로
+    expect(barLeftOf(707, 563, bounds)).toBe(429) // 오른쪽 정렬한 작은 이미지(왼쪽 707, 도구줄 563) → 1000-8-563
+    expect(barLeftOf(707, 563, bounds) + 563).toBeLessThanOrEqual(1000 - 8)
+    expect(barLeftOf(-50, 560, bounds)).toBe(8) // 왼쪽으로 벗어나면 왼쪽 여백
+    // 보이는 영역보다 도구줄이 더 넓으면 왼쪽 끝을 우선 보이게
+    expect(barLeftOf(500, 1200, bounds)).toBe(8)
+    // 스크롤 상자(clip) 범위 안으로
+    expect(barLeftOf(800, 400, { left: 200, right: 900 })).toBe(492)
+    expect(barLeftOf(210, 400, { left: 200, right: 900 })).toBe(210)
   })
 
   it('조상 영역 교집합: 겹침 계산, 크기 0(레이아웃 없음)은 무시, 없으면 null', () => {
