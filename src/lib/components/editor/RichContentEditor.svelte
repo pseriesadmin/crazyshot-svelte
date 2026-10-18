@@ -20,7 +20,7 @@
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
-  import { allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, createHandlePref, handleSpanXOf, IMAGE_BAR_HEIGHT } from '$lib/modules/doc-editor/core/imageTools'
+  import { allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, createHandlePref, handleSpanXOf, intersectClipBoxes, IMAGE_BAR_HEIGHT, type ClipBox } from '$lib/modules/doc-editor/core/imageTools'
   import KeywordTagInput from './KeywordTagInput.svelte'
   import '$lib/styles/rich-content.css'
 
@@ -557,8 +557,23 @@
   let resizing = $state<{ side: 'l' | 'r'; align: ImageAlign; rect: DOMRect; pw: number; w: number; dom: HTMLElement } | null>(null)
 
   // 화면에서 실제로 보이는 세로 범위 — 위는 상단 서식 도구줄(sticky) 아래, 아래는 화면 끝
+  // 편집기를 감싼 "잘라 보이는" 조상(스크롤 상자·overflow 숨김 영역)의 보이는 영역 교집합 — 점·이미지 도구줄은 이 안에 놓아야 가려지지 않는다
+  function clipBounds(): ClipBox | null {
+    if (!canvasWrap) return null
+    const boxes: ClipBox[] = []
+    let el: HTMLElement | null = canvasWrap.parentElement
+    while (el && el !== document.body && el !== document.documentElement) {
+      const cs = getComputedStyle(el)
+      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') {
+        const r = el.getBoundingClientRect()
+        boxes.push({ top: r.top + el.clientTop, bottom: r.top + el.clientTop + el.clientHeight, left: r.left + el.clientLeft, right: r.left + el.clientLeft + el.clientWidth })
+      }
+      el = el.parentElement
+    }
+    return intersectClipBoxes(boxes)
+  }
   function visibleBand() {
-    return visibleBandOf(toolbarWrap ? toolbarWrap.getBoundingClientRect().bottom : 0, window.innerHeight)
+    return visibleBandOf(toolbarWrap ? toolbarWrap.getBoundingClientRect().bottom : 0, window.innerHeight, clipBounds())
   }
   const BAR_H = IMAGE_BAR_HEIGHT
   /** 선택 도구줄의 세로 위치(화면 기준) — 계산은 공통 모듈(imageTools) */
@@ -573,9 +588,13 @@
     const w = canvasWrap.getBoundingClientRect()
     // 묶음이 화면 밖이면 손잡이도 보이지 않는다(가장자리에 엉뚱하게 붙어 있지 않게)
     const span = handleSpanOf(r, visibleBand(), BAR_H)
-    if (!span) { handleBox = null; return }
+    if (!span) {
+      // 끄는 중에는 점을 지우지 않는다 — 줄이는 순간 묶음이 짧아져 잠깐 보이는 영역 밖으로 계산돼도(스크롤 위치 보정 전), 점이 사라지면 포인터 캡처를 잃어 끌기가 끝나지 않고 점이 복구되지 않았다
+      if (!resizing) handleBox = null
+      return
+    }
     const { yTop, yBottom } = span
-    const { xL, xR } = handleSpanXOf(r, window.innerWidth)
+    const { xL, xR } = handleSpanXOf(r, window.innerWidth, 14, clipBounds())
     handleBox = { xL: xL - w.left, xR: xR - w.left, yTop: yTop - w.top, yBottom: yBottom - w.top }
   }
 
@@ -628,7 +647,27 @@
     const cur = groupAttrs.width
     resizing = { side, align: groupAttrs.align, rect, pw: rect.width / (cur / 100), w: cur, dom }
     ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    // 점 요소가 아니라 창 전체에서 끝까지 추적한다 — 포인터 캡처를 잃거나 손을 놓은 위치가 점 밖이어도 끌기가 반드시 끝나도록(끝나지 않으면 점이 영영 안 뜸)
+    stopWinResize()
+    const mv = (ev: PointerEvent) => moveResize(ev)
+    const up = () => endResize(true)
+    const cancel = () => endResize(false)
+    window.addEventListener('pointermove', mv)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+    stopWinResize = () => {
+      window.removeEventListener('pointermove', mv)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      stopWinResize = () => {}
+    }
   }
+  let stopWinResize: () => void = () => {}
+  $effect(() => () => stopWinResize())
+  // 안전장치: 끄는 도중 선택이 풀리거나 사진 이외로 바뀌면(문서 변경 등) 끌기 상태를 남겨 두지 않고 취소한다
+  $effect(() => {
+    if (resizing && (ctxKind !== 'image' || !groupAttrs)) endResize(false)
+  })
   function moveResize(e: PointerEvent) {
     const r = resizing
     if (!r) return
@@ -642,6 +681,7 @@
     const r = resizing
     if (!r) return
     resizing = null
+    stopWinResize()
     if (commit && r.w !== groupAttrs?.width) updateGroup({ width: r.w })
     else r.dom.style.width = ''   // 변경 없음/취소 → 문서 값으로 복구(다시 그려질 때 스타일 재적용)
     if (!commit) tick += 1

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  IMAGE_RESIZE_CORNERS, allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, handleSpanXOf, createHandlePref,
+  IMAGE_RESIZE_CORNERS, allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, handleSpanXOf, intersectClipBoxes, createHandlePref,
 } from '../../../lib/modules/doc-editor/core/imageTools'
 
 describe('imageTools — 두 편집기 공통 이미지 도구 계산', () => {
@@ -28,8 +28,8 @@ describe('imageTools — 두 편집기 공통 이미지 도구 계산', () => {
   it('보이는 영역 계산: 위 → 아래 → 안쪽 순, 화면 밖이면 손잡이 없음', () => {
     const band = visibleBandOf(60, 900) // 68 ~ 892
     expect(band).toEqual({ visTop: 68, visBottom: 892 })
-    expect(barPlacementOf({ top: 300, bottom: 400 }, band)).toEqual({ topV: 248, inside: false })
-    expect(barPlacementOf({ top: 70, bottom: 400 }, band)).toEqual({ topV: 412, inside: false })
+    expect(barPlacementOf({ top: 300, bottom: 400 }, band)).toEqual({ topV: 237, inside: false }) // 위쪽 점(300±7) 위에 간격을 두고
+    expect(barPlacementOf({ top: 70, bottom: 400 }, band)).toEqual({ topV: 415, inside: false }) // 위가 모자라면 아래쪽 점(400±7) 아래
     expect(barPlacementOf({ top: -100, bottom: 1000 }, band).inside).toBe(true)
     expect(handleSpanOf({ top: 1000, bottom: 1200 }, band)).toBeNull()
     expect(handleSpanOf({ top: -500, bottom: 40 }, band)).toBeNull()
@@ -44,6 +44,59 @@ describe('imageTools — 두 편집기 공통 이미지 도구 계산', () => {
     expect(handleSpanXOf({ left: -63, right: 1071 }, 1071)).toEqual({ xL: 14, xR: 1057 })
     const tiny = handleSpanXOf({ left: -500, right: -400 }, 1000)
     expect(tiny.xR - tiny.xL).toBeGreaterThanOrEqual(24)
+  })
+
+  it('점은 이미지의 실제 모서리에 놓이고(도구줄 때문에 밀리지 않는다), 도구줄은 어떤 위치·크기에서도 점을 가리지 않는다', () => {
+    const band = visibleBandOf(60, 900) // 68~892
+    // 화면 안에 완전히 보이는 이미지: 점 = 실제 위·아래 모서리
+    expect(handleSpanOf({ top: 300, bottom: 600 }, band)).toEqual({ yTop: 300, yBottom: 600 })
+    const overlaps = (a0: number, a1: number, b0: number, b1: number) => a0 < b1 && b0 < a1
+    let checked = 0
+    // 위치·높이를 훑으며 확인: 도구줄 [topV, topV+48] 이 위·아래 점 [y±7] 과 겹치지 않는다(이미지가 최소 100px일 때)
+    for (let top = -800; top <= 1000; top += 37) {
+      for (const h of [100, 160, 260, 500, 820, 1400]) {
+        const r = { top, bottom: top + h }
+        const span = handleSpanOf(r, band)
+        if (!span) continue
+        const bar = barPlacementOf(r, band)
+        const y0 = bar.topV, y1 = bar.topV + 48
+        expect(overlaps(y0, y1, span.yTop - 7, span.yTop + 7), `위쪽 점 가림 top=${top} h=${h}`).toBe(false)
+        if (span.yBottom - span.yTop >= 62) expect(overlaps(y0, y1, span.yBottom - 7, span.yBottom + 7), `아래쪽 점 가림 top=${top} h=${h}`).toBe(false)
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(80)
+    // 작은 이미지는 바깥(위 또는 아래)에, 화면을 가득 채우는 큰 이미지만 안쪽(위쪽 점 아래)
+    expect(barPlacementOf({ top: 400, bottom: 560 }, band).inside).toBe(false)
+    expect(barPlacementOf({ top: 80, bottom: 240 }, band).inside).toBe(false) // 위가 모자라도 아래 바깥으로
+    const big = barPlacementOf({ top: 100, bottom: 880 }, band)
+    expect(big.inside).toBe(true)
+    expect(big.topV).toBeGreaterThanOrEqual(handleSpanOf({ top: 100, bottom: 880 }, band)!.yTop + 7)
+  })
+
+  it('스크롤 상자 안으로 좁히기: 점·도구줄이 상자 밖(화면 아래 푸터 위 등)에 놓이지 않는다', () => {
+    const clip = { top: 100, bottom: 600, left: 40, right: 1100 }
+    // 창 기준 보이는 범위는 68~892지만, 스크롤 상자는 100~600 → 108~592
+    expect(visibleBandOf(60, 900, clip)).toEqual({ visTop: 108, visBottom: 592 })
+    expect(visibleBandOf(60, 900, null)).toEqual({ visTop: 68, visBottom: 892 })
+    // 상자보다 큰 묶음: 아래 점이 상자 안(592-14)으로 당겨진다
+    const span = handleSpanOf({ top: 171, bottom: 996 }, visibleBandOf(60, 900, clip))!
+    expect(span.yBottom).toBeLessThanOrEqual(592 - 14)
+    // 가로도 상자 안으로
+    expect(handleSpanXOf({ left: 40, right: 1240 }, 1280, 14, clip)).toEqual({ xL: 54, xR: 1086 })
+    // 상자 밖으로 완전히 밀려난 묶음은 점 없음
+    expect(handleSpanOf({ top: 700, bottom: 1200 }, visibleBandOf(60, 900, clip))).toBeNull()
+  })
+
+  it('조상 영역 교집합: 겹침 계산, 크기 0(레이아웃 없음)은 무시, 없으면 null', () => {
+    expect(intersectClipBoxes([])).toBeNull()
+    expect(intersectClipBoxes([{ top: 0, bottom: 0, left: 0, right: 0 }])).toBeNull()
+    const r = intersectClipBoxes([
+      { top: 0, bottom: 900, left: 0, right: 1280 },
+      { top: 153, bottom: 927, left: 200, right: 1200 },
+      { top: -50, bottom: 600, left: 0, right: 1280 },
+    ])
+    expect(r).toEqual({ top: 153, bottom: 600, left: 200, right: 1200 })
   })
 
   describe('표시 선호 저장', () => {
