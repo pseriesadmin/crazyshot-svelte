@@ -166,6 +166,161 @@ test.describe('상품설명 편집기(RichContentEditor)', () => {
     await expect(page.locator('.rc-host .ProseMirror')).toContainText('ok')
   })
 
+  test('이미지가 스크롤 상자보다 커도 네 점이 모두 상자 안에서 눌리고, 아래쪽 점으로도 크기가 조절된다', async ({ page }) => {
+    await page.goto(URL_RICH + '&n=1&scroll=1') // 600px 스크롤 상자 안에 높이 800px 넘는 이미지
+    await page.locator('.rc-host .ProseMirror .rc-fig img').first().waitFor()
+    const c = await center(page, IMG)
+    await page.mouse.click(c.x, c.y)
+    await page.mouse.click(c.x, c.y)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    // 네 점 모두 "그 위치를 실제로 누르면 점이 눌린다"(다른 요소·상자 밖에 가려지지 않는다)
+    const blocked = await page.evaluate(() => {
+      const sc = document.querySelector('#e2e-scroller')!.getBoundingClientRect()
+      return [...document.querySelectorAll('.rc-resize')].filter((e) => {
+        const r = e.getBoundingClientRect()
+        const x = r.x + r.width / 2, y = r.y + r.height / 2
+        const inside = y >= sc.top && y <= sc.bottom && x >= sc.left && x <= sc.right
+        return !inside || document.elementFromPoint(x, y) !== e
+      }).map((e) => e.className)
+    })
+    expect(blocked).toEqual([])
+    // 아래쪽 점(se)을 끌어 줄이기
+    const w0 = await widthOf(page, '.rc-host .ProseMirror .rc-fig')
+    const se = (await page.locator('.rc-resize-se').boundingBox())!
+    await drag(page, { x: se.x + se.width / 2, y: se.y + se.height / 2 }, { x: se.x - 200, y: se.y + se.height / 2 })
+    await expect.poll(() => widthOf(page, '.rc-host .ProseMirror .rc-fig')).toBeLessThan(w0 - 60)
+    // 줄인 뒤에도 네 점이 그대로 남아 있고, 한 번 더 조절된다(반복 조작)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    const w1 = await widthOf(page, '.rc-host .ProseMirror .rc-fig')
+    const ne = (await page.locator('.rc-resize-ne').boundingBox())!
+    await drag(page, { x: ne.x + ne.width / 2, y: ne.y + ne.height / 2 }, { x: ne.x + 80, y: ne.y + ne.height / 2 })
+    await expect.poll(() => widthOf(page, '.rc-host .ProseMirror .rc-fig')).toBeGreaterThan(w1 + 40)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+  })
+
+  test('스크롤 상자를 맨 아래까지 내린 채 큰 이미지를 크게 줄여도 점이 사라지지 않고, 끌기가 끝나 폭이 저장되며, 다시 조절된다', async ({ page }) => {
+    await page.goto(URL_RICH + '&n=1&scroll=1')
+    await page.locator('.rc-host .ProseMirror .rc-fig img').first().waitFor()
+    const box = page.locator('#e2e-scroller')
+    await box.evaluate((el) => { (el as HTMLElement).style.height = '400px' }) // 이미지(높이 800px대)보다 한참 낮은 스크롤 상자
+    const top = (await page.locator(IMG).first().boundingBox())!
+    await page.mouse.click(top.x + top.width / 2, top.y + 60) // 상자 안에 보이는 이미지 윗부분을 누른다
+    await page.mouse.click(top.x + top.width / 2, top.y + 60)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    await box.evaluate((el) => { el.scrollTop = el.scrollHeight }) // 맨 아래까지
+    await expect.poll(async () => page.locator('.rc-resize').count()).toBe(4)
+    // 스크롤 직후 점 위치가 자리 잡을 때까지(점이 실제로 눌리는 위치에 올 때까지) 기다린다
+    await expect.poll(() => page.evaluate(() => {
+      const e = document.querySelector('.rc-resize-se')
+      if (!e) return false
+      const r = e.getBoundingClientRect()
+      return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === e
+    })).toBe(true)
+    const se = (await page.locator('.rc-resize-se').boundingBox())!
+    // 빠르게 크게 줄이는 한 번의 끌기(한 번에 20%까지 — 줄이는 순간 묶음이 짧아져 위로 밀려나는 구간을 지난다. 천천히 끌 때는 결함이 드러나지 않았다)
+    await page.mouse.move(se.x + se.width / 2, se.y + se.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(se.x - 600, se.y + se.height / 2, { steps: 1 })
+    await page.mouse.up()
+    // 끝났으면: 점 4개 유지 + 폭이 문서에 저장(data-width 변경) + 인라인 임시 폭이 남지 않음
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    await expect(page.locator('.rc-host .ProseMirror .rc-images')).not.toHaveAttribute('data-width', '100')
+    const inlineLeft = await page.locator('.rc-host .ProseMirror .rc-images').evaluate((el) => (el as HTMLElement).style.width)
+    const dw = await page.locator('.rc-host .ProseMirror .rc-images').getAttribute('data-width')
+    expect(inlineLeft === '' || inlineLeft === `${dw}%`).toBe(true)
+    // 다시 선택하지 않아도 다시 조절된다(점이 영구적으로 사라지는 상태가 아님)
+    const w1 = await widthOf(page, '.rc-host .ProseMirror .rc-fig')
+    const nw = (await page.locator('.rc-resize-nw').boundingBox())!
+    await drag(page, { x: nw.x + nw.width / 2, y: nw.y + nw.height / 2 }, { x: nw.x - 80, y: nw.y + nw.height / 2 })
+    await expect.poll(() => widthOf(page, '.rc-host .ProseMirror .rc-fig')).toBeGreaterThan(w1 + 40)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+  })
+
+  test('가로로 화면보다 넓은 페이지 + 스크롤 상자 맨 아래에서 빠르게 줄여도 점이 사라지지 않고 폭이 저장된다', async ({ page }) => {
+    await page.goto(URL_RICH + '&n=1&scroll=1')
+    await page.locator('.rc-host .ProseMirror .rc-fig img').first().waitFor()
+    await page.addStyleTag({ content: 'body{min-width:1600px}' })
+    const box = page.locator('#e2e-scroller')
+    await box.evaluate((el) => { (el as HTMLElement).style.height = '400px' })
+    const top = (await page.locator(IMG).first().boundingBox())!
+    await page.mouse.click(top.x + top.width / 2, top.y + 60)
+    await page.mouse.click(top.x + top.width / 2, top.y + 60)
+    await box.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await expect.poll(() => page.evaluate(() => {
+      const e = document.querySelector('.rc-resize-se')
+      if (!e) return false
+      const r = e.getBoundingClientRect()
+      return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === e
+    })).toBe(true)
+    const se = (await page.locator('.rc-resize-se').boundingBox())!
+    await page.mouse.move(se.x + se.width / 2, se.y + se.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(se.x - 300, se.y + se.height / 2, { steps: 1 })
+    await page.mouse.up()
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    await expect(page.locator('.rc-host .ProseMirror .rc-images')).not.toHaveAttribute('data-width', '100')
+  })
+
+  test('조절 점은 이미지의 실제 네 모서리에 놓이고, 이미지 도구줄은 큰/작은 이미지 모두에서 점을 가리지 않는다', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 })
+    await open(page, URL_RICH + '&n=1', '.rc-host .ProseMirror')
+    const checkAll = async (label: string, expectCorners: boolean) => {
+      await expect(page.locator('.rc-resize')).toHaveCount(4)
+      const r = await page.evaluate(() => {
+        const g = document.querySelector('.rc-images')!.getBoundingClientRect()
+        const bar = document.querySelector('.rc-ctx')!.getBoundingClientRect()
+        const hs = [...document.querySelectorAll('.rc-resize')].map((e) => { const q = e.getBoundingClientRect(); return { id: e.className.split(' ')[1], cx: q.x + q.width / 2, cy: q.y + q.height / 2, l: q.left, r: q.right, t: q.top, b: q.bottom } })
+        return { g: { l: g.left, r: g.right, t: g.top, b: g.bottom }, bar: { l: bar.left, r: bar.right, t: bar.top, b: bar.bottom }, hs }
+      })
+      // 도구줄이 점을 가리지 않는다(사각형 겹침 없음)
+      for (const h of r.hs) {
+        const overlap = h.l < r.bar.r && r.bar.l < h.r && h.t < r.bar.b && r.bar.t < h.b
+        expect(overlap, `${label}: 도구줄이 ${h.id} 점을 가림 (bar ${JSON.stringify(r.bar)} / 점 ${JSON.stringify(h)})`).toBe(false)
+      }
+      if (expectCorners) {
+        // 점 = 이미지의 실제 모서리(위·아래, 좌·우) — 도구줄 때문에 옆면 중간으로 밀리지 않는다
+        for (const h of r.hs) {
+          expect(Math.abs(h.cy - (h.id.includes('n') ? r.g.t : r.g.b)), `${label}: ${h.id} 세로 위치`).toBeLessThanOrEqual(1.5)
+        }
+      }
+      return r
+    }
+    const c = await center(page, IMG)
+    await page.mouse.click(c.x, c.y)
+    await page.mouse.click(c.x, c.y)
+    // 작은 이미지로 줄인다(폭 약 25%) — 이미지 전체가 화면에 보이는 크기
+    for (let i = 0; i < 3; i++) {
+      const se = (await page.locator('.rc-resize-se').boundingBox())!
+      await drag(page, { x: se.x + se.width / 2, y: se.y + se.height / 2 }, { x: se.x - 330, y: se.y + se.height / 2 }, 3)
+    }
+    await expect.poll(async () => Number(await page.locator('.rc-host .ProseMirror .rc-images').getAttribute('data-width'))).toBeLessThan(40)
+    await page.locator('.rc-host .ProseMirror .rc-images').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    await expect.poll(() => page.evaluate(() => { const g = document.querySelector('.rc-images')!.getBoundingClientRect(); return g.top > 150 && g.bottom < innerHeight - 100 })).toBe(true)
+    const small = await checkAll('작은 이미지', true)
+    expect(small.g.b - small.g.t).toBeLessThan(400)
+    // 작은 이미지: 도구줄이 이미지 안쪽이 아니라 바깥(위 또는 아래)에 있다
+    expect(small.bar.b <= small.g.t || small.bar.t >= small.g.b).toBe(true)
+    // 큰 이미지(폭 100%)로 되돌린 뒤에도: 점이 모서리(보이는 범위 안)에 있고 도구줄이 점을 가리지 않는다
+    const ne = (await page.locator('.rc-resize-ne').boundingBox())!
+    await drag(page, { x: ne.x + ne.width / 2, y: ne.y + ne.height / 2 }, { x: ne.x + 900, y: ne.y + ne.height / 2 }, 4)
+    await expect.poll(async () => Number(await page.locator('.rc-host .ProseMirror .rc-images').getAttribute('data-width'))).toBeGreaterThan(80)
+    await checkAll('큰 이미지', false)
+  })
+
+  test('끌기를 점 밖에서 놓아도 끌기가 끝나고 점이 유지된다(손을 놓은 위치가 점이 아니어도)', async ({ page }) => {
+    await open(page, URL_RICH, '.rc-host .ProseMirror')
+    const c = await center(page, IMG)
+    await page.mouse.click(c.x, c.y)
+    await page.mouse.click(c.x, c.y)
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    const se = (await page.locator('.rc-resize-se').boundingBox())!
+    await drag(page, { x: se.x + se.width / 2, y: se.y + se.height / 2 }, { x: 20, y: 20 }, 4) // 화면 왼쪽 위 구석(점·편집기 밖)에서 놓기
+    await expect(page.locator('.rc-resize')).toHaveCount(4)
+    await expect(page.locator('.rc-resize-badge')).toHaveCount(0) // 끌기 표시(%) 배지가 남아 있지 않다 = 끌기가 끝났다
+    const se2 = (await page.locator('.rc-resize-se').boundingBox())!
+    expect(se2.x).toBeGreaterThan(0)
+  })
+
   test('이미지 더블클릭 → 공통 뷰어 열림, 편집 모드 진입, 닫기', async ({ page }) => {
     await open(page, URL_RICH, '.rc-host .ProseMirror')
     const c = await center(page, IMG)

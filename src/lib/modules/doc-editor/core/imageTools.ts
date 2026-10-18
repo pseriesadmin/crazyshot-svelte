@@ -41,29 +41,66 @@ export function pointerExtent(align: ImageAlignKey, overlay: boolean, clientX: n
 
 export interface VisibleBand { visTop: number; visBottom: number }
 
-/** 화면에서 실제로 보이는 세로 범위 — 위는 sticky 서식 도구줄 아래, 아래는 화면 끝 */
-export function visibleBandOf(stickyBottom: number, innerHeight: number): VisibleBand {
-  return { visTop: Math.max(stickyBottom + 8, 0), visBottom: innerHeight - 8 }
+/** 화면 좌표 기준 사각 영역 */
+export interface ClipBox { top: number; bottom: number; left: number; right: number }
+
+/**
+ * 여러 "잘라 보이는" 조상 영역(스크롤 상자 등)의 교집합. 크기가 0인 영역은 의미 없는 값(레이아웃 없는 환경)이라 무시한다.
+ * 겹치는 부분이 없으면 비어 있는 상자(top>=bottom)를 돌려준다.
+ */
+export function intersectClipBoxes(boxes: ClipBox[]): ClipBox | null {
+  const real = boxes.filter((b) => b.bottom - b.top > 0 && b.right - b.left > 0)
+  if (real.length === 0) return null
+  return real.reduce((a, b) => ({
+    top: Math.max(a.top, b.top),
+    bottom: Math.min(a.bottom, b.bottom),
+    left: Math.max(a.left, b.left),
+    right: Math.min(a.right, b.right),
+  }))
+}
+
+/**
+ * 화면에서 실제로 보이는 세로 범위 — 위는 sticky 서식 도구줄 아래, 아래는 화면 끝.
+ * clip(편집기를 감싼 스크롤 상자들의 보이는 영역)이 있으면 그 안으로 더 좁힌다 — 점·도구줄이 스크롤 상자 밖(화면 아래 푸터 위 등)에 놓여 가려지는 것을 막는다.
+ */
+export function visibleBandOf(stickyBottom: number, innerHeight: number, clip?: ClipBox | null): VisibleBand {
+  const top = Math.max(stickyBottom + 8, 0, clip ? clip.top + 8 : 0)
+  const bottom = Math.min(innerHeight - 8, clip ? clip.bottom - 8 : Infinity)
+  return { visTop: top, visBottom: bottom }
 }
 
 export const IMAGE_BAR_HEIGHT = 48
+/** 크기 조절 점의 한 변(px) — CSS .rc-resize 와 같은 값 */
+export const HANDLE_SIZE = 14
+/** 점과 도구줄 사이 최소 간격(점 절반 + 여유) — 도구줄이 점을 가리지 않게 */
+const HANDLE_CLEAR = HANDLE_SIZE / 2 + 8
 
-/** 선택 도구줄 위치: 대상 위 → 아래 → (화면을 가득 채우면) 보이는 영역 맨 위 안쪽 순으로 닿을 수 있는 곳 */
+/**
+ * 선택 도구줄 위치(점을 가리지 않는 곳). 우선순위:
+ *  ① 이미지 위쪽 바깥(위쪽 점 위) → ② 이미지 아래쪽 바깥(아래쪽 점 아래) → ③ 이미지가 화면을 가득 채우면 이미지 안쪽, 위쪽 점 바로 아래
+ * 작은 이미지는 ①·②로 점과 겹치지 않고, 큰 이미지만 ③으로 안쪽에 놓이되 위쪽 점 아래에 놓인다.
+ */
 export function barPlacementOf(r: { top: number; bottom: number }, band: VisibleBand, barH = IMAGE_BAR_HEIGHT): { topV: number; inside: boolean } {
-  const above = r.top - barH - 4
-  const below = r.bottom + 12
+  // 점이 실제로 놓이는 위치(보이는 영역 안으로 당겨진 값)를 기준으로 간격을 둔다 — 이미지가 거의 화면 밖이어도 점을 가리지 않게
+  const span = handleSpanOf(r, band)
+  const topPoint = span ? span.yTop : r.top
+  const bottomPoint = span ? span.yBottom : r.bottom
+  const above = topPoint - barH - HANDLE_CLEAR
+  const below = bottomPoint + HANDLE_CLEAR
   if (above >= band.visTop) return { topV: above, inside: false }
   if (below + barH <= band.visBottom) return { topV: below, inside: false }
-  return { topV: Math.max(band.visTop, r.top) + 8, inside: true }
+  return { topV: topPoint + HANDLE_CLEAR, inside: true }
 }
 
-/** 손잡이 세로 위치(화면 기준). 대상이 보이는 영역 밖이면 null — 높은 묶음도 닿을 수 있게 보이는 영역 안으로 당긴다 */
-export function handleSpanOf(r: { top: number; bottom: number }, band: VisibleBand, barH = IMAGE_BAR_HEIGHT): { yTop: number; yBottom: number } | null {
+/**
+ * 크기 조절 점의 세로 위치(화면 기준) — 이미지의 실제 모서리(위·아래)에 놓고, 보이는 영역 밖으로 나가는 경우만 영역 안으로 당긴다.
+ * 도구줄 위치와 무관하다(도구줄이 점을 피해 놓이므로 점을 도구줄 때문에 밀지 않는다). 대상이 보이는 영역 밖이면 null.
+ */
+export function handleSpanOf(r: { top: number; bottom: number }, band: VisibleBand, _barH = IMAGE_BAR_HEIGHT): { yTop: number; yBottom: number } | null {
+  void _barH
   if (r.bottom < band.visTop || r.top > band.visBottom) return null
-  const bar = barPlacementOf(r, band, barH)
-  const topLimit = bar.inside ? bar.topV + barH + 14 : band.visTop + 14
-  const yTop = Math.max(r.top, topLimit)
-  const yBottom = Math.max(Math.min(r.bottom, band.visBottom - 14), yTop + 24)
+  const yTop = Math.max(r.top, band.visTop + HANDLE_SIZE)
+  const yBottom = Math.max(Math.min(r.bottom, band.visBottom - HANDLE_SIZE), yTop + 24)
   return { yTop, yBottom }
 }
 
@@ -71,9 +108,9 @@ export function handleSpanOf(r: { top: number; bottom: number }, band: VisibleBa
  * 손잡이 가로 위치(화면 기준). 폭 100% 묶음처럼 모서리가 화면 가장자리·밖(가로 스크롤된 페이지)에 걸려도 잡을 수 있게
  * 보이는 가로 범위 안(margin)으로 당긴다. 두 점 사이는 최소 24px을 유지한다.
  */
-export function handleSpanXOf(r: { left: number; right: number }, viewportWidth: number, margin = 14): { xL: number; xR: number } {
-  const lo = margin
-  const hi = Math.max(viewportWidth - margin, lo + 24)
+export function handleSpanXOf(r: { left: number; right: number }, viewportWidth: number, margin = 14, clip?: ClipBox | null): { xL: number; xR: number } {
+  const lo = Math.max(margin, clip ? clip.left + margin : 0)
+  const hi = Math.max(Math.min(viewportWidth - margin, clip ? clip.right - margin : Infinity), lo + 24)
   const xL = Math.min(Math.max(r.left, lo), hi - 24)
   const xR = Math.max(Math.min(r.right, hi), xL + 24)
   return { xL, xR }
