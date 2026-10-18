@@ -20,7 +20,7 @@
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
-  import { allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, createHandlePref, handleSpanXOf, intersectClipBoxes, IMAGE_BAR_HEIGHT, type ClipBox } from '$lib/modules/doc-editor/core/imageTools'
+  import { allowedHandleSide, pointerExtent, visibleBandOf, barPlacementOf, handleSpanOf, createHandlePref, handleSpanXOf, barLeftOf, intersectClipBoxes, IMAGE_BAR_HEIGHT, type ClipBox } from '$lib/modules/doc-editor/core/imageTools'
   import KeywordTagInput from './KeywordTagInput.svelte'
   import '$lib/styles/rich-content.css'
 
@@ -122,6 +122,7 @@
   })
   let canvasWrap = $state<HTMLDivElement | null>(null)
   let ctxStyle = $state('top: 0px; left: 0px')
+  let ctxEl = $state<HTMLDivElement | null>(null)
   let photoInput: HTMLInputElement
   let attachInput: HTMLInputElement
   let addToGroupInput: HTMLInputElement
@@ -1096,6 +1097,15 @@
     if (ctxKind !== 'image') activeImgIdx = null
   })
 
+  // 도구줄 폭이 바뀌면(선택 종류·묶음 구성에 따라 버튼 수가 달라질 때) 가로 위치를 다시 계산한다
+  $effect(() => {
+    const el = ctxEl
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => { tick += 1 })
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
+
   // 선택 도구줄은 편집 영역을 밀어내지 않도록 선택한 항목 근처에 떠 있게 한다(밀리면 표·사진 드래그 선택이 끊긴다).
   $effect(() => {
     void tick
@@ -1114,7 +1124,11 @@
     const r = anchor.getBoundingClientRect()
     const w = canvasWrap.getBoundingClientRect()
     const top = barPlacement(r).topV - w.top
-    const left = Math.max(8, r.left - w.left)
+    // 가로: 대상 왼쪽 끝에 맞추되 보이는 영역(창∩스크롤 상자) 오른쪽을 넘지 않게 당긴다 — 오른쪽 정렬한 작은 이미지에서 도구줄이 화면 밖으로 나가던 문제
+    const clip = clipBounds()
+    const bounds = { left: Math.max(0, clip ? clip.left : 0), right: Math.min(window.innerWidth, clip ? clip.right : Infinity) }
+    const barW = ctxEl ? ctxEl.offsetWidth : 0
+    const left = Math.max(8, barLeftOf(r.left, barW, bounds) - w.left)
     ctxStyle = `top: ${Math.round(top)}px; left: ${Math.round(left)}px`
   })
 
@@ -1418,7 +1432,7 @@
     {/if}
   {/if}
   {#if ctxKind && !readonly}
-    <div class="rc-ctx" style={ctxStyle} role="toolbar" aria-label="선택 항목 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
+    <div class="rc-ctx" bind:this={ctxEl} style={ctxStyle} role="toolbar" aria-label="선택 항목 도구" tabindex="-1" onmousedown={keepSelection} onpointerdown={keepSelection}>
       {#if ctxKind === 'image' && groupAttrs}
         {@const head = !!groupAttrs.images[curIdx()]?.isHead}
         {#each [['individual', 'layIndividual', '개별사진'], ['collage', 'layCollage', '콜라주'], ['slide', 'laySlide', '슬라이드']] as [v, ic, label] (v)}

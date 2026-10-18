@@ -105,6 +105,16 @@ export function handleSpanOf(r: { top: number; bottom: number }, band: VisibleBa
 }
 
 /**
+ * 선택 도구줄의 가로 위치(화면 기준 왼쪽 끝). 기본은 대상(이미지·표) 왼쪽 끝에 맞추되, 오른쪽 정렬한 작은 이미지처럼 대상이 오른쪽에 있어
+ * 도구줄(폭이 큼)이 보이는 영역 오른쪽을 넘으면 그만큼 왼쪽으로 당긴다. 보이는 영역보다 도구줄이 더 넓으면 왼쪽 끝을 우선 보이게 한다.
+ * bounds는 창과 스크롤 상자(clip)의 교집합 가로 범위.
+ */
+export function barLeftOf(anchorLeft: number, barWidth: number, bounds: { left: number; right: number }, margin = 8): number {
+  const maxLeft = bounds.right - margin - barWidth
+  return Math.max(Math.min(anchorLeft, maxLeft), bounds.left + margin)
+}
+
+/**
  * 손잡이 가로 위치(화면 기준). 폭 100% 묶음처럼 모서리가 화면 가장자리·밖(가로 스크롤된 페이지)에 걸려도 잡을 수 있게
  * 보이는 가로 범위 안(margin)으로 당긴다. 두 점 사이는 최소 24px을 유지한다.
  */
