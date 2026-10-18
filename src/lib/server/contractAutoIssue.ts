@@ -157,12 +157,14 @@ export async function autoIssueContractOnApproval(deps: AutoIssueDeps, reservati
   let reservationSpecs: Array<{ key: string; value: string }> = []
   try {
     // 화면은 대표 행 기준으로 저장하므로 주문의 어느 예약에 저장돼 있어도 읽는다(자동발행 대상 id와 어긋나도 누락되지 않게)
-    const { data: rs, error: rsErr } = await admin.from('rental_reservations').select('id, contract_specifications').in('id', ids)
+    const { data: rs, error: rsErr } = await admin.from('rental_reservations').select('id, status, contract_specifications').in('id', ids)
     if (!rsErr) {
-      const rows = ((rs ?? []) as Array<{ id: number; contract_specifications?: unknown }>)
-      const own = rows.find(r => r.id === reservationId)
-      // 결정적 선택: 자기 예약 → 없으면 id가 가장 작은 예약의 값(조회 순서에 의존하지 않는다)
-      const pick = [own, ...[...rows].sort((a, b) => a.id - b.id)].find(r => r && normalizeContractSpecs(r.contract_specifications).length > 0)
+      const all = ((rs ?? []) as Array<{ id: number; status?: string; contract_specifications?: unknown }>)
+      // 취소·만료 예약의 옛 특약이 대표 행 특약을 이기지 않도록 활성 예약만 본다(활성이 하나도 없으면 전체)
+      const active = all.filter(r => r.status !== 'cancelled' && r.status !== 'expired')
+      const rows = active.length > 0 ? active : all
+      // 결정적 선택: 화면이 저장하는 대표 행(주문 내 id가 가장 작은 예약)의 값을 우선한다 — 형제마다 값이 달라도 항상 같은 쪽이 고른다(조회 순서에 의존하지 않는다)
+      const pick = [...rows].sort((a, b) => a.id - b.id).find(r => normalizeContractSpecs(r.contract_specifications).length > 0)
       reservationSpecs = normalizeContractSpecs(pick?.contract_specifications)
     }
   } catch { /* 사전 등록 특약 조회 실패 — 양식 특약만 사용 */ }

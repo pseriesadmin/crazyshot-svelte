@@ -40,7 +40,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (g instanceof Response) return g
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const { data, error } = await admin.from('rental_reservations').select('contract_specifications').eq('id', g.id).maybeSingle()
-  if (error) return json({ specifications: [] }) // 컬럼이 없는 환경(마이그레이션 전)은 특약 없음으로 본다
+  if (error) {
+    // 컬럼이 없는 환경(마이그레이션 전, Postgres 오류 코드 42703)만 특약 없음으로 본다 — 그 밖의 오류를 빈 목록으로 돌려주면 화면에서 저장할 때 기존 특약을 덮어쓸 수 있다
+    if (error.code === '42703') return json({ specifications: [] })
+    return json({ error: '특약을 불러오지 못했습니다.' }, { status: 500 })
+  }
   return json({ specifications: normalizeContractSpecs((data as { contract_specifications?: unknown } | null)?.contract_specifications) })
 }
 

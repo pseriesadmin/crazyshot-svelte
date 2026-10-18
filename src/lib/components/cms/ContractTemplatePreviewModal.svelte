@@ -305,10 +305,10 @@
 
         templates = (await tplRes.json()) as TemplateSummary[]
         subData   = (await subRes.json()) as ContractSubstitutionData
-        try {
-          const specRes = await fetch(`/api/cms/reservations/${reservationId}/contract-specs`)
-          if (specRes.ok) reservationSpecs = ((await specRes.json()) as { specifications?: SpecRow[] }).specifications ?? []
-        } catch { reservationSpecs = [] }
+        // 예약별 사전 등록 특약 — 조회에 실패하면 빈 목록으로 진행하지 않고 오류로 멈춘다(특약 없이 계약서가 발행되는 것 방지)
+        const specRes = await fetch(`/api/cms/reservations/${reservationId}/contract-specs`)
+        if (!specRes.ok) throw new Error('예약별 계약 특약을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+        reservationSpecs = ((await specRes.json()) as { specifications?: SpecRow[] }).specifications ?? []
       }
 
       // 기존 계약서 편집 내용 확인 (편집 보존 목적 — contractId가 있을 때만)
