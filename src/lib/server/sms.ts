@@ -97,6 +97,25 @@ export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: str
     `[크레이지샷] ${p} 반납예정일이 다가와요. crazyshot.kr에서 반납 방법을 확인해 주세요.`,
   reservation_cancelled: (p) =>
     `[크레이지샷] ${p} 예약이 취소됐어요. 문의는 crazyshot.kr로 연락해 주세요.`,
+  // 반납 방식별 단계 알림(2026-10-17, Migration #722) — 링크는 반납 제출 화면(defaultLinkPath)
+  return_notice_courier: (p) =>
+    `[크레이지샷] ${p} 반납일이에요. 크레이지배송 반납 방법을 확인하고 반납요청을 등록해 주세요.`,
+  return_notice_quick_5h: (p) =>
+    `[크레이지샷] ${p} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.`,
+  return_notice_quick_2h: (p) =>
+    `[크레이지샷] ${p} 반납 종료 2시간 전이에요. 반납을 준비해 주세요.`,
+  return_notice_quick_1h: (p) =>
+    `[크레이지샷] ${p} 반납 종료 1시간 전이에요. 서둘러 반납을 준비해 주세요.`,
+  // 반납 검수 결과(2026-10-17, Migration #724)
+  // CS 사전 이슈 접수 증빙 요청(3단계, Migration #728) — 링크는 호출부가 smsLink 로 증빙 폼 주소를 넘긴다
+  issue_report_request: (p) =>
+    `[크레이지샷] ${p} 장비 이상·파손·분실 접수를 위해 사진·영상 등 증빙 자료를 등록해 주세요.`,
+  inspection_pass: (p) =>
+    `[크레이지샷] 대여 완료 안내\n${p} 검수 결과, 장비 및 구성품에 이상이 없어 대여가 완료되었습니다. 이용해 주셔서 감사합니다.`,
+  inspection_issue: (p) =>
+    `[크레이지샷] 검수 결과 안내\n${p} 검수 결과, 장비 및 구성품에 이상이 확인되어 추가 확인 후 담당자가 연락드리겠습니다.`,
+  return_notice_locker: (p) =>
+    `[크레이지샷] ${p} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
 }
 
 export interface SendLifecycleSmsParams {
@@ -117,6 +136,11 @@ const SITE_URL = 'https://crazyshot.kr'
 function defaultLinkPath(notifyType: string, reservationId: number): string {
   switch (notifyType) {
     case 'return_remind':    return `/account/rental/${reservationId}/history`
+    case 'return_notice_courier':
+    case 'return_notice_quick_5h':
+    case 'return_notice_quick_2h':
+    case 'return_notice_quick_1h':
+    case 'return_notice_locker': return `/account/rental/${reservationId}/return-submit`
     case 'contract_signed':  return `/account/rental/${reservationId}/contract`
     case 'contract_reshare': return `/account/rental/${reservationId}/contract`
     default:                 return '/account/rental'

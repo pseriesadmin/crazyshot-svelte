@@ -251,6 +251,11 @@
           onclick={() => setStatus(f.value, f.contractPending)}
         >
           <span>{f.label}</span>
+          {#if data.chipCounts?.[f.contractPending ? 'contract_pending' : f.value] != null && f.value === 'hold'}
+            {@const cnt = data.chipCounts[f.contractPending ? 'contract_pending' : f.value]}
+            <!-- 처리 대기 건수 배지 — 상품 패널 탭 수량 배지 스타일(있음=red-5%/red, 없음=surface-gray/text-mid) -->
+            <span class="chip-count" class:is-empty={cnt === 0} aria-label="처리 대기 {cnt}건">{cnt}</span>
+          {/if}
           {#if f.value === 'hold'}
             <ChevronIcon direction="right" size={6} color="currentColor" />
           {/if}
@@ -497,6 +502,14 @@
   }
   .chip:hover:not(.chip-active) { color: var(--cs-purple); }
   .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  .chip-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; margin-left: -3px; padding: 0 5px;
+    border-radius: var(--radius-full, 99px);
+    font: var(--text-pc-descript-10); line-height: 18px;
+    background: var(--cs-red-xlight); color: var(--cs-red);
+  }
+  .chip-count.is-empty { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
   .chip-all:not(.chip-active) { background: transparent; }
   /* '취소'는 일반 진행 단계와 구분되는 종료 상태 — 대여현황 '취소·환불' 칩과 동일: 미선택 시 극연한 레드(red-5%), 선택 시 레드(red-100) */
   .chip-refund:not(.chip-active) { background: var(--cs-red-xlight); }

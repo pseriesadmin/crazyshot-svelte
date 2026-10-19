@@ -149,7 +149,7 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
     expect(admin._mockRpc).not.toHaveBeenCalledWith('update_reservation_status', expect.anything())
   })
 
-  it('케이스 5 — direction=return, statusCode=5, currentStatus=return_requested → returned + rental_complete', async () => {
+  it('케이스 5 — direction=return, statusCode=5, currentStatus=return_requested → returned (완료 알림은 검수 승인 시점으로 이동)', async () => {
     const admin = makeAdmin({ freshStatus: 'return_requested' })
     const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
 
@@ -159,7 +159,8 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
       p_reservation_id: 500,
       p_new_status: 'returned',
     })
-    expect(admin._mockRpc).toHaveBeenCalledWith('send_rental_chat_notification', expect.objectContaining({
+    // 2026-10-17(Migration #724): "대여 완료" 알림은 returned 시점에 나가지 않는다 — 관리자의 반납 검수 승인 때 inspection_pass 로 나간다
+    expect(admin._mockRpc).not.toHaveBeenCalledWith('send_rental_chat_notification', expect.objectContaining({
       p_reservation_id: 500,
       p_notify_type: 'rental_complete',
     }))
@@ -205,15 +206,13 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
     }))
   })
 
-  it('RED → GREEN: 케이스 9 — direction=return 완료(returned) 시 awardRentalCompletePoints 호출해야 한다', async () => {
+  it('케이스 9 — direction=return 완료(returned) 시 대여완료 포인트는 적립하지 않는다(검수 승인 시점으로 이동, Migration #724)', async () => {
     const admin = makeAdmin({ freshStatus: 'return_requested' })
     const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
 
     await maybeAutoAdvanceOnDheroDelivered(admin, 900, 'return', 5, null, 'crazydelivery', 'return_requested')
 
-    // RED: 현재 dheroAutoAdvance.ts는 이 호출이 없어 실패함
-    // GREEN: rentalQrTransition.ts:69-71과 동일하게 newStatus==='returned' 시 호출
-    expect(mockAwardPoints).toHaveBeenCalledWith(admin, 900)
+    expect(mockAwardPoints).not.toHaveBeenCalled()
   })
 
   it('케이스 10 — direction=pickup(in_use 전이) 시 awardRentalCompletePoints 미호출', async () => {
@@ -225,19 +224,18 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
     expect(mockAwardPoints).not.toHaveBeenCalled()
   })
 
-  it('케이스 11 — awardRentalCompletePoints 실패 시 fail-soft(throw 안 함, 알림은 정상 발송)', async () => {
+  it('케이스 11 — returned 전이는 완료 알림 없이 정상 처리된다(fail-soft 유지, throw 안 함)', async () => {
     const admin = makeAdmin({ freshStatus: 'return_requested' })
-    mockAwardPoints.mockRejectedValue(new Error('포인트 적립 실패'))
     const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
 
     await expect(
       maybeAutoAdvanceOnDheroDelivered(admin, 1100, 'return', 5, null, 'crazydelivery', 'return_requested')
     ).resolves.not.toThrow()
 
-    expect(admin._mockRpc).toHaveBeenCalledWith('send_rental_chat_notification', expect.objectContaining({
+    expect(admin._mockRpc).toHaveBeenCalledWith('update_reservation_status', {
       p_reservation_id: 1100,
-      p_notify_type: 'rental_complete',
-    }))
+      p_new_status: 'returned',
+    })
   })
 })
 

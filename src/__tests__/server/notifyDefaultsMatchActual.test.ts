@@ -49,7 +49,7 @@ describe('화면의 문자 현재 문구 = sms.ts 고정 문구', () => {
       url: new URL('https://x.test/cms/set/push'),
     }))
     const smsTypes = NOTIFY_SPECS.filter((s) => s.sms && s.notifyType !== 'locker_guide').map((s) => s.notifyType)
-    expect(smsTypes.length).toBe(9)
+    expect(smsTypes.length).toBe(17)
     for (const t of smsTypes) {
       expect(res.smsDefaults[t], t).toBeTruthy()
       expect(res.smsDefaults[t].startsWith('[크레이지샷] ')).toBe(true)

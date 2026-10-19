@@ -19,8 +19,10 @@
     { label: '계약완료', value: 'confirmed' },
     { label: '배송중',   value: 'shipped' },
     { label: '대여중',   value: 'in_use' },
-    { label: '반납요청', value: 'return_requested' },
-    { label: '반납완료', value: 'returned' },
+    // 반납요청 + 반납완료(검수 대기)를 하나로 통합(2026-10-19) — 행 배지로 반납요청 예정/발송·반납등록을 구분
+    { label: '반납중',   value: 'returning' },
+    // 반납중 목록 중 반납 이력정보에 문제가 있어 이슈로 등록된 건(2026-10-17, Migration #724)
+    { label: '검수',     value: 'inspection' },
     { label: '완료',     value: 'completed' },
     // 결제까지 끝난 뒤 취소·환불된 대여 — 별도 조회(loadRefundedRentals), 단계 화살표 없음
     { label: '취소·환불', value: 'cancelled_refunded' },
@@ -53,6 +55,7 @@
 
   // 결제까지 끝난 뒤 PG 환불이 완료된 취소만 '취소·환불', 결제 전 취소·환불 미완료는 '취소'
   function rowStatusLabel(row: RentalListRow): string {
+    if (row.status === 'returned' && (data.status ?? '') === 'inspection') return '검수'
     return row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status)
   }
 
@@ -153,6 +156,16 @@
     await scrollSelectedRowIntoView()
   }
 
+  // 검수 승인·이슈 등록이 끝나면 그 예약이 옮겨간 칩(완료 / 검수)으로 전환해 같은 예약 패널을 다시 연다
+  async function openAfterInspection(id: number, to: 'inspection' | 'completed') {
+    keepOpenId = id
+    try {
+      await goto(`/cms/rentals?status=${to}&selected=${id}`, { replaceState: true, invalidateAll: true })
+      selectedId = id
+    } finally { keepOpenId = null }
+    await scrollSelectedRowIntoView()
+  }
+
   // 취소·환불 칩으로 전환된 뒤에도 이전 목록의 스크롤 위치가 남아 취소 건이 화면 밖에 있을 수 있어, 선택된 행이 보이도록 맞춘다
   async function scrollSelectedRowIntoView() {
     await tick()
@@ -213,6 +226,10 @@
           onclick={() => setStatus(f.value)}
         >
           <span>{f.label}</span>
+          {#if data.chipCounts?.[f.value] != null}
+            <!-- 처리 대기 건수 배지 — 상품 패널 탭 수량 배지(tab-count-badge) 스타일 차용: 있음=red-5%/red, 없음=surface-gray/text-mid -->
+            <span class="chip-count" class:is-empty={data.chipCounts[f.value] === 0} aria-label="처리 대기 {data.chipCounts[f.value]}건">{data.chipCounts[f.value]}</span>
+          {/if}
           {#if f.value !== '' && f.value !== 'completed' && f.value !== 'cancelled_refunded'}
             <ChevronIcon direction="right" size={6} color="currentColor" />
           {/if}
@@ -270,6 +287,18 @@
                   {#if row.status_mixed && !row.cancel_pending}
                     <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
                     <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info)">일부 진행</span>
+                  {/if}
+                  {#if row.return_stage}
+                    <!-- 반납중 칩 배지: 반납요청(알림 예정/발송) · 반납등록(고객이 반납 이력정보 등록) -->
+                    {#if row.return_stage === 'registered'}
+                      <span class="status-badge" style="background:{STATUS_STYLE.confirmed.bg};color:{STATUS_STYLE.confirmed.color}">반납등록</span>
+                    {:else}
+                      <span class="status-badge" style="background:rgba(255,69,0,0.12);color:var(--cs-orange)">{row.return_stage === 'notice_sent' ? '반납요청 발송' : '반납요청 예정'}</span>
+                    {/if}
+                  {/if}
+                  {#if row.prior_issue}
+                    <!-- CS 사전 이슈 접수 건(3단계) — 반납완료 시 검수 칩으로 자동 이동, 고객 증빙과 실물을 비교 검수 -->
+                    <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">사전접수건</span>
                   {/if}
                   {#if row.dhero_status}
                     <span class="dhero-mini-badge">{row.dhero_status}</span>
@@ -341,6 +370,7 @@
             onclose={closePanel}
             onrefresh={invalidateAll}
             oncancelled={openInCancelledList}
+            oninspectionchange={openAfterInspection}
             oncancelstate={(pending) => { keepOpenId = pending ? selectedId : null }}
             isRentalView={true}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
@@ -423,6 +453,14 @@
   /* 호버 컬러토큰값 유지(기존 var(--cs-purple) 그대로) — 화살표는 currentColor라 함께 전환됨 */
   .chip:hover:not(.chip-active) { color: var(--cs-purple); }
   .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  .chip-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; margin-left: -3px; padding: 0 5px;
+    border-radius: var(--radius-full, 99px);
+    font: var(--text-pc-descript-10); line-height: 18px;
+    background: var(--cs-red-xlight); color: var(--cs-red);
+  }
+  .chip-count.is-empty { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
   /* '전체'는 파이프라인 밖의 리셋 액션 — 미선택 시 기본 BG토큰(purple-10) 제거해 다른
      순차 상태 버튼들과 시각적으로 구분(선택되면 다른 칩과 동일하게 chip-active 배경 적용) */
   .chip-all:not(.chip-active) { background: transparent; }

@@ -127,7 +127,7 @@
 {/if}
 
 <div class="min-h-screen flex flex-col">
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/auth') && !page.url.pathname.startsWith('/payment') && !page.url.pathname.startsWith('/crazylog/') && !page.url.pathname.startsWith('/subscribe/')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/products/') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/auth') && !page.url.pathname.startsWith('/payment') && !page.url.pathname.startsWith('/crazylog/') && !page.url.pathname.startsWith('/subscribe/') && !page.url.pathname.startsWith('/issue-report')}
 		<GNB pathname={page.url.pathname} />
 	{/if}
 
@@ -135,8 +135,8 @@
 		<slot />
 	</main>
 
-	<!-- 공통 플로팅 바: /cms · /cart · /account · /contract 제외 전체 사용자 화면 -->
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract')}
+	<!-- 공통 플로팅 바: /cms · /cart · /account · /contract · /issue-report(로그인 없는 증빙 폼, 2026-10-19) 제외 전체 사용자 화면 -->
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/issue-report')}
 		<FloatingBar
 			userId={chatUserId}
 			userName={chatUserName}
@@ -144,7 +144,7 @@
 		/>
 	{/if}
 
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract')}
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/issue-report')}
 	<footer class="site-footer">
 		<div class="footer-inner" class:footer-collapsed={!footerOpen}>
 			<button

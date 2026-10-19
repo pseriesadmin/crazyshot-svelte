@@ -4,7 +4,6 @@
 // H-01: 직접 DML 금지 — RPC 경유만 허용.
 
 import { sendReservationLifecyclePush } from '$lib/server/push'
-import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 
@@ -19,13 +18,12 @@ const AUTO_NOTIFY: Partial<Record<string, string>> = {
   shipped:          'shipment_notify',
   in_use:           'rental_confirm',
   return_requested: 'return_registration',
-  returned:         'rental_complete',
 }
 
 // QR 스캔·수동 반출입으로 전이할 수 있는 상태만 허용한다(2026-10-15, sp3 2차 검수 M-1).
 // ⛔ 'confirmed'(계약완료)는 허용하지 않는다 — 서명·결제 없이 신청대기를 계약완료로 올리는 서버 경로가 되기 때문이다(service-operations.md §9).
 //    계약완료는 고객의 서명 + 결제 후 try_confirm_reservation만 전환한다. 취소·파손 등도 이 경로의 책임이 아니다.
-export const QR_ALLOWED_NEW_STATUSES: ReadonlySet<string> = new Set(['shipped', 'in_use', 'return_requested', 'returned', 'completed'])
+export const QR_ALLOWED_NEW_STATUSES: ReadonlySet<string> = new Set(['shipped', 'in_use', 'return_requested', 'returned'])
 
 export interface RentalQrTransitionResult {
   ok: boolean
@@ -75,11 +73,9 @@ export async function processRentalQrTransition(
     })
   } catch { /* 로그 실패는 무시 */ }
 
-  // 대여완료·정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+  // 정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+  // 대여완료 포인트·완료 알림은 반납 검수 승인 시점으로 이동(2026-10-17, Migration #724) — inspection.ts
   if (newStatus === 'returned') {
-    try {
-      await awardRentalCompletePoints(admin, reservationId)
-    } catch { /* 포인트 적립 실패는 무시 */ }
     try {
       await awardOnTimeReturnPoints(admin, reservationId)
     } catch { /* 포인트 적립 실패는 무시 */ }
