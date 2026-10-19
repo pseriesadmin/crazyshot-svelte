@@ -41,6 +41,13 @@
      * 기본 false(기존 absolute 동작 그대로 — 다른 사용처 무영향). 스크롤·리사이즈 시 위치를 다시 계산한다.
      */
     floating?: boolean
+    /**
+     * true(product_search 전용): 스크롤 끝에 닿으면 다음 페이지(pageSize건)를 서버에서 추가 조회한다 — 수량 제한 없이 끝까지.
+     * 서버(search-suggestions API 페이지 모드)가 후보 최대 500건을 한 번만 정렬해 두고 페이지 단위로 내려준다.
+     * 기본 false(기존 limit 기반 단건 조회 그대로 — 다른 사용처 무영향).
+     */
+    paginate?: boolean
+    pageSize?: number
     oninput?: (value: string) => void
     onselect?: (item: SimilarNameItem, previousValue: string) => void
     field: Snippet<[SimilarNameFieldControl]>
@@ -62,6 +69,8 @@
     listLabel,
     overlayLayer = false,
     floating = false,
+    paginate = false,
+    pageSize = 20,
     oninput,
     onselect,
     field,
@@ -76,6 +85,10 @@
   let suggestTimer: ReturnType<typeof setTimeout> | null = null
   // RTN-2: stale-response race 방지 — 진행 중인 fetch 취소용 AbortController
   let fetchController: AbortController | null = null
+  // 페이지 모드(paginate) 상태 — 다음 페이지 존재 여부와 추가 조회 중 표시
+  let hasMore = $state(false)
+  let loadingMore = $state(false)
+  let moreController: AbortController | null = null
 
   const listboxId = $derived(`${id}-suggest-list`)
 
@@ -158,7 +171,9 @@
     if (source === 'product_search') {
       // K-2: /api/cms/products/search-suggestions API 호출 (하이브리드 ilike + MiniSearch)
       // AbortController signal을 fetch에 전달 — stale-response race 방지 (RTN-2 패턴 유지)
-      const params = new URLSearchParams({ q: kw, limit: String(limit) })
+      const usePaging = paginate
+      const params = new URLSearchParams({ q: kw, limit: String(usePaging ? pageSize : limit) })
+      if (usePaging) params.set('offset', '0')
       if (activeOnly) params.set('activeOnly', 'true')
       if (excludeId)  params.set('excludeId', excludeId)
 
@@ -172,6 +187,7 @@
           return
         }
         fetched = await res.json() as SimilarNameItem[]
+        hasMore = usePaging && res.headers.get('x-has-more') === '1'
       } catch {
         if (signal.aborted) return // AbortError: 후속 요청에 의한 정상 취소 — 무시
         suggestions = []
@@ -218,6 +234,10 @@
       fetchController.abort()  // 이전 fetch의 signal.aborted = true → fetchSuggestions 내 체크로 결과 버림
       fetchController = null
     }
+    // 새 검색이 시작되면 진행 중이던 "다음 페이지" 조회도 버린다
+    if (moreController) { moreController.abort(); moreController = null }
+    loadingMore = false
+    hasMore = false
     const kw = value.trim()
     if (kw.length < minChars) {
       suggestions = []
@@ -249,6 +269,39 @@
     prevLimit = currentLimit
     if (untrack(() => value.trim().length >= minChars)) scheduleSuggest()
   })
+
+  // 페이지 모드: 목록 끝에 닿으면 다음 페이지를 이어 붙인다(같은 검색어일 때만, 중복 id는 건너뜀)
+  async function loadMore(): Promise<void> {
+    if (!paginate || source !== 'product_search' || !hasMore || loadingMore || suggestLoading) return
+    const kw = value.trim()
+    if (kw.length < minChars) return
+    const controller = new AbortController()
+    moreController = controller
+    loadingMore = true
+    try {
+      const params = new URLSearchParams({ q: kw, limit: String(pageSize), offset: String(suggestions.length) })
+      if (activeOnly) params.set('activeOnly', 'true')
+      if (excludeId) params.set('excludeId', excludeId)
+      const res = await fetch(`/api/cms/products/search-suggestions?${params}`, { signal: controller.signal })
+      if (controller.signal.aborted) return
+      if (!res.ok) { hasMore = false; return }
+      const next = await res.json() as SimilarNameItem[]
+      if (controller.signal.aborted || kw !== value.trim()) return
+      const seen = new Set(suggestions.map((it) => it.id))
+      suggestions = [...suggestions, ...next.filter((it) => !seen.has(it.id))]
+      hasMore = res.headers.get('x-has-more') === '1' && next.length > 0
+    } catch {
+      if (!controller.signal.aborted) hasMore = false
+    } finally {
+      if (moreController === controller) { moreController = null; loadingMore = false }
+    }
+  }
+
+  function handleLayerScroll(e: Event): void {
+    if (!paginate || !hasMore || loadingMore) return
+    const el = e.currentTarget as HTMLElement
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 48) void loadMore()
+  }
 
   function closeSuggest(): void {
     suggestOpen = false
@@ -321,6 +374,7 @@
       id={listboxId}
       role="listbox"
       aria-label={listAriaLabel}
+      onscroll={handleLayerScroll}
     >
       {#if suggestLoading && suggestions.length === 0}
         <p class="cms-similar-name-status">검색 중...</p>
@@ -354,6 +408,9 @@
             </span>
           </button>
         {/each}
+        {#if loadingMore}
+          <p class="cms-similar-name-status">더 불러오는 중...</p>
+        {/if}
       {/if}
     </div>
   {/if}

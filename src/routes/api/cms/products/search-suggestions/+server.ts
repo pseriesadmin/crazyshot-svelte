@@ -16,6 +16,13 @@
 //   필터: parent_product_id IS NULL + deleted_at IS NULL (부모·미삭제 상품만)
 //         is_active 필터는 activeOnly=true 파라미터로만 적용 (CMS 검색은 기본적으로 비활성 상품도 표시)
 //
+// 페이지 모드(2026-10-19, Stephen 확정 — 채팅 상품 검색 무한 스크롤): offset 파라미터가 있으면 켜진다.
+//   · 후보는 가벼운 칼럼(이미지·슬러그 제외)으로 최대 PAGED_POOL_MAX(500)건만 한 번 읽어 관련도 정렬 → slice(offset, offset+limit)
+//   · 화면에 나갈 페이지의 이미지·슬러그·가격만 추가 조회(스크롤마다 무거운 조회가 반복되지 않게)
+//   · 같은 검색어의 정렬 결과는 짧게(PAGED_CACHE_TTL_MS) 메모리에 두어 다음 페이지 조회는 후보 재조회 없이 처리
+//   · 응답 본문 형태는 그대로(배열) — 다음 페이지 여부는 헤더 x-has-more('1'|'0')로 알린다. offset이 없으면 기존 동작 100% 동일.
+//   · 동의어·자연어 보강은 첫 페이지(offset=0)에서만, 약한 매칭(≤3건)일 때만 — 그 경우 총량이 작아 다음 페이지가 없다.
+//
 // POST: 관리자 검색→선택 확인 신호 저장 (§I 학습파이프라인)
 //   record_admin_search_confirmation RPC 호출 (SECURITY DEFINER, service_role 전용)
 //
@@ -39,6 +46,18 @@ import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 // (nlsearch.md §2, /api/search/products/+server.ts와 동일 임계값)
 const WEAK_MATCH_THRESHOLD = 3
 
+// 페이지 모드 상수 — 후보 최대 500건(Stephen 확정), 한 페이지 최대 40건, 정렬 결과 캐시 20초
+const PAGED_POOL_MAX = 500
+const PAGED_LIMIT_MAX = 40
+const PAGED_CACHE_TTL_MS = 20_000
+const PAGED_CACHE_MAX_ENTRIES = 40
+
+type PagedRow = {
+  id: string; name: string; brand: string | null; category: string | null; product_code: string | null
+  description: string | null; product_caption: string | null
+}
+const pagedCache = new Map<string, { at: number; rows: PagedRow[]; codeMatchIds: string[] }>()
+
 // ── GET: 상품 검색 제안 ────────────────────────────────────────────────────────
 export const GET: RequestHandler = async ({ url, locals }) => {
   // CMS 인증: 파트너 포함 모든 CMS 역할 허용 (security-auth.md getCmsRoleForAction 패턴)
@@ -48,7 +67,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   }
 
   const q         = (url.searchParams.get('q') ?? '').trim()
-  const limit     = Math.min(20, Math.max(1, parseInt(url.searchParams.get('limit') ?? '8')))
+  // 페이지 모드: offset 파라미터가 있을 때만(없으면 기존 동작 그대로)
+  const offsetParam = url.searchParams.get('offset')
+  const paged     = offsetParam !== null
+  const offset    = paged ? Math.max(0, parseInt(offsetParam ?? '0') || 0) : 0
+  const limit     = Math.min(paged ? PAGED_LIMIT_MAX : 20, Math.max(1, parseInt(url.searchParams.get('limit') ?? '8')))
   const activeOnly = url.searchParams.get('activeOnly') === 'true'
   const excludeId  = url.searchParams.get('excludeId') || null
   // H-1: 카테고리 필터 (선택) — 지정 시 ilike/MiniSearch 결과를 해당 카테고리로 제한
@@ -64,6 +87,89 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
   // admin 클라이언트 — products RLS를 우회해 비활성 상품도 조회 가능하게 (CMS 전용)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  // ── 페이지 모드(채팅 상품 검색 무한 스크롤) ───────────────────────────────────
+  // 후보(최대 500건)를 가벼운 칼럼으로 한 번만 읽어 관련도 정렬한 뒤 offset~offset+limit만 잘라 내려준다.
+  // 첫 페이지가 약한 매칭(≤3건)이면 아래 기존 경로(동의어·자연어 보강)로 넘긴다 — 그 경우 총량이 작아 다음 페이지가 없다.
+  if (paged) {
+    const cacheKey = JSON.stringify([q, category, activeOnly, excludeId])
+    const now = Date.now()
+    let hit = pagedCache.get(cacheKey)
+    if (hit && now - hit.at > PAGED_CACHE_TTL_MS) { pagedCache.delete(cacheKey); hit = undefined }
+
+    if (!hit) {
+      let poolCodeIds: string[] = []
+      let poolQ = admin
+        .from('products')
+        .select('id, name, brand, category, product_code, description, product_caption')
+      if (isChosung) {
+        poolQ = poolQ.or(`name_chosung.ilike.%${q}%,brand_chosung.ilike.%${q}%`)
+      } else {
+        try {
+          poolCodeIds = await findParentIdsByProductCode(admin, q)
+        } catch (e) {
+          console.error('[cms/products/search-suggestions] 품번 검색 오류:', e)
+        }
+        poolQ = poolQ.or(
+          poolCodeIds.length > 0
+            ? `${productSearchOrFilter(q)},id.in.(${poolCodeIds.join(',')})`
+            : productSearchOrFilter(q)
+        )
+      }
+      poolQ = poolQ.is('deleted_at', null).is('parent_product_id', null).order('name').limit(PAGED_POOL_MAX)
+      if (category) poolQ = poolQ.eq('category', category)
+      if (activeOnly) poolQ = poolQ.eq('is_active', true)
+      if (excludeId) poolQ = poolQ.neq('id', excludeId)
+
+      const { data: poolData, error: poolError } = await poolQ
+      if (poolError) return json({ error: poolError.message }, { status: 500 })
+
+      const ranked = [...((poolData ?? []) as PagedRow[])].sort((a, b) => {
+        const diff = relevanceTier(a, q) - relevanceTier(b, q)
+        return diff !== 0 ? diff : a.name.localeCompare(b.name, 'ko')
+      })
+      hit = { at: now, rows: ranked, codeMatchIds: poolCodeIds }
+      if (pagedCache.size >= PAGED_CACHE_MAX_ENTRIES) {
+        const oldest = pagedCache.keys().next().value
+        if (oldest !== undefined) pagedCache.delete(oldest)
+      }
+      pagedCache.set(cacheKey, hit)
+    }
+
+    // 약한 매칭의 첫 페이지는 기존 보강 경로로(아래) — 그 외에는 여기서 끝낸다
+    if (offset > 0 || hit.rows.length > WEAK_MATCH_THRESHOLD) {
+      const pageRows = hit.rows.slice(offset, offset + limit)
+      const hasMore = hit.rows.length > offset + limit
+      if (pageRows.length === 0) return json([], { headers: { 'x-has-more': '0' } })
+
+      // 화면에 나가는 페이지의 이미지·슬러그·24시간 가격만 추가 조회(후보 전체가 아니라 최대 limit건)
+      const pageIds = pageRows.map((r) => r.id)
+      const [{ data: thumbData }, { data: priceData }] = await Promise.all([
+        admin.from('products').select('id, image_urls, slug').in('id', pageIds),
+        admin.from('price_rules').select('product_id, price').in('product_id', pageIds)
+          .eq('duration_type', '24h').is('deleted_at', null).eq('is_active', true),
+      ])
+      const thumbMap = new Map(((thumbData ?? []) as Array<{ id: string; image_urls: string[] | null; slug: string | null }>).map((r) => [r.id, r]))
+      const priceMap = new Map(((priceData ?? []) as Array<{ product_id: string; price: number }>).map((r) => [r.product_id, r.price]))
+
+      const items = pageRows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        brand: row.brand,
+        category: row.category,
+        product_code: row.product_code,
+        match_label: isChosung
+          ? '초성 매칭'
+          : hit!.codeMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
+            ? '품번'
+            : resolveProductSearchMatchLabel(row, q),
+        image_url: thumbMap.get(row.id)?.image_urls?.[0] ?? null,
+        slug: thumbMap.get(row.id)?.slug ?? null,
+        price_24h: priceMap.get(row.id) ?? null,
+      }))
+      return json(items, { headers: { 'x-has-more': hasMore ? '1' : '0' } })
+    }
+  }
 
   // ── 1차: ilike 검색 ──────────────────────────────────────────────────────────
   // H-2: 초성 쿼리 시 name_chosung·brand_chosung 생성컬럼, 일반 시 4필드 OR
@@ -305,10 +411,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     return json(finalItems.map((item) => ({
       ...item,
       price_24h: priceMap.get(item.id) ?? null,
-    })))
+    })), paged ? { headers: { 'x-has-more': '0' } } : undefined)
   }
 
-  return json(finalItems)
+  return json(finalItems, paged ? { headers: { 'x-has-more': '0' } } : undefined)
 }
 
 // ── POST: 관리자 검색→상품 선택 확인 신호 저장 (§I 학습파이프라인) ──────────

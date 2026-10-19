@@ -7,12 +7,7 @@
   import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
   import { csToast } from '$lib/utils/toast'
 
-  // 상품검색 팝업 — 타이핑 중 라이브 제안(SuggestPicker류)은 가벼운 소량만 조회하고,
-  // 엔터(하이라이트 없을 때)로 명시적 "더 보기"를 눌러야만 더 큰 목록을 조회한다.
-  // EXPANDED는 search-suggestions/+server.ts 서버측 상한(Math.min(20, ...))과 동일하게 맞춰
-  // 그 이상 요청해도 서버가 어차피 20건으로 잘라내므로 클라이언트 상수도 20을 넘기지 않는다.
-  const PRODUCT_SEARCH_DEFAULT_LIMIT = 5
-  const PRODUCT_SEARCH_EXPANDED_LIMIT = 20
+  // 상품검색 팝업 — 결과는 20건씩 스크롤 끝에서 추가 조회(후보 최대 500건, 서버 페이지 모드 — search-suggestions API 참고).
 
   interface CannedItem {
     id: string
@@ -104,13 +99,11 @@
   // 상품검색 팝업 상태 (isAdmin=true 전용 버튼)
   let showProductSearchPopup = $state(false)
   let productSearchValue = $state('')
-  let productSearchLimit = $state(PRODUCT_SEARCH_DEFAULT_LIMIT)
 
-  // 팝업 완전 닫기 — 다음에 다시 열 때 항상 소량(라이브 제안) 기준으로 초기화
+  // 팝업 완전 닫기 — 검색어 초기화(결과는 스크롤 추가 조회라 다음에 열면 처음부터)
   function closeProductSearchPopup(): void {
     showProductSearchPopup = false
     productSearchValue = ''
-    productSearchLimit = PRODUCT_SEARCH_DEFAULT_LIMIT
   }
 
   // 쿠폰 팝업 상태 (isAdmin=true 전용)
@@ -299,20 +292,6 @@
       price_24h: extended.price_24h ?? null,
     })
     textareaEl?.focus()
-  }
-
-  // CmsSimilarNameInput의 자체 onkeydown(ctrl.onkeydown)은 화살표로 먼저 하이라이트한 뒤에만
-  // Enter가 "선택"으로 동작한다(SuggestPicker와 동일한 공유 패턴) — 그 경로는 그대로 둔다.
-  // 하이라이트 없이 바로 Enter를 치면: 타이핑 중 라이브 제안(소량)을 "더 보기"로 확장한다.
-  // 수백 건을 항상 조회하는 대신, 명시적 Enter 액션에서만 상한까지 넓게 재조회하는 방식으로
-  // 로딩 부담을 낮춘다(bind:limit 변경 → CmsSimilarNameInput 내부 effect가 재검색을 트리거).
-  function handleProductSearchKeydown(e: KeyboardEvent, ctrlKeydown: (e: KeyboardEvent) => void): void {
-    ctrlKeydown(e)
-    if (e.key !== 'Enter' || e.defaultPrevented) return
-    if (productSearchLimit < PRODUCT_SEARCH_EXPANDED_LIMIT) {
-      e.preventDefault()
-      productSearchLimit = PRODUCT_SEARCH_EXPANDED_LIMIT
-    }
   }
 
   function selectCanned(item: CannedItem) {
@@ -536,7 +515,8 @@
         placeholder="상품명으로 검색..."
         source="product_search"
         overlayLayer={true}
-        bind:limit={productSearchLimit}
+        paginate={true}
+        pageSize={20}
         onselect={handlePopupProductSelect}
       >
         {#snippet field(ctrl)}
@@ -547,7 +527,7 @@
             placeholder={ctrl.placeholder}
             value={ctrl.value}
             oninput={ctrl.oninput}
-            onkeydown={(e) => handleProductSearchKeydown(e, ctrl.onkeydown)}
+            onkeydown={ctrl.onkeydown}
             onfocus={ctrl.onfocus}
             onblur={ctrl.onblur}
             aria-autocomplete={ctrl.ariaAutocomplete}
@@ -924,7 +904,7 @@
     right: 0;
     display: flex;
     flex-direction: column;
-    min-height: 300px;
+    height: 300px;   /* 고정 세로폭 — 결과가 많아져도 팝업은 커지지 않고 목록만 스크롤 */
     background: var(--cs-white, #fff);
     border: 1px solid var(--cs-lilac, #ECEBF4);
     border-radius: var(--radius-md, 15px);
