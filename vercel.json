@@ -9,6 +9,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/return-notice",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/sync-national-holidays",
       "schedule": "15 0 * * *"
     },

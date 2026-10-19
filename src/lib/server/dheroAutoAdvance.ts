@@ -14,7 +14,6 @@
 
 import { nextStatus } from '$lib/utils/rentalTransition'
 import { sendReservationLifecyclePush } from '$lib/server/push'
-import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,7 +24,6 @@ const AUTO_NOTIFY: Partial<Record<string, string>> = {
   shipped:          'shipment_notify',
   in_use:           'rental_confirm',
   return_requested: 'return_registration',
-  returned:         'rental_complete',
 }
 
 /**
@@ -93,11 +91,9 @@ export async function maybeAutoAdvanceOnDheroDelivered(
       return
     }
 
-    // 포인트 적립 (rentalQrTransition.ts와 동일 패턴, fail-soft)
+    // 정시반납 포인트 적립 (rentalQrTransition.ts와 동일 패턴, fail-soft)
+    // 대여완료 포인트·완료 알림은 반납 검수 승인 시점으로 이동(2026-10-17, Migration #724)
     if (newStatus === 'returned') {
-      try {
-        await awardRentalCompletePoints(admin, reservationId)
-      } catch { /* 포인트 적립 실패는 무시 */ }
       try {
         await awardOnTimeReturnPoints(admin, reservationId)
       } catch { /* 포인트 적립 실패는 무시 */ }

@@ -108,6 +108,41 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
     title: '예약변경이 진행됩니다',
     body: (p) => `${p} 기존 결제가 취소됐어요. 잠시 후 새 계약서가 발송됩니다.`,
   },
+  // 2026-10-17 반납 방식별 단계 알림(Migration #722, 크론 /api/cron/return-notice). 채팅카드는 send_return_notice_card 가 같은 단계 문장을 보낸다.
+  return_notice_courier: {
+    title: '반납 안내',
+    body: (p) => `${p} 반납일이에요. 크레이지배송 반납 방법을 확인하고 반납요청을 등록해 주세요.`,
+  },
+  return_notice_quick_5h: {
+    title: '퀵서비스 반납 안내',
+    body: (p) => `${p} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.`,
+  },
+  return_notice_quick_2h: {
+    title: '반납을 준비해 주세요',
+    body: (p) => `${p} 반납 종료 2시간 전이에요. 반납을 준비해 주세요.`,
+  },
+  return_notice_quick_1h: {
+    title: '반납 종료 1시간 전',
+    body: (p) => `${p} 반납 종료 1시간 전이에요. 서둘러 반납을 준비해 주세요.`,
+  },
+  // 반납 검수 결과(2단계, Migration #724) — 검수 승인 시 / 이슈 등록 시. 채팅카드는 inspection.ts 가 같은 문장으로 보낸다.
+  // CS 사전 이슈 접수(3단계, Migration #728) — 운영자가 [이슈 사전 접수]를 누르면 증빙 등록 폼 링크와 함께 나간다.
+  issue_report_request: {
+    title: '증빙 자료를 등록해 주세요',
+    body: (p) => `${p} 장비 이상·파손·분실 접수를 위해 사진·영상 등 증빙 자료를 등록해 주세요.`,
+  },
+  inspection_pass: {
+    title: '대여 완료 안내',
+    body: (p) => `${p} 검수 결과, 장비 및 구성품에 이상이 없어 대여가 완료되었습니다. 이용해 주셔서 감사합니다.`,
+  },
+  inspection_issue: {
+    title: '검수 결과 안내',
+    body: (p) => `${p} 검수 결과, 장비 및 구성품에 이상이 확인되어 추가 확인 후 담당자가 연락드리겠습니다.`,
+  },
+  return_notice_locker: {
+    title: '무인함 반납 안내',
+    body: (p) => `${p} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
+  },
 }
 
 const CHUNK_SIZE = 500

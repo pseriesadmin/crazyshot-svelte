@@ -1,4 +1,6 @@
 import { attachCancelPending } from '$lib/server/attachCancelPending'
+import { attachPriorIssue } from '$lib/server/attachPriorIssue'
+import { attachReturnStage, RETURN_STAGE_RANK } from '$lib/server/attachReturnStage'
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -25,6 +27,12 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // '전체' 칩 클릭 시에는 +page.svelte가 status=''를 명시적으로 params에 채워 보내므로
   // url.searchParams.has('status')가 true가 되어 이 기본값으로 되돌아가지 않는다.
   const status = url.searchParams.has('status') ? (url.searchParams.get('status') ?? '') : 'confirmed'
+  // 옛 칩 값(반납요청·반납완료)으로 들어온 링크는 통합된 '반납중' 칩으로 보낸다(2026-10-19)
+  if (status === 'return_requested' || status === 'returned') {
+    const u = new URL(url)
+    u.searchParams.set('status', 'returning')
+    throw redirect(303, `${u.pathname}${u.search}`)
+  }
   const search = url.searchParams.get('search') ?? ''
   const page   = parseInt(url.searchParams.get('page') ?? '1', 10)
   const selectedParam = url.searchParams.get('selected')
@@ -44,6 +52,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // 환불까지 완료된 건은 행 배지가 '취소·환불', 결제 전 취소는 '취소'로 구분된다(payment_status). 칩 필터는 기존 get_rental_list의
   // p_status·p_include_statuses(cancelled)로 처리 — 총 건수·페이지네이션도 그대로 맞는다.
   const isCancelledView = status === 'cancelled_refunded'
+  // '검수' 칩(status=inspection, 2026-10-17, Migration #724): 반납완료(returned) 중 검수 이슈가 등록된 건. '반납완료' 칩은 검수 대기 건만 보여준다.
+  const isInspectionView = status === 'inspection'
+  // '반납중' 칩(status=returning, 2026-10-19): 반납요청 + 반납완료(검수 대기) + 반납 예정일 도래·알림 발송된 대여중. 검수 이슈 건은 '검수' 칩으로 간다.
+  const isReturningView = status === 'returning'
 
   // 예약을 가리키는 링크(?selected=)로 들어왔는데 그 예약이 이미 취소 상태라면 '취소·환불' 칩으로 전환해 연다
   // (취소된 예약은 다른 칩 목록에 없어 패널이 열리지 않던 문제). 칩 클릭 시에는 화면이 selected를 지우므로 칩 이동이 막히지 않는다.
@@ -59,14 +71,28 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     }
   }
 
+  // 링크(?selected=)로 연 반납완료 예약이 현재 칩과 맞지 않으면(이슈 등록 ↔ 검수 대기 ↔ 완료) 알맞은 칩으로 전환해 연다
+  if (selectedId != null && (isReturningView || isInspectionView || status === 'completed')) {
+    const { data: insRow } = await admin.from('rental_reservations').select('status, inspection_status').eq('id', selectedId).maybeSingle()
+    const ir = insRow as { status?: string; inspection_status?: string | null } | null
+    if (ir?.status === 'returned') {
+      const isIssue = ir.inspection_status === 'issue'
+      if (isIssue && isReturningView) throw redirect(303, `/cms/rentals?status=inspection&selected=${selectedId}`)
+      if (!isIssue && isInspectionView) throw redirect(303, `/cms/rentals?status=returning&selected=${selectedId}`)
+    } else if (ir?.status === 'completed' && (isReturningView || isInspectionView)) {
+      throw redirect(303, `/cms/rentals?status=completed&selected=${selectedId}`)
+    }
+  }
+
   const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:           isCancelledView ? 'cancelled' : (status || null),
+    p_status:           isCancelledView ? 'cancelled' : isInspectionView ? 'returned' : isReturningView ? null : (status || null),
+    p_inspection_scope: isInspectionView ? 'issue' : (isReturningView ? 'returning' : null),
     p_search:           search   || null,
     p_date_from:        null,
     p_date_to:          null,
     p_page:             page,
     p_per_page:         30,
-    p_include_statuses: isCancelledView ? ['cancelled'] : RENTAL_STATUSES,
+    p_include_statuses: isCancelledView ? ['cancelled'] : isReturningView ? ['in_use', 'return_requested', 'returned'] : RENTAL_STATUSES,
     // '취소·환불' 칩 = 결제완료 이력이 있는 취소(계약완료·결제완료 후 취소). 결제 전 취소는 예약현황 '취소' 칩(Migration #714)
     p_cancel_payment_scope: isCancelledView ? 'paid' : null,
     // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
@@ -141,7 +167,14 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   }
   // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지 + 목록 상단 정렬
   await attachCancelPending(admin, rentals)
-  rentals.sort((a, b) => Number(!!b.cancel_pending) - Number(!!a.cancel_pending))
+  // CS 사전 이슈 접수 표식("사전접수건", 3단계) — 검수 칩에서는 목록 상단에 모아 담당자가 먼저 보게 한다
+  await attachPriorIssue(admin, rentals)
+  // 반납 진행 단계 배지(반납요청 예정/발송, 반납등록) — '반납중' 칩에서는 예정 → 발송 → 등록 순으로 정렬
+  await attachReturnStage(admin, rentals)
+  rentals.sort((a, b) =>
+    (Number(!!b.cancel_pending) - Number(!!a.cancel_pending)) ||
+    (isReturningView ? (RETURN_STAGE_RANK[a.return_stage ?? 'registered'] ?? 3) - (RETURN_STAGE_RANK[b.return_stage ?? 'registered'] ?? 3) : 0) ||
+    (isInspectionView ? Number(!!b.prior_issue) - Number(!!a.prior_issue) : 0))
   await attachRentalDaysLabel(admin, rentals)
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
 
@@ -156,7 +189,28 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     canChangeOrCancelReservation = hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')
   }
 
-  return { rentals, totalCount, totalPages, status, search, page, selectedId, cmsRole, canChangeOrCancelReservation }
+  // 칩별 '처리 대기' 건수(2026-10-19, Stephen 확정 — 열람 여부와 무관): 계약완료=반출 대기, 배송중=수령 확인 대기,
+  // 대여중=반납일 도래·초과, 반납중=반납요청·회수·검수 대기 전체, 검수=이슈 등록 건. 주문 1건=1행 기준(목록 총건수와 같은 방식). 실패한 칩은 배지 없이 둔다.
+  const countOf = async (args: Record<string, unknown>): Promise<number | null> => {
+    const { data, error: e } = await admin.rpc('get_rental_list', {
+      p_search: null, p_date_from: null, p_date_to: null, p_page: 1, p_per_page: 1, p_group_by_order: true, ...args,
+    })
+    if (e) { console.error('[cms/rentals] 칩 건수 조회 실패:', e.message); return null }
+    return ((data ?? []) as RentalListRow[])[0]?.total_count ?? 0
+  }
+  const todayKst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const [cConfirmed, cShipped, cReturning, cInspection, cInUse] = await Promise.all([
+    countOf({ p_status: 'confirmed', p_include_statuses: RENTAL_STATUSES }),
+    countOf({ p_status: 'shipped', p_include_statuses: RENTAL_STATUSES }),
+    countOf({ p_status: null, p_inspection_scope: 'returning', p_include_statuses: ['in_use', 'return_requested', 'returned'] }),
+    countOf({ p_status: 'returned', p_inspection_scope: 'issue', p_include_statuses: RENTAL_STATUSES }),
+    admin.from('rental_reservations').select('id', { count: 'exact', head: true }).eq('status', 'in_use').lte('end_date', todayKst)
+      .then(({ count, error: e }) => (e ? null : (count ?? 0))),
+  ])
+  const chipCounts: Record<string, number | null> = {
+    confirmed: cConfirmed, shipped: cShipped, in_use: cInUse, returning: cReturning, inspection: cInspection,
+  }
+  return { rentals, chipCounts, totalCount, totalPages, status, search, page, selectedId, cmsRole, canChangeOrCancelReservation }
 }
 
 export const actions: Actions = {

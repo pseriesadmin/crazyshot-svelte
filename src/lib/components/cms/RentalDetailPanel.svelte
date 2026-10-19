@@ -9,6 +9,19 @@
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
+  import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import { supabase } from '$lib/services/supabase'
+  import {
+    INSPECTION_ISSUE_TYPES,
+    INSPECTION_STATUS_LABEL,
+    INSPECTION_DETAIL_MAX,
+    INSPECTION_NOTE_MAX,
+    INSPECTION_MEDIA_MAX,
+    priorKindLabel,
+    issueTypeLabel,
+    normalizeInspectionStatus,
+  } from '$lib/utils/inspection'
+  import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
@@ -31,6 +44,8 @@
   interface RentalListRow {
     /** 고객 취소 후 관리자 취소확인 대기 — /cms/rentals 로더가 부착(헤더 [예약취소]=취소확인) */
     cancel_pending?:   boolean
+    /** CS 사전 이슈 접수 건(3단계) — /cms/rentals 로더가 부착 */
+    prior_issue?:      boolean
     reservation_id:    number
     reservation_code:  string | null
     status:            string
@@ -127,12 +142,14 @@
     /** 최초 마운트 시 활성화할 탭 — 미지정 시 기존과 동일하게 'rental'(대여정보).
         컴포넌트가 마운트된 이후 row가 갱신(onrefresh)돼도 재적용되지 않음(마운트 시 1회만) —
         관리자가 이미 다른 탭으로 전환한 상태를 되돌리지 않기 위함 */
-    initialTab?:  'rental' | 'customer' | 'payment' | 'contract' | 'sms'
+    initialTab?:  'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'
     /** 예약 단계 상태 변경(승인·거부·취소) 완료 시 호출 — /cms/reservation에서 closePanel에 연결.
         /cms/rentals에서는 미사용(isRentalView=true일 때 undefined가 기본값). */
     onstatuschange?: () => void
     /** 이 예약이 취소(환불)로 확정된 직후 호출 — 대여현황이 '취소·환불' 목록으로 전환하는 용도(미지정 시 동작 없음) */
     oncancelled?: (reservationId: number) => void | Promise<void>
+    /** 검수 승인/이슈 등록 직후 — 예약이 옮겨간 칩('completed' | 'inspection')으로 목록을 전환해 같은 패널을 다시 연다(/cms/rentals) */
+    oninspectionchange?: (reservationId: number, to: 'inspection' | 'completed') => void | Promise<void>
     /** 예약취소 실행 시작(true)·실패로 끝남(false) — 부모가 취소 중 패널을 닫지 않게 한다 */
     oncancelstate?: (pending: boolean) => void
     /** 예약승인으로 전자계약이 자동 발행·발송된 직후 호출 — 예약현황이 '계약대기' 칩 목록으로 전환해 같은 예약의 패널을 다시 연다(미지정 시 현재 목록 유지) */
@@ -141,7 +158,7 @@
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -243,7 +260,7 @@
     }
   }
 
-  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'sms'>(initialTab ?? 'rental')
+  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>(initialTab ?? 'rental')
   let isSubmitting = $state(false)
 
   // 헤더 버튼 이중확인 — ProductDetailPanel.svelte handleDeleteProduct 패턴
@@ -411,6 +428,193 @@
     const d = new Date(iso)
     const kst = new Date(d.getTime() + 9 * 3600 * 1000).toISOString()
     return `${kst.slice(5, 10).replace('-', '.')} ${kst.slice(11, 16)}`
+  }
+
+  // ── 검수 탭(2026-10-17, Migration #722, 1단계 읽기 전용) ─────────────────────────────
+  // 반납요청이 발행된 뒤(반납중·반납완료·완료)에만 노출한다. 고객이 반납 안내 CTA에서 등록한 체크리스트·사진(항목별 정렬)·무인함 정보를 보여준다.
+  // 사진·영상은 비공개 버킷이라 조회 API가 서명 URL을 내려준다(만료 10분 — 탭을 다시 열면 새로 받는다).
+  const showInspectionTab = $derived(['return_requested', 'returned', 'completed'].includes(row.status))
+  interface EvidenceGroup { item_key: string; label: string; items: { id: number; kind: 'photo' | 'video'; url: string | null }[] }
+  interface EvidenceSubmission {
+    method: string
+    submitted_at: string
+    checklist: { key: string; label: string; checked: boolean }[]
+    locker_number: string | null
+    locker_password: string | null
+    locker_password_hidden?: boolean
+  }
+  const EVIDENCE_METHOD_LABEL: Record<string, string> = { courier: '택배 반납', quick: '퀵서비스 반납', locker: '무인함 반납' }
+  let evFetchedFor  = $state<number | null>(null)
+  let evLoading     = $state(false)
+  let evError       = $state<string | null>(null)
+  let evSubmission  = $state<EvidenceSubmission | null>(null)
+  let evGroups      = $state<EvidenceGroup[]>([])
+  let evViewerIndex = $state<number | null>(null)
+  interface EvidenceInspection {
+    reservation_status: string
+    status: string | null
+    inspected_at: string | null
+    has_prior_issue: boolean
+    prior_reports?: { id: number; status: string; types: string[]; detail: string | null; submitted_at: string | null; expires_at: string; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
+    assignees?: { id: string; name: string }[]
+    issues: { id: number; assignee_name?: string | null; types: string[]; detail: string | null; created_at: string; resolved_at: string | null; resolution_note: string | null; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
+  }
+  let evInspection = $state<EvidenceInspection | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'inspection') { evFetchedFor = null; return } // 탭을 벗어나면 다음 진입 때 다시 조회(서명 URL 만료 대비)
+    if (evLoading) return
+    if (evFetchedFor === row.reservation_id) return
+
+    const id = row.reservation_id
+    evFetchedFor = id
+    evLoading = true
+    evError = null
+    fetch(`/api/cms/reservations/${id}/return-evidence`)
+      .then(async (r) => ({ ok: r.ok, body: await r.json() }))
+      .then(({ ok, body }) => {
+        if (evFetchedFor !== id) return
+        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; return }
+        evSubmission = body.submission ?? null
+        evInspection = body.inspection ?? null
+        evGroups = body.groups ?? []
+      })
+      .catch(() => { if (evFetchedFor === id) evError = '네트워크 오류로 조회하지 못했습니다.' })
+      .finally(() => { evLoading = false })
+  })
+
+  // 뷰어에는 사진만 넘긴다(영상은 카드 안에서 바로 재생). 화면의 사진 순서 = 뷰어 순서.
+  const evViewerItems = $derived<MediaViewerItem[]>(
+    evGroups.flatMap((g) =>
+      g.items
+        .filter((m) => m.kind === 'photo' && m.url)
+        .map((m, i) => ({ url: m.url as string, name: `${g.label} ${i + 1}`, editable: false })),
+    ),
+  )
+  function evPhotoIndex(groupKey: string, itemId: number): number {
+    let n = 0
+    for (const g of evGroups) {
+      for (const m of g.items) {
+        if (m.kind !== 'photo' || !m.url) continue
+        if (g.item_key === groupKey && m.id === itemId) return n
+        n++
+      }
+    }
+    return 0
+  }
+
+  // ── 검수 처리(2단계, Migration #724): 반납 검수 승인 · 이슈 등록 · 이슈 해소 — manager 이상 ──
+  const inspStatus = $derived(normalizeInspectionStatus(evInspection?.status))
+  const canInspect = $derived(canManagePaymentAndLocker && row.status === 'returned' && evInspection !== null)
+  let inspBusy       = $state(false)
+  let issueTypesSel  = $state<string[]>([])
+  let issueDetail    = $state('')
+  let issueAssignee  = $state<string | null>(null) // 이슈 담당자(선택, CMS 직원 id)
+  let issueMedia     = $state<{ path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }[]>([])
+  let issueUploading = $state(0)
+  let resolveNote    = $state('')
+
+  // ── CS 사전 이슈 접수(3단계, Migration #728) — 반납 전(계약완료~반납요청) 예약에서 manager 이상 ──
+  const PRIOR_ISSUE_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested']
+  let priorOverride = $state<boolean | null>(null)
+  let priorBusy     = $state(false)
+  let priorForId    = $state<number | null>(null)
+  $effect(() => {
+    if (priorForId !== row.reservation_id) { priorForId = row.reservation_id; priorOverride = null } // 다른 예약으로 바뀌면 낙관 표시 초기화
+  })
+  const priorOn = $derived(priorOverride ?? !!row.prior_issue)
+  const canPriorIssue = $derived(canManagePaymentAndLocker && PRIOR_ISSUE_STATUSES.includes(row.status))
+
+  async function runPriorIssue(action: 'register' | 'cancel'): Promise<void> {
+    if (priorBusy) return
+    if (action === 'register' && priorOn && !window.confirm('이미 사전 접수된 건입니다. 고객에게 증빙 요청을 다시 보낼까요?')) return
+    priorBusy = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/prior-issue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) { csToast.error(body.error ?? '처리에 실패했습니다.'); return }
+      priorOverride = action === 'register'
+      csToast.success(action === 'register' ? '사전 접수했습니다. 고객에게 증빙 등록 링크를 보냈어요.' : '사전 접수를 해제했습니다.')
+      evFetchedFor = null
+      onrefresh?.()
+    } catch {
+      csToast.error('처리 중 오류가 발생했습니다.')
+    } finally {
+      priorBusy = false
+    }
+  }
+
+  function toggleIssueType(key: string): void {
+    issueTypesSel = issueTypesSel.includes(key) ? issueTypesSel.filter((k) => k !== key) : [...issueTypesSel, key]
+  }
+
+  async function pickIssueFiles(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    for (const file of files) {
+      if (issueMedia.length >= INSPECTION_MEDIA_MAX) { csToast.warning(`증빙은 최대 ${INSPECTION_MEDIA_MAX}개까지 첨부할 수 있어요.`); break }
+      issueUploading++
+      try {
+        const signRes = await fetch(`/api/cms/reservations/${row.reservation_id}/inspection/sign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content_type: file.type, size: file.size }),
+        })
+        const sign = (await signRes.json().catch(() => ({}))) as { path?: string; token?: string; kind?: 'photo' | 'video'; error?: string }
+        if (!signRes.ok || !sign.path || !sign.token) { csToast.error(sign.error ?? '업로드 준비에 실패했습니다.'); continue }
+        const { error: upErr } = await supabase.storage.from('return-evidence').uploadToSignedUrl(sign.path, sign.token, file, { contentType: file.type })
+        if (upErr) { csToast.error('파일을 올리지 못했습니다.'); continue }
+        issueMedia = [...issueMedia, { path: sign.path, kind: sign.kind ?? 'photo', previewUrl: URL.createObjectURL(file), name: file.name }]
+      } catch {
+        csToast.error('파일을 올리는 중 오류가 발생했습니다.')
+      } finally {
+        issueUploading--
+      }
+    }
+  }
+
+  function removeIssueMedia(index: number): void {
+    const t = issueMedia[index]
+    if (t) URL.revokeObjectURL(t.previewUrl)
+    issueMedia = issueMedia.filter((_, i) => i !== index)
+  }
+
+  async function runInspection(action: 'approve' | 'issue' | 'resolve'): Promise<void> {
+    if (inspBusy) return
+    inspBusy = true
+    try {
+      const payload: Record<string, unknown> = { action }
+      if (action === 'issue') {
+        payload.types = issueTypesSel
+        payload.detail = issueDetail
+        if (issueAssignee) payload.assignee_id = issueAssignee
+        payload.media = issueMedia.map((m) => ({ path: m.path, kind: m.kind }))
+      }
+      if (action === 'resolve') payload.note = resolveNote
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/inspection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) { csToast.error(body.error ?? '처리에 실패했습니다.'); return }
+      csToast.success(action === 'approve' ? '반납 검수를 승인했습니다. 고객에게 대여 완료가 안내됩니다.' : action === 'issue' ? '검수 이슈를 등록했습니다. 고객에게 안내됩니다.' : '이슈를 처리 완료했습니다.')
+      issueTypesSel = []; issueDetail = ''; issueAssignee = null; resolveNote = ''
+      for (const m of issueMedia) URL.revokeObjectURL(m.previewUrl)
+      issueMedia = []
+      evFetchedFor = null // 탭 effect 가 새 상태를 다시 조회한다
+      if (oninspectionchange) await oninspectionchange(row.reservation_id, action === 'issue' ? 'inspection' : 'completed')
+      else onrefresh?.()
+    } catch {
+      csToast.error('처리 중 오류가 발생했습니다.')
+    } finally {
+      inspBusy = false
+    }
   }
 
   $effect(() => {
@@ -2039,6 +2243,7 @@
       { id: 'customer', label: '고객정보' },
       { id: 'payment',  label: '결제정보' },
       { id: 'contract', label: '계약서'   },
+      ...(showInspectionTab ? [{ id: 'inspection', label: '검수' }] : []),
       { id: 'sms',      label: '알림발송' },
     ] as tab}
       <button
@@ -3015,6 +3220,14 @@
             </form>
           {/each}
         {/if}
+
+        <!-- CS 사전 이슈 접수 — 크레이지챗/전화로 장비 이상·파손·분실이 접수된 예약. 반납완료가 되면 자동으로 검수 칩(이슈)으로 간다 -->
+        {#if canPriorIssue}
+          <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('register')}>{priorOn ? '증빙 재요청 💬' : '이슈 사전 접수 💬'}</button>
+          {#if priorOn}
+            <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('cancel')}>사전접수 해제</button>
+          {/if}
+        {/if}
       </div>
       </div>
     {/if}
@@ -3380,6 +3593,183 @@
       />
     {/if}
 
+    <!-- ─── Tab: 검수 (고객이 등록한 반납 증빙 — 1단계 읽기 전용) ─── -->
+    {#if activeTab === 'inspection'}
+      <div class="section-title-row">
+        <div class="section-title">고객 반납 제출 내용{evSubmission ? ` · ${EVIDENCE_METHOD_LABEL[evSubmission.method] ?? evSubmission.method}` : ''}</div>
+      </div>
+      {#if evLoading}
+        <div class="sms-empty">제출 내용을 불러오는 중…</div>
+      {:else if evError}
+        <div class="sms-empty" role="alert">{evError}</div>
+      {:else if !evSubmission}
+        <div class="sms-empty">고객이 등록한 반납 정보가 아직 없습니다.</div>
+      {:else}
+        <div class="ev-meta">제출 일시 {smsDateLabel(evSubmission.submitted_at)}</div>
+
+        {#if evSubmission.checklist.length > 0}
+          <div class="ev-block">
+            <div class="ev-block-title">장비 확인 체크리스트</div>
+            {#each evSubmission.checklist as c (c.key)}
+              <div class="ev-check" class:ev-check-off={!c.checked}>{c.checked ? '✓' : '－'} {c.label}</div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if evSubmission.locker_number || evSubmission.locker_password || evSubmission.locker_password_hidden}
+          <div class="ev-block">
+            <div class="ev-block-title">무인함 정보 (고객 입력)</div>
+            <div class="ev-check">무인함 번호 {evSubmission.locker_number ?? '-'}</div>
+            <div class="ev-check">비밀번호 {evSubmission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (evSubmission.locker_password ?? '-')}</div>
+          </div>
+        {/if}
+
+        {#each evGroups as g (g.item_key)}
+          <div class="ev-block">
+            <div class="ev-block-title">{g.label} ({g.items.length})</div>
+            <div class="ev-thumbs">
+              {#each g.items as m (m.id)}
+                {#if !m.url}
+                  <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                {:else if m.kind === 'video'}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                {:else}
+                  <button type="button" class="ev-thumb ev-thumb-btn" onclick={() => (evViewerIndex = evPhotoIndex(g.item_key, m.id))} aria-label={`${g.label} 크게 보기`}>
+                    <img src={m.url} alt={g.label} />
+                  </button>
+                {/if}
+              {/each}
+            </div>
+          </div>
+        {/each}
+        {#if evGroups.length === 0}
+          <div class="sms-empty">첨부된 사진이 없습니다.</div>
+        {/if}
+      {/if}
+
+      {#if !evLoading && !evError && evInspection}
+        <div class="section-title-row ev-insp-title">
+          <div class="section-title">반납 검수 · {INSPECTION_STATUS_LABEL[inspStatus]}</div>
+        </div>
+        {#if evInspection.has_prior_issue}<div class="ev-meta">CS 사전 접수 건 — 고객 입력 자료와 실물을 비교해 검수해 주세요.</div>{/if}
+        {#each evInspection.prior_reports ?? [] as pr (pr.id)}
+          <div class="ev-block">
+            <div class="ev-block-title">고객 사전 접수 내용 · {pr.status === 'submitted' ? '제출됨' : '고객 입력 대기'}</div>
+            {#if pr.status === 'submitted'}
+              <div class="ev-meta">{pr.types.map(priorKindLabel).join(' · ')}{pr.submitted_at ? ` · 제출 ${smsDateLabel(pr.submitted_at)}` : ''}</div>
+              {#if pr.detail}<div class="ev-check">{pr.detail}</div>{/if}
+              {#if pr.media.length > 0}
+                <div class="ev-thumbs">
+                  {#each pr.media as m}
+                    {#if !m.url}
+                      <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                    {:else if m.kind === 'video'}
+                      <!-- svelte-ignore a11y_media_has_caption -->
+                      <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                    {:else}
+                      <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="고객 사전 접수 증빙" /></a>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            {:else}
+              <div class="ev-meta">고객이 아직 증빙을 등록하지 않았어요.</div>
+            {/if}
+          </div>
+        {/each}
+
+        {#each evInspection.issues as is (is.id)}
+          <div class="ev-block">
+            <div class="ev-block-title">{is.types.map(issueTypeLabel).join(' · ')}{is.resolved_at ? ' (처리 완료)' : ''}</div>
+            {#if is.assignee_name}<div class="ev-meta">담당 {is.assignee_name}</div>{/if}
+            <div class="ev-meta">등록 {smsDateLabel(is.created_at)}{is.resolved_at ? ` · 해소 ${smsDateLabel(is.resolved_at)}` : ''}</div>
+            {#if is.detail}<div class="ev-check">{is.detail}</div>{/if}
+            {#if is.resolution_note}<div class="ev-check">처리 메모: {is.resolution_note}</div>{/if}
+            {#if is.media.length > 0}
+              <div class="ev-thumbs">
+                {#each is.media as m}
+                  {#if !m.url}
+                    <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                  {:else if m.kind === 'video'}
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                  {:else}
+                    <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="이슈 증빙" /></a>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+
+        {#if (inspStatus === 'pass' || inspStatus === 'resolved') && evInspection.issues.length === 0}
+          <!-- 검수 완료 결과 — 승인 뒤에도 처리 결과가 남아 보이도록 한 줄 요약(이슈 건은 위 이슈 블록에 처리 완료로 표시됨) -->
+          <div class="ev-block">
+            <div class="ev-block-title">{inspStatus === 'pass' ? '검수 통과 — 이상 없이 대여가 완료 처리됐어요.' : '검수 완료'}</div>
+            {#if evInspection.inspected_at}<div class="ev-meta">승인 {smsDateLabel(evInspection.inspected_at)}</div>{/if}
+          </div>
+        {/if}
+
+        {#if canInspect}
+          {#if inspStatus !== 'issue'}
+            <div class="ev-block">
+              <div class="ev-block-title">이슈 항목 (하나라도 선택하면 이슈로 등록돼요)</div>
+              <div class="ev-chips">
+                {#each INSPECTION_ISSUE_TYPES as t (t.key)}
+                  <button type="button" class="ev-chip" class:ev-chip-on={issueTypesSel.includes(t.key)} aria-pressed={issueTypesSel.includes(t.key)} onclick={() => toggleIssueType(t.key)}>{t.label}</button>
+                {/each}
+              </div>
+              {#if issueTypesSel.length > 0}
+                <textarea class="cancel-reason-input ev-textarea" rows="3" maxlength={INSPECTION_DETAIL_MAX} placeholder="상세 사유를 입력하세요" bind:value={issueDetail}></textarea>
+                {#if (evInspection.assignees ?? []).length > 0}
+                  <div class="ev-block-title">담당자 지정 (선택)</div>
+                  <div class="ev-chips">
+                    {#each evInspection.assignees ?? [] as a (a.id)}
+                      <button type="button" class="ev-chip" class:ev-chip-on={issueAssignee === a.id} aria-pressed={issueAssignee === a.id} onclick={() => { issueAssignee = issueAssignee === a.id ? null : a.id }}>{a.name}</button>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="ev-thumbs">
+                  {#each issueMedia as m, i (m.path)}
+                    <div class="ev-thumb">
+                      {#if m.kind === 'video'}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video src={m.previewUrl} muted></video>
+                      {:else}
+                        <img src={m.previewUrl} alt={m.name} />
+                      {/if}
+                      <button type="button" class="ev-thumb-remove" onclick={() => removeIssueMedia(i)} aria-label="첨부 삭제">✕</button>
+                    </div>
+                  {/each}
+                  {#if issueMedia.length < INSPECTION_MEDIA_MAX}
+                    <label class="ev-thumb ev-thumb-add">＋<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,video/mp4,video/quicktime,video/webm" multiple onchange={pickIssueFiles} /></label>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+            <div class="action-section action-section-end">
+              {#if issueTypesSel.length > 0}
+                <button type="button" class="btn-danger-sm" disabled={inspBusy || issueUploading > 0} onclick={() => runInspection('issue')}>이슈 등록/검수 전환</button>
+              {:else}
+                <button type="button" class="btn-primary" disabled={inspBusy} onclick={() => runInspection('approve')}>반납 검수 승인</button>
+              {/if}
+            </div>
+          {:else}
+            <div class="ev-block">
+              <div class="ev-block-title">이슈 처리 완료 (추가 청구·협의 마감)</div>
+              <textarea class="cancel-reason-input ev-textarea" rows="2" maxlength={INSPECTION_NOTE_MAX} placeholder="처리 메모 (선택)" bind:value={resolveNote}></textarea>
+            </div>
+            <div class="action-section action-section-end">
+              <button type="button" class="btn-primary" disabled={inspBusy} onclick={() => runInspection('resolve')}>완료 처리(추가청구)</button>
+            </div>
+          {/if}
+        {:else if row.status === 'returned'}
+          <div class="sms-empty">검수 승인·이슈 처리는 매니저 이상만 할 수 있습니다.</div>
+        {/if}
+      {/if}
+    {/if}
+
     <!-- ─── Tab 5: 알림발송 ─── -->
     {#if activeTab === 'sms'}
       <div class="section-title-row">
@@ -3416,6 +3806,10 @@
   </div>
  </div>
 </div>
+
+{#if evViewerIndex !== null && evViewerItems.length > 0}
+  <MediaViewer items={evViewerItems} bind:index={evViewerIndex} title="반납 증빙" onclose={() => (evViewerIndex = null)} />
+{/if}
 
 {#if enableQrVerify}
   <QrScannerOverlay
@@ -3635,6 +4029,29 @@
   .sms-badge-failed      { background: rgba(255, 53, 53, 0.10);  color: var(--cs-red-badge); }
   .sms-badge-unknown     { background: rgba(102, 102, 102, 0.10); color: var(--cs-text-light); }
   .sms-empty  { font: var(--text-pc-body-14); color: var(--cs-text-light); padding: 24px 0; text-align: center; }
+  /* 검수 탭(반납 증빙) — 카드 면은 --cs-surface-gray 면 위주, 보더 없음 */
+  .ev-meta { font: var(--text-pc-script-12); color: var(--cs-text-light); margin-bottom: 12px; }
+  .ev-block { background: var(--cs-surface-gray); border-radius: var(--cms-radius-sm); padding: 14px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .ev-block-title { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 700; }
+  .ev-check { font: var(--text-pc-body-14); color: var(--cs-text); }
+  .ev-check-off { color: var(--cs-text-light); }
+  .ev-thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ev-thumb { width: 96px; height: 96px; border-radius: var(--cms-radius-sm); object-fit: cover; background: var(--cs-white); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .ev-thumb-btn { padding: 0; border: none; cursor: pointer; }
+  .ev-thumb-btn img { width: 100%; height: 100%; object-fit: cover; }
+  .ev-insp-title { margin-top: 20px; }
+  .ev-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ev-chip { height: 36px; padding: 0 14px; border: none; border-radius: var(--cms-radius-sm); background: var(--cs-white); color: var(--cs-text); font: var(--text-pc-body-14); cursor: pointer; transition: background 0.15s; }
+  .ev-chip:hover:not(.ev-chip-on) { background: var(--cs-lilac); }
+  .ev-chip-on { background: var(--cs-purple); color: var(--cs-white); }
+  .ev-textarea { resize: vertical; min-height: 64px; }
+  .ev-thumb { position: relative; }
+  .ev-thumb img, .ev-thumb video { width: 100%; height: 100%; object-fit: cover; }
+  .ev-thumb-add { cursor: pointer; color: var(--cs-purple); font: var(--text-pc-title-18); }
+  .ev-thumb-add input { display: none; }
+  .ev-thumb-remove { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(16, 11, 50, 0.6); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
+  .ev-thumb-remove:hover { background: var(--cs-red-badge); }
+  .ev-thumb-missing { font: var(--text-pc-script-12); color: var(--cs-text-light); text-align: center; }
   .sms-notice { font: var(--text-pc-script-12); color: var(--cs-red-badge); }
   .sms-hint   { font: var(--text-pc-script-12); color: var(--cs-text-light); line-height: 1.6; }
 

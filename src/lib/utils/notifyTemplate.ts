@@ -72,6 +72,16 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   // 무인보관함 이용 안내(2026-10-11, Stephen 확정): 이 안내문장이 푸시·문자·채팅카드 세 곳의 공통 정본이다(비우면 아래 기본 문구).
   // 문자는 SMS_BRAND_PREFIX가 앞에 붙고 길면 LMS로 나간다. 비밀번호가 푸시 알림 본문에도 들어가므로 해당 고객 1명에게만 발송된다.
   { notifyType: 'locker_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 무인보관함 이용 {{무인함번호}}번함 비밀번호는 '{{무인함비밀번호}}'입니다.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
+  // 반납 방식별 단계 알림(2026-10-17, Migration #722) — 푸시·문자 공통 안내문장(채팅카드는 크론이 같은 기본 문구를 보낸다)
+  { notifyType: 'return_notice_courier', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납일이에요. 크레이지배송 반납 방법을 확인하고 반납요청을 등록해 주세요.' },
+  { notifyType: 'return_notice_quick_5h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.' },
+  { notifyType: 'return_notice_quick_2h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 종료 2시간 전이에요. 반납을 준비해 주세요.' },
+  { notifyType: 'return_notice_quick_1h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 종료 1시간 전이에요. 서둘러 반납을 준비해 주세요.' },
+  { notifyType: 'return_notice_locker', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!' },
+  // 반납 검수 결과(2026-10-17, Migration #724) — 관리자가 검수 승인 / 이슈 등록할 때 고객에게 나간다
+  { notifyType: 'issue_report_request', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 장비 이상·파손·분실 접수를 위해 사진·영상 등 증빙 자료를 등록해 주세요.' },
+  { notifyType: 'inspection_pass', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 검수 결과, 장비 및 구성품에 이상이 없어 대여가 완료되었습니다. 이용해 주셔서 감사합니다.' },
+  { notifyType: 'inspection_issue', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 검수 결과, 장비 및 구성품에 이상이 확인되어 추가 확인 후 담당자가 연락드리겠습니다.' },
   { notifyType: 'dhero_place_guide', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 두발히어로 배송이 접수됐어요. 채팅에서 수령 위치를 등록해 주세요.' },
   { notifyType: 'payment_cancelled_reissue', vars: RESERVATION_VARS, sms: false, defaultMessage: '{{상품명}} 기존 결제가 취소됐어요. 잠시 후 새 계약서가 발송됩니다.' },
   { notifyType: 'event_coupon_issued', vars: ['고객이름', '할인내용'], sms: false, defaultMessage: '{{할인내용}} 쿠폰을 받으셨어요! 지금 확인해보세요.' },

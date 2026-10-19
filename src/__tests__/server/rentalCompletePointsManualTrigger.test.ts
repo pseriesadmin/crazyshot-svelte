@@ -115,7 +115,7 @@ describe('updateStatus 액션 — 대여완료 포인트 자동적립 배선', (
     mockGetReservationForDhero.mockResolvedValue(null)
   })
 
-  it('EC-1: returned 전이 성공 시 awardRentalCompletePoints(admin, reservationId) 호출됨', async () => {
+  it('EC-1: returned 전이 성공 시 대여완료 포인트는 적립하지 않는다(검수 승인 시점으로 이동, Migration #724)', async () => {
     mockRpc.mockImplementation((fn: string) => {
       if (fn === 'update_reservation_status') return Promise.resolve({ data: { ok: true }, error: null })
       return Promise.resolve({ data: null, error: null })
@@ -129,7 +129,7 @@ describe('updateStatus 액션 — 대여완료 포인트 자동적립 배선', (
       locals: makeLocals(),
     } as unknown as Parameters<typeof actions.updateStatus>[0])
 
-    expect(mockAward).toHaveBeenCalledWith(expect.anything(), 4001)
+    expect(mockAward).not.toHaveBeenCalled()
   })
 
   it('EC-2: returned 외 상태(shipped)에서는 awardRentalCompletePoints 미호출', async () => {
@@ -147,5 +147,19 @@ describe('updateStatus 액션 — 대여완료 포인트 자동적립 배선', (
     } as unknown as Parameters<typeof actions.updateStatus>[0])
 
     expect(mockAward).not.toHaveBeenCalled()
+  })
+
+  it('EC-3: completed 로의 직접 전환은 거절한다 — 완료는 검수 탭의 반납 검수 승인으로만(Migration #724)', async () => {
+    mockRpc.mockImplementation(() => Promise.resolve({ data: { ok: true }, error: null }))
+    const formData = makeFormData({ reservation_id: '4003', status: 'completed' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+
+    const result = await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0]) as unknown as { status?: number }
+
+    expect(result.status).toBe(400)
+    expect(mockRpc).not.toHaveBeenCalledWith('update_reservation_status', expect.anything())
   })
 })

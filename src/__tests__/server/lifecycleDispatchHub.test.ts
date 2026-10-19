@@ -72,7 +72,7 @@ function fakeAdmin() {
   return { from } as never
 }
 
-const SMS_TYPES = ['reservation_approval', 'shipment_notify', 'tracking_notify', 'dhero_place_guide', 'return_registration', 'return_remind', 'reservation_cancelled']
+const SMS_TYPES = ['reservation_approval', 'shipment_notify', 'tracking_notify', 'dhero_place_guide', 'return_registration', 'return_remind', 'reservation_cancelled', 'return_notice_courier', 'return_notice_quick_5h', 'return_notice_quick_2h', 'return_notice_quick_1h', 'return_notice_locker', 'inspection_pass', 'inspection_issue', 'issue_report_request']
 const NON_SMS_TYPES = ['rental_confirm', 'rental_complete', 'damage_claimed', 'hold_expired', 'reservation_hold', 'payment_cancelled_reissue', 'locker_guide']
 
 beforeEach(() => {

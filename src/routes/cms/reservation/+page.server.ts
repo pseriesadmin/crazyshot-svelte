@@ -16,7 +16,6 @@ import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
-import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
 import { attachCancelPending } from '$lib/server/attachCancelPending'
@@ -28,6 +27,10 @@ import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult
 export interface RentalListRow {
   /** 고객이 취소했고 관리자 취소확인 전("예약취소" 배지·헤더 [예약취소]=취소확인) — /cms/rentals 로더가 부착 */
   cancel_pending?:   boolean
+  /** CS 사전 이슈 접수 건(has_prior_issue) — /cms/rentals 로더가 부착([사전접수건] 배지) */
+  prior_issue?:      boolean
+  /** '반납중' 칩의 반납 진행 단계 — /cms/rentals 로더가 부착(attachReturnStage) */
+  return_stage?:     'notice_due' | 'notice_sent' | 'registered'
   reservation_id:    number
   reservation_code:  string | null
   status:            string
@@ -227,7 +230,22 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     canChangeOrCancelReservation = hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')
   }
 
-  return { rentals, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending, canChangeOrCancelReservation }
+  // 칩별 '처리 대기' 건수(2026-10-19, 대여현황과 동일 방식): 신청대기=예약승인 대기, 계약대기=계약 발송·서명·결제 진행 대기. 주문 1건=1행 기준.
+  // 검색어·기간 필터와 무관한 전체 건수다. 임시예약·취소·전체 칩은 관리자 조치 대기 개념이 없어 배지를 두지 않는다. 실패하면 배지 없이 둔다.
+  const holdCountOf = async (pending: boolean): Promise<number | null> => {
+    const { data, error: e } = await admin.rpc('get_rental_list', {
+      p_status: 'hold', p_search: null, p_date_from: null, p_date_to: null, p_page: 1, p_per_page: 1,
+      p_exclude_statuses: ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft'],
+      p_require_contract_sent_unsigned: pending || null,
+      p_exclude_contract_sent: !pending || null,
+      p_group_by_order: true,
+    })
+    if (e) { console.error('[cms/reservation] 칩 건수 조회 실패:', e.message); return null }
+    return ((data ?? []) as RentalListRow[])[0]?.total_count ?? 0
+  }
+  const [cHold, cContract] = await Promise.all([holdCountOf(false), holdCountOf(true)])
+  const chipCounts: Record<string, number | null> = { hold: cHold, contract_pending: cContract }
+  return { rentals, chipCounts, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending, canChangeOrCancelReservation }
 }
 
 export const actions: Actions = {
@@ -518,6 +536,10 @@ export const actions: Actions = {
     // 계약완료(confirmed)로의 직접 전환은 이 액션으로 하지 않는다(Stephen 2026-10-15) — 서명·결제 없이 신청대기를 확정하는 경로를 서버에서 막는다.
     // 계약완료는 고객의 전자계약 서명 + 결제가 모두 끝났을 때만 try_confirm_reservation이 자동 전환한다(service-operations.md §9).
     // (confirmed 이후 단계 전환 shipped·in_use 등은 영향 없음 — 이 값으로 들어오는 정상 화면 호출은 없다)
+    // 완료(completed)도 이 액션으로 직접 전환하지 않는다(2026-10-17) — 반납 검수 승인(검수 탭 [반납 검수 승인])을 거쳐야 하며 DB 트리거도 같은 규칙을 집행한다.
+    if (newStatus === 'completed') {
+      return fail(400, { message: '완료 처리는 검수 탭의 [반납 검수 승인]으로 진행해 주세요.' })
+    }
     if (newStatus === 'confirmed') {
       return fail(400, { message: '계약완료는 고객의 전자계약 서명과 결제가 모두 끝나야 자동으로 전환돼요. 직접 변경할 수 없습니다.' })
     }
@@ -709,12 +731,12 @@ export const actions: Actions = {
       })
     } catch { /* 로그 실패는 무시 */ }
 
-    // 대여완료·정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+    // 정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
     // QR 반납 경로(rentalQrTransition.ts)도 동일하게 배선됨(log_rental_action과 동일 이중 배선)
+    // ⛔ 대여완료 포인트·"대여 완료" 알림은 더 이상 returned 시점에 나가지 않는다(2026-10-17, Migration #724) —
+    //    관리자의 반납 검수 승인(lib/server/inspection.ts approveInspection)에서만 지급·발송한다.
+    //    정시반납 적립은 호출 시점(오늘)을 반납 시점으로 보는 로직이라 returned 시점에 그대로 둔다.
     if (newStatus === 'returned') {
-      try {
-        await awardRentalCompletePoints(admin, reservationId)
-      } catch { /* 포인트 적립 실패는 무시 */ }
       try {
         await awardOnTimeReturnPoints(admin, reservationId)
       } catch { /* 포인트 적립 실패는 무시 */ }
@@ -727,7 +749,6 @@ export const actions: Actions = {
       shipped:          'shipment_notify',
       in_use:           'rental_confirm',
       return_requested: 'return_registration',
-      returned:         'rental_complete',
       cancelled:        'reservation_cancelled',
       damage_claimed:   'damage_claimed',
     }
