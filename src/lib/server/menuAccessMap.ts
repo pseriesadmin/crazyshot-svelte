@@ -64,6 +64,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/chat/coupon-gift/direct-send',
       'src/routes/api/cms/chat/identity-request/direct-send',
       'src/routes/api/cms/chat/pending-inquiries',
+      'src/routes/api/cms/chat/inbox',
       // 크레이지챗 접수 큐(2026-10-07, S3)
       'src/routes/api/cms/chat/agent-requests',
       'src/routes/api/cms/chat/agent-requests/[id]/resolve',

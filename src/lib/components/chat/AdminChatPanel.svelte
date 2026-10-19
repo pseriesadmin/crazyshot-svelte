@@ -28,6 +28,7 @@
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
   import { CS_MEMO_MAX, checkCsMemo } from '$lib/utils/csMemo'
+  import { listenChatTab, CHAT_WINDOW_NAME } from '$lib/utils/cmsChatTabBridge'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
@@ -496,6 +497,26 @@
           handleSelectSession(initialSessionId)
         }
       }
+    }
+  })
+
+  // 다른 CMS 화면의 플로팅 채팅 아이콘에서 "이 대화 열어줘" 요청이 오면 이 탭에서 해당 대화를 선택한다(2026-10-19).
+  // 목록에 아직 없는 새 세션이면 딥링크로 다시 불러온다. 새 창으로 열릴 때 같은 창을 재사용하도록 창 이름도 지정.
+  $effect(() => {
+    const prevName = window.name
+    window.name = CHAT_WINDOW_NAME
+    const stopListen = listenChatTab((sid) => {
+      const target = chatStore.sessions.find((s) => s.id === sid)
+      if (!target) { window.location.href = `/cms/chat?session=${sid}`; return }
+      if (target.status === 'closed') filterTab = 'closed'
+      else if (target.status === 'pending') filterTab = 'pending'
+      else filterTab = 'open'
+      handleSelectSession(sid)
+    })
+    return () => {
+      stopListen()
+      // 채팅 화면을 떠난 탭이 이후 "채팅 창"으로 오인돼 다른 화면이 덮어써지지 않도록 창 이름을 되돌린다
+      if (window.name === CHAT_WINDOW_NAME) window.name = prevName
     }
   })
 

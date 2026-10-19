@@ -8,8 +8,9 @@
   import { unregisterCurrentPushToken } from '$lib/utils/push'
   import { CMS_MENUS, hasMenuAccess } from '$lib/constants/cmsMenus'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-  import { subscribeToAllMessages } from '$lib/services/chatService'
-  import type { ChatMessage } from '$lib/types/chat'
+  import CmsChatFab from '$lib/components/cms/CmsChatFab.svelte'
+  import { createCmsChatInbox } from '$lib/utils/cmsChatInbox.svelte'
+  import { withTitleBadge } from '$lib/utils/chatInbox'
   import type { LayoutData } from './$types'
 
   interface Props {
@@ -69,22 +70,53 @@
     }
   })
 
-  // 2026-09-08(Stephen 지시): CMS 다른 메뉴 화면을 보고 있는 동안에도 새 고객 채팅이
-  // 도착하면 토스트로 알린다 — /cms/chat 화면 안에서는 AdminChatPanel.svelte 자체의
-  // subscribeToAllMessages(목록 미리보기 갱신 + flashSession 점멸)로 이미 눈에 보이므로
-  // 중복 알림을 피하기 위해 그 경로에서는 토스트를 띄우지 않는다. sender_type='user'만
-  // 필터 — 관리자 본인 답장·시스템 자동응답(캔드매칭·RPC 알림카드 등)은 sender_type='admin'
-  // 이라 이 토스트 대상이 아니다(관리자 스스로의 발신을 자기 알림으로 다시 받지 않도록).
-  // 1h(2026-10-05): 상담 권한(consulting.chat)이 꺼진 계정은 새 채팅 토스트를 구독하지 않는다
+  // 2026-09-08(Stephen 지시): CMS 다른 메뉴 화면을 보고 있는 동안에도 새 고객 채팅이 도착하면 알린다.
+  // 2026-10-19(Stephen 지시, A안): 잠깐 뜨고 사라지는 한 줄 토스트만으로는 놓치므로 ① 우측 하단 플로팅 채팅 아이콘(읽지 않음 개수 + 간추림 바 목록)
+  // ② 고객명·내용이 담긴 짧은(4초) 토스트(누르면 해당 대화로 이동 — 지속 알림은 우측 하단 플로팅 채팅 아이콘이 담당) ③ 탭 제목 "(N)" 개수를 함께 둔다.
+  // /cms/chat 화면 안에서는 AdminChatPanel 자체의 실시간 갱신이 보이므로 토스트는 띄우지 않는다(아이콘 개수는 계속 갱신).
+  // 알림 대상: 고객 발신 메시지 + 고객 행동으로 남는 이벤트 카드(전자계약 서명 완료 등) — 관리자 본인 답장·자동응답은 제외.
+  // 상담 권한(consulting.chat)이 꺼진 계정은 구독하지 않는다.
   const canReceiveChatToast = $derived(hasMenuAccess(data.cmsRole ?? '', data.menuPermissionOverrides, 'consulting.chat'))
+  const chatInbox = createCmsChatInbox()
   $effect(() => {
     if (!data.cmsRole || !canReceiveChatToast) return
-    const unsub = subscribeToAllMessages((message: ChatMessage) => {
-      if (message.sender_type !== 'user') return
+    return chatInbox.start((found) => {
       if (page.url.pathname.startsWith('/cms/chat')) return
-      csToast.info('새로운 채팅이 수신되었습니다.')
+      const text = found
+        ? `${found.name} · ${found.label ?? found.preview}`
+        : '새로운 채팅이 수신되었습니다.'
+      csToast.info(text, {
+        id: 'cms-chat-inbox',
+        duration: 4000,
+        actionLabel: '열기',
+        onClick: () => { void goto(found ? `/cms/chat?session=${found.session_id}` : '/cms/chat') },
+      })
     })
-    return unsub
+  })
+
+  // 화면을 옮길 때마다 채팅 아이콘 개수를 다시 맞춘다(채팅 화면에서 답장·종료한 뒤 다른 메뉴로 이동해도 즉시 반영)
+  $effect(() => {
+    void page.url.pathname
+    if (canReceiveChatToast && chatInbox.loaded) chatInbox.refreshIfStale()
+  })
+
+  // 탭 제목 앞 "(N)" 배지 — 다른 탭·창에서 작업 중에도 새 대화를 알아챌 수 있게 한다(페이지 이동으로 제목이 바뀌어도 다시 붙인다)
+  $effect(() => {
+    if (!canReceiveChatToast) return
+    const n = chatInbox.count
+    const apply = () => {
+      const next = withTitleBadge(document.title, n)
+      if (next !== document.title) document.title = next
+    }
+    apply()
+    const titleEl = document.querySelector('title')
+    if (!titleEl) return
+    const observer = new MutationObserver(apply)
+    observer.observe(titleEl, { childList: true, characterData: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      document.title = withTitleBadge(document.title, 0)
+    }
   })
 
   let manualLogout = false
@@ -325,6 +357,11 @@
     <main class="cms-main">
       {@render children()}
     </main>
+
+    <!-- 우측 하단 플로팅 채팅 아이콘(프론트 채팅 FAB과 동일 UI) — 채팅 화면 안에서는 이미 대화가 보이므로 숨김(2026-10-19) -->
+    {#if canReceiveChatToast && !page.url.pathname.startsWith('/cms/chat')}
+      <CmsChatFab count={chatInbox.count} items={chatInbox.items} loaded={chatInbox.loaded} onDismissEvent={chatInbox.dismissEvent} />
+    {/if}
 
   </div>
 {:else}
