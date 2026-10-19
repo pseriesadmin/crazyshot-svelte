@@ -3,6 +3,7 @@
   // 구조: dev/cart fab-bar 패턴 동일 적용
   // 아이콘: 커스텀 SVG (35×35 viewBox, 52px 표시)
 
+  import { tick } from 'svelte'
   import ChatBottomSheet from './ChatBottomSheet.svelte'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import { chatStore, toggleChat, resetUnreadCount, setUnreadCount, pushMessage, setActiveSession } from '$lib/stores/chat.svelte'
@@ -43,6 +44,20 @@
   let isOpen = $derived(chatStore.isOpen)
   let unreadCount = $derived(chatStore.unreadCount)
   let badgeLabel = $derived(unreadCount > 99 ? '99+' : String(unreadCount))
+
+  // ── 수신 알림 모션: 미읽음이 늘어난 순간(화면 이용 중 새 메시지 도착 / 최초 진입 시 기존 미읽음 복원) 1회 '바운스 & 틸트' ──
+  // 줄어들거나 그대로면(읽음 처리·채팅 열림) 재생하지 않는다. 연속 도착 시에는 처음부터 다시 1회 재생.
+  let bouncing = $state(false)
+  let prevUnread = 0
+  $effect(() => {
+    const count = unreadCount
+    const open = isOpen
+    const increased = count > prevUnread
+    prevUnread = count
+    if (!increased || open) return
+    bouncing = false
+    tick().then(() => requestAnimationFrame(() => requestAnimationFrame(() => { bouncing = true }))) // 클래스를 뗀 뒤 스타일 반영(두 프레임)을 기다려야 재생 중 연속 도착에서도 처음부터 다시 재생된다
+  })
 
   function handleToggle(e: MouseEvent) {
     e.stopPropagation()
@@ -104,7 +119,7 @@
 
 {#if !hideFab}
   <!-- fab-btn — dev/cart 패턴 동일 (배경 없음, drop-shadow, scale hover) -->
-  <div class="chat-fab-wrap">
+  <div class="chat-fab-wrap" class:bounce-tilt={bouncing} onanimationend={(e) => { if (e.animationName.endsWith('chat-bounce-tilt')) bouncing = false }}>
     <!-- 전파 확산 링: 미읽음 메시지 도착 시 표시 -->
     {#if unreadCount > 0 && !isOpen}
       <span class="ripple ripple-1" aria-hidden="true"></span>
@@ -154,6 +169,30 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  /* 수신 알림 모션 — 바운스 & 틸트(1회, 0.9s). 래퍼에 적용해 아이콘·배지·링이 함께 움직인다.
+     FAB는 화면 우측 끝에 붙어 있으므로 모션이 우측 밖으로 넘치지 않게 좌측 방향으로만 확장한다:
+     transform-origin을 우측 하단으로 두어 확대는 좌측으로 자라고, 기울기는 좌측(반시계)으로만 간다.
+     크기·위치(70px/40px)는 변경하지 않는다. */
+  .chat-fab-wrap.bounce-tilt {
+    transform-origin: 100% 85%;
+    animation: chat-bounce-tilt 0.9s cubic-bezier(0.28, 0.84, 0.42, 1) 1;
+  }
+
+  @keyframes chat-bounce-tilt {
+    0%   { transform: translate(0, 0)       rotate(0deg)   scale(1, 1); }
+    14%  { transform: translate(-6px, -16px) rotate(-16deg) scale(0.96, 1.06); }
+    28%  { transform: translate(0, 0)       rotate(-4deg)  scale(1.06, 0.94); }
+    44%  { transform: translate(-4px, -9px)  rotate(-10deg) scale(0.98, 1.03); }
+    58%  { transform: translate(0, 0)       rotate(-2deg)  scale(1.03, 0.97); }
+    74%  { transform: translate(-1px, -3px)  rotate(-4deg)  scale(1, 1); }
+    100% { transform: translate(0, 0)       rotate(0deg)   scale(1, 1); }
+  }
+
+  /* 모션 감소 설정 사용자는 재생하지 않음 */
+  @media (prefers-reduced-motion: reduce) {
+    .chat-fab-wrap.bounce-tilt { animation: none; }
   }
 
   /* dev/cart fab-btn 패턴 동일 */
