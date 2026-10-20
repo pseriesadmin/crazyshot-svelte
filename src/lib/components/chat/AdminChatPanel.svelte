@@ -28,6 +28,7 @@
   import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
+  import { playChatChime } from '$lib/utils/chatChime'
   import { CS_MEMO_MAX, checkCsMemo } from '$lib/utils/csMemo'
   import { listenChatTab, CHAT_WINDOW_NAME } from '$lib/utils/cmsChatTabBridge'
   import { INFO_PCT_MIN, INFO_PCT_MAX, INFO_PCT_DEFAULT, infoPctFromPointer, infoPctFromKey, parseStoredInfoPct, COMPOSE_PCT_MIN, COMPOSE_PCT_MAX, COMPOSE_MIN_PX, clampComposePct, composePctFromPointer, composePctFromKey, parseStoredComposePct } from '$lib/utils/panelSplit'
@@ -647,6 +648,8 @@
   $effect(() => {
     const unsub = subscribeToAllMessages((message) => {
       applyIncomingMessagePreview(message)
+      // 새 대화카드가 생길 때마다 소리 — 내가 방금 보낸 메시지(관리자 발신)는 제외(탭 간·FAB와의 중복은 내부 최소 간격이 걸러냄)
+      if (!(message.sender_type === 'admin' && Date.now() - lastOwnSendAt < 5000)) playChatChime()
       // 기존 채팅목록에 새 대화(수신/발신) 도착 시 점멸 표시
       flashSession(message.session_id)
       // 긴급 배지(is_urgent)는 서버가 의도분류 로그를 근거로 계산하는 값이라 Realtime payload에 없다 —
@@ -660,6 +663,8 @@
   })
 
   let sessionsRefetchTimer: ReturnType<typeof setTimeout> | null = null
+  /** 이 화면에서 관리자가 메시지를 마지막으로 보낸 시각 — 내 발신이 Realtime으로 되돌아올 때 소리를 내지 않기 위함 */
+  let lastOwnSendAt = 0
   function scheduleSessionsRefetch(): void {
     if (sessionsRefetchTimer) clearTimeout(sessionsRefetchTimer)
     sessionsRefetchTimer = setTimeout(async () => {
@@ -1057,6 +1062,7 @@
         ...(product.slug ? { product_slug: product.slug } : {}),
         ...(product.price_24h != null ? { product_price: product.price_24h } : {}),
       }
+      lastOwnSendAt = Date.now()
       const res = await fetch('/api/chat/admin-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1196,6 +1202,7 @@
     if (!selectedSessionId || isSending) return
     isSending = true
     try {
+      lastOwnSendAt = Date.now()
       const res = await fetch('/api/chat/admin-reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,10 @@
 # chat.md — 대화형 렌탈예약 어시스턴트 시스템 (PRD.1.7)
 # Harness Flow v3.2 | crazyshot 채팅 도메인 정본
+
+> ⛔ **명칭 규칙(2026-10-07, S6)**: 관리자 화면 표기는 "크레이지챗"이다. 기존 빠른답변 자동매칭 스위치(`auto_reply_settings`)는 **"크레이지챗 · 빠른답변"**,
+> 신규 에이전트(조회·접수·AI, `crazychat_settings`)는 `/cms/chat/crazychat` 화면의 "마스터/조회형/접수형/AI 답변"으로 구분한다 — 서로 다른 스위치이므로 한쪽 이름으로 통일하지 않는다.
+> 크레이지챗이 보낸 텍스트 답변은 `action_payload={type:'crazychat_reply',source}` 표시값으로 관리자 화면에서만 로고 배지(`/crazychat-badge.svg`)가 붙고 기본 뷰에 노출된다. 고객 화면에는 이름·배지·로고를 표시하지 않는다(Stephen 확정). 내부 식별자(canned·auto_reply)는 바꾸지 않는다.
+
 # 최종 업데이트: 2026-06-27 (세션 정책 확립 + 구현 완료)
 
 ---
@@ -675,6 +680,19 @@ GATE C 확인 항목:
   [ ] 학생인증 분기가 identity_type === 'student' 기준?
   [ ] is_student boolean 직접 참조 없음?
   [ ] get_chat_customer_detail RPC 반환값에 identity_type 존재 확인?
+```
+
+### 17-2b. 기본 자동응답(대기 안내) — 매 고객 메시지마다 발송 (2026-10-20, Stephen 지시)
+
+```
+빠른답변에 해당하지 않아 AI도 답을 못 정한 고객 메시지에는 기본 자동응답(WAIT_REPLY "정확한 답변을 위해 담당자가 확인 후 안내드릴게요…")을 매번 보낸다.
+같은 세션에서 연속으로 이어지는 고객 대화에도 매번 반응한다 — 2026-10-06의 "5분 안 반복 억제"는 폐지됐다.
+  · api/chat/message/+server.ts: 억제 조회 제거. AI 응답 INSERT·고객 푸시(ai_auto_reply)·인텐트 로그·관리자 긴급 푸시가 메시지마다 실행.
+  · cannedAutoReply.ts의 isWaitNoticeStillPending·WAIT_SUPPRESS_MINUTES는 미사용 코드로 남아 있다(테스트 waitNoticeSuppress·cannedAutoReply가 유지).
+  · 완화 2가지(Stephen 확정): ① 관리자가 응대 중인 세션(admin_id 있음 + 마지막 관리자 답변 10분 이내 — crazychat/engagement.ts 판정, 크레이지챗의 30분과 별도로 이 용도만 10분)에는 대기 안내를 보내지 않는다(10분이 지나면 다시 보냄).
+    ② 대기 안내는 채팅 기록에 매번 남기되, 직전 대기 안내가 60초(WAIT_PUSH_COOLDOWN_SECONDS) 이내면 고객 푸시만 생략한다. 판정 조회 실패 시에는 평소대로 안내·푸시를 보낸다(fail-soft).
+  · manual_mode=true 세션은 기존대로 자동응답 전체 스킵. 인텐트 로그·관리자 긴급 푸시(admin_id 없는 세션)는 매번 그대로.
+  · 테스트: chatMessageWaitRepeat(소스 점검)·chatMessageAutoReplyObserve("대기 안내 반복(억제 폐지)").
 ```
 
 ### 17-3. 세션별 자동응답 모드 (manual_mode)

@@ -3,7 +3,7 @@
 // 호출부(프로즌 경로)의 변경을 최소화하려고 "판정·기록·대기 안내 문구"를 이 모듈에 모았다.
 //   · decideAutoReply: 규칙 판정(evaluateCannedMatch) + 확률 모델(decideWithModel) → 보낼 답변(없으면 null)
 //   · buildObservationRow / recordObservation: 관찰 기록(canned_match_observations, Migration 656) — 고객 원문 미저장, fail-soft
-//   · WAIT_REPLY / WAIT_SUPPRESS_MINUTES: 판정 불가 시 "관리자 답변 대기" 안내와 같은 세션 반복 억제
+//   · WAIT_REPLY: 판정 불가 시 "관리자 답변 대기" 안내 문구. 반복 억제(WAIT_SUPPRESS_MINUTES·isWaitNoticeStillPending)는 2026-10-20 폐지 — 호출부는 매 고객 메시지마다 안내를 보낸다(미사용 코드로 남김)
 // 순수함수 원칙(nlsearch.md §6): 판정 함수에는 DB 호출이 없고, DB 쓰기는 recordObservation 한 곳에만 있다.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -39,6 +39,22 @@ export function isWaitNoticeStillPending(
   if (Number.isNaN(t)) return false
   const age = now.getTime() - t
   return age >= 0 && age < WAIT_SUPPRESS_MINUTES * 60_000
+}
+
+/** 연속 대기 안내의 고객 푸시 쿨다운(초) — 채팅 기록에는 매번 남기되, 이 시간 안에 이미 대기 안내를 보냈다면 고객 푸시는 다시 보내지 않는다(2026-10-20) */
+export const WAIT_PUSH_COOLDOWN_SECONDS = 60
+
+/** 세션의 마지막 비고객 발신이 cooldownSeconds 이내의 대기 안내인지(고객 푸시 쿨다운 판정). */
+export function isWaitNoticeRecent(
+  lastReply: { sender_type: string; content: string | null; created_at: string } | null | undefined,
+  cooldownSeconds: number = WAIT_PUSH_COOLDOWN_SECONDS,
+  now: Date = new Date(),
+): boolean {
+  if (!lastReply || lastReply.sender_type !== 'ai' || (lastReply.content !== WAIT_REPLY && lastReply.content !== LEGACY_WAIT_REPLY)) return false
+  const t = Date.parse(lastReply.created_at)
+  if (Number.isNaN(t)) return false
+  const age = now.getTime() - t
+  return age >= 0 && age < cooldownSeconds * 1000
 }
 
 export type AutoReplyMode = 'observe' | 'on'

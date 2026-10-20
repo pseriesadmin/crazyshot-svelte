@@ -20,7 +20,7 @@ import { getNlsearchParamsCached } from '$lib/server/searchEngine/adapters/nlsea
 import { getSemanticModel } from '$lib/server/searchEngine/adapters/semanticModelCache'
 import { semanticCannedFeatures, type SemanticCannedFeatures } from '$lib/server/cannedSemanticFeature'
 import { withTimeout, SHADOW_MAX_WAIT_MS } from '$lib/server/searchEngine/adapters/semanticShadow'
-import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, isWaitNoticeStillPending } from '$lib/server/cannedAutoReply'
+import { decideAutoReply, buildObservationRow, recordObservation, WAIT_REPLY, isWaitNoticeRecent } from '$lib/server/cannedAutoReply'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { loadSensitiveCategoryKeys } from '$lib/server/cannedCategories'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
@@ -29,7 +29,7 @@ import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymS
 import { sendPushToUser, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 import { runCrazychatAgent } from '$lib/server/crazychat/agent'
-import { isAdminEngaged } from '$lib/server/crazychat/engagement'
+import { isAdminEngaged, evaluateAdminEngaged } from '$lib/server/crazychat/engagement'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -433,24 +433,48 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     )
   }
 
-  // 대기 안내 반복 억제(2026-10-06): 같은 세션에서 WAIT_SUPPRESS_MINUTES분 안에 이미 같은 안내를 보냈다면 다시 보내지 않는다
-  // (고객이 연달아 메시지를 보낼 때마다 같은 문구가 쌓이는 것을 막는다 — 인텐트 로그·관리자 긴급 푸시는 그대로 유지)
-  let suppressWait = false
-  if (classified.intent === 'CS_ESCALATE' && classified.reply === WAIT_REPLY && admin) {
+  // 기본 자동응답(대기 안내)은 빠른답변에 해당하지 않는 고객 메시지마다 매번 보낸다(2026-10-20, Stephen 지시 — 이전의 "5분 안 반복 억제"(2026-10-06)는 폐지).
+  // 연속으로 이어지는 고객 대화에도 매번 반응한다. 두 가지 완화만 둔다(Stephen 확정):
+  //  ① 관리자가 응대 중인 세션(마지막 관리자 답변 10분 이내 — 크레이지챗의 30분보다 짧게)에는 대기 안내를 보내지 않는다(사람이 응대하는데 "담당자가 확인할게요"가 반복되지 않게).
+  //  ② 채팅 기록에는 매번 남기되, 직전 대기 안내가 60초 이내면 고객 푸시만 생략한다(푸시 스팸 방지).
+  // 인텐트 로그·관리자 긴급 푸시는 그대로 매번 남는다.
+  /** 대기 안내 생략 판정에 쓰는 "관리자 응대 중" 기준(분) — 고객이 이어서 보내는 대화에 더 빨리 반응하도록 크레이지챗(30분)보다 짧다 */
+  const WAIT_NOTICE_ENGAGED_MINUTES = 10
+  let skipWaitNotice = false
+  let skipWaitPush = false
+  if (classified.reply === WAIT_REPLY && admin) {
     try {
-      // 세션의 마지막 비고객 메시지(빠른답변·관리자·AI 포함)가 최근 대기 안내일 때만 억제 — 그 사이 다른 답변이 나갔다면 새 질문에는 안내를 다시 보낸다
-      const { data: lastReply } = await admin
-        .from('chat_messages')
-        .select('sender_type, content, created_at')
-        .eq('session_id', body.session_id)
-        .neq('sender_type', 'user')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      suppressWait = isWaitNoticeStillPending(lastReply as { sender_type: string; content: string | null; created_at: string } | null)
+      // isAdminEngaged는 조회 실패 시 "응대 중"으로 간주하지만(크레이지챗이 끼어들지 않게), 대기 안내는 실패 시 평소대로 보내야 하므로 여기서는 직접 조회·판정한다
+      const sessionAdminId = (chatSession as { admin_id?: string | null }).admin_id
+      let engaged = false
+      if (sessionAdminId) {
+        const { data: lastAdminMsg, error: engagedErr } = await admin
+          .from('chat_messages')
+          .select('created_at')
+          .eq('session_id', body.session_id)
+          .eq('sender_type', 'admin')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (engagedErr) throw new Error(engagedErr.message)
+        engaged = evaluateAdminEngaged(sessionAdminId, (lastAdminMsg as { created_at?: string } | null)?.created_at ?? null, new Date(), WAIT_NOTICE_ENGAGED_MINUTES)
+      }
+      if (engaged) {
+        skipWaitNotice = true
+      } else {
+        const { data: lastReply } = await admin
+          .from('chat_messages')
+          .select('sender_type, content, created_at')
+          .eq('session_id', body.session_id)
+          .neq('sender_type', 'user')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        skipWaitPush = isWaitNoticeRecent(lastReply as { sender_type: string; content: string | null; created_at: string } | null)
+      }
     } catch (err) {
-      // 조회 실패 시에는 억제하지 않고 안내를 보낸다(응답 누락보다 중복 안내가 낫다)
-      console.error('[chat/message] 대기 안내 중복 조회 실패(fail-soft):', err instanceof Error ? err.message : err)
+      // 조회 실패 시에는 평소대로 안내와 푸시를 보낸다(응답 누락보다 중복 안내가 낫다)
+      console.error('[chat/message] 대기 안내 판정 조회 실패(fail-soft):', err instanceof Error ? err.message : err)
     }
   }
 
@@ -458,7 +482,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // db(고객 세션 클라이언트)로 삽입하면 RLS(participant_insert_message)가 비-'user' sender_type을
   // 차단해 캔드매칭 실패 후 AI 폴백 응답도 DB에 저장되지 않는 무반응 상태가 됨.
   let aiMessage: ChatMessage | null = null
-  if (!suppressWait) {
+  if (!skipWaitNotice) {
     const insertClient = admin ?? db
     const { data: insertedAi, error: aiInsertError } = await insertClient
       .from('chat_messages')
@@ -512,7 +536,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   // 고객 브라우저 푸시 — AI 자유응답도 캔드매칭·관리자 수동답장과 동일하게 발송
   // (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
-  if (!suppressWait) {
+  if (!skipWaitNotice && !skipWaitPush) {
     const aiReplyPreview = classified.reply.length > 60 ? `${classified.reply.slice(0, 60)}…` : classified.reply
     await sendPushToUser(session.user.id, 'ai_auto_reply', {
       title: '답변이 도착했어요',
