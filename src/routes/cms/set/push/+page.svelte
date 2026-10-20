@@ -741,7 +741,7 @@
   }
 
   .msg-textarea:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 
@@ -776,7 +776,7 @@
   }
 
   .msg-input:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 

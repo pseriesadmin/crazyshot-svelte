@@ -3642,7 +3642,7 @@
     border-radius: var(--cms-radius-sm); padding: 9px 14px;
     font: var(--text-pc-body-14); color: var(--cs-text); width: 100%;
   }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .f-textarea { resize: vertical; min-height: 80px; }
   /* 슬라이딩 토글 스위치 — cms-uiux.md §7-8 표준 (36×20px / ON: --cs-purple) */
   .toggle-wrap { display: flex; align-items: center; gap: 10px; }
@@ -3755,7 +3755,7 @@
   .il-input:hover { background: rgba(59,47,138,0.04); }
   .il-input:focus {
     background: var(--cs-surface-gray);
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
   .il-textarea {
@@ -4760,7 +4760,7 @@
     width: 100%;
   }
   .opt-search-input::placeholder { color: var(--cs-text-light); }
-  .opt-search-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .opt-search-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .btn-opt-search {
     flex-shrink: 0;
     height: 44px; padding: 0 20px;

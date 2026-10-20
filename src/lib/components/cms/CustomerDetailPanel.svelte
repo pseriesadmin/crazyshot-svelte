@@ -2187,7 +2187,7 @@
     padding: 8px 12px; font: var(--text-pc-body-14); color: var(--cs-text); width: 100%;
     box-sizing: border-box; resize: vertical;
   }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   /* 포인트 추가 — 목록 행(.audit-row)과 동일하게 한 줄 병렬 배치(adjust-row 재사용).
      .f-input의 width:100%보다 뒤에 와야 폭 지정이 실제로 적용됨(동일 명시도 순서 문제). */
   .grant-amount-input { width: 110px; flex-shrink: 0; }
@@ -2226,7 +2226,7 @@
     color: var(--cs-text);
     min-width: 0;
   }
-  .info-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .info-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   /* 회원유형 선택 버튼 */
   .info-select-btn {

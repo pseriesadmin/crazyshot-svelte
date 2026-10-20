@@ -120,7 +120,7 @@
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
-.mr-select:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.mr-select:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 .mr-preview { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mr-preview-name { font: var(--text-pc-body-14); color: var(--cs-text-mid); }
 .mr-preview-code { font: var(--text-pc-script-12); color: var(--cs-text-dark); background: var(--cs-surface-gray); padding: 3px 8px; border-radius: var(--radius-sm); }

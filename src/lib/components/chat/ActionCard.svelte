@@ -1,4 +1,5 @@
 <script lang="ts">
+  import LinkifiedText from './LinkifiedText.svelte'
   // PRD.1.7.5 — ActionCard: 6종 액션 카드 렌더링
   // Figma node: 2497:8761 (product card with CTA), 2497:8702
 
@@ -528,7 +529,7 @@
 {/snippet}
 
 {#snippet scriptText()}
-  {#if script}<p class="card-script">{script}</p>{/if}
+  {#if script}<p class="card-script"><LinkifiedText text={script} /></p>{/if}
 {/snippet}
 
 <div class="action-card" class:expired={isBlocked}>
@@ -562,23 +563,23 @@
         {@render scriptText()}
         {#if payload.product_slug}
           <a
-            class="product-link-btn"
+            class="cta-btn cta-btn--purple cta-btn--link"
             href="/products/{payload.product_slug}"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="{payload.product_name ?? '상품'} 상세 보기"
-          >상세 보기 →</a>
+          >상세 보기</a>
         {:else if payload.product_id}
           <a
-            class="product-link-btn"
+            class="cta-btn cta-btn--purple cta-btn--link"
             href="/products/{payload.product_id}"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="{payload.product_name ?? '상품'} 상세 보기"
-          >상세 보기 →</a>
+          >상세 보기</a>
         {:else if ctaUrl}
           <a
-            class="product-link-btn"
+            class="cta-btn cta-btn--purple cta-btn--link"
             href={ctaUrl}
             target="_blank"
             rel="noopener noreferrer"
@@ -922,10 +923,13 @@
   .cta-btn {
     border: none;
     border-radius: 10px;
-    padding: 5px 10px;
+    padding: 4px 10px;
     width: 100%;
-    min-height: 44px;
-    font: 700 16px/2 'Noto Sans KR', sans-serif;
+    /* 2026-10-20(Stephen 지시): 세로폭 20% 축소(44px → 35px) + 글자 토큰 한 단계 축소(16px → --text-pc-body-14 14px, Bold 유지).
+       ⚠️ 모바일 터치 기준 44px 미달은 기존 모바일 예외(35px)와 같은 값 — PC 기본값도 35px로 맞춘 것. 줄높이 200%면 글자만 28px라 35px에 못 미치므로 1.5로 낮춘다 */
+    min-height: 35px;
+    font: var(--text-pc-body-14);
+    line-height: 1.5;
     color: var(--cs-white);
     cursor: pointer;
     transition: filter 0.15s;
@@ -1048,20 +1052,14 @@
     margin: 0;
   }
 
-  .product-link-btn {
-    display: inline-block;
-    margin-top: 6px;
-    padding: 5px 12px;
-    background: var(--cs-purple);
-    color: #fff;
-    font: 700 12px/1 'Noto Sans KR', sans-serif;
-    border-radius: 20px;
+  /* 링크형 CTA(<a>) — 공통 표준 CTA(.cta-btn / .cta-btn--purple, 44px·반경 10px·16px Bold·호버 밝기만 변경)를 그대로 쓰고
+     버튼이 아닌 앵커라서 가운데 정렬·밑줄 제거만 보탠다(2026-10-20, Stephen 지시: 관리자 발송 공식 대화카드 CTA는 표준값 적용) */
+  .cta-btn--link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-decoration: none;
-    transition: filter 0.15s;
-  }
-
-  .product-link-btn:hover {
-    filter: brightness(0.9);
+    box-sizing: border-box;
   }
 
   /* 만료 오버레이 */

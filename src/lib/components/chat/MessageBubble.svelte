@@ -1,4 +1,6 @@
 <script lang="ts">
+  import LinkifiedText from './LinkifiedText.svelte'
+  import { isChatMessageDeletable } from '$lib/utils/chatMessageDelete'
   // PRD.1.7 — MessageBubble: 텍스트·이미지·파일·액션카드 버블
   // Figma: user(left, white) / admin·ai(right, lilac)
 
@@ -15,13 +17,21 @@
     /** 전송 실패한 내 메시지(send_failed) 다시 보내기 */
     onresend?: (messageId: string) => void
     onbookmark?: (messageId: string) => void
+    /** 관리자 화면 전용: 대화카드 삭제(관리자 발송 취소) — 상태줄 우측 끝 삭제 아이콘(삭제 가능한 메시지에만) */
+    onadmindelete?: (messageId: string) => void
+    /** 1차 클릭으로 무장된 상태(삭제 안전 토스트) — 아이콘이 경고색 유지 */
+    adminDeleteArmed?: boolean
+    adminDeleteBusy?: boolean
     /** COUPON_GIFT_CARD 승인·거절 콜백 — AdminChatPanel에서 주입 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
     /** 관리자 CTA 레이어 모달 오픈 요청 — AdminChatPanel 최상위에서 렌더링하기 위해 위로 전달 */
     onctamodal?: (info: CtaModalRequest) => void
   }
 
-  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onresend, onbookmark, oncouponapprove, onctamodal }: Props = $props()
+  let { message, isOwn = false, isAdmin = false, onaction, ondelete, onresend, onbookmark, onadmindelete, adminDeleteArmed = false, adminDeleteBusy = false, oncouponapprove, onctamodal }: Props = $props()
+
+  // 관리자 발송 취소(대화카드 삭제) 가능 여부 — 서버·DB도 같은 규칙으로 다시 검증한다(고객 발신·결제/계약/쿠폰 카드는 불가)
+  let canAdminDelete = $derived(isAdmin && !!onadmindelete && isChatMessageDeletable(message))
 
   // GSD-12: 북마크 로컬 상태 — {#each messages as message (message.id)} 키로 인스턴스가 1:1 고정되므로
   // $state(prop) 초기화가 안전함 (재마운트 문제 없음 — MessageList.svelte keyed each 검증 완료)
@@ -196,6 +206,21 @@
             </svg>
           </button>
         {/if}
+        {#if canAdminDelete}
+          <button
+            type="button"
+            class="act-btn act-del msg-del-btn"
+            class:act-del--confirming={adminDeleteArmed}
+            disabled={adminDeleteBusy}
+            onclick={() => onadmindelete?.(message.id)}
+            aria-label="대화 삭제"
+            title={adminDeleteArmed ? '한 번 더 누르면 삭제됩니다' : '대화 삭제'}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M2 3h8M4.5 3V2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M3 3l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L9 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -261,7 +286,7 @@
         <span class="auto-badge" aria-label="자동답변">자동답변</span>
       {/if}
       {#if message.content && !(isActionCard && message.action_payload)}
-        <p class="bubble-text">{message.content}</p>
+        <p class="bubble-text"><LinkifiedText text={message.content} /></p>
       {/if}
       <div class="bubble-status">
         {#if message.send_failed}
@@ -284,6 +309,21 @@
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill={bookmarked ? 'var(--cs-purple)' : 'none'} stroke={bookmarked ? 'var(--cs-purple)' : 'var(--cs-text-light,#aaa)'} stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        {/if}
+        {#if canAdminDelete}
+          <button
+            type="button"
+            class="act-btn act-del msg-del-btn"
+            class:act-del--confirming={adminDeleteArmed}
+            disabled={adminDeleteBusy}
+            onclick={() => onadmindelete?.(message.id)}
+            aria-label="대화 삭제"
+            title={adminDeleteArmed ? '한 번 더 누르면 삭제됩니다' : '대화 삭제'}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M2 3h8M4.5 3V2a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 .5.5v1M3 3l.5 7a1 1 0 0 0 1 .9h3a1 1 0 0 0 1-.9L9 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
         {/if}
@@ -515,6 +555,25 @@
   }
   .bookmark-btn:hover { opacity: 0.7; }
   .bookmark-btn.bookmarked svg { transition: fill 0.15s; }
+
+
+  /* 관리자 발송 취소 — 표준 삭제 아이콘(act-del): 투명 배경, 호버·무장 시 연한 레드 면 + 레드 아이콘(배경색만 변경) */
+  .act-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    color: var(--cs-text-light);
+    flex-shrink: 0;
+  }
+  .act-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .msg-del-btn { width: 20px; height: 20px; padding: 0; }
+  .act-del:hover:not(:disabled) { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
+  .act-del--confirming { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
 
   /* ── 자동답변 배지 ── */
   .auto-badge {

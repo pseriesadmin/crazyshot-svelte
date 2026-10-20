@@ -285,7 +285,7 @@
   font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-success-light);
   margin-bottom: 8px;
 }
-.fc-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.fc-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 .mono-in { font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
 .fc-hint { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; line-height: 1.5; }
 

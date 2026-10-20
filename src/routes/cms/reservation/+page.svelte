@@ -458,9 +458,9 @@
     width: 440px;                        /* 기존 220px → 2배 확장, 검색버튼 제거로 엔터 입력만 사용 */
   }
   .search-in:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
-    border-color: var(--cs-purple);
+    border-color: var(--cs-focus-ring);
   }
   .date-in {
     background: var(--cs-white);
@@ -471,7 +471,7 @@
     color: var(--cs-text);
     width: 130px;
   }
-  .date-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: var(--cs-purple); }
+  .date-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: var(--cs-focus-ring); }
   .date-sep { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
 
   /* 대여현황(/cms/rentals)과 동일한 내비게이터형 필터 디자인(2026-08-20) — CMS 콤보버튼

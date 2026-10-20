@@ -1101,7 +1101,7 @@
   box-sizing: border-box;
 }
 .new-group-form .ng-kw:focus-within {
-  outline: 2px solid var(--cs-purple);
+  outline: 2px solid var(--cs-focus-ring);
   outline-offset: -2px;
   border-color: transparent;
 }
@@ -1116,7 +1116,7 @@
   outline: none;
   box-shadow: none;
 }
-.ng-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.ng-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 
 .btn-save-group {
   height: 34px;
@@ -1422,7 +1422,7 @@
   font: var(--text-pc-script-12);
   color: var(--cs-text);
 }
-.ef-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+.ef-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 .ef-short { flex: 0 0 80px; }
 .ef-actions { display: flex; gap: 8px; padding-top: 4px; }
 
@@ -1734,7 +1734,7 @@
   text-align: right;
 }
 .seq-input::placeholder { color: var(--cs-text-light); text-align: left; font-size: 10px; }
-.seq-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.seq-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 
 /* 순번 버블 가이드 */
 .seq-wrap { position: relative; display: flex; flex-direction: column; }
@@ -1883,7 +1883,7 @@
   color: var(--cs-text);
 }
 .combo-name-in::placeholder { color: var(--cs-text-light); }
-.combo-name-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.combo-name-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 
 /* 키워드 태그 래퍼 */
 .combo-kw-wrap {
@@ -1900,7 +1900,7 @@
   min-height: 28px;
   cursor: text;
 }
-.combo-kw-wrap:focus-within { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: transparent; }
+.combo-kw-wrap:focus-within { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: transparent; }
 
 /* 키워드 태그 칩 */
 .combo-kw-tag {
@@ -2043,7 +2043,7 @@
   color: var(--cs-text);
   width: 180px;
 }
-.picker-search:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+.picker-search:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
 .picker-list {
   display: flex;

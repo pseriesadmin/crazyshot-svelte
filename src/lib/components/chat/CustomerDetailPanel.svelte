@@ -206,7 +206,7 @@
           </div>
         {/if}
         <div class="info-row">
-          <span class="info-label">크레이지스코어</span>
+          <span class="info-label">스코어</span>
           <span class="info-value">
             {#if summary?.credit_score !== null && summary?.credit_score !== undefined}
               <span class="cs-score {scoreClass(summary.credit_score)}">{summary.credit_score}점</span>
@@ -370,7 +370,8 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 16px 20px 20px;
+    /* 왼쪽 28px — 가로폭 조절 손잡이(경계에서 오른쪽 24px 영역, 막대는 약 12px 지점)와 내용 사이 여백 확보(2026-10-20, 최소 폭에서 겹쳐 보이던 문제) */
+    padding: 16px 20px 20px 28px;
     display: block;
   }
   .panel-body > * + * {
@@ -416,10 +417,9 @@
   .info-row:last-child { border-bottom: none; }
 
   .info-label {
-    flex: 0 0 96px;
-    font: var(--text-pc-script-12);
+    flex: 0 0 54px;
+    font: var(--text-pc-descript-10);
     color: var(--cs-text-mid);
-    font-weight: 700;
   }
   .info-value {
     flex: 1;
@@ -446,16 +446,22 @@
     align-items: center;
     justify-content: space-between;
     gap: 6px;
+    /* 폭이 좁아 상태 글자와 요청 버튼이 한 줄에 못 들어가면 버튼이 아래 줄로 내려간다(글자를 눌러 세로로 쪼개지 않는다) */
+    flex-wrap: wrap;
   }
   .doc-status {
     font: var(--text-pc-script-12);
     font-weight: 700;
+    /* "미등록" 같은 짧은 상태 글자는 줄어들거나 글자 단위로 꺾이지 않게 고정 */
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .doc-status.doc-expired { white-space: nowrap; }
   .doc-status.doc-ok      { color: var(--cs-success-light); }
   .doc-status.doc-none    { color: var(--cs-text-light); }
   .doc-status.doc-expired { color: var(--cs-warning); }
-  .doc-status.doc-pending { color: var(--cs-warning); white-space: nowrap; }
+  /* 승인대기 문구(개수·날짜)는 길어서 단어 단위로 줄바꿈 — 글자 단위로 꺾이지 않게 keep-all */
+  .doc-status.doc-pending { color: var(--cs-warning); white-space: normal; word-break: keep-all; flex: 1 1 auto; min-width: 0; }
 
   /* cms-uiux.md §0-10-F DetailPanel 전용 버튼 — 소형(행 단위 실행 버튼) */
   .doc-request-btn {
@@ -531,5 +537,23 @@
     color: var(--cs-text-light);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  /* ── 영역 폭에 맞춘 유연한 배치 (2026-10-20) — 부모(AdminChatPanel .customer-info-float, 컨테이너 이름 cinfo)의 폭 기준 ── */
+  /* 좁을 때(약 280px 이하): 라벨을 값 위로 쌓고 여백을 줄인다 */
+  @container cinfo (max-width: 280px) {
+    .panel-body { padding: 12px 12px 16px 28px; } /* 왼쪽은 손잡이 여백(28px) 유지 */
+    .info-row { flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 10px; }
+    .info-label { flex: 0 0 auto; }
+    .info-value { flex: 0 1 auto; }
+    .doc-value { width: 100%; }
+    .cdp-reserve-item { flex-wrap: wrap; row-gap: 2px; }
+    .cdp-reserve-product { flex-basis: 100%; white-space: normal; }
+  }
+  /* 넓을 때(약 420px 이상): 라벨 칸과 여백을 넓혀 한눈에 읽기 좋게 */
+  @container cinfo (min-width: 420px) {
+    .panel-body { padding: 20px 28px 24px; }
+    .info-label { flex: 0 0 60px; }
+    .info-row { padding: 12px 18px; }
   }
 </style>

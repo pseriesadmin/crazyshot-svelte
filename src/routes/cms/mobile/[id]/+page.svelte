@@ -1352,7 +1352,7 @@
     color: var(--cs-text);
   }
   .history-comment-input::placeholder { color: var(--cs-text-placeholder); }
-  .history-comment-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .history-comment-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .history-form-actions {
     display: flex;
@@ -1694,7 +1694,7 @@
     height: 48px;
     width: 100%;
   }
-  .device-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .device-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   /* 스캔 결과 카드 */
   .scan-result-card {

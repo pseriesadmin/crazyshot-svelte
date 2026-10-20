@@ -72,7 +72,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     source: string
     status: string
     occurrence_count: number
-    created_at: string
+    first_observed_at: string
     last_observed_at: string | null
     group_id: string
     synonym_groups: { canonical_term: string } | null
@@ -94,10 +94,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     // (upsert_synonym_member가 rejected 상태를 영구 보존하므로 재관찰돼도 다시 안 나타남)
     admin
       .from('synonym_group_members')
-      .select('id, term, source, status, occurrence_count, created_at, last_observed_at, group_id, synonym_groups!inner(canonical_term)')
+      .select('id, term, source, status, occurrence_count, first_observed_at, last_observed_at, group_id, synonym_groups!inner(canonical_term)')
       .in('source', ['cross_lingual_pattern', 'query_reformulation'])
       .neq('status', 'rejected')
-      .order('created_at', { ascending: false })
+      .order('first_observed_at', { ascending: false })
       .limit(200)
       .returns<RawCandidateRow[]>(),
     // NLSearch A안(2026-09-02): 빠른답변 후보 — pending 상태만
@@ -111,6 +111,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     // NLSearch B안(2026-09-03): 0건 검색어 갭 — 최근 30일, 빈도순 상위 50건
     admin.rpc('get_zero_result_search_terms', { p_lookback_days: 30, p_limit: 50 }),
   ])
+
+  // 조회 실패를 빈 목록으로만 바꾸면 컬럼 오류 같은 결함이 오래 숨는다 — 실패는 서버 로그에 남긴다
+  const queryFailures: Array<[string, { message?: string } | null]> = [
+    ['canned_responses', itemsResult.error],
+    ['auto_reply_settings', autoReplyResult.error],
+    ['synonym_group_members', candidatesResult.error],
+    ['chat_reply_candidates', replyCandidatesResult.error],
+    ['get_zero_result_search_terms', zeroResultResult.error],
+  ]
+  for (const [name, err] of queryFailures) {
+    if (err) console.error(`[cms/chat/qna] ${name} 조회 실패:`, err.message)
+  }
 
   const items = (itemsResult.error ? [] : (itemsResult.data ?? [])) as CannedResponseRow[]
   const selectedId = url.searchParams.get('selected') ?? null
@@ -126,7 +138,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     source: r.source,
     status: r.status,
     occurrence_count: r.occurrence_count,
-    created_at: r.created_at,
+    created_at: r.first_observed_at, // synonym_group_members에는 created_at이 없어 첫 관찰 시각을 등록일로 사용
     last_observed_at: r.last_observed_at,
     group_id: r.group_id,
     canonical_term: r.synonym_groups?.canonical_term ?? '',

@@ -23,10 +23,41 @@ function decodeEntities(s: string): string {
   return s.replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (m) => ENTITIES[m] ?? m)
 }
 
-/** HTML 조각 → 줄바꿈이 보존된 순수 텍스트 */
+// 여는 <a …> 태그만 선형으로 찾고(속 글자에 '<'가 없어야 함) 닫는 </a>는 indexOf로 찾는다 — 닫는 태그가 없는 악성 입력에도 시간이 늘어나지 않게(ReDoS 방지)
+const ANCHOR_OPEN = /<a\s[^<>]*>/gi
+const HREF_ATTR = /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i
+
+function replaceAnchors(html: string): string {
+  const lower = html.toLowerCase()
+  let out = ''
+  let last = 0
+  for (const m of html.matchAll(ANCHOR_OPEN)) {
+    const start = m.index ?? 0
+    if (start < last) continue
+    const openEnd = start + m[0].length
+    const close = lower.indexOf('</a>', openEnd)
+    if (close < 0) break
+    const h = HREF_ATTR.exec(m[0])
+    if (!h) continue
+    out += html.slice(last, start) + linkToPlainText(html.slice(openEnd, close), h[1] ?? h[2] ?? h[3] ?? '')
+    last = close + 4
+  }
+  return out + html.slice(last)
+}
+
+/** 링크 문구와 주소를 채팅 글에 함께 남긴다 — "문구 주소"(문구가 주소와 같으면 주소만). http(s)가 아닌 주소는 문구만 남긴다. */
+export function linkToPlainText(label: string, url: string): string {
+  const u = decodeEntities(url).trim()
+  const l = decodeEntities(label.replace(ANY_TAG, '')).trim()
+  if (!/^https?:\/\//i.test(u)) return l
+  if (!l || l === u || l === u.replace(/^https?:\/\//i, '')) return u
+  return `${l} ${u}`
+}
+
+/** HTML 조각 → 줄바꿈이 보존된 순수 텍스트 (링크는 "문구 주소"로 주소를 보존) */
 export function htmlToPlainText(html: string): string {
   if (!html) return ''
-  const text = html
+  const text = replaceAnchors(html)
     .replace(BR_TAG, '\n')
     .replace(LI_OPEN, '• ')
     .replace(BLOCK_END_TAGS, '\n')
@@ -37,14 +68,14 @@ export function htmlToPlainText(html: string): string {
     .trim()
 }
 
-/** 서식 본문 → 채팅·검색용 순수 텍스트. 이미지·동영상·구분선은 제외, 링크 블록은 "문구" 로만 남긴다. */
+/** 서식 본문 → 채팅·검색용 순수 텍스트. 이미지·동영상·구분선은 제외, 링크는 "문구 주소"로 주소까지 남긴다(고객 화면에서 눌러 열 수 있게). */
 export function blocksToPlainText(blocks: readonly ContentBlock[] | null | undefined): string {
   if (!Array.isArray(blocks)) return ''
   const parts: string[] = []
   for (const b of blocks) {
     if (b.type === 'text') parts.push(htmlToPlainText(b.html))
     else if (b.type === 'html') parts.push(htmlToPlainText(b.content))
-    else if (b.type === 'link-entry') parts.push(b.text?.trim() ?? '')
+    else if (b.type === 'link-entry') parts.push(linkToPlainText(b.text ?? '', b.url ?? ''))
   }
   return parts.filter(Boolean).join('\n\n').trim()
 }

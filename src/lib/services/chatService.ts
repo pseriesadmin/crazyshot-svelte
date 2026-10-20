@@ -275,7 +275,9 @@ let _channelSeq = 0
 export function subscribeToChatMessages(
   sessionId: string,
   onMessage: (message: ChatMessage) => void,
-  onRead?: (messageId: string) => void
+  onRead?: (messageId: string) => void,
+  /** 관리자가 대화를 삭제해 행이 '대화가 삭제되었습니다.'로 바뀐 경우(Migration #733) — 양쪽 창 즉시 반영용 */
+  onDeleted?: (message: ChatMessage) => void
 ): () => void {
   const uid = ++_channelSeq
   const channel = supabase
@@ -304,6 +306,10 @@ export function subscribeToChatMessages(
         // 상대가 읽어서 is_read가 false → true 로 변경된 경우만
         if (payload.new.is_read === true && payload.old?.is_read === false) {
           onRead?.(payload.new.id as string)
+        }
+        // 관리자 삭제: deleted_at이 새로 채워진 경우(이미 삭제 표시였던 행의 단순 갱신은 무시)
+        if (payload.new.deleted_at && !payload.old?.deleted_at) {
+          onDeleted?.(payload.new as ChatMessage)
         }
       }
     )

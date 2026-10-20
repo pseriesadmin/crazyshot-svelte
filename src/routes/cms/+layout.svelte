@@ -422,7 +422,7 @@
   :global(.cms-shell input:focus-visible),
   :global(.cms-shell select:focus-visible),
   :global(.cms-shell textarea:focus-visible) {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 

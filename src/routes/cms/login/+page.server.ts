@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { sendSms } from '$lib/server/sms'
+import { generateOtpCode } from '$lib/server/otpCode'
 import { REMEMBER_COOKIE } from '$lib/utils/authCookies'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -323,7 +324,7 @@ export const actions: Actions = {
       return fail(400, { error: '보안을 위해 이 링크는 차단되었습니다. 관리자에게 새 링크를 요청해주세요.' })
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000))
+    const code = generateOtpCode()
     const otpExpiresAt = new Date(Date.now() + 3 * 60 * 1000).toISOString()
     await admin
       .from('admin_password_recovery_tokens')

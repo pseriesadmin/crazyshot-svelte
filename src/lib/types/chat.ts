@@ -27,6 +27,7 @@ export type ActionCardType =
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
   | 'refund_failed'    // 환불 RPC 실패 알림 (관리자 전용, admin_only=true)
+  | 'message_deleted'  // 관리자가 삭제한 대화 표시(Migration #733, message_type='system')
   | 'coupon_duplicate_warning'  // 이미 보유한 쿠폰 재선물 경고 (관리자 전용, admin_only=true)
   // 자동답변 메타데이터 (message_type: 'text', sender_type: 'admin')
   | 'crazychat_reply'     // 크레이지챗(조회·접수·AI)이 보낸 텍스트 답변 표시 — 관리자 화면 배지 전용, 고객 화면 미노출
@@ -161,6 +162,8 @@ export interface ChatMessage {
   created_at: string
   is_bookmarked?: boolean  // GSD-12: 관리자 북마크 여부 — 클라이언트 집계 시 병합
   admin_only?: boolean     // Migration #404 — true면 관리자에게만 보이는 카드(경고·검토요청 등)
+  /** 관리자가 삭제한 대화(Migration #733) — 삭제되면 행이 '대화가 삭제되었습니다.' 시스템 메시지로 바뀌고 이 값이 채워진다 */
+  deleted_at?: string | null
   send_failed?: boolean    // 클라이언트 전용 — 자동 재시도까지 실패한 내 임시 메시지("다시 보내기" 표시). DB 컬럼 아님
 }
 

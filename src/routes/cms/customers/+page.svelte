@@ -431,9 +431,9 @@
     width: 240px;
   }
   .search-in:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
-    border-color: var(--cs-purple);
+    border-color: var(--cs-focus-ring);
   }
 
   /* 필터 칩 — 예약목록(/cms/reservation) 알약형과 동일 */

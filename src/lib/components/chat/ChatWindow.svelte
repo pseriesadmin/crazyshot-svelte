@@ -19,7 +19,7 @@
     markMessagesRead,
     clearMyChatHistory,
   } from '$lib/services/chatService'
-  import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead, markMessageSendFailed } from '$lib/stores/chat.svelte'
+  import { chatStore, pushMessage, setMessages, prependMessages, setActiveSession, removeMessage, markMessageRead, markMessageSendFailed, applyMessageUpdate } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ActionPayload } from '$lib/types/chat'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
@@ -168,7 +168,9 @@
       (messageId) => {
         // 상대방이 내 메시지를 읽었을 때 → 로컬 버블 아이콘 즉시 업데이트
         markMessageRead(messageId)
-      }
+      },
+      // 관리자가 대화를 삭제하면 이 창에도 '대화가 삭제되었습니다.'로 즉시 바뀐다
+      (deleted) => applyMessageUpdate(deleted)
     )
 
     return unsubscribe

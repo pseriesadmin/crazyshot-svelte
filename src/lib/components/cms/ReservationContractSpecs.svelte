@@ -105,7 +105,7 @@
   .spec-list { display: flex; flex-direction: column; gap: 6px; }
   .spec-row { display: flex; align-items: center; gap: 8px; }
   .f-input { background: var(--cs-surface-gray); border: none; border-radius: var(--radius-sm); padding: 8px 12px; font: var(--text-pc-body-14); color: var(--cs-text); box-sizing: border-box; min-width: 0; }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .spec-key { flex: 0 0 140px; }
   .spec-val { flex: 1; }
   .remove-btn { width: 28px; height: 28px; background: none; border: none; border-radius: var(--radius-sm); color: var(--cs-text-light); cursor: pointer; flex-shrink: 0; }

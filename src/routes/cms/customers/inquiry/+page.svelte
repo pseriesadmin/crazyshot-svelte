@@ -370,7 +370,7 @@
     color: var(--cs-text);
     width: 220px;
   }
-  .search-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .search-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .btn-secondary {
     height: 36px;
@@ -624,7 +624,7 @@
     min-height: 80px;
     box-sizing: border-box;
   }
-  .reply-textarea:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .reply-textarea:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .reply-actions {
     display: flex;
