@@ -360,7 +360,7 @@
     color: var(--cs-text);
     background: #fafafa;
   }
-  .csv-input:focus { outline: 2px solid var(--cs-purple); }
+  .csv-input:focus { outline: 2px solid var(--cs-focus-ring); }
 
   .action-row {
     display: flex;

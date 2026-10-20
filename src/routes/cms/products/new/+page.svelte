@@ -1940,7 +1940,7 @@
     box-sizing: border-box;
   }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   /* 금액 입력은 숫자 정렬 관례상 우측 정렬(ProductDetailPanel.svelte .il-number와 동일 원칙) */
   .f-input-number { text-align: right; }
   .f-select { cursor: pointer; }

@@ -945,7 +945,7 @@
     font: var(--text-pc-body-14); color: var(--cs-text); width: 100%;
   }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .f-input.ta { resize: vertical; height: auto; }
 
   .panel-actions { display: flex; justify-content: flex-end; }

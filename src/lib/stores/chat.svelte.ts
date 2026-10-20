@@ -126,6 +126,13 @@ export function markMessageSendFailed(messageId: string): void {
 }
 
 // 상대방이 읽었을 때 is_read 로컬 반영
+// 서버에서 갱신된 메시지(예: 관리자 삭제로 '대화가 삭제되었습니다.'로 교체)를 같은 id의 기존 메시지에 덮어쓴다 — 북마크 등 로컬 값은 유지
+export function applyMessageUpdate(updated: ChatMessage): void {
+  chatStore.messages = chatStore.messages.map((m) =>
+    m.id === updated.id ? { ...m, ...updated } : m
+  )
+}
+
 export function markMessageRead(messageId: string): void {
   chatStore.messages = chatStore.messages.map((m) =>
     m.id === messageId ? { ...m, is_read: true } : m

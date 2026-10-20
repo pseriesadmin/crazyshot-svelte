@@ -527,7 +527,7 @@
     border-radius: var(--radius-sm);
     background: var(--cs-surface-gray, #f6f6f6);
   }
-  .kw-tag-list:focus-within { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .kw-tag-list:focus-within { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .kw-tag {
     display: inline-flex;
@@ -596,7 +596,7 @@
     resize: vertical;
   }
   .field-input:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 
@@ -636,7 +636,7 @@
     background: var(--cs-surface-gray, #f6f6f6);
     overflow: hidden;
   }
-  .shortcut-wrap:focus-within { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .shortcut-wrap:focus-within { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .shortcut-prefix {
     padding: 10px 10px 10px 14px;

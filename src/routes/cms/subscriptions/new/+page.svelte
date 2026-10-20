@@ -404,7 +404,7 @@
     padding: 12px 16px; font: var(--text-pc-body-14); color: var(--cs-text);
     width: 100%; box-sizing: border-box;
   }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .f-textarea { resize: vertical; min-height: 80px; font-family: inherit; }
   .f-input--sm { width: 120px; flex: 0 0 auto; }
 

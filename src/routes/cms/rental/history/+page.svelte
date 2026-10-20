@@ -233,7 +233,7 @@
     height: 38px;
   }
   .search-in::placeholder { color: var(--cs-text-placeholder); }
-  .search-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .search-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .search-btn {
     height: 38px;
     padding: 0 18px;

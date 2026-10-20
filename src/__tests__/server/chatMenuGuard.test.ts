@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * 1단계 1b — 상담(consulting.chat) 메뉴 권한 서버 집행: 관리자 전용 채팅 API 13개 파일(핸들러 16개)의 진입부 게이트 (2026-10-03)
+ * 1단계 1b — 상담(consulting.chat) 메뉴 권한 서버 집행: 관리자 전용 채팅 API 13개 파일(핸들러 17개 — 2026-10-20 cs-record PATCH 추가)의 진입부 게이트 (2026-10-03)
  *
  * ① 소스 스캔(누락 감지): 모든 핸들러의 진입부 첫 문장이 requireMenuAccessApi(locals, 'consulting.chat') 호출
  * ② 동작: 게이트가 거부(403)하면 핸들러는 DB·세션 조회 없이 즉시 403 응답
@@ -33,7 +33,7 @@ const TARGETS: { file: string; methods: Method[] }[] = [
   { file: 'sessions/[id]/+server', methods: ['DELETE'] },
   { file: 'sessions/[id]/bookmarks/+server', methods: ['GET'] },
   { file: 'sessions/[id]/close/+server', methods: ['POST'] },
-  { file: 'sessions/[id]/cs-record/+server', methods: ['GET', 'POST', 'DELETE'] },
+  { file: 'sessions/[id]/cs-record/+server', methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
   { file: 'sessions/[id]/join/+server', methods: ['POST'] },
   { file: 'sessions/[id]/manual-mode/+server', methods: ['PATCH'] },
   { file: 'sessions/[id]/pending/+server', methods: ['POST'] },
@@ -48,9 +48,9 @@ const ROOT = process.cwd()
 const srcOf = (file: string) => readFileSync(join(ROOT, 'src/routes/api/chat', `${file}.ts`), 'utf-8')
 
 describe('1b 소스 스캔 — 모든 관리자 전용 채팅 핸들러가 진입부 게이트를 가진다', () => {
-  it('13개 파일·16개 핸들러', () => {
+  it('13개 파일·17개 핸들러', () => {
     expect(TARGETS.length).toBe(13)
-    expect(TARGETS.reduce((n, t) => n + t.methods.length, 0)).toBe(16)
+    expect(TARGETS.reduce((n, t) => n + t.methods.length, 0)).toBe(17)
   })
 
   for (const { file, methods } of TARGETS) {

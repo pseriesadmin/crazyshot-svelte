@@ -2062,7 +2062,7 @@
     font: var(--text-pc-body-14); color: var(--cs-text); outline: none;
   }
   .area-filter::placeholder { color: var(--cs-text-light); }
-  .area-filter:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .area-filter:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .area-list-count { font: var(--text-pc-script-12); color: var(--cs-text-light); white-space: nowrap; }
   .area-accordion-btn {
     margin-left: auto;

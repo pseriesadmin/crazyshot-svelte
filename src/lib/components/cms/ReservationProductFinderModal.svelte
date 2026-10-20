@@ -504,7 +504,7 @@
   }
 
   .search-in:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 

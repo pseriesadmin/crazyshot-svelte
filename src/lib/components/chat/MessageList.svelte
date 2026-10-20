@@ -43,6 +43,10 @@
     onaction?: (payload: ActionPayload) => void
     ondelete?: (messageId: string) => void
     onbookmark?: (messageId: string) => void
+    /** 관리자 화면 전용: 대화카드 삭제(관리자 발송 취소) — 삭제 안전 토스트 2단계. armedId = 1차 클릭으로 무장된 메시지 id */
+    onadmindelete?: (messageId: string) => void
+    adminDeleteArmedId?: string | null
+    adminDeleteBusyId?: string | null
     /** COUPON_GIFT_CARD 승인·거절 콜백 */
     oncouponapprove?: (messageId: string, reject: boolean) => void
     /** 관리자 CTA 레이어 모달 오픈 요청 — AdminChatPanel 최상위에서 렌더링하기 위해 위로 전달 */
@@ -61,6 +65,9 @@
     onaction,
     ondelete,
     onbookmark,
+    onadmindelete,
+    adminDeleteArmedId = null,
+    adminDeleteBusyId = null,
     oncouponapprove,
     onctamodal,
   }: Props = $props()
@@ -201,6 +208,9 @@
             {ondelete}
             {onresend}
             {onbookmark}
+            {onadmindelete}
+            adminDeleteArmed={adminDeleteArmedId === message.id}
+            adminDeleteBusy={adminDeleteBusyId === message.id}
             {oncouponapprove}
             {onctamodal}
           />

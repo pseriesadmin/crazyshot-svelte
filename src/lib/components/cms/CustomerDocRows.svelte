@@ -510,7 +510,7 @@
   .reupload-slot-label { font: var(--text-pc-descript-10); color: var(--cs-text-mid); }
   .reupload-hint { font: var(--text-pc-descript-10); color: var(--cs-text-light); margin: 0; }
   .f-input { background: var(--cs-white); border: none; border-radius: var(--radius-sm); padding: 8px 12px; font: var(--text-pc-body-14); color: var(--cs-text); width: 100%; box-sizing: border-box; }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .btn-file-pick { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; background: var(--cs-white); border: 1px solid var(--cs-lilac); border-radius: var(--cms-radius-sm); font: var(--text-pc-script-12); color: var(--cs-text); cursor: pointer; width: fit-content; }
   .btn-file-pick:hover { background: var(--cs-purple-op10); border-color: var(--cs-purple); }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border-width: 0; }

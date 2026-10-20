@@ -140,7 +140,7 @@
     background: var(--cs-white); border: 1px solid #ECEBF4; border-radius: var(--radius-sm);
     padding: 10px 20px; font: var(--text-pc-body-14); color: var(--cs-text); width: 240px;
   }
-  .search-in:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: var(--cs-purple); }
+  .search-in:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: var(--cs-focus-ring); }
   .btn-secondary {
     display: inline-flex; align-items: center; height: 44px; padding: 0 20px;
     background: var(--cs-white); color: var(--cs-purple-dark); border: 1px solid #201857;

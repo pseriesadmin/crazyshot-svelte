@@ -67,6 +67,7 @@
   --cs-purple-light:  #553FE0;       /* 포인트 강조 = purple-60% */
   --cs-purple-pale:   #C1BBEC;       /* 연한 강조 = purple-20% */
   --cs-purple-op10:   #E1DEF3;       /* nav 배경 기본색 = purple-op-10% */
+  --cs-focus-ring:    var(--cs-purple-pale); /* CMS 입력폼 포커스 아웃라인(2026-10-20, 기존 --cs-purple보다 옅게 — 입력폼 전역 단일 토큰) */
   --cs-red:           #CF0000;       /* 에러·경고 = red-100 */
   --cs-red-badge:     #FF3535;       /* 빨간 배지 = red-80% */
   --cs-red-light:     #FFB3B3;       /* 연한 강조 = red-30% */

@@ -719,6 +719,45 @@ position: sticky 요소는 자체 stacking context를 만들어, 그 안의 posi
 
 ---
 
+### 0-10-H. 자동 저장 입력폼 — 저장 버튼 없음 · 저장 완료 시 비활성 BG / 다시 선택 시 활성 BG ★ (2026-10-14 확정, Stephen)
+
+> **"자동 저장 적용해" / "저장 버튼 없이" 입력폼을 만들 때 아래 상호작용을 그대로 적용한다.**
+> 정본: `RentalDetailPanel.svelte` "취소·환불 사유"(`.cancel-reason-input` — `SuggestPicker` 선택 + 추가 입력 200자, 스텝퍼 박스 안).
+> 환경: CMS 전용. 저장 버튼·저장 안내 토스트는 두지 않는다(저장 결과는 입력폼 옆 상태 글자로만 표시).
+
+**저장 시점(사용자 조작에서만 — 조회 결과를 채울 때는 저장하지 않는다 → 불러오기→저장 루프 금지)**
+
+| 입력 방식 | 저장 시점 |
+|---|---|
+| 목록 선택(`SuggestPicker` `onselect`) | 선택 즉시 |
+| 글자 입력(`oninput`) | 입력을 멈춘 뒤 700ms(디바운스) — 포커스가 빠져나가면(`onblur`) 대기 중인 저장을 즉시 실행 |
+| 선택/입력을 전부 비움 | 즉시 저장(서버가 값 삭제로 처리) |
+
+- 저장 요청은 호출 시점의 대상 id·값을 붙잡아 보낸다 — 디바운스 중 다른 항목으로 넘어가도 입력한 내용이 원래 항목에 저장된다.
+- 상태 글자(`.cancel-reason-status`, `--text-pc-script-12` / `--cs-text-light`, 우측 정렬): `저장 중…` → `자동 저장됨`(실패 시 `저장 실패` + `csToast.error`).
+- 검증은 서버가 다시 한다(화면 `maxlength`만 믿지 않는다).
+
+**입력폼 BG 상태 토큰**
+
+| 상태 | 입력폼 BG | 조건 |
+|---|---|---|
+| 활성(편집 중·미저장) | `var(--cs-white)` (회색 박스 안) / 박스 밖은 `var(--cs-surface-gray)` | 기본값, 다시 선택(`:focus`)했거나 수정해서 저장이 아직 안 끝난 동안 |
+| 비활성(저장 완료) | 박스와 같은 색 — 회색 박스 안이면 박스 BG 토큰(취소·환불 사유 박스는 `var(--cs-bg-row-hover)` #fafafa), 박스 밖이면 `var(--cs-surface-gray)` | 저장 성공 직후, 또는 저장된 값을 불러온 직후 — 단 `:focus`가 아닐 때만 |
+
+- 구현: `class:is-saved={saved}` + `.input.is-saved:not(:focus) { background: <박스 BG 토큰>; }` — 다시 선택(포커스)하면 CSS가 자동으로 활성 BG로 돌려놓는다. 수정이 시작되면 `saved=false`, 저장 성공 시 `saved=값 있음`.
+- 두 입력폼(선택 + 추가 입력)은 **같은 `saved` 상태를 공유**해 함께 바뀐다.
+- 비활성은 "읽기 전용"이 아니다 — `disabled`를 쓰지 않고 클릭하면 바로 편집된다. 글자색·보더·반경은 바꾸지 않는다(BG 토큰만).
+- 안내 문구(placeholder)는 `::placeholder { color: var(--cs-text-placeholder); }`(입력값보다 옅게).
+
+```
+[ ] 저장 버튼·저장 토스트 없이 상태 글자만으로 저장 결과를 보여주는가?
+[ ] 선택은 즉시, 글자 입력은 700ms 디바운스 + blur 즉시 저장인가? 조회 결과를 채우는 코드가 저장을 호출하지 않는가?
+[ ] 저장 완료 시 입력폼 BG가 비활성 토큰(surface-gray)이고, 포커스하면 활성 BG(white)로 돌아오는가? (disabled 사용 금지)
+[ ] 디바운스 대기 중 대상이 바뀌어도 원래 대상에 저장되도록 id·값을 붙잡았는가?
+```
+
+---
+
 ### 0-11. standardCards — 실측 카드 BG UI 스펙 (정본)
 
 > 출처: JSON `standardCards` 섹션 — "디자인 시안에서 측정된 카드 레이아웃 BG UI 스펙"
@@ -1445,6 +1484,8 @@ td { padding: 10px 16px; vertical-align: middle; }
 
 > **JSON 정본**: `searchInput` (white/gray-600/Noto 14px 700/base 8px/padding 10px 20px/border-default)
 
+> ⚠️ **2026-10-20 포커스 아웃라인 색 변경(Stephen 지시)**: 입력폼 포커스 아웃라인(`:focus`/`:focus-within`)은 `--cs-purple`이 아니라 더 옅은 단일 토큰 **`var(--cs-focus-ring)`**(= `--cs-purple-pale` #C1BBEC, `app.css`)을 쓴다. 입력폼 포커스 외곽선을 새로 만들 때 `--cs-purple`을 쓰지 말고 이 토큰을 쓴다 — 색을 다시 조정할 때는 `app.css` 한 곳만 고치면 CMS 입력폼 전역에 반영된다. 예외(변경 안 함): 키보드 포커스 링(`.cms-shell :focus-visible`, 툴바 버튼 `.tb-btn:focus-visible`)과 대표 이미지 표시 외곽선(`.img-card.primary`)은 입력폼이 아니므로 기존 `--cs-purple` 유지.
+
 ```css
 /* 표준 검색 입력 | JSON: searchInput */
 .search-in,
@@ -1460,7 +1501,7 @@ td { padding: 10px 16px; vertical-align: middle; }
 .search-in::placeholder,
 .f-input-search::placeholder { color: var(--cs-text-light); }
 .search-in:focus,
-.f-input-search:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; border-color: var(--cs-purple); }
+.f-input-search:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; border-color: var(--cs-focus-ring); }
 
 /* 폼 입력 (배경 gray, 테두리 없음 — 기존 패턴 유지) */
 .f-input {
@@ -1473,7 +1514,7 @@ td { padding: 10px 16px; vertical-align: middle; }
   width: 100%;
 }
 .f-input::placeholder { color: var(--cs-text-light); }
-.f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+.f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
 /* 인라인 소형 입력 (테이블 내 편집) */
 .inline-input {
@@ -1484,7 +1525,7 @@ td { padding: 10px 16px; vertical-align: middle; }
   font: var(--text-pc-script-12);
   color: var(--cs-text);
 }
-.inline-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+.inline-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 ```
 
 ### 7-7-1. 유사이름 제안 (`CmsSimilarNameInput`) — 공통 컴포넌트 ★
@@ -2214,6 +2255,35 @@ ARIA            : role="navigation" + aria-label / aria-current="page" (현재 �
 ```
 
 ---
+
+### 7-18. 풍선형 도움말 (`CmsHelpBubble`) — 마우스 오버 시 안내문 자동 노출 ★ (2026-10-15 표준 등록, Stephen 지시)
+
+> **"풍선형 도움말 적용해"/"버블 도움말 적용해"/"마우스 오버 안내문 적용해" 언급 시 → 아래 컴포넌트를 즉시 적용. 인라인 title·자체 툴팁 구현 금지.**
+> 화면에 항상 펼쳐 두던 긴 안내문(토글 옆 설명 등)을 풍선으로 옮겨 공간을 줄이는 용도다.
+
+| 항목 | 내용 |
+|---|---|
+| 파일 | `$lib/components/cms/CmsHelpBubble.svelte` |
+| 동작 | 감싼 UI에 마우스 오버(`:hover`) 또는 키보드 포커스(`:focus-within`) 시 풍선 자동 노출, 벗어나면 숨김 (opacity 0.12s) |
+| 풍선 스타일 | 배경 `--cs-dark` · 글자 `--cs-white` · `--text-pc-script-12` / 500 · 반경 `--cms-radius-sm` · 패딩 8px 12px · 최대 폭 280px · 꼬리(마름모) 포함 · 그림자·테두리 없음 |
+| 위치 | 기본 아래쪽(`placement="bottom"`, 패널 상단 클리핑 방지), 필요 시 `placement="top"` |
+| 접근성 | 풍선은 `role="tooltip"` · `pointer-events:none`. `aria-describedby`는 감싼 UI 안의 **포커스를 받는 요소(버튼 등)**에 자동 연결(고유 id는 `$props.id()` — SSR 일치). 포커스 가능한 요소가 없거나 전부 disabled면 래퍼가 `tabindex=0`을 받아 키보드로도 풍선을 볼 수 있음. **Esc**로 풍선을 닫을 수 있고(마우스가 벗어나거나 포커스가 나가면 다시 열림) |
+
+**Props**: `text`(안내문) · `placement`(`'bottom'`(기본)|`'top'`) · `children`(감쌀 UI).
+
+```svelte
+<script>
+  import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
+</script>
+
+<CmsHelpBubble text={on ? 'ON: …설명…' : 'OFF: …설명…'}>
+  <button class="toggle-btn" …></button>
+  <span class="toggle-label">{on ? 'ON' : 'OFF'}</span>
+</CmsHelpBubble>
+```
+
+규칙: ① 화면에 보이는 라벨은 상태 단어만(예: 필수/선택, ON/OFF) 짧게 두고 설명은 풍선으로 옮긴다 ② 풍선 문구는 상태에 따라 바뀌어도 된다(`text`를 반응형 값으로) ③ 풍선 안에 버튼·링크 등 상호작용 요소를 넣지 않는다(순수 안내문 전용) ④ 부모에 `overflow:hidden`이 있으면 풍선이 잘릴 수 있으니 `placement`를 조정한다.
+최초 적용: `ContractTemplatePanel.svelte` "발행자 서명·직인 필수" · "자동발행 표준양식" 토글.
 
 ## 8. 폼 레이아웃 패턴
 

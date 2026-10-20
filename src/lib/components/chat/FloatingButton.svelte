@@ -6,7 +6,7 @@
   import { tick } from 'svelte'
   import ChatBottomSheet from './ChatBottomSheet.svelte'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
-  import { chatStore, toggleChat, resetUnreadCount, setUnreadCount, pushMessage, setActiveSession } from '$lib/stores/chat.svelte'
+  import { chatStore, toggleChat, resetUnreadCount, setUnreadCount, pushMessage, setActiveSession, applyMessageUpdate } from '$lib/stores/chat.svelte'
   import { subscribeToChatMessages, loadUserSession, getUnreadCount } from '$lib/services/chatService'
   import { supabase } from '$lib/services/supabase'
 
@@ -112,7 +112,7 @@
 
     const unsub = subscribeToChatMessages(sessionId, (msg) => {
       pushMessage(msg)
-    })
+    }, undefined, (deleted) => applyMessageUpdate(deleted))
     return unsub
   })
 </script>

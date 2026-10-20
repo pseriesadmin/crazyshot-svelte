@@ -1,5 +1,6 @@
 // GET    /api/chat/sessions/[id]/cs-record — 세션의 상담 메모 목록 조회(최신순). 호환용 record = 가장 최신 1건
 // POST   /api/chat/sessions/[id]/cs-record — 상담 메모 1건 추가(단문 100자 이내, 항상 새 행 INSERT — 2026-10-17 '무한 등록' 목록화)
+// PATCH  /api/chat/sessions/[id]/cs-record?id=<메모 id> — 기존 메모 1건 내용 수정(단문 100자 이내, 2026-10-20 목록 인라인 수정)
 // DELETE /api/chat/sessions/[id]/cs-record — 세션의 상담 메모 전체 삭제, ?id=<메모 id>가 있으면 그 1건만 삭제
 // 기존 패턴 참조: /api/chat/sessions/[id]/close/+server.ts (service_role + cms_role 확인)
 
@@ -125,6 +126,52 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   // 방금 등록한 메모에도 등록 관리자 아이디를 붙여 돌려준다(목록 맨 위에 바로 표시)
   const email = session.user.email ?? null
   return json({ record: { ...(result.data as Record<string, unknown>), created_by_label: email ? email.split('@')[0] : null } })
+}
+
+// ── PATCH: 기존 상담 메모 1건 내용 수정 (?id=<메모 id> 필수) ──────────────────────
+export const PATCH: RequestHandler = async ({ params, request, locals, url }) => {
+  const denied = await requireMenuAccessApi(locals, 'consulting.chat')
+  if (denied) return denied
+  const { session } = await locals.safeGetSession()
+  if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
+
+  const admin = getAdminClient()
+  if (!admin) return json({ error: '서버 설정 오류입니다.' }, { status: 500 })
+
+  const { data: profile } = await admin
+    .from('user_profiles')
+    .select('cms_role')
+    .eq('id', session.user.id)
+    .single()
+
+  const p = profile as { cms_role: string | null } | null
+  if (!p?.cms_role) return json({ error: '관리자 권한이 필요합니다.' }, { status: 403 })
+
+  const memoId = url.searchParams.get('id')
+  if (!memoId) return json({ error: '수정할 메모 id가 필요합니다.' }, { status: 400 })
+
+  const body = await request.json().catch(() => null)
+  // 등록과 같은 단문 검증(100자·줄바꿈 합침·빈 값 거절) — 서버가 최종 집행
+  const checked = checkCsMemo(body?.summary)
+  if (!checked.ok) return json({ error: checked.error }, { status: 400 })
+
+  // 다른 세션 메모는 id가 같아도 바뀌지 않도록 session_id도 함께 조건
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (admin as any)
+    .from('cs_records')
+    .update({ summary: checked.text, updated_at: new Date().toISOString() })
+    .eq('id', memoId)
+    .eq('session_id', params.id)
+    .select('id, session_id, user_id, category, status, summary, admin_note, created_by, created_at, updated_at')
+    .maybeSingle() as { data: Record<string, unknown> | null; error: { message?: string } | null }
+
+  if (error) return json({ error: error.message }, { status: 500 })
+  if (!data) return json({ error: '메모를 찾을 수 없습니다.' }, { status: 404 })
+
+  // §C-4: 수정된 문장도 이중언어 병기 패턴 학습 대상(fire-and-forget)
+  registerCrossLingualCandidates(checked.text).catch(() => {})
+
+  return json({ record: data })
 }
 
 // ── DELETE: 세션의 CS 기록 전체 삭제 ──────────────────────────────

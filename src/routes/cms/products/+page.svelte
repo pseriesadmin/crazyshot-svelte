@@ -900,7 +900,7 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text);
   }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .f-input::placeholder { color: var(--cs-text-placeholder); }
   .tb-actions {
     display: flex;

@@ -806,12 +806,12 @@
   /* 관리자(CMS) 답변 입력 — 상담 메모 입력란과 같은 면 토큰(옅은 퍼플 0.04), 입력 중(포커스)엔 흰 면 + 퍼플 아웃라인.
      고객 채팅(isAdmin=false)은 기존 --cs-surface-gray 그대로 */
   .input-pill--admin {
-    background: rgba(59, 47, 138, 0.04);
+    background: var(--cs-white); /* 2026-10-20(Stephen 지시): 입력창은 흰색, 바깥 하단 작성 그룹이 옅은 퍼플(rgba(59,47,138,0.04)) 면을 가진다 */
     transition: background 0.15s;
   }
   .input-pill--admin:focus-within {
     background: var(--cs-white);
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 

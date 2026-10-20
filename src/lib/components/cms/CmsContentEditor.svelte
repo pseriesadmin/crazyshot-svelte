@@ -2057,7 +2057,7 @@
     width: 100%;
   }
   .f-input::placeholder { color: var(--cs-text-light); }
-  .f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   /* ── 모바일 반응형 ─────────────────────────────────── */
   @media (max-width: 640px) {

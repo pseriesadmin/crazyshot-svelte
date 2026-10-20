@@ -866,7 +866,7 @@
   font: var(--text-pc-body-14); color: var(--cs-text); width: 100%;
 }
 .f-input::placeholder { color: var(--cs-text-placeholder); }
-.f-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+.f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
 /* ─ 항목 4: sequenced 모드 코드 표시 배지 — 자유편집 입력창과 구분되는 단순 표시 스타일 ─ */
 .f-input-code-badge {

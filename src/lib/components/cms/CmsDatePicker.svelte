@@ -165,11 +165,11 @@
     text-align: left;
   }
   .dp-trigger:focus-visible {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
   .dp-open .dp-trigger {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
 

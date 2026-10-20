@@ -418,9 +418,9 @@
     width: 440px;                        /* 기존 220px → 2배 확장, 검색버튼 제거로 엔터 입력만 사용 */
   }
   .search-in:focus {
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
-    border-color: var(--cs-purple);
+    border-color: var(--cs-focus-ring);
   }
 
   /* 대여 라이프사이클 내비게이터형 필터 — CMS 콤보버튼 표준 §7-12-A(cat-pill/filter-pill

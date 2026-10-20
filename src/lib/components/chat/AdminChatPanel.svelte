@@ -3,6 +3,7 @@
   // 좌측: 세션 목록 / 우측: 선택된 세션 대화창
 
   import { goto } from '$app/navigation'
+  import { tick } from 'svelte'
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
   import CustomerDetailPanel from './CustomerDetailPanel.svelte'
@@ -29,7 +30,9 @@
   import { csToast } from '$lib/utils/toast'
   import { CS_MEMO_MAX, checkCsMemo } from '$lib/utils/csMemo'
   import { listenChatTab, CHAT_WINDOW_NAME } from '$lib/utils/cmsChatTabBridge'
+  import { INFO_PCT_MIN, INFO_PCT_MAX, INFO_PCT_DEFAULT, infoPctFromPointer, infoPctFromKey, parseStoredInfoPct, COMPOSE_PCT_MIN, COMPOSE_PCT_MAX, COMPOSE_MIN_PX, clampComposePct, composePctFromPointer, composePctFromKey, parseStoredComposePct } from '$lib/utils/panelSplit'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
+  import { DELETED_MESSAGE_TEXT } from '$lib/utils/chatMessageDelete'
 
   // 로컬 타입 정의 (routes 크로스-임포트 금지 원칙) — /api/cms/customers/[userId]/summary 응답 형태
   interface CustomerSummary {
@@ -500,6 +503,115 @@
     }
   })
 
+  // ── 대화 영역 ↔ 고객 정보 영역 가로폭 조절 (2026-10-20, Stephen 지시) ──
+  // 두 영역의 합을 100%로 보고 고객 정보 영역을 30%~70% 사이에서 조절한다(대화 영역은 그 나머지 70%~30%).
+  // 손잡이를 끌거나 방향키(←→ 2%씩)로 조절하고, 더블클릭하면 기본값으로 돌아간다. 값은 이 브라우저에 저장된다.
+  const INFO_PCT_KEY = 'cms-chat-info-panel-pct'
+  let infoPct = $state(INFO_PCT_DEFAULT)
+  let resizingInfo = $state(false)
+  let messagesEl = $state<HTMLElement | null>(null)
+
+  function saveInfoPct(): void {
+    try { localStorage.setItem(INFO_PCT_KEY, String(Math.round(infoPct * 10) / 10)) } catch { /* 저장소 차단 시 이번 세션만 유지 */ }
+  }
+  $effect(() => {
+    try {
+      const v = parseStoredInfoPct(localStorage.getItem(INFO_PCT_KEY))
+      if (v !== null) infoPct = v
+    } catch { /* 저장소 차단 시 기본값 */ }
+  })
+  function onInfoResizeDown(e: PointerEvent): void {
+    if (e.button !== 0) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    resizingInfo = true
+  }
+  function onInfoResizeMove(e: PointerEvent): void {
+    if (!resizingInfo || !messagesEl) return
+    infoPct = infoPctFromPointer(e.clientX, messagesEl.getBoundingClientRect())
+  }
+  function onInfoResizeUp(e: PointerEvent): void {
+    if (!resizingInfo) return
+    resizingInfo = false
+    const el = e.currentTarget as HTMLElement
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId)
+    saveInfoPct()
+  }
+  function onInfoResizeKey(e: KeyboardEvent): void {
+    const next = infoPctFromKey(infoPct, e.key)
+    if (next === null) return
+    infoPct = next
+    e.preventDefault()
+    saveInfoPct()
+  }
+  function resetInfoPct(): void {
+    infoPct = INFO_PCT_DEFAULT
+    saveInfoPct()
+  }
+
+  // ── 위아래 높이 조절: 대화 영역(대화카드+고객 기본 정보) ↔ 하단 작성 그룹(답변 입력 + 상담 메모) (2026-10-20, Stephen 지시) ──
+  // 두 영역의 합을 100%로 보고 하단 작성 그룹을 30%~70%로 제한한다. 저장값이 없으면(null) 기존처럼 내용 높이에 맞춘다 —
+  // 처음 끌 때부터 비율 방식으로 바뀌고, 더블클릭하면 자동으로 돌아간다. 너무 낮은 화면에서는 내용 최소 높이(COMPOSE_MIN_PX)가 30%보다 우선한다.
+  const COMPOSE_PCT_KEY = 'cms-chat-compose-pct'
+  let composePct = $state<number | null>(null)
+  let resizingCompose = $state(false)
+  let splitEl = $state<HTMLElement | null>(null)
+  let composeEl = $state<HTMLElement | null>(null)
+  let measuredComposePct = $state(35) // 자동일 때 실제 비율(방향키 시작값·접근성 값)
+
+  function saveComposePct(): void {
+    try {
+      if (composePct === null) localStorage.removeItem(COMPOSE_PCT_KEY)
+      else localStorage.setItem(COMPOSE_PCT_KEY, String(Math.round(composePct * 10) / 10))
+    } catch { /* 저장소 차단 시 이번 세션만 유지 */ }
+  }
+  $effect(() => {
+    try { composePct = parseStoredComposePct(localStorage.getItem(COMPOSE_PCT_KEY)) } catch { /* 자동 */ }
+  })
+  // 실제 비율 측정(자동 모드 포함) — 두 영역 크기가 바뀔 때마다 갱신
+  $effect(() => {
+    const split = splitEl
+    const compose = composeEl
+    if (!split || !compose || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      if (split.clientHeight > 0) measuredComposePct = clampComposePct((compose.offsetHeight / split.clientHeight) * 100)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(split)
+    ro.observe(compose)
+    return () => ro.disconnect()
+  })
+  function onComposeResizeDown(e: PointerEvent): void {
+    if (e.button !== 0) return
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    resizingCompose = true
+  }
+  function onComposeResizeMove(e: PointerEvent): void {
+    if (!resizingCompose || !splitEl) return
+    const next = composePctFromPointer(e.clientY, splitEl.getBoundingClientRect())
+    if (next !== null) composePct = next
+  }
+  function onComposeResizeUp(e: PointerEvent): void {
+    if (!resizingCompose) return
+    resizingCompose = false
+    const el = e.currentTarget as HTMLElement
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId)
+    saveComposePct()
+  }
+  function onComposeResizeKey(e: KeyboardEvent): void {
+    const next = composePctFromKey(composePct, measuredComposePct, e.key)
+    if (next === null) return
+    composePct = next
+    e.preventDefault()
+    saveComposePct()
+  }
+  function resetComposePct(): void {
+    composePct = null
+    saveComposePct()
+  }
+
   // 다른 CMS 화면의 플로팅 채팅 아이콘에서 "이 대화 열어줘" 요청이 오면 이 탭에서 해당 대화를 선택한다(2026-10-19).
   // 목록에 아직 없는 새 세션이면 딥링크로 다시 불러온다. 새 창으로 열릴 때 같은 창을 재사용하도록 창 이름도 지정.
   $effect(() => {
@@ -607,6 +719,10 @@
         messages = messages.map((m) =>
           m.id === messageId ? { ...m, is_read: true } : m
         )
+      },
+      // 다른 관리자 창에서 대화를 삭제한 경우도 이 창에 즉시 '대화가 삭제되었습니다.'로 반영
+      (deleted) => {
+        messages = messages.map((m) => (m.id === deleted.id ? { ...m, ...deleted } : m))
       }
     )
     return unsub
@@ -711,6 +827,8 @@
     const sid = selectedSessionId
     csRecords = []
     csSummaryDraft = ''
+    editingMemoId = null
+    memoEditStatus = null
     if (!sid) return
     fetch(`/api/chat/sessions/${sid}/cs-record`)
       .then((r) => r.ok ? r.json() : null)
@@ -747,6 +865,95 @@
     } finally {
       isSavingCsRecord = false
     }
+  }
+
+  // ── 상담 메모 인라인 수정 (2026-10-20, Stephen 지시) ──
+  // 목록의 메모 글자를 누르면 바로 수정 모드(입력칸)가 되고, 커서가 영역을 벗어나면(blur) 바로 저장한다(Enter도 같은 효과, Esc는 취소).
+  // 저장 버튼·토스트 없이 행 옆 상태 글자(저장 중… / 자동 저장됨)로 결과를 보여준다(cms-uiux.md §0-10-H). 내용이 바뀌지 않았으면 저장 요청을 보내지 않는다.
+  let editingMemoId = $state<string | null>(null)
+  let editMemoDraft = $state('')
+  let memoEditStatus = $state<{ id: string; text: string } | null>(null)
+  let memoEditEl = $state<HTMLInputElement | null>(null)
+  let memoEditCancelled = false
+  let memoStatusTimer: ReturnType<typeof setTimeout> | null = null
+
+  async function startEditMemo(rec: CsRecord): Promise<void> {
+    editingMemoId = rec.id
+    editMemoDraft = rec.summary ?? ''
+    memoEditCancelled = false
+    await tick()
+    memoEditEl?.focus()
+    memoEditEl?.select()
+  }
+
+  function showMemoStatus(id: string, text: string, autoClearMs?: number): void {
+    memoEditStatus = { id, text }
+    if (memoStatusTimer) clearTimeout(memoStatusTimer)
+    if (autoClearMs) memoStatusTimer = setTimeout(() => { memoEditStatus = null }, autoClearMs)
+  }
+
+  async function commitEditMemo(rec: CsRecord): Promise<void> {
+    if (editingMemoId !== rec.id) return
+    const cancelled = memoEditCancelled
+    const draft = editMemoDraft
+    editingMemoId = null
+    if (cancelled) return
+    const sid = selectedSessionId
+    if (!sid) return
+    const checked = checkCsMemo(draft)
+    if (!checked.ok) { csToast.warning(checked.error); return } // 비우면 원래 내용 유지(삭제는 휴지통 버튼)
+    if (checked.text === rec.summary) return                   // 바뀐 게 없으면 저장하지 않는다
+    showMemoStatus(rec.id, '저장 중…')
+    try {
+      const res = await fetch(`/api/chat/sessions/${sid}/cs-record?id=${encodeURIComponent(rec.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary: checked.text }),
+      })
+      if (res.ok) {
+        const { record } = await res.json() as { record: CsRecord | null }
+        // 저장 중에 다른 세션으로 옮겼다면 화면은 건드리지 않는다(서버에는 올바른 메모에 저장됨)
+        if (selectedSessionId === sid) {
+          csRecords = csRecords.map((r) => r.id === rec.id ? { ...r, summary: record?.summary ?? checked.text, updated_at: record?.updated_at ?? r.updated_at } : r)
+          showMemoStatus(rec.id, '자동 저장됨', 1800)
+        }
+      } else {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        showMemoStatus(rec.id, '저장 실패', 2500)
+        csToast.error(d.error ?? '상담 메모 수정에 실패했습니다.')
+      }
+    } catch {
+      showMemoStatus(rec.id, '저장 실패', 2500)
+      csToast.error('상담 메모 수정에 실패했습니다.')
+    }
+  }
+
+  function onEditMemoKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); memoEditEl?.blur() } // blur → commitEditMemo
+    else if (e.key === 'Escape') { memoEditCancelled = true; memoEditEl?.blur() }
+  }
+
+  // ── 대화카드 개별 삭제(관리자 발송 취소) (2026-10-20, Stephen 지시) ──
+  // 말풍선 상태줄의 삭제 아이콘 → 삭제 안전 토스트 2단계(1차: 경고, 2차: 삭제). 삭제되면 고객·관리자 창 모두 '대화가 삭제되었습니다.'로 바뀐다
+  // (서버가 행을 교체 → 실시간 UPDATE로 양쪽 반영). 이미 나간 문자·푸시 알림은 회수되지 않는다. 결제·계약·쿠폰 카드와 고객 메시지는 삭제할 수 없다.
+  const msgDelete = createDeleteSafetyToast({
+    warningMessage: '한번 더 누르면 대화가 삭제됩니다. 이미 나간 문자·푸시 알림은 회수되지 않습니다.',
+    successMessage: DELETED_MESSAGE_TEXT,
+    errorMessage: '대화 삭제에 실패했습니다.',
+  })
+  async function handleAdminDeleteMessage(messageId: string): Promise<void> {
+    await msgDelete.handleAction(`msg:${messageId}`, async () => {
+      const res = await fetch(`/api/cms/chat/messages/${encodeURIComponent(messageId)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(d.error ?? '')
+      }
+      // 실시간 반영을 기다리지 않고 이 창은 즉시 바꾼다(서버 UPDATE 이벤트가 와도 같은 값이라 무해)
+      messages = messages.map((m) => m.id === messageId
+        ? { ...m, message_type: 'system', content: DELETED_MESSAGE_TEXT, action_payload: { type: 'message_deleted' }, deleted_at: new Date().toISOString() }
+        : m)
+      return true
+    })
   }
 
   // 메모 1건 삭제 — 같은 삭제 안전 토스트(메모별 키로 무장 상태 구분)
@@ -1415,7 +1622,14 @@
         </div>
       {/if}
 
-      <div class="chat-messages">
+      <!-- 위아래 높이 조절 영역(2026-10-20): 대화 영역 + 하단 작성 그룹의 합이 100% -->
+      <div class="chat-split" class:chat-split--resizing={resizingCompose} bind:this={splitEl}>
+      <div
+        class="chat-messages"
+        class:chat-messages--resizing={resizingInfo}
+        style:--info-pct={infoPct}
+        bind:this={messagesEl}
+      >
         {#if isLoadingMessages}
           <div class="loading-msgs">메시지 로딩 중...</div>
         {:else}
@@ -1424,6 +1638,9 @@
             currentUserId="admin"
             isAdmin={true}
             onbookmark={handleBookmark}
+            onadmindelete={handleAdminDeleteMessage}
+            adminDeleteArmedId={msgDelete.pendingKey?.startsWith('msg:') ? msgDelete.pendingKey.slice(4) : null}
+            adminDeleteBusyId={msgDelete.busyKey?.startsWith('msg:') ? msgDelete.busyKey.slice(4) : null}
             hasMoreOlder={hasMoreOlderMessages}
             isLoadingOlder={isLoadingOlderMessages}
             onloadmore={handleLoadMoreOlderMessages}
@@ -1443,8 +1660,58 @@
             {requestingDocType}
           />
         </div>
+
+        <!-- 대화 영역 ↔ 고객 정보 영역 가로폭 조절 손잡이(30%~70%) — 끌기·방향키·더블클릭 초기화 -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
+        <div
+          class="info-resizer"
+          class:info-resizer--active={resizingInfo}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="대화 영역과 고객 정보 영역의 가로폭 조절"
+          aria-valuemin={INFO_PCT_MIN}
+          aria-valuemax={INFO_PCT_MAX}
+          aria-valuenow={Math.round(infoPct)}
+          tabindex="0"
+          title="끌어서 가로폭 조절 (더블클릭: 기본값)"
+          onpointerdown={onInfoResizeDown}
+          onpointermove={onInfoResizeMove}
+          onpointerup={onInfoResizeUp}
+          onpointercancel={onInfoResizeUp}
+          onkeydown={onInfoResizeKey}
+          ondblclick={resetInfoPct}
+        ></div>
       </div>
 
+      <!-- 하단 작성 그룹(2026-10-20): 답변 입력창 + 상담 메모는 같은 좌우 여백(24px)·세로 간격·하단 고정(flex-shrink:0)을 공유하므로 한 그룹으로 묶어 여백 규칙을 한 곳에서 관리 -->
+      <!-- 대화 영역 ↔ 하단 작성 그룹 높이 조절 손잡이(30%~70%) — 끌기·↑↓ 방향키·더블클릭(자동) -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
+      <div
+        class="compose-resizer"
+        class:compose-resizer--active={resizingCompose}
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="대화 영역과 답변 입력·상담 메모 영역의 높이 조절"
+        aria-valuemin={COMPOSE_PCT_MIN}
+        aria-valuemax={COMPOSE_PCT_MAX}
+        aria-valuenow={Math.round(composePct ?? measuredComposePct)}
+        tabindex="0"
+        title="끌어서 높이 조절 (더블클릭: 자동)"
+        onpointerdown={onComposeResizeDown}
+        onpointermove={onComposeResizeMove}
+        onpointerup={onComposeResizeUp}
+        onpointercancel={onComposeResizeUp}
+        onkeydown={onComposeResizeKey}
+        ondblclick={resetComposePct}
+      ></div>
+
+      <div
+        class="chat-compose-group"
+        class:chat-compose-group--sized={composePct !== null}
+        style:--compose-pct={composePct ?? undefined}
+        style:--compose-min="{COMPOSE_MIN_PX}px"
+        bind:this={composeEl}
+      >
       <div class="chat-input-wrap">
         <ChatInput
           isAdmin={true}
@@ -1466,13 +1733,27 @@
             <div class="cs-record-item" role="listitem">
               <span class="cs-record-saved-at">{formatDateTime(rec.created_at)}</span>
               {#if rec.created_by_label}<span class="cs-record-saved-at cs-record-by">{rec.created_by_label}</span>{/if}
-              <span class="cs-record-text">{rec.summary}</span>
+              {#if editingMemoId === rec.id}
+                <input
+                  class="cs-record-edit"
+                  type="text"
+                  bind:this={memoEditEl}
+                  bind:value={editMemoDraft}
+                  maxlength={CS_MEMO_MAX * 2}
+                  aria-label="상담 메모 수정"
+                  onkeydown={onEditMemoKeydown}
+                  onblur={() => commitEditMemo(rec)}
+                />
+              {:else}
+                <button type="button" class="cs-record-text cs-record-text-btn" title="눌러서 수정" aria-label={`상담 메모 수정: ${rec.summary ?? ''}`} onclick={() => startEditMemo(rec)}>{rec.summary}</button>
+              {/if}
+              {#if memoEditStatus?.id === rec.id}<span class="cs-record-status" role="status">{memoEditStatus.text}</span>{/if}
               <button
                 type="button"
                 class="act-btn act-del cs-record-item-del"
                 class:act-del--confirming={csMemoDelete.pendingKey === `item:${rec.id}`}
                 onclick={() => handleDeleteCsRecord(rec.id)}
-                disabled={csMemoDelete.busyKey !== null}
+                disabled={csMemoDelete.busyKey !== null || (memoEditStatus?.id === rec.id && memoEditStatus.text === '저장 중…')}
                 aria-label="상담 메모 삭제"
                 title={csMemoDelete.pendingKey === `item:${rec.id}` ? '한 번 더 누르면 삭제됩니다' : '상담 메모 삭제'}
               >
@@ -1505,6 +1786,8 @@
             aria-label="상담 메모 저장"
           >{isSavingCsRecord ? '저장 중' : '저장'}</button>
         </div>
+      </div>
+      </div>
       </div>
     {/if}
   </section>
@@ -2120,7 +2403,7 @@
 
   .chat-status {
     display: inline-block;
-    font: var(--text-m-script-12);
+    font: var(--text-pc-descript-10);
     padding: 3px 10px;
     border-radius: var(--radius-full);
     background: var(--cs-surface-gray);
@@ -2142,10 +2425,16 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    /* 우측에 겹쳐지는 customer-info-float(300px)에 메시지 말풍선이 가려지지 않도록
-       메시지 영역 자체의 가용 폭을 그만큼 미리 줄여둠 */
-    padding-right: 300px;
+    /* 고객 정보 영역(오른쪽)의 비율 — 두 영역 합 100% 중 30%~70%(스크립트에서 제한). 값은 소수 없는 숫자(퍼센트) */
+    --info-pct: 36;
+    /* 우측에 겹쳐지는 customer-info-float에 메시지 말풍선이 가려지지 않도록
+       메시지 영역 자체의 가용 폭을 그만큼 미리 줄여둠(고정 300px → 조절 가능한 비율) */
+    padding-right: calc(var(--info-pct) * 1%);
+    /* 대화 영역(패딩을 뺀 안쪽 폭)을 기준으로 말풍선·여백이 폭에 맞게 유연하게 바뀌도록 컨테이너로 지정 */
+    container-type: inline-size;
+    container-name: chatmsg;
   }
+  .chat-messages--resizing { user-select: none; cursor: col-resize; }
 
   /* 우측 플로팅 고객 정보(읽기전용) — 별도 3분할 컬럼이 아니라 대화 목록 영역 내부
      우측에 겹쳐 노출되는 오버레이 카드. chat-messages 밖(입력창·상담메모 영역)까지는
@@ -2155,13 +2444,52 @@
     top: 0;
     right: 0;
     bottom: 0;
-    width: 300px;
-    max-width: 40%;
+    width: calc(var(--info-pct) * 1%);
     overflow-y: auto;
     background: var(--cs-white);
     border-left: 1px solid rgba(16, 11, 50, 0.08);
     box-shadow: -4px 0 16px rgba(16, 11, 50, 0.06);
     z-index: 5;
+    /* 고객 정보 패널 내용(CustomerDetailPanel)이 이 영역 폭에 맞게 바뀌도록 컨테이너로 지정 */
+    container-type: inline-size;
+    container-name: cinfo;
+  }
+
+  /* 가로폭 조절 손잡이 — 고객 정보 영역 왼쪽 경계 바로 안쪽에 놓는다. 호버·끌기는 배경색만 변경 */
+  .info-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    /* 경계 오른쪽(고객 정보 영역 안쪽)으로 치우쳐 배치 — 대화 목록 오른쪽 끝의 스크롤바를 가리지 않도록 */
+    right: calc(var(--info-pct) * 1% - 24px);
+    width: 24px; /* 경계에서 오른쪽으로 24px — 막대(4px)는 그 가운데(경계에서 약 12px)에 놓여 경계선과 여백을 둔다 */
+    z-index: 6;
+    cursor: col-resize;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+  }
+  .info-resizer::before {
+    content: '';
+    width: 2.8px; /* 두께 2.8px(Stephen 지정, 기존 4px) — 덜 두드러지게 */
+    height: 40px;
+    margin-right: 4px; /* 막대를 경계 쪽으로 약 2px 이동(경계선과의 여백을 조금 줄임) */
+    border-radius: var(--radius-full);
+    background: var(--cs-purple-op10); /* 평소엔 더 옅게(2026-10-20), 호버·끌기에서만 진하게 */
+    transition: background 0.15s;
+  }
+  .info-resizer:hover::before,
+  .info-resizer:focus-visible::before,
+  .info-resizer--active::before { background: var(--cs-purple-pale); }
+
+  /* 대화 영역이 좁아지면(안쪽 폭 약 360px 이하) 말풍선의 바깥 여백·안쪽 여백을 줄여 글자 폭을 확보한다 */
+  @container chatmsg (max-width: 360px) {
+    .chat-messages :global(.message-list) { padding: 12px; }
+    .chat-messages :global(.bubble-row) { padding-right: 16px; }
+    .chat-messages :global(.bubble-row--own) { padding-right: 0; padding-left: 16px; }
+    .chat-messages :global(.bubble) { padding: 11px 14px; }
   }
 
   .loading-msgs {
@@ -2173,16 +2501,78 @@
     color: var(--cs-text-light);
   }
 
+  /* 위아래 높이 조절 영역 — 대화 영역(.chat-messages) + 손잡이 + 하단 작성 그룹. 이 영역의 높이가 100% */
+  .chat-split {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-split--resizing { user-select: none; cursor: row-resize; }
+
+  /* 위아래 높이 조절 손잡이 — 하단 작성 그룹의 윗부분(위쪽 패딩 16px 안)에 들여 놓는다(2026-10-20, 옅은 퍼플 면 위라 막대가 또렷하게 보이고 대화 영역 끝에 잘려 보이지 않음).
+     음수 아래 마진으로 그룹 위에 겹쳐 영역 크기를 바꾸지 않으며, 그룹 내용(입력창)은 패딩 아래에서 시작해 클릭을 가로채지 않는다. 호버·끌기는 배경색만 변경 */
+  .compose-resizer {
+    position: relative;
+    z-index: 6;
+    flex-shrink: 0;
+    height: 16px;
+    margin: 0 0 -16px;
+    cursor: row-resize;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+  }
+  .compose-resizer::before {
+    content: '';
+    width: 40px;
+    height: 2.8px; /* 두께 2.8px(Stephen 지정, 기존 4px) */
+    border-radius: var(--radius-full);
+    background: var(--cs-purple-op10); /* 평소엔 더 옅게(2026-10-20), 호버·끌기에서만 진하게 */
+    transition: background 0.15s;
+  }
+  .compose-resizer:hover::before,
+  .compose-resizer:focus-visible::before,
+  .compose-resizer--active::before { background: var(--cs-purple-pale); }
+
+  /* 비율 모드(사용자가 한 번이라도 조절한 뒤) — 하단 작성 그룹을 비율 높이로 고정하고, 모자라면 메모 목록이 줄어들며 스크롤된다.
+     너무 낮은 화면에서는 내용 최소 높이(--compose-min)가 30%보다 우선한다 */
+  .chat-compose-group--sized {
+    flex: 0 0 calc(var(--compose-pct) * 1%);
+    min-height: var(--compose-min);
+    /* ⚠️ overflow:hidden 금지 — 입력창 위로 뜨는 팝업(상품검색·빠른답변·쿠폰·첨부, position:absolute bottom:100%)이 잘린다(QA MAJOR-1). 메모 목록이 min-height:0으로 줄어들어 넘침을 흡수한다 */
+  }
+  .chat-compose-group--sized .chat-input-wrap { flex-shrink: 0; }
+  .chat-compose-group--sized .cs-record-section {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-compose-group--sized .cs-record-list { flex: 1 1 auto; min-height: 0; max-height: none; }
+  .chat-compose-group--sized .cs-record-compose { flex-shrink: 0; }
+
+  /* 하단 작성 그룹 — 답변 입력창 + 상담 메모. 좌우 24px·위 28px·아래 16px 여백과 두 블록 사이 간격(12px)을 여기서만 정한다 */
+  .chat-compose-group {
+    flex-shrink: 0;
+    /* 가장 옅은 퍼플 면(기존 답변 입력창 배경이던 값, cms-uiux.md 허용 범위 0.04~0.12 중 최저값) — 안쪽 답변 입력창은 흰색 */
+    background: rgba(59, 47, 138, 0.04);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    /* 위쪽 28px = 높이 조절 손잡이(16px) + 손잡이와 입력창 사이 여백 12px(분리감) */
+    padding: 28px 24px 16px;
+  }
   .chat-input-wrap {
-    padding: 16px 24px 0;
     flex-shrink: 0;
   }
 
   /* ── CS-A1 상담 메모 섹션 ── */
   /* 상담 메모 영역 전체 = 카드 하나 — 연한 회색 면(--cs-surface-gray) + 카드 반경 '중' 20px(cms-uiux 라운드값 정책), 안쪽 메모는 흰 카드 */
   .cs-record-section {
-    /* 위쪽 여백 = 답변 입력창(chat-input-wrap)과의 간격 */
-    margin: var(--spacing-3) 24px 16px;
+    /* 바깥 여백·입력창과의 간격은 .chat-compose-group이 담당 */
     padding: 14px 16px;
     flex-shrink: 0;
     border-radius: var(--radius-lg);
@@ -2204,8 +2594,12 @@
     border: none;
     /* uiux-index.md CMS 카드 라운드값 "중" = 20px(var(--radius-lg)) */
     border-radius: var(--radius-lg);
-    padding: 12px 16px;
-    font: var(--text-pc-body-14);
+    /* 세로 58px = 메모 목록 2행(행 24px ×2 + 간격 10px) 높이 — 2행 입력이 보이도록 위아래 패딩만 줄임(2026-10-20 Stephen 지시) */
+    padding: 8px 16px;
+    height: 58px; /* 글자가 작아져도 입력칸 높이는 그대로(2행 목록 높이) */
+    /* 입력 중 글자 = 한 단계 작은 토큰(14px → --text-pc-script-12 12px). 입력 글자는 기존 굵기(Bold) 유지, 안내 문구는 아래 ::placeholder가 400 */
+    font: var(--text-pc-script-12);
+    font-weight: 700;
     color: var(--cs-text);
     /* 가장 옅은 퍼플 bg 토큰(cms-uiux.md 허용 범위 0.04~0.12 중 최저값) */
     background: rgba(59, 47, 138, 0.04);
@@ -2217,7 +2611,7 @@
   /* 입력 중(포커스) — 흰 면 + 퍼플 아웃라인(cms-uiux.md §7-7 입력 필드 포커스 표준) */
   .cs-record-textarea:focus {
     background: var(--cs-white);
-    outline: 2px solid var(--cs-purple);
+    outline: 2px solid var(--cs-focus-ring);
     outline-offset: -2px;
   }
   .cs-record-textarea:disabled {
@@ -2287,6 +2681,39 @@
   /* 메모별 삭제 — 목록 행 우측 끝, 행 높이를 키우지 않게 작게 */
   .cs-record-item .cs-record-item-del { flex-shrink: 0; align-self: center; height: 24px; padding: 0 6px; }
   .cs-record-empty { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  /* 메모 글자 = 눌러서 바로 수정(버튼 모양 없이 글자처럼 보이고, 호버는 배경색만) */
+  .cs-record-text-btn {
+    border: none;
+    background: transparent;
+    padding: 2px 6px;
+    margin: -2px -6px;
+    border-radius: var(--radius-sm);
+    text-align: left;
+    cursor: text;
+    transition: background 0.15s;
+  }
+  .cs-record-text-btn:hover { background: var(--cs-white); }
+  /* 수정 중 입력칸 — 활성 BG(white), 글자 토큰은 메모 글자와 동일 */
+  .cs-record-edit {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 8px;
+    border: none;
+    outline: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+  /* 저장 결과 상태 글자(저장 중… / 자동 저장됨 / 저장 실패) — 저장 버튼·토스트 없이 행 옆에 */
+  .cs-record-status {
+    flex-shrink: 0;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+    white-space: nowrap;
+  }
 
   /* CMS 표준 아이콘형 액션 버튼(act-del) 공통 베이스 — project_cms_delete_button_standard 준수 */
   .act-btn {

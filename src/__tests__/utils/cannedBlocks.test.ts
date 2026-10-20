@@ -14,6 +14,28 @@ describe('htmlToPlainText', () => {
   it('빈 값은 빈 문자열', () => {
     expect(htmlToPlainText('')).toBe('')
   })
+  it('글 속 링크(<a href>)는 "문구 주소"로 주소를 보존한다', () => {
+    expect(htmlToPlainText('<p>자세히는 <a href="https://crazyshot.kr/a">여기</a>를 보세요</p>')).toBe('자세히는 여기 https://crazyshot.kr/a를 보세요')
+    expect(htmlToPlainText('<p><a href="https://crazyshot.kr/a">https://crazyshot.kr/a</a></p>')).toBe('https://crazyshot.kr/a')
+    expect(htmlToPlainText('<a href="https://x.kr/?a=1&amp;b=2">링크</a>')).toBe('링크 https://x.kr/?a=1&b=2')
+  })
+  it('따옴표 없는 href도 주소를 보존하고, 문구의 특수문자 표기는 풀어서 비교한다', () => {
+    expect(htmlToPlainText('<a href=https://x.kr/a>보기</a>')).toBe('보기 https://x.kr/a')
+    expect(htmlToPlainText('<a href="https://x.kr/?a=1&amp;b=2">https://x.kr/?a=1&amp;b=2</a>')).toBe('https://x.kr/?a=1&b=2')
+  })
+  it('닫는 태그 없는 악성 입력도 즉시 처리된다(ReDoS 방지)', () => {
+    const t0 = Date.now()
+    htmlToPlainText('<a href=x '.repeat(3000))
+    htmlToPlainText('<a href="x">'.repeat(3000))
+    expect(Date.now() - t0).toBeLessThan(500)
+  })
+  it('한 글에 링크가 여러 개여도 각각 변환한다', () => {
+    expect(htmlToPlainText('<p><a href="https://a.kr">가</a> 그리고 <a href="https://b.kr">나</a></p>')).toBe('가 https://a.kr 그리고 나 https://b.kr')
+  })
+  it('http(s)가 아닌 링크(javascript:·mailto:·내부 경로)는 문구만 남긴다', () => {
+    expect(htmlToPlainText('<a href="javascript:alert(1)">클릭</a>')).toBe('클릭')
+    expect(htmlToPlainText('<a href="mailto:a@b.kr">메일</a>')).toBe('메일')
+  })
   it('스크립트 태그 문자열은 글자로만 남지 않고 태그가 제거된다', () => {
     expect(htmlToPlainText('<p>x</p><script>alert(1)</script>')).not.toContain('<')
   })
@@ -29,7 +51,8 @@ describe('blocksToPlainText', () => {
     { type: 'link-entry', url: 'https://x', text: '자세히 보기' },
   ]
   it('글자만 이어 붙이고 이미지·영상·구분선은 제외한다', () => {
-    expect(blocksToPlainText(blocks)).toBe('환불 안내입니다.\n\n문의는 채팅으로 주세요.\n\n자세히 보기')
+    // 링크 블록은 "문구 주소"로 주소까지 남긴다(2026-10-20 — 고객 화면에서 눌러 열 수 있게)
+    expect(blocksToPlainText(blocks)).toBe('환불 안내입니다.\n\n문의는 채팅으로 주세요.\n\n자세히 보기 https://x')
   })
   it('배열이 아니면 빈 문자열', () => {
     expect(blocksToPlainText(null)).toBe('')

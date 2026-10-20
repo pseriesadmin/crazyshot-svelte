@@ -383,7 +383,7 @@
     height: 50px;
   }
   .search-input::placeholder { color: var(--cs-text-placeholder); }
-  .search-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+  .search-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
   .limit-notice {
     margin: 10px 16px 0;
