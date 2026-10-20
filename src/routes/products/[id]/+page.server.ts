@@ -268,10 +268,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	type ReviewItem = { id: string; author_name: string; title: string; content: string; created_at: string; isMine?: boolean };
 	let reviews: ReviewItem[] = [];
 	if (isUuid(String(row.id))) {
-		const { data: reviewData } = await (locals.supabase.rpc as unknown as RpcFn)(
+		const { data: reviewData, error: reviewError } = await (locals.supabase.rpc as unknown as RpcFn)(
 			'get_product_reviews',
 			{ p_product_id: String(row.id) },
 		);
+		if (reviewError) {
+			console.error('[products/[id]] get_product_reviews 실패:', (reviewError as { message?: string }).message);
+		}
 		reviews = (reviewData ?? []) as ReviewItem[];
 		// 본인 후기 표시(삭제 버튼 노출용) — user_id 자체는 클라이언트로 내려보내지 않는다.
 		// get_product_reviews RPC는 user_id를 돌려주지 않으므로, 본인 소유 id만 별도 조회해 대조한다.
