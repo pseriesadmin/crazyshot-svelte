@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { untrack } from 'svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HomeBannerModal from '$lib/components/home/admin/HomeBannerModal.svelte'
   import HomeThemeGroupModal from '$lib/components/home/admin/HomeThemeGroupModal.svelte'
@@ -161,6 +162,53 @@
 
   // 취향직격 테마 원형탭(Mobile) — PC와 동일 구조(activeThemeId 공유)
   let mThemeTabsEl: HTMLDivElement | undefined = $state()
+
+  // 모바일 원형탭 무한 슬라이드(2026-10-20) — 테마 목록을 3벌 이어 붙이고(앞·뒤는 복제), 스크롤이 가운데 벌을
+  // 벗어나면 한 벌 폭만큼 소리 없이 되돌려 시작·끝이 없는 것처럼 보이게 한다. 2개 미만이면 반복하지 않는다.
+  const mLoopTabs = $derived.by(() => {
+    const g = data.themeGroups ?? []
+    if (g.length < 2) return g.map((tg) => ({ tg, key: tg.id, clone: false }))
+    return [0, 1, 2].flatMap((c) => g.map((tg) => ({ tg, key: `${c}-${tg.id}`, clone: c !== 1 })))
+  })
+  let mLoopTimer: ReturnType<typeof setTimeout> | undefined
+  let mTouching = false
+
+  function mNormalizeLoop() {
+    const c = mThemeTabsEl
+    const n = data.themeGroups?.length ?? 0
+    if (!c || n < 2 || mTouching || c.children.length < n * 3) return
+    const cr = c.getBoundingClientRect()
+    const left = (i: number) => c.children[i].getBoundingClientRect().left - cr.left + c.scrollLeft
+    const setW = left(n) - left(0)
+    if (setW <= 0) return
+    const mid = c.scrollLeft + c.clientWidth / 2
+    const shift = Math.floor((mid - left(n)) / setW)
+    if (shift !== 0) c.scrollTo({ left: c.scrollLeft - shift * setW, behavior: 'instant' })
+  }
+  // 스크롤이 멈춘 뒤(손가락을 떼고 150ms)에만 되돌린다 — 스크롤 도중 위치를 바꾸면 모션이 끊긴다
+  function mScheduleNormalize() {
+    clearTimeout(mLoopTimer)
+    mLoopTimer = setTimeout(mNormalizeLoop, 150)
+  }
+
+  // 첫 진입·테마 목록 변경 시 선택된 테마(가운데 벌)를 정중앙에 놓고 시작
+  $effect(() => {
+    const c = mThemeTabsEl
+    const n = data.themeGroups?.length ?? 0
+    if (!c || n < 2) return
+    const recenter = () => untrack(() => {
+      const groups = data.themeGroups ?? []
+      const idx = Math.max(0, groups.findIndex((g) => g.id === (activeThemeId ?? groups[0].id)))
+      const el = c.children[n + idx] as HTMLElement | undefined
+      if (!el) return
+      const cr = c.getBoundingClientRect()
+      const er = el.getBoundingClientRect()
+      c.scrollTo({ left: c.scrollLeft + (er.left + er.width / 2) - (cr.left + cr.width / 2), behavior: 'instant' })
+    })
+    recenter()
+    document.fonts?.ready.then(recenter)
+    return () => clearTimeout(mLoopTimer)
+  })
 
   // 선택한 원형 탭을 스크롤 트랙 중앙으로 부드럽게 이동 — PC·모바일 동일 동작
   // scrollIntoView({inline:'center'})는 브라우저별 편차가 있어(특히 Safari), 컨테이너·타겟의
@@ -586,10 +634,28 @@
     {#if data.themeGroups && data.themeGroups.length > 0}
       <!-- PC와 동일 구조: 원형 탭 선택 시 하나의 상품슬라이드만 전환(그룹마다 반복 아님) -->
       <div class="m-theme-circle-tabs-wrap">
-        <div class="m-theme-circle-tabs" class:m-theme-circle-tabs--capped={data.themeGroups.length > 3} bind:this={mThemeTabsEl}>
-          {#each data.themeGroups as tg}
+        <!-- 터치 중 무한 슬라이드 위치 되돌리기를 보류하기 위한 터치 상태 추적용 — 실제 조작은 내부 button이 담당 -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="m-theme-circle-tabs"
+          class:m-theme-circle-tabs--capped={data.themeGroups.length > 1}
+          bind:this={mThemeTabsEl}
+          onscroll={mScheduleNormalize}
+          ontouchstart={() => { mTouching = true }}
+          ontouchend={() => { mTouching = false; mScheduleNormalize() }}
+          ontouchcancel={() => { mTouching = false; mScheduleNormalize() }}
+        >
+          {#each mLoopTabs as item (item.key)}
+            {@const tg = item.tg}
             {@const isActive = (activeThemeId ?? data.themeGroups[0].id) === tg.id}
-            <button class="theme-circle-tab" onclick={(e) => selectTheme(tg.id, e.currentTarget as HTMLElement)} type="button" aria-pressed={isActive}>
+            <button
+              class="theme-circle-tab"
+              onclick={(e) => selectTheme(tg.id, e.currentTarget as HTMLElement)}
+              type="button"
+              aria-pressed={isActive}
+              aria-hidden={item.clone ? 'true' : undefined}
+              tabindex={item.clone ? -1 : undefined}
+            >
               <div class="theme-hl-card theme-hl-card--m theme-hl-card--circle" class:is-active={isActive}>
                 {#if tg.image_url}
                   <img src={tg.image_url} alt={tg.title} class="theme-hl-card-img"/>
@@ -1245,6 +1311,10 @@
     padding: 0;
     cursor: pointer;
     font: inherit;
+    /* 터치 시 브라우저 기본 하이라이트(iOS 회색 사각형 등)·길게 누르기 메뉴·텍스트 선택 방지 — 브라우저별 편차 제거 */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
   }
   /* ── hl-card(하이라이트 카드) 스타일·인터랙션 그대로 차용 — 원형은 Figma node 2072:5953 기준 180x180 ── */
   /* 카드 자체는 고정 — hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌 효과) */
@@ -1378,24 +1448,18 @@
        늘려 "따라잡으려는" 방식은 패딩을 늘릴수록 필요 패딩도 함께 커지는 자기모순이라
        성립하지 않음(2026-10-01 실측 확인) — 그래서 .m-theme-circle-tabs--capped는 별도
        max-width 없이 이 자연폭 그대로를 사용한다. */
-    padding: 23px 120px;
+    /* 무한 슬라이드(2026-10-20) — 좌우 여백 불필요(앞뒤로 복제 탭이 이어져 항상 가운데 정렬 가능). 세로 23px만 유지 */
+    padding: 23px 0;
     box-sizing: border-box;
+    overscroll-behavior-x: contain;
   }
   .m-theme-circle-tabs::-webkit-scrollbar { display: none; }
-  /* 테마 3개 초과 시 한 화면에 3개만 노출(140px 원형×3 + gap 20px×2) */
-  /* 2026-10-01 Stephen 확정 — 모바일은 PC와 달리 "3개만 노출" 디자인보다 "선택 원형이
-     항상 화면 정중앙으로 이동"을 우선한다(2번 안, 모바일 전용). PC(.theme-circle-tabs--capped)는
-     1번 안(부분 클램핑 허용) 그대로 유지 — 이 결정은 모바일에만 적용된다.
-     ⚠️ max-width로 폭을 인위적으로 제한하지 않는다 — base .m-theme-circle-tabs의 자연폭 +
-     120px 패딩을 그대로 사용(패딩만큼 max-width도 함께 늘리는 방식은 늘릴수록 필요 패딩도
-     커지는 자기모순이라 성립하지 않음이 실측으로 확인됨, 2026-10-01). */
+  /* 테마 2개 이상이면 무한 루프 — 스냅은 가운데 정렬·위치 되돌리기와 충돌하므로 쓰지 않는다 */
   .m-theme-circle-tabs--capped {
-    scroll-snap-type: x proximity;
     /* 좌우 끝을 투명하게 페이드 — PC(.theme-circle-tabs--capped)와 동일 원리, 모바일 규격만 축소 */
     mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
     -webkit-mask-image: linear-gradient(to right, transparent 0, black 24px, black calc(100% - 24px), transparent 100%);
   }
-  .m-theme-circle-tabs--capped .theme-circle-tab { scroll-snap-align: start; }
   .m-theme-img-ph { width: 100%; height: 100%; background: #ebe9f5; }
   /* 상품슬라이드는 "미칠 PICK"과 동일한 표준 m-prod-card를 재사용(.m-snap-slider/.m-prod-card) */
   /* /crazylog(m-carousel) 슬라이드 좌우 구조 반영(2026-09-29) — 전폭 스크롤 + 좌우 25px 패딩 + scroll-padding + snap start
