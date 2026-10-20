@@ -308,10 +308,13 @@
     resizeTextarea()
   }
 
+  /** 관리자 입력창은 Enter로 줄을 바꾸며 3행(22px × 3)까지 세로로 늘어난다(2026-10-20, Stephen 지시) */
+  const ADMIN_INPUT_MAX_HEIGHT = 66
+
   function resizeTextarea() {
     if (!textareaEl) return
     textareaEl.style.height = 'auto'
-    const maxH = 44
+    const maxH = isAdmin ? ADMIN_INPUT_MAX_HEIGHT : 44
     textareaEl.style.height = Math.min(textareaEl.scrollHeight, maxH) + 'px'
   }
 
@@ -387,6 +390,14 @@
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
+      // 관리자 입력창: Enter는 줄바꿈(입력창이 3행까지 늘어남), 전송은 Ctrl/⌘+Enter 또는 전송 버튼. 고객 입력창은 기존대로 Enter 전송.
+      if (isAdmin) {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault()
+          handleSend()
+        }
+        return
+      }
       e.preventDefault()
       handleSend()
     }
@@ -793,13 +804,15 @@
     min-width: 0;
     background: var(--cs-surface-gray);
     border-radius: 25px;
-    height: 67px;
+    /* 1행일 때 67px, 줄이 늘어나면(고객 2행·관리자 3행) pill도 함께 커진다 — 하단 고정 영역이라 위쪽으로 늘어남(2026-10-20, Stephen 지시) */
+    height: auto;
+    min-height: 67px;
     display: flex;
     align-items: center;
     /* 67px 높이의 대형 pill이라 인풋 기본 토큰(중, 16px)보다 한 단계 큰
        카드/패널급 좌우 패딩(--spacing-5, 20px) 적용.
-       상하는 기존 12px의 2배값 토큰(--spacing-6, 24px) 적용 */
-    padding: var(--spacing-6) var(--spacing-5);
+       상하는 22px(1행 22px + 상하 22px = 66px ≈ 최소 67px) */
+    padding: 22px var(--spacing-5);
     gap: 8px;
   }
 
@@ -849,7 +862,9 @@
     border: none;
     padding: 0;
     margin: 0;
-    font: 400 16px/22px 'Noto Sans KR', sans-serif;
+    /* 볼드값이 있는 폰트 토큰(--text-pc-title-16 = 700 16px) — 줄 높이만 22px로 고정(2026-10-20, Stephen 지시) */
+    font: var(--text-pc-title-16);
+    line-height: 22px;
     color: var(--cs-text);
     letter-spacing: -0.2px;
     resize: none;
@@ -859,6 +874,11 @@
     overflow-y: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
+  }
+
+  /* 관리자 입력창: 볼드값이 있는 폰트 토큰(--text-pc-title-16 = 700 16px) — 줄 높이만 입력창 높이(22px)에 맞춘다(2026-10-20, Stephen 지시) */
+  .input-pill--admin .input-field {
+    max-height: 66px; /* 3행까지 늘어난다(고객 입력창은 2행 — 기본 max-height 44px) */
   }
 
   .input-field::-webkit-scrollbar {
