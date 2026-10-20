@@ -164,7 +164,7 @@ export function createCmsChatInbox() {
         const m = e.data
         if (m.t === 'snap') applySnapshot(m.count, m.items)
         else if (m.t === 'new') onNew?.(m.found ?? undefined)
-        else if (m.t === 'hello' && isLeader && loaded) channel?.postMessage({ t: 'snap', count, items } satisfies SyncMessage)
+        else if (m.t === 'hello' && isLeader && loaded) channel?.postMessage({ t: 'snap', count, items: $state.snapshot(items) } satisfies SyncMessage) // 반응형 값은 그대로 보낼 수 없어(복제 오류) 일반 값으로 변환
         else if (m.t === 'refresh' && isLeader) refreshIfStale(m.maxAgeMs)
       }
       cleanups.push(() => { channel?.close(); channel = null })
@@ -190,8 +190,10 @@ export function createCmsChatInbox() {
         // 알림 대상 새 메시지는 지연 없이 갱신(진행 중이면 합침) → 해당 대화 정보를 모든 탭에 알린다
         void refreshNow().then(() => {
           const found = items.find((i) => i.session_id === m.session_id)
-          onNew?.(found)
-          channel?.postMessage({ t: 'new', found: found ?? null } satisfies SyncMessage)
+          // items는 반응형 값이라 BroadcastChannel로 그대로 보내면 DataCloneError — 일반 값으로 변환해 보낸다
+          const plain = found ? $state.snapshot(found) : undefined
+          onNew?.(plain)
+          try { channel?.postMessage({ t: 'new', found: plain ?? null } satisfies SyncMessage) } catch { /* 다른 탭 알림 실패는 이 탭 동작에 영향 없음 */ }
         })
       })
       // 대화 종료만 반영(메시지 도착과 겹치는 갱신 제거). 재개는 새 메시지·주기 갱신·화면 이동으로 따라잡는다.

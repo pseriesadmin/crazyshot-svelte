@@ -6,6 +6,7 @@
   import { goto } from '$app/navigation'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import { formatInboxTime } from '$lib/utils/chatInbox'
+  import { primeChatChime } from '$lib/utils/chatChime'
   import { requestOpenInChatTab, CHAT_WINDOW_NAME } from '$lib/utils/cmsChatTabBridge'
   import type { ChatInboxItem } from '$lib/utils/cmsChatInbox.svelte'
 
@@ -44,6 +45,7 @@
   // 관리자가 아이콘을 선택(열기)하거나 대화가 모두 사라질 때까지 반복한다. 선택해서 확인한 뒤에는 새 대화가 더 늘어날 때만 다시 시작한다.
   let alerting = $state(false)
   let prevCount = 0
+  $effect(() => { primeChatChime() }) // 첫 클릭·키 입력 때 소리 재생 준비(브라우저 자동재생 제한 대응)
   let wasLoaded = false
   $effect(() => {
     const now = count
@@ -53,7 +55,7 @@
       if (loaded && now > 0) alerting = true // 첫 조회 결과에 이미 응대 필요 대화가 있는 경우
       return
     }
-    if (now > prevCount) alerting = true
+    if (now > prevCount) alerting = true // 소리는 새 메시지 수신 시점에 레이아웃에서 재생한다(개수가 그대로여도 울리도록)
     if (now === 0) alerting = false
     prevCount = now
   })

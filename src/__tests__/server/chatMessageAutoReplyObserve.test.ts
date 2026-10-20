@@ -63,6 +63,8 @@ interface Opts {
   /** 세션의 마지막 비고객 메시지(대기 안내 반복 억제 판정용) */
   lastReply?: { sender_type: string; content: string; created_at: string } | null
   observationInsertError?: { message: string; code: string }
+  /** 세션에 배정된 관리자(admin_id) — 있고 마지막 관리자 답변이 30분 안이면 응대 중으로 본다 */
+  adminId?: string | null
 }
 
 let mockAdmin: { from: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> }
@@ -98,7 +100,7 @@ function setup(o: Opts) {
   mockDb = {
     from: vi.fn((table: string) => {
       if (table === 'chat_sessions') {
-        return makeChain(table, { data: { user_id: USER_ID, status: 'open', context_type: 'general', context_id: null, manual_mode: false, admin_id: null } })
+        return makeChain(table, { data: { user_id: USER_ID, status: 'open', context_type: 'general', context_id: null, manual_mode: false, admin_id: o.adminId ?? null } })
       }
       // INSERT(.single)는 사용자 메시지 행, 대화 이력 조회(.then)는 빈 배열
       if (table === 'chat_messages') return makeChain(table, { data: { id: 'user-msg-id', session_id: SESSION_ID } }, { data: [] })
@@ -183,26 +185,42 @@ describe('켜짐(enabled=true)', () => {
   })
 })
 
-describe('대기 안내 반복 억제(5분)', () => {
+describe('대기 안내 반복(억제 폐지) + 완화(관리자 응대 중 생략·푸시 60초 쿨다운)', () => {
   beforeEach(() => vi.clearAllMocks())
+  const agoIso = (sec: number) => new Date(Date.now() - sec * 1000).toISOString()
 
-  it('마지막 답변이 5분 안의 대기 안내라면 다시 보내지 않는다(응답 ai_message=null, 고객 푸시 없음)', async () => {
-    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'ai', content: WAIT_REPLY, created_at: new Date().toISOString() } })
+  it('직전 대기 안내가 방금이어도 채팅에는 다시 남기고, 고객 푸시만 생략한다(쿨다운 60초)', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'ai', content: WAIT_REPLY, created_at: agoIso(5) } })
     const res = await run()
     expect(res.status).toBe(201)
-    expect(res.data.ai_message).toBeNull()
-    expect(insertsOf('chat_messages').some((r) => r.sender_type === 'ai')).toBe(false)
+    expect(res.data.ai_message).not.toBeNull()
+    expect(insertsOf('chat_messages').find((r) => r.sender_type === 'ai')?.content).toBe(WAIT_REPLY)
     expect(mockSendPushToUser).not.toHaveBeenCalled()
-    // 인텐트 로그(긴급 배지 근거)와 관리자 긴급 푸시는 유지된다
+    // 인텐트 로그(긴급 배지 근거)와 관리자 긴급 푸시는 매번 남는다
     expect(insertsOf('chat_intent_logs')).toHaveLength(1)
     expect(mockUrgentPush).toHaveBeenCalledTimes(1)
   })
 
-  it('그 사이 빠른답변·관리자 답변이 나갔다면 새 질문에는 안내를 다시 보낸다(2026-10-10 사고 재현)', async () => {
-    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'admin', content: '📌 예약 취소·환불 안내', created_at: new Date().toISOString() } })
+  it('직전 대기 안내가 60초보다 오래됐다면 고객 푸시도 보낸다', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'ai', content: WAIT_REPLY, created_at: agoIso(120) } })
+    const res = await run()
+    expect(res.data.ai_message).not.toBeNull()
+    expect(mockSendPushToUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('연속으로 두 번 보내면 대기 안내가 두 번 모두 저장된다', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'ai', content: WAIT_REPLY, created_at: agoIso(5) } })
+    await run()
+    await run()
+    expect(insertsOf('chat_messages').filter((r) => r.sender_type === 'ai')).toHaveLength(2)
+  })
+
+  it('그 사이 빠른답변·관리자 답변이 나갔다면 새 질문에는 안내와 푸시를 다시 보낸다(2026-10-10 사고 재현)', async () => {
+    setup({ enabled: true, observe: false, answer: null, lastReply: { sender_type: 'admin', content: '📌 예약 취소·환불 안내', created_at: agoIso(5) } })
     const res = await run()
     expect(res.data.ai_message).not.toBeNull()
     expect(insertsOf('chat_messages').find((r) => r.sender_type === 'ai')?.content).toBe(WAIT_REPLY)
+    expect(mockSendPushToUser).toHaveBeenCalledTimes(1)
   })
 
   it('최근 안내가 없으면 보낸다(응답에 ai_message 포함, 고객 푸시 발송)', async () => {
@@ -211,9 +229,26 @@ describe('대기 안내 반복 억제(5분)', () => {
     expect(res.data.ai_message).not.toBeNull()
     expect(mockSendPushToUser).toHaveBeenCalledTimes(1)
   })
+
+  it('관리자가 응대 중인 세션(관리자 배정 + 마지막 관리자 답변 10분 이내)에는 대기 안내를 보내지 않는다 — 인텐트 로그는 남는다', async () => {
+    setup({ enabled: true, observe: false, answer: null, adminId: 'admin-1', lastReply: { sender_type: 'admin', content: '확인해 보겠습니다', created_at: agoIso(60) } })
+    const res = await run()
+    expect(res.status).toBe(201)
+    expect(res.data.ai_message).toBeNull()
+    expect(insertsOf('chat_messages').some((r) => r.sender_type === 'ai')).toBe(false)
+    expect(mockSendPushToUser).not.toHaveBeenCalled()
+    expect(insertsOf('chat_intent_logs')).toHaveLength(1)
+  })
+
+  it('관리자가 배정됐어도 마지막 관리자 답변이 10분을 넘었다면 대기 안내를 다시 보낸다', async () => {
+    setup({ enabled: true, observe: false, answer: null, adminId: 'admin-1', lastReply: { sender_type: 'admin', content: '확인해 보겠습니다', created_at: agoIso(11 * 60) } })
+    const res = await run()
+    expect(res.data.ai_message).not.toBeNull()
+    expect(insertsOf('chat_messages').find((r) => r.sender_type === 'ai')?.content).toBe(WAIT_REPLY)
+  })
 })
 
-describe('대기 안내 중복 조회 실패(fail-soft)', () => {
+describe('대기 안내 판정 조회 실패(fail-soft)', () => {
   beforeEach(() => vi.clearAllMocks())
   it('조회가 예외를 던져도 억제하지 않고 안내를 보낸다(응답 201)', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})

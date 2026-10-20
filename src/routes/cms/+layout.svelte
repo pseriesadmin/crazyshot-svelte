@@ -10,6 +10,7 @@
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import CmsChatFab from '$lib/components/cms/CmsChatFab.svelte'
   import { createCmsChatInbox } from '$lib/utils/cmsChatInbox.svelte'
+  import { playChatChime } from '$lib/utils/chatChime'
   import { withTitleBadge } from '$lib/utils/chatInbox'
   import type { LayoutData } from './$types'
 
@@ -81,6 +82,7 @@
   $effect(() => {
     if (!data.cmsRole || !canReceiveChatToast) return
     return chatInbox.start((found) => {
+      playChatChime() // 한 고객에게서 이어서 오는 메시지를 포함해 새 대화가 올 때마다 수신벨(개수 변화와 무관, 짧은 간격 중복만 내부에서 걸러짐)
       if (page.url.pathname.startsWith('/cms/chat')) return
       const text = found
         ? `${found.name} · ${found.label ?? found.preview}`

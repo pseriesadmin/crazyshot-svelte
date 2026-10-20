@@ -20,6 +20,7 @@ export function evaluateAdminEngaged(
   adminId: string | null | undefined,
   lastAdminMessageAt: string | null | undefined,
   now: Date = new Date(),
+  windowMinutes: number = ADMIN_ENGAGED_WINDOW_MINUTES,
 ): boolean {
   if (!adminId) return false
   if (!lastAdminMessageAt) return false
@@ -27,7 +28,7 @@ export function evaluateAdminEngaged(
   if (Number.isNaN(t)) return true
   const ageMs = now.getTime() - t
   if (ageMs < 0) return true
-  return ageMs < ADMIN_ENGAGED_WINDOW_MINUTES * 60_000
+  return ageMs < windowMinutes * 60_000
 }
 
 /** 세션의 마지막 관리자 답변을 조회해 응대 중 여부를 돌려준다. 실패해도 던지지 않고 true(끼어들지 않음)로 돌려준다. */
@@ -36,6 +37,7 @@ export async function isAdminEngaged(
   sessionId: string,
   adminId: string | null | undefined,
   now: Date = new Date(),
+  windowMinutes: number = ADMIN_ENGAGED_WINDOW_MINUTES,
 ): Promise<boolean> {
   if (!adminId) return false
   try {
@@ -51,7 +53,7 @@ export async function isAdminEngaged(
       console.error('[crazychat] 관리자 응대 여부 조회 실패(응대 중으로 간주):', error.message)
       return true
     }
-    return evaluateAdminEngaged(adminId, (data as { created_at?: string } | null)?.created_at ?? null, now)
+    return evaluateAdminEngaged(adminId, (data as { created_at?: string } | null)?.created_at ?? null, now, windowMinutes)
   } catch (e) {
     console.error('[crazychat] 관리자 응대 여부 조회 예외(응대 중으로 간주):', e instanceof Error ? e.message : String(e))
     return true
