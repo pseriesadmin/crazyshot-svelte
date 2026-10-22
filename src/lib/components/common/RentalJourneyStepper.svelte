@@ -272,7 +272,7 @@
     overflow-x: auto; overflow-y: hidden; padding: 12px; margin: -12px;
     justify-content: safe center;
   }
-  .journey-stepper.slim.fluid .step-connector-icon { width: 16px; height: 10px; }
+  .journey-stepper.slim.fluid .step-connector-icon, .journey-stepper.slim.fluid .wave-arrow { width: 16px; height: 10px; }
   /* 넘칠 때만 좌우 끝 흐림(밀어서 더 볼 수 있다는 단서) — 슬림형의 mask 해제 규칙보다 우선하도록 클래스 4개 */
   /* 상품명 ↔ 원형 배지 줄 사이 여백(8px → 12px → 20px, 2026-10-22 추가 확대) — 고객 화면(fluid)만, CMS 헤더 불변 */
   .journey-stepper.slim.fluid .stepper-product-name { margin-bottom: 20px; }
@@ -283,7 +283,7 @@
   /* PC 반응형(≥768px)에서는 배지 사이 여백을 넓힌다 — 컨테이너 폭에 비례(7.5%, 18~40px), 배지는 남은 폭에 맞춰 34~46px */
   @media (min-width: 768px) {
     .journey-stepper.slim.fluid .stepper-scroll { --circle: clamp(34px, calc((100cqw - (var(--n) - 1) * var(--conn)) / var(--n)), 46px); --conn: clamp(18px, 7.5cqw, 40px); }
-    .journey-stepper.slim.fluid .step-connector-icon { width: 14px; height: 9px; }
+    .journey-stepper.slim.fluid .step-connector-icon, .journey-stepper.slim.fluid .wave-arrow { width: 14px; height: 9px; }
   }
 
   /* 현재 단계 화살표 물결 — 마스크(화살표 모양) 안의 줄무늬를 translateX 로만 이동(합성기 처리) */
@@ -356,11 +356,11 @@
     inset: 0;
     border-radius: 50%;
     box-shadow: 0 0 0 5px rgba(59,47,138,0.14);
-    animation: step-glow 3s ease-in-out 0.8s infinite;
+    animation: step-glow 3s ease-in-out 0.8s infinite backwards;
     will-change: transform, opacity;
     pointer-events: none;
   }
-  .step-item.active.last .step-circle::after { animation: step-glow 2.2s ease-in-out 0.2s 2, step-arc-out 0.4s ease 4.6s forwards; }
+  .step-item.active.last .step-circle::after { animation: step-glow 2.2s ease-in-out 0.2s 2 backwards, step-arc-out 0.4s ease 4.6s forwards; }
 
   /* 패널을 열 때 단계가 아래에서 위로 올라오며 왼쪽부터 차례로 나타남(1회, 스프링 곡선) */
   @keyframes step-in {
@@ -391,7 +391,7 @@
   @media (prefers-reduced-motion: reduce) {
     .step-item, .step-connector { animation: none; }
     .journey-stepper.slim .step-item, .journey-stepper.slim .step-connector, .step-item.active .step-circle, .step-item.active .step-circle::before { animation: none; }
-    .step-item.active.last .step-circle { background: var(--cs-purple); color: var(--cs-white); } /* 동작 줄이기: 마지막 단계는 모션 없이 바로 활성 배경 */
+    .step-item.active.last .step-circle { animation: none; background: var(--cs-purple); color: var(--cs-white); } /* 동작 줄이기: 마지막 단계는 모션 없이 바로 활성 배경 */
     .step-item.active .step-circle::before, .step-item.active .step-circle::after { display: none; }
     .wave-strip { animation: none; transform: translateX(-25%); }
   }
