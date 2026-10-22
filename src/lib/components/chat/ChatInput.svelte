@@ -392,7 +392,7 @@
     if (e.key === 'Enter' && !e.shiftKey) {
       // 관리자 입력창: Enter는 줄바꿈(입력창이 3행까지 늘어남), 전송은 Ctrl/⌘+Enter 또는 전송 버튼. 고객 입력창은 기존대로 Enter 전송.
       if (isAdmin) {
-        if (e.ctrlKey || e.metaKey) {
+        if ((e.ctrlKey || e.metaKey) && !e.isComposing) { // 한글 조합 중에는 전송하지 않는다(마지막 글자 유실 방지)
           e.preventDefault()
           handleSend()
         }

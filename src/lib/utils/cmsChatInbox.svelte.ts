@@ -27,6 +27,11 @@ export interface ChatInboxItem {
 const DISMISS_KEY = 'cms-chat-inbox-dismissed'
 const DISMISS_MAX = 100
 const LAZY_DEBOUNCE_MS = 250
+/** 고객 메시지가 오면 정상 매칭 자동답변이 저장될 때까지 기다리는 시간(ms) — 이 시간 뒤에도 사람의 답이 필요한 메시지에만 숫자·소리·토스트를 낸다(2026-10-20) */
+export const AUTO_REPLY_SETTLE_MS = 1500
+/** 대기 뒤 목록 조회가 실패했을 때 다시 시도하는 간격(ms)·횟수 — 조회 실패로 소리·토스트가 조용히 빠지지 않게 한다 */
+const SETTLE_RETRY_MS = 1000
+const SETTLE_MAX_ATTEMPTS = 3
 export const INBOX_POLL_VISIBLE_MS = 30_000
 export const INBOX_POLL_HIDDEN_MS = 120_000
 export const INBOX_STALE_MS = 10_000
@@ -39,6 +44,7 @@ type SyncMessage =
   | { t: 'hello' }
   | { t: 'refresh'; maxAgeMs: number }
   | { t: 'new'; found: ChatInboxItem | null }
+  | { t: 'chime' }
 
 function readDismissed(): string[] {
   try {
@@ -75,6 +81,7 @@ export function createCmsChatInbox() {
   let isLeader = false
   let channel: BroadcastChannel | null = null
   let onNew: ((found: ChatInboxItem | undefined) => void) | undefined
+  let onChime: (() => void) | undefined
   let lastFetchStart = 0
   let inFlight: Promise<void> | null = null
   let pendingAgain = false
@@ -86,12 +93,16 @@ export function createCmsChatInbox() {
     loaded = true
   }
 
+  let lastFetchOk = true
+
   async function fetchOnce(): Promise<void> {
+    lastFetchOk = false
     try {
       const dismissed = readDismissed()
       const qs = dismissed.length > 0 ? `?exclude=${encodeURIComponent(dismissed.join(','))}` : ''
       const res = await fetch(`/api/cms/chat/inbox${qs}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }) // 응답이 멈춰도 합치기 상태(inFlight)가 영구히 걸리지 않게 제한
       if (!res.ok) return
+      lastFetchOk = true
       const body = (await res.json()) as { count?: number; items?: ChatInboxItem[] }
       const c = typeof body.count === 'number' ? body.count : 0
       const its = Array.isArray(body.items) ? body.items : []
@@ -147,11 +158,13 @@ export function createCmsChatInbox() {
   }
 
   /**
-   * 시작. onNewMessage는 "관리자가 알아야 할 새 메시지"가 도착해 목록이 갱신된 뒤(모든 탭에서) 호출된다.
+   * 시작. onNewMessage는 "관리자가 알아야 할 새 메시지"가 도착해 목록이 갱신된 뒤(모든 탭에서) 호출된다(숫자·토스트 — 자동답변으로 해결된 건은 제외).
+   * onChime은 고객 메시지·고객 행동 카드가 도착하는 즉시(자동답변 여부와 무관하게, 모든 탭에서) 호출된다(소리 전용, 2026-10-23 Stephen 지시).
    * 반환 함수로 정리한다.
    */
-  function start(onNewMessage?: (found: ChatInboxItem | undefined) => void): () => void {
+  function start(onNewMessage?: (found: ChatInboxItem | undefined) => void, onChimeMessage?: () => void): () => void {
     onNew = onNewMessage
+    onChime = onChimeMessage
     const cleanups: Array<() => void> = []
     let stopped = false
 
@@ -164,6 +177,7 @@ export function createCmsChatInbox() {
         const m = e.data
         if (m.t === 'snap') applySnapshot(m.count, m.items)
         else if (m.t === 'new') onNew?.(m.found ?? undefined)
+        else if (m.t === 'chime') onChime?.()
         else if (m.t === 'hello' && isLeader && loaded) channel?.postMessage({ t: 'snap', count, items: $state.snapshot(items) } satisfies SyncMessage) // 반응형 값은 그대로 보낼 수 없어(복제 오류) 일반 값으로 변환
         else if (m.t === 'refresh' && isLeader) refreshIfStale(m.maxAgeMs)
       }
@@ -182,18 +196,67 @@ export function createCmsChatInbox() {
     // ── 대표 탭 전용 작업: 실시간 구독 + 주기 갱신 ──
     function becomeLeader(): () => void {
       isLeader = true
+      // 고객 메시지는 정상 매칭 자동답변(빠른답변·AI)이 곧바로 저장될 수 있어, 잠시(AUTO_REPLY_SETTLE_MS) 기다렸다가 목록을 새로 받은 뒤
+      // "아직 사람의 답이 필요한 메시지"로 남은 것만 알린다(숫자·소리·토스트). 기본 자동응답(대기 안내)만 나간 문의는 그대로 남아 알린다.
+      const pending = new Map<string, string>() // message_id → session_id
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      let stopped = false
+      const announce = (found: ChatInboxItem | undefined) => {
+        // items는 반응형 값이라 BroadcastChannel로 그대로 보내면 DataCloneError — 일반 값으로 변환해 보낸다
+        const plain = found ? $state.snapshot(found) : undefined
+        onNew?.(plain)
+        try { channel?.postMessage({ t: 'new', found: plain ?? null } satisfies SyncMessage) } catch { /* 다른 탭 알림 실패는 이 탭 동작에 영향 없음 */ }
+      }
+      // 소리는 자동답변 여부와 무관하게 메시지가 오는 즉시 낸다(숫자·토스트만 settle 뒤 사람 답이 필요한 건으로 제한)
+      const chime = () => {
+        onChime?.()
+        try { channel?.postMessage({ t: 'chime' } satisfies SyncMessage) } catch { /* 다른 탭 소리 실패는 이 탭 동작에 영향 없음 */ }
+      }
+      const settle = () => {
+        settleTimer = null
+        const batch = [...pending]
+        pending.clear()
+        void (async () => {
+          // 조회가 실패하면 잠시 뒤 다시 시도한다(최대 SETTLE_MAX_ATTEMPTS회). 종료된 뒤에는 알리지 않는다.
+          for (let attempt = 0; attempt < SETTLE_MAX_ATTEMPTS; attempt++) {
+            await refreshNow()
+            if (stopped) return
+            if (lastFetchOk) break
+            await new Promise<void>((resolve) => setTimeout(resolve, SETTLE_RETRY_MS))
+            if (stopped) return
+          }
+          if (!lastFetchOk) {
+            // 끝내 확인하지 못했다면 알림 누락보다 중복 알림이 낫다 — 일반 알림 1건
+            if (batch.length > 0) announce(undefined)
+            return
+          }
+          for (const [messageId, sessionId] of batch) {
+            const found = items.find((i) => i.session_id === sessionId && i.message_id === messageId)
+            if (!found) continue // 자동답변으로 해결됐거나 더 최근 메시지가 대신 알려졌다
+            announce(found)
+          }
+        })()
+      }
       const unsubMessages = subscribeToAllMessages((m) => {
         if (!isInboxRelevantMessage(m)) {
           scheduleRefresh() // 관리자 답장·자동응답 등 — 목록에서 빠지는 변화
           return
         }
-        // 알림 대상 새 메시지는 지연 없이 갱신(진행 중이면 합침) → 해당 대화 정보를 모든 탭에 알린다
+        if (m.sender_type === 'user') {
+          chime()
+          pending.set(m.id, m.session_id)
+          if (!settleTimer) settleTimer = setTimeout(settle, AUTO_REPLY_SETTLE_MS)
+          return
+        }
+        if (isWaitNoticeMessage(m)) {
+          scheduleRefresh() // 대기 안내는 고객 메시지로 이미 알렸으므로 목록만 맞춘다
+          return
+        }
+        // 고객 행동 이벤트 카드(전자계약 서명 완료 등)는 자동답변 대상이 아니라 지연 없이 소리·갱신·알림
+        chime()
         void refreshNow().then(() => {
-          const found = items.find((i) => i.session_id === m.session_id)
-          // items는 반응형 값이라 BroadcastChannel로 그대로 보내면 DataCloneError — 일반 값으로 변환해 보낸다
-          const plain = found ? $state.snapshot(found) : undefined
-          onNew?.(plain)
-          try { channel?.postMessage({ t: 'new', found: plain ?? null } satisfies SyncMessage) } catch { /* 다른 탭 알림 실패는 이 탭 동작에 영향 없음 */ }
+          if (stopped) return
+          announce(items.find((i) => i.session_id === m.session_id))
         })
       })
       // 대화 종료만 반영(메시지 도착과 겹치는 갱신 제거). 재개는 새 메시지·주기 갱신·화면 이동으로 따라잡는다.
@@ -209,6 +272,8 @@ export function createCmsChatInbox() {
 
       return () => {
         isLeader = false
+        stopped = true
+        if (settleTimer) clearTimeout(settleTimer)
         unsubMessages()
         unsubSessions()
         if (pollTimer) clearTimeout(pollTimer)

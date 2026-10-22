@@ -13,7 +13,7 @@ vi.mock('$lib/services/chatService', () => ({
   subscribeToSessions: (h: (s: unknown) => void) => { hoisted.sessHandlers.push(h); return hoisted.unsubSess },
 }))
 
-import { createCmsChatInbox, INBOX_POLL_VISIBLE_MS } from '$lib/utils/cmsChatInbox.svelte'
+import { createCmsChatInbox, INBOX_POLL_VISIBLE_MS, AUTO_REPLY_SETTLE_MS } from '$lib/utils/cmsChatInbox.svelte'
 
 type Cb = () => Promise<void> | void
 /** 단일 프로세스용 간이 Web Locks — 배타 잠금 + 대기열 + abort */
@@ -69,7 +69,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
-const userMsg = { id: 'a', session_id: 's1', sender_type: 'user', message_type: 'text', content: '문의', admin_only: false }
+const userMsg = { id: 'm1', session_id: 's1', sender_type: 'user', message_type: 'text', content: '문의', admin_only: false }
 
 describe('탭 대표 선출', () => {
   it('두 탭 중 대표 1곳만 조회·구독하고, 다른 탭도 같은 결과를 받는다', async () => {
@@ -115,10 +115,143 @@ describe('탭 대표 선출', () => {
     const stopA = a.start(onA); const stopB = b.start(onB)
     await flush(50)
     hoisted.msgHandlers[0](userMsg)
-    await flush(50)
+    await flush(AUTO_REPLY_SETTLE_MS + 50)
     expect(onA).toHaveBeenCalledTimes(1)
     expect(onB).toHaveBeenCalledTimes(1)
     stopA(); stopB()
+  })
+})
+
+describe('정상 매칭 자동답변 대기(AUTO_REPLY_SETTLE_MS)', () => {
+  it('대기 시간 안에는 알리지 않고, 지난 뒤 아직 사람의 답이 필요한 메시지만 알린다', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    fetchCalls = 0
+    hoisted.msgHandlers[0](userMsg)
+    await flush(AUTO_REPLY_SETTLE_MS - 200)
+    expect(on).not.toHaveBeenCalled()
+    expect(fetchCalls).toBe(0) // 숫자도 대기 시간 뒤에 갱신
+    await flush(400)
+    expect(on).toHaveBeenCalledTimes(1)
+    expect(fetchCalls).toBe(1)
+    stop()
+  })
+
+  it('자동답변으로 해결돼 목록에 남지 않은 메시지는 알리지 않는다(소리·토스트 없음)', async () => {
+    setupEnv(true)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ count: 0, items: [] }) })))
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    hoisted.msgHandlers[0](userMsg)
+    await flush(AUTO_REPLY_SETTLE_MS + 100)
+    expect(on).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('소리는 자동답변으로 해결되는 건도 메시지가 오는 즉시 낸다(숫자·토스트와 별개, 2026-10-23)', async () => {
+    setupEnv(true)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ count: 0, items: [] }) })))
+    const a = createCmsChatInbox()
+    const on = vi.fn(); const chime = vi.fn()
+    const stop = a.start(on, chime)
+    await flush(50)
+    hoisted.msgHandlers[0](userMsg)
+    await flush(0)
+    expect(chime).toHaveBeenCalledTimes(1) // 대기 시간 전에 즉시
+    await flush(AUTO_REPLY_SETTLE_MS + 100)
+    expect(on).not.toHaveBeenCalled() // 토스트·숫자 알림은 자동답변으로 해결돼 없음
+    expect(chime).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('다른 탭에도 소리 신호가 전달된다', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox(); const b = createCmsChatInbox()
+    const chimeA = vi.fn(); const chimeB = vi.fn()
+    const stopA = a.start(undefined, chimeA); const stopB = b.start(undefined, chimeB)
+    await flush(50)
+    hoisted.msgHandlers[0](userMsg)
+    await flush(AUTO_REPLY_SETTLE_MS + 50)
+    expect(chimeA).toHaveBeenCalledTimes(1)
+    expect(chimeB).toHaveBeenCalledTimes(1)
+    stopA(); stopB()
+  })
+
+  it('기본 자동응답(대기 안내)만 나간 문의는 남아 있으므로 알린다', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    hoisted.msgHandlers[0](userMsg)
+    hoisted.msgHandlers[0]({ id: 'w1', session_id: 's1', sender_type: 'ai', message_type: 'text', content: '정확한 답변을 위해 담당자가 확인 후 안내드릴게요. 잠시만', admin_only: false })
+    await flush(AUTO_REPLY_SETTLE_MS + 100)
+    expect(on).toHaveBeenCalledTimes(1) // 대기 안내가 별도로 한 번 더 알리지 않는다
+    stop()
+  })
+
+  it('대기 뒤 조회가 한 번 실패해도 다시 시도해서 알린다(소리·토스트 누락 방지)', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls++
+      if (calls === 1) throw new Error('network down')
+      return { ok: true, json: async () => ({ count: 1, items: [{ session_id: 's1', message_id: 'm1', user_id: 'u', kind: 'reply', label: null, preview: 'x', created_at: '', name: '홍', handle: '', urgent: false }] }) }
+    }))
+    hoisted.msgHandlers[0](userMsg)
+    await flush(AUTO_REPLY_SETTLE_MS + 1100)
+    expect(calls).toBe(2)
+    expect(on).toHaveBeenCalledTimes(1)
+    expect(on.mock.calls[0][0]).toMatchObject({ session_id: 's1', message_id: 'm1' })
+    stop()
+  })
+
+  it('조회가 계속 실패하면 일반 알림 1건을 보낸다(알림 누락보다 중복이 낫다)', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down') }))
+    hoisted.msgHandlers[0](userMsg)
+    await flush(AUTO_REPLY_SETTLE_MS + 3500)
+    expect(on).toHaveBeenCalledTimes(1)
+    expect(on.mock.calls[0][0]).toBeUndefined()
+    stop()
+  })
+
+  it('같은 세션에서 연속으로 온 메시지는 마지막 메시지 기준으로 한 번만 알린다', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    hoisted.msgHandlers[0]({ ...userMsg, id: 'm0' })
+    hoisted.msgHandlers[0](userMsg) // 마지막 = m1 (서버 목록의 message_id)
+    await flush(AUTO_REPLY_SETTLE_MS + 100)
+    expect(on).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('종료하면 대기 중인 타이머를 정리한다(종료 뒤 알림 없음)', async () => {
+    setupEnv(true)
+    const a = createCmsChatInbox()
+    const on = vi.fn()
+    const stop = a.start(on)
+    await flush(50)
+    hoisted.msgHandlers[0](userMsg)
+    stop()
+    await flush(AUTO_REPLY_SETTLE_MS + 100)
+    expect(on).not.toHaveBeenCalled()
   })
 })
 
@@ -130,7 +263,7 @@ describe('갱신 합치기·완화', () => {
     await flush(50)
     fetchCalls = 0
     for (let i = 0; i < 6; i++) hoisted.msgHandlers[0]({ ...userMsg, id: `m${i}` })
-    await flush(50)
+    await flush(AUTO_REPLY_SETTLE_MS + 50)
     expect(fetchCalls).toBeLessThanOrEqual(2)
     stop()
   })
