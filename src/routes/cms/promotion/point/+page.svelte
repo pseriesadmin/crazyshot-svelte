@@ -89,6 +89,7 @@
   let useMin     = $state('0')
   let useUnit    = $state('1')
   let useRatio   = $state('100')
+  let useExpiry  = $state('0')
   let useSaving  = $state(false)
 
   $effect(() => {
@@ -98,6 +99,7 @@
     useMin     = String(r.min_use_points)
     useUnit    = String(r.use_unit)
     useRatio   = String(r.max_use_ratio)
+    useExpiry  = String(r.expiry_days ?? 0)
   })
 
   const useDirty = $derived(
@@ -105,7 +107,8 @@
       useEnabled !== data.pointUseSettings.use_enabled ||
       Number(useMin)   !== data.pointUseSettings.min_use_points ||
       Number(useUnit)  !== data.pointUseSettings.use_unit ||
-      Number(useRatio) !== data.pointUseSettings.max_use_ratio
+      Number(useRatio) !== data.pointUseSettings.max_use_ratio ||
+      Number(useExpiry) !== (data.pointUseSettings.expiry_days ?? 0)
     )
   )
 
@@ -511,6 +514,17 @@
           </div>
           <input type="number" name="max_use_ratio" min="0" max="100" step="1" class="f-input inline" bind:value={useRatio} />
         </div>
+        <div class="use-rule-row">
+          <div>
+            <span class="rule-label">자동 소멸 기한</span>
+            <span class="rule-desc">적립일로부터 이 일수가 지나면 적립 포인트가 자동 소멸합니다(적립일 다음 날부터 N일째 되는 날 23:59:59까지 사용 가능, 예: 10/22 적립·30일 → 11/21). 0이면 소멸 없음. 저장 이후 새로 적립되는 포인트부터 적용되며 기존 적립분·관리자 직접 지급분은 그대로입니다.</span>
+          </div>
+          <span class="expiry-field">
+            <span class="expiry-prefix">적립일로부터</span>
+            <input type="number" name="expiry_days" min="0" max="3650" step="1" class="f-input inline" bind:value={useExpiry} />
+            <span class="expiry-suffix">일</span>
+          </span>
+        </div>
       </div>
     </form>
     <p class="rule-desc use-rules-note">저장하면 즉시 적용됩니다. 이미 결제 대기 중인 주문은 다음 금액 갱신 시 새 규칙으로 보정되며, 포인트가 이미 차감된 주문은 변경되지 않습니다.</p>
@@ -718,5 +732,7 @@ td { padding: 10px 16px; vertical-align: middle; }
   border-bottom: 1px solid var(--cs-lilac);
 }
 .use-rule-row:last-child { border-bottom: none; }
+.expiry-field { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.expiry-prefix, .expiry-suffix { font: var(--text-pc-script-12); color: var(--cs-text-mid); white-space: nowrap; }
 .use-rules-note { margin-top: 12px; }
 </style>

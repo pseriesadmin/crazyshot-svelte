@@ -21,6 +21,7 @@
 - [ ] 번호 충돌 정리 결정(다른 세션 739/740과 중복) · Stage 시험 데이터 정리: 시험 예약 `CSTEST-RETURN-01~07`·시험 계정 적립 포인트·'반납등록 미션' 규칙 500p 켜짐 → 0원·꺼짐으로 복구 필요
 - [x] (sp3 MAJOR 반영, 2026-10-22) 서버도 사진 항목마다 1장 이상 필수로 집행(`returnSubmission.ts`, 테스트 15건 GREEN)
 - [x] (sp3 MAJOR-1 반영) 중복 지급 방지 Migration #741 `20261022075000_741_return_mission_dedupe.sql` — 예약 단위 advisory 잠금 + 부분 유일 인덱스. Stage만 적용·권한 확인(anon/authenticated false), 라이브 테스트 11건 GREEN(동시 호출 3회→적립 1회). Production 미적용
+- [x] **Production DB #739·#740·#741 적용 완료(2026-10-23, Stephen 승인)** — 코드(PR #580)가 DB보다 먼저 배포된 상태여서 적용 즉시 복구. 확인: 칼럼 2·체크 2·유일 인덱스·잠금 포함 함수, 권한(anon·authenticated false, service_role true), '반납등록 미션' 규칙 행 0원·꺼짐(Production은 미션 포인트 지급 꺼진 상태 — CMS에서 금액 설정·켜기 필요)
 - [ ] 포인트 만료일(expires_at) 정책은 이번 세션에서 관여하지 않음(Stephen 지시)
 - [x] sp3 재검수 통과(2026-10-22, BLOCKER 0·MAJOR 0) · sp5 A-Lite 조건부 통과(MEDIUM 3: 쓰레기 파일 지급·업로드 서명 남발·동시 첫 제출 덮어쓰기)
 - [x] 포인트 지급 시점을 제출 즉시 → **관리자 검수 승인 후**로 변경(Stephen 확정): `inspection.ts` approveInspection → `awardReturnMissionForApproved`(고객이 등록한 예약만·승인(pass)만, 예약당 1회). 제출 API는 지급하지 않음. 완료 화면 문구 '검수가 끝나면 N 포인트를 적립해 드려요'로 변경. sp3 경미 A(시험 eslint)·B(as unknown as 제거)·D(RPC 오류 로그) 반영, 라이브 시험 14건·단위 15건 GREEN
@@ -428,6 +429,8 @@
 - [x] sp3 2차 재검수(#743): 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 3: 경계 테스트 보강 권고·과거 이중 소멸 이력 점검·크론 동시 실행 잠금 이월). Production 읽기 전용 확인(2026-10-22): expire_due_points 정의 해시가 Stage 수정 전과 동일(=#540), anon/authenticated 실행 불가·service_role만, expire 거래 0건·만료일 있는 적립 0건(과거 이중 소멸 흔적 없음), point_use_settings.expiry_days 컬럼 아직 없음(#742 미적용).
 - [x] Stephen 승인(2026-10-22): sp3 MINOR 3건 이월 승인(경계 테스트 보강 · 과거 이중 소멸 이력 점검 · 크론 동시 실행 잠금) — 이번 범위에서는 구현하지 않고 이월 부채로 둔다.
 - [x] 설정 직후 전역 반영 확인(Stage, 롤백 DO 블록): 설정 30일 상태에서 실제 함수 호출 결과 반납등록 미션·생일 적립 모두 expires_at = 2026-11-21 23:59:59 KST 부여. 정시반납·렌탈완료(본 적립)·리뷰는 Stage 데이터가 조건 미충족(late_return/no_rental_fee)이라 직접 호출은 못 했으나 라이브 함수 정의에서 point_transactions INSERT 컬럼에 expires_at이 없음을 확인(→ 트리거 대상), 구독 적립(sub_bonus)만 자기 expires_at 지정. 설정은 DB 테이블을 매 적립마다 즉시 읽어 별도 캐시·재시작 없이 저장 직후 반영. 테스트 DB 원복 확인(expiry_days 0).
+- [x] 소급 미적용 확인(2026-10-23, Stephen 지시): 트리거는 INSERT 전용·설정 테이블 트리거 없음·point_transactions 만료일을 고치는 코드/마이그레이션 0건. Stage 실측 0→30→90→0 변경 후에도 기존 적립 만료일 불변, 회귀 테스트 추가(pointEarnExpiryDays 10건 GREEN).
+- [x] sp3 3차 검수: 조건부 통과(BLOCKER 0·MAJOR 0·신규 MINOR 3 — Stephen 승인 2026-10-23). N1 GSD_LOG 테스트 개수 정정 완료 · N3 빈 입력 거절 즉시 수정(saveUseSettings: expiry_days 빈 값·공백·누락 거절, 0은 직접 입력해야 함, `pointUseSettingsExpiryInput.test.ts` 4건 GREEN·eslint 0) · N2 '소멸 후 설정 변경해도 재소멸 없음' 테스트 보강은 이월 경계 테스트 항목에 합침.
 - [ ] Production 적용(#742 → #743, DB 먼저 → 검증 → 코드 배포)은 Stephen 확인 후 · 커밋은 Stephen 직접
 
 ## NOW — 🟡 BOUNDARY: 구독 공통 정책·이용안내·서비스 기본 정보를 설정 서브메뉴 '정책관리'(`/cms/set/policy`)로 이동 (2026-10-15, 이 세션'만', ✅ Stephen 지시로 GATE B 명시 승인 · DB 마이그레이션 없음 · 커밋·배포는 Stephen)
