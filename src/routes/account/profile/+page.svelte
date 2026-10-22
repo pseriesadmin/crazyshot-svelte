@@ -4,6 +4,7 @@
   import { browser } from '$app/environment'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import CouponTabContent from '$lib/components/members/profile/CouponTabContent.svelte'
+  import PointTabContent from '$lib/components/members/profile/PointTabContent.svelte'
   import LogTabContent from '$lib/components/members/profile/LogTabContent.svelte'
   import ReviewTabContent from '$lib/components/members/profile/ReviewTabContent.svelte'
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
@@ -15,12 +16,13 @@
   interface Props { data: PageData }
   let { data }: Props = $props()
 
-  type Tab = 'coupon' | 'log' | 'review' | 'profile' | 'address' | 'notification' | 'withdrawal'
+  type Tab = 'coupon' | 'point' | 'log' | 'review' | 'profile' | 'address' | 'notification' | 'withdrawal'
 
-  const VALID_TABS: Tab[] = ['coupon', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal']
+  const VALID_TABS: Tab[] = ['coupon', 'point', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal']
 
   const TAB_LABELS: { id: Tab; label: string; count?: number }[] = [
     { id: 'coupon',        label: '쿠폰' },
+    { id: 'point',         label: '포인트' },
     { id: 'log',          label: '로그',      count: data.profile?.rental_count ?? 0 },
     { id: 'review',       label: '후기·댓글' },
     { id: 'profile',      label: '개인정보' },
@@ -86,6 +88,8 @@
     <div class="tab-content">
       {#if activeTab === 'coupon'}
         <CouponTabContent coupons={data.coupons} />
+      {:else if activeTab === 'point'}
+        <PointTabContent points={data.profile?.points ?? 0} transactions={data.pointTransactions} />
       {:else if activeTab === 'log'}
         <LogTabContent logs={data.myActivity?.logs ?? []} />
       {:else if activeTab === 'review'}

@@ -16,6 +16,7 @@
   import WishlistScroll from '$lib/components/account/WishlistScroll.svelte'
   import MenuSection from '$lib/components/account/MenuSection.svelte'
   import CouponTabContent from '$lib/components/members/profile/CouponTabContent.svelte'
+  import PointTabContent from '$lib/components/members/profile/PointTabContent.svelte'
   import LogTabContent from '$lib/components/members/profile/LogTabContent.svelte'
   import ReviewTabContent from '$lib/components/members/profile/ReviewTabContent.svelte'
   import ProfileTabContent from '$lib/components/members/profile/ProfileTabContent.svelte'
@@ -76,6 +77,7 @@
 
   const myInfoMenuItems = [
     { label: '쿠폰',         href: '/account/profile?tab=coupon',      panel: 'coupon' },
+    { label: '포인트',      href: '/account/profile?tab=point',        panel: 'point' },
     { label: '로그',         href: '/account/profile?tab=log',         panel: 'log' },
     { label: '후기·댓글',   href: '/account/profile?tab=review',       panel: 'review' },
     { label: '개인정보',    href: '/account/profile?tab=profile',      panel: 'profile' },
@@ -88,7 +90,7 @@
   // /account/profile?tab=X (모바일 전용 라우트)는 PC(≥1024px) 진입 시 /account로 리다이렉트
   // 되는데(account/profile/+page.svelte), 그 리다이렉트가 ?tab= 값을 그대로 들고 오므로
   // 여기서도 초기값을 URL의 tab 파라미터로 맞춰야 PC에서도 같은 탭으로 랜딩한다.
-  const PC_TAB_PANELS = new Set(['coupon', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal'])
+  const PC_TAB_PANELS = new Set(['coupon', 'point', 'log', 'review', 'profile', 'address', 'notification', 'withdrawal'])
   function getInitialPcSection(): string {
     const tab = $page.url.searchParams.get('tab')
     return tab && PC_TAB_PANELS.has(tab) ? tab : 'home'
@@ -303,6 +305,8 @@
               <PcInquiryPanel inquiries={data.inquiries} onback={() => activePcSection = 'home'} />
             {:else if activePcSection === 'coupon'}
               <CouponTabContent coupons={data.coupons} />
+            {:else if activePcSection === 'point'}
+              <PointTabContent points={data.profile?.points ?? 0} transactions={data.pointTransactions} />
             {:else if activePcSection === 'log'}
               <LogTabContent logs={data.myActivity?.logs ?? []} />
             {:else if activePcSection === 'review'}
