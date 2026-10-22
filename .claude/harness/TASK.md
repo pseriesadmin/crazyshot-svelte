@@ -2,9 +2,781 @@
 
 > ⛔ **2026-09-24 인덱싱 분리**: 이 파일은 "진행중·상시(BLOCKED/BACKLOG/NEXT/GATE C)·최근 3일 완료" 블록만 보관한다.
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
-> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
+> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🟢 ROUTINE: 채팅 FAB 수신 알림 모션 '바운스 & 틸트' 1회 재생 (좌측 방향 확장) (2026-10-19, 이 세션'만', ✅ Stephen 지시("선택영역 화면 이용 중 or 최초 진입 시 채팅 수신 시 1회 바운스 & 틸트 모션" → "FAB가 우측 배치라 확대 방향은 좌측이어야 함") · DB·마이그레이션·`src/routes/api/**` 변경 없음 · Claude Browser: Stephen 요소 선택 세션(조건 ①)에서 로컬 동작 확인 · 모션 부드러움·좌측 확장 육안 확인 대기 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 변경: `src/lib/components/chat/FloatingButton.svelte` 1개 — `unreadCount`가 늘어난 순간(새 메시지 도착 / 최초 진입 시 미읽음 복원) `.chat-fab-wrap`에 `bounce-tilt` 클래스를 붙여 0.9초 모션 1회 재생(`animationend`로 해제, Svelte가 키프레임 이름에 접두어를 붙이므로 `endsWith`로 비교). 개수가 같거나 줄거나 채팅이 열려 있으면 미재생, 연속 도착은 처음부터 1회 재생, `prefers-reduced-motion` 사용자 미재생.
+- 모션: 위로 튀기며 기울기 반복(바운스 3회 감쇠). 우측 끝 배치라 `transform-origin: 100% 85%` + 반시계(음수) 기울기·왼쪽 이동만 사용해 오른쪽 밖으로 넘치지 않게 함. 채팅 FAB 크기(70px/40px)·위치 불변.
+- 확인: 가짜 미읽음 개수로 0→1 재생·종료 후 해제 / 같은 개수 미재생 / 1→2 재생 / 0 미재생 확인(브라우저 실측). svelte-check 신규 오류 0(기존 2건).
+- 알려진 한계: 모바일 FAB 바가 peek(절반 숨김) 상태이면 모션도 절반 가려짐(수신 시 바 자동 펼침은 요청 없어 미구현).
+
+## NOW — 🟢 ROUTINE: /cms/rentals 상태 칩 → 패널 헤더 '단계 흐름 원형 배지' 응용 대체 (2026-10-22, 이 세션'만', ✅ Stephen 직접 지시(칩을 원형 배지·화살표로 대체·건수 카운터 유지·모션 동일·크기 1.5배 → 미선택 활성 BG → 이후 단계 칩 비활성 BG·활성 글자색 → 옅은 회색 → 호 두께↑ → 화살표 지난 단계 색 → 임시예약·취소환불CS 10% 축소 → 가운데 정렬) · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · Claude Browser: Stephen이 "Claude Browser 실행 테스트해" 명시(조건 ②) — 렌더링·프레임 실측만 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 변경: `src/routes/cms/rentals/+page.svelte` 1개(마크업·CSS·`badgeLines`·`activeFilterIndex` 파생). 칩 데이터(STATUS_FILTERS)·`setStatus`·`chipCounts` 로직 불변, `ChevronIcon` import 제거(미사용).
+- 구현: 칩 = 72px 원형 배지(패널 slim 48px×1.5), 화살표 21×13.5px(×1.5), 글자 토큰 `--text-pc-script-12`/700. 선택=흰 BG+회전 호 6px(inset -9px)+글로 8px+팝, 선택 칩 오른쪽 화살표=물결, 앞쪽=`--cs-purple` BG·흰 글자·퍼플 화살표, 뒤쪽(`chip-after`)=`--cs-surface-gray` BG·퍼플 글자·옅은 화살표. 임시예약(`chip-draft`)=`--cs-purple-op10`, 취소·환불·CS(`chip-refund`)=레드 BG, 두 배지만 ×0.9(64.8px). 필터 줄 가운데 정렬. 호버=BG 변경만(outline·shadow 없음).
+- 확인: Claude Browser 실측 — 칩 10개·무한 모션 3개(호·글로·물결)·3초 평균 16.62ms·최대 17.7ms·20ms 초과 0. svelte-check 이 파일 신규 오류 0.
+- 알려진 한계: 패널 열림 상태·넓은 창 실측 미실시. 임시예약 BG가 툴바 바탕(lilac)과 근접. "취소·환불" 5자가 64.8px 배지 안쪽 폭(~61px)에 빠듯.
+- 추가(검수 후): 칩 호버 버블(transform 스프링 1.12배·클릭 0.95배, 글자·건수는 역배율로 크기 고정, 동작 줄이기 시 비활성).
+- sp3-qa-agent: ✅ GATE E 통과(T3, BLOCKER 0·MAJOR 0·MINOR 3, 보안 sp3 판단 SKIP) — MINOR-1(버튼 aria-label이 건수 배지 읽기를 덮음→aria-label 제거)·MINOR-2(글로 하드코딩 rgba→color-mix 토큰)·MINOR-3(chip-refund 주석 정정) 같은 세션 반영. 미검증: 1280px 한 줄 배치·회전 호 잘림·글로 이웃 겹침(화면 확인 필요), 호버 버블 추가분은 sp3 검수 후 추가라 미검수.
+
+## DONE — 🟢 ROUTINE: 마이페이지(/account) 모바일 '대여 경험' 숫자 카드·'최근 예약' 원형 배지 줄 레이아웃 정리 (2026-10-22, 이 세션'만', ✅ Stephen 직접 지시(비율 확인 요청 → 배지 간격·크기 +20%·상품명 여백·상하 패딩 → 현재 단계 중앙 스크롤(양끝 단계는 제외) → 숫자 박스 원형(모바일·PC)) · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · Claude Browser: Stephen 요소 선택 세션(조건 ①)에서 실측 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 변경(이 세션분): ① `src/lib/components/account/RentalStatRow.svelte` — 숫자 박스 가로 90px 고정(358px 폭에서 카드 147px 밖으로 삐져나옴) → **45×45 원형**(모바일·PC 공통, `border-radius:50%`). ② `src/lib/components/common/RentalJourneyStepper.svelte` — **고객 화면(`slim fluid`)만**: 배지 `--circle` 34~46px → 50~55px(+20%, 좁아도 줄이지 않음), 배지 간격 `--conn` 18px → 44~56px, 간격 화살표 아이콘 16×10, 박스 상하 패딩 14 → 24px, 상품명↔배지 줄 여백 8 → 20px, 넘칠 때만 좌우 끝 흐림(`.fade`) + 현재 단계 배지를 가운데로 자동 스크롤(스크롤 한계에서 멈춤 — 처음·끝 단계는 억지로 중앙 배치하지 않음, 레이아웃 값(offsetLeft) 기준으로 넘침 판정·`tick`·resize 재계산). PC(≥768px) 배지 크기 계산은 기존 식 그대로.
+- ⚠️ `RentalJourneyStepper.svelte`·같은 작업트리의 다른 파일(`PcRentalPanel.svelte` 등)에는 **다른 세션의 미커밋 변경**이 함께 있음(연결 화살표 물결 모션·`returnDay`·`cancelledAlign` 등 — 이 세션 소관 아님). 커밋 시 구분 필요.
+- 확인(실측 358·420·1100px): 숫자 원 45×45 카드 안 정렬, 배지 50px·간격 44px·`activeLeft=12`(첫 단계 왼쪽 끝) 등. 뒤쪽 단계가 현재일 때의 가운데 이동은 데이터가 없어 코드로만 구성(실기기 확인 필요).
+- sp3-qa-agent: ✅ GATE E 통과(T3, BLOCKER 0·MAJOR 0·MINOR 3) — svelte-check 두 파일 신규 오류·경고 0, harness-scan high 0, eslint는 스텝퍼 57행 `status` 단독 호출 1건(HEAD에도 있던 기존 부채, 신규 아님). 사용처 전수 확인: `slim fluid`는 고객 화면 5곳뿐, CMS(`slim`만·비-slim compact) 영향 없음, PC 세로 배치 유지, effect 재실행 폭주 없음·리스너 정리·SSR 안전·넘침 판정(24px=padding 12×2)·스크롤 계산 정확 확인. 보안: sp3 판단 SKIP(클라이언트 UI 전용) → sp5 미연결.
+  - MINOR-3(`returnDay`·`steps`만 바뀌면 재중앙정렬 안 됨) → 같은 세션에 effect에서 두 값을 읽도록 반영. MINOR-1(카드 폭 ~111px 미만, 320px 안팎 기기에서 라벨+숫자 원 넘칠 가능성 — 실측 미실시)·MINOR-2(숫자 4자리 이상이 45px 원을 넘침, 현실성 낮음)·NIT(스크롤 끝 마스크 18px가 첫·끝 배지를 약간 흐림) → 미수정.
+  - 미검증: 실기기 렌더링(320·360·375px, PC 카드, 뒤쪽 단계 현재일 때 가운데 이동)·vitest 전체 미실행(CSS 전용).
+
+## DONE — 🟢 ROUTINE: 새 테이블 GRANT 규칙 명문화 — Supabase 2026-10-30 신규 테이블 자동 권한 중단 대응 (2026-10-20, 이 세션'만', Stephen 지시 · 규칙 문서만 수정, 코드·DB 변경 없음 · 커밋은 Stephen)
+
+- 배경: Supabase 공지(2026-10-20) — 2026-10-30부터 기존 프로젝트에서도 public 스키마의 새 테이블에 Data API 권한(anon·authenticated·service_role)을 자동으로 주지 않음. 기존 테이블은 영향 없음.
+- 판단 근거(읽기 전용 조회): Production 기본 권한 설정이 현재 자동 부여 상태, public 테이블 135개 전부 service_role 권한 보유(110개는 anon·authenticated도). 테이블을 만드는 마이그레이션 127개 중 105개가 자동 부여에 의존 — 소급 수정 불필요. 최근 14개 중 686·700·703만 테이블 GRANT 없음(이미 적용돼 권한 있음).
+- 변경: `.claude/rules/security-auth.md` — ① '새 테이블 GRANT 규칙' 절 신설(같은 마이그레이션에 GRANT 포함, service_role 필수·anon/authenticated는 필요한 테이블에 최소 권한, 서버 전용·증적 테이블은 service_role만+RLS, 누락 증상, 영향 없는 범위, 환경 재생성 시 주의, 기본 권한 직접 변경 금지) ② GATE C `[테이블 GRANT]` 4항목 추가.
+- 영향 범위: 2026-10-30 이후 테이블을 새로 만드는 모든 마이그레이션. 서버 코드가 거의 전부 service_role로 접근하므로 GRANT 누락 시 해당 기능이 통째로 permission denied.
+- 후속(미수행): 10월 30일 직후 Stage에서 테스트 테이블로 실제 동작·기본 권한 설정 변경 여부 확인 · Supabase 대시보드 Data API 노출 설정은 Stephen 확인.
+- 검수: 규칙 문서 수정이라 sp3-qa-agent 검수는 실시하지 않음(편집 후 훅의 Guard 9 회귀테스트 안내도 코드 무변경이라 미실행). 이 파일은 다른 세션의 미커밋 수정도 함께 담고 있어 `.claude` 파일은 모아서 커밋 권장.
+
+## DONE — 🟢 ROUTINE: 모바일 홈 '취향직격' 원형 탭 — 무한 슬라이드(시작·끝 제거, 선택 탭 정중앙 모션 유지) + 터치 하이라이트 제거 (2026-10-20, 이 세션'만', ✅ Stephen 직접 지시(리뷰 요청 → "무한 슬라이드로 이어 붙이고 선택 탭은 정중앙" → "터치영역 bg 노출은 브라우저마다 다른가" → ".theme-circle-tab 한 곳에만 적용") · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · 요구 범위 외 수정 없음(리뷰에서 지적한 상품 슬라이드 스크롤 초기화·카드 링크화 등은 요청 없어 미수정) · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 변경: `src/routes/+page.svelte` 1개(스크립트·마크업·CSS). 이 세션 변경분만(다른 세션 변경 없음 — git diff 10개 구간 전부 이 세션).
+- ① 무한 슬라이드(모바일 `.m-theme-circle-tabs`만, PC 불변): 테마 목록을 3벌(앞·가운데·뒤 복제)로 이어 붙이고(`mLoopTabs`), 스크롤이 멈춘 뒤(150ms, 터치 중 제외) 가운데 벌을 벗어난 만큼 한 벌 폭을 `scrollTo(instant)`로 되돌림(`mNormalizeLoop`). 복제 탭은 `aria-hidden`·`tabindex=-1`. 테마 2개 이상이면 루프(`--capped` 조건 3개 초과→1개 초과), 1개면 반복 없음.
+- ② 정중앙 모션: 기존 `selectTheme`(공용, scrollBy smooth) 그대로. 첫 진입·목록 변경·폰트 로드 후 선택 테마를 가운데 벌에서 정중앙에 배치(`$effect`, `untrack`). 좌우 패딩 120px 제거(첫 탭이 오른쪽으로 쏠리던 원인), 스크롤 스냅 제거(중앙 정렬·되돌리기와 충돌), `overscroll-behavior-x: contain` 추가.
+- ③ 터치 하이라이트: `.theme-circle-tab`(PC·모바일 공용 클래스)에 `-webkit-tap-highlight-color: transparent`·`-webkit-touch-callout: none`·`user-select: none`.
+- 확인: svelte-check 이 파일 신규 오류 0. 실브라우저·실기기 확인은 CLAUDE.md 기본값(Browser 금지)에 따라 미실시 — Stephen 실기기(iOS Safari·Android Chrome) 확인 필요.
+- 알려진 한계: 테마 2개면 같은 탭이 화면에 두 개 보여 둘 다 선택 상태(확대)로 표시. 복제 탭의 이미지 중복 요청(캐시됨).
+- sp3-qa-agent: ✅ GATE E 통과(T3, BLOCKER 0·MAJOR 0·MINOR 3) — svelte-check 이 파일 ERROR 0·harness-scan high 0·eslint 6건은 전부 기존 부채. 루프 수식·$effect 무한 재실행·타이머 정리·PC 회귀 없음 확인. 보안: sp3 판단 SKIP(클라이언트 UI 전용, 신뢰 경계 무관) → sp5 미연결.
+  - MINOR-1(신규 a11y 경고, 터치 상태 추적 div) → 같은 세션에 `svelte-ignore` 주석으로 정리. MINOR-2(테마 1개일 때 좌측 붙음 가능)·MINOR-3(터치 이벤트 누락 시 보정 지연, 극단적 장거리 관성 스크롤) → 미수정(영향 미미, 요청 범위 밖).
+  - 미검증: iOS Safari·Android Chrome 실기기 체감(정지 후 위치 되돌리기가 눈에 띄는지, 터치 하이라이트 제거) — Stephen 확인 필요. 이 파일 대상 테스트 없음(UI 전용).
+
+## DONE — 🟢 ROUTINE: 고객 채팅 입력창 — 줄 늘어남(2행, pill 높이 동반 확장) + 볼드 폰트 토큰 (2026-10-20, 이 세션'만', ✅ Stephen 직접 지시("채팅입력폼(ChatInput.svelte)의 엔터 자동 늘림 시 2행까지 위로 늘어나게 — 관리자 채팅 모드 기능 적용" + "입력 텍스트 폰트토큰을 볼드값 토큰으로") · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 변경(이 세션분): `src/lib/components/chat/ChatInput.svelte` **CSS만** — ① `.input-pill` 높이 고정 67px → `height:auto; min-height:67px`, 상하 패딩 22px(관리자 전용이던 규칙을 공통으로 승격 → 고객 2행·관리자 3행 모두 pill이 함께 커짐, 하단 고정이라 위로 늘어남) ② `.input-field` 폰트 `400 16px` → `var(--text-pc-title-16)`(700) + `line-height:22px`(토큰 200% 상쇄) ③ `.input-pill--admin .input-field`는 `max-height:66px`만 남김(중복 font·높이 규칙 제거). 고객 입력 높이 상한 44px(2행)은 기존 값 유지(스크립트 무변경).
+- ⚠️ 같은 파일에 **다른 세션의 미커밋 변경**이 함께 있음(관리자 Enter=줄바꿈·Ctrl/⌘+Enter 전송, `ADMIN_INPUT_MAX_HEIGHT` 스크립트·관리자 3행 등) — 이 세션 소관 아님. 커밋 시 구분 필요.
+- 확인: 실브라우저·실기기 확인 미실시(CLAUDE.md 기본값) — Stephen이 고객 모바일 채팅에서 2행 확장·입력창 높이·볼드 폰트 확인 필요.
+- sp3-qa-agent: ✅ GATE E 통과(T3, BLOCKER 0·MAJOR 0·MINOR 1) — svelte-check 이 파일 신규 오류·경고 0(eslint는 .svelte ignore로 미실행). 사용처(ChatWindow 고객·AdminChatPanel 관리자) 모두 부모가 높이 고정이 아니고 고객 쪽은 `bind:clientHeight`로 하단 여백이 자동 연동돼 잘림·겹침 없음 확인. 높이 1행 67px·고객 2행 88px·관리자 3행 110px, 폰트 토큰 실존·line-height 덮어쓰기 순서 정상. 보안: sp3 판단 SKIP(CSS 전용) → sp5 미연결.
+  - MINOR-1: 입력 글자와 placeholder가 함께 볼드로 바뀜 — Stephen 지시에 따른 의도된 변경, 시각 확인만 필요.
+  - 미검증: 2·3행 확장 시 pill·overlay 높이 연동의 실제 렌더링(브라우저 금지 기본값) — Stephen 실기기 확인 필요.
+
+## NOW — 🔴 CRITICAL(채팅 응답·frozen `src/routes/api/**`): 알림 소리(딩동) + 기본 자동응답 반복 발송 (2026-10-20, ✅ Stephen 직접 지시 — GATE C 승인 근거 · DB 변경 없음 · 커밋·배포는 Stephen)
+
+- 알림 소리: `chatChime.ts`(맑은 종소리 딩동, Web Audio) — 새 고객 대화 수신마다 재생(레이아웃 콜백 + 상담 화면), 0.7초 중복 방지, 첫 클릭 시 오디오 준비. 콘솔 DataCloneError 수정(`cmsChatInbox.svelte.ts` $state.snapshot).
+- 기본 자동응답: `api/chat/message/+server.ts`의 "5분 안 반복 억제"(2026-10-06) 폐지 → 빠른답변에 해당하지 않는 고객 메시지마다 대기 안내·고객 푸시 발송. 테스트 갱신(chatMessageAutoReplyObserve·chatMessageWaitRepeat), `chat.md` §17-2b 기록.
+- 완화(Stephen 확정): 관리자 응대 중(10분 이내 답변) 세션은 대기 안내 생략, 연속 대기 안내는 채팅엔 남기고 고객 푸시만 60초 쿨다운.
+- 상태: sp3-qa 1차 REJECT(MAJOR 2) 수정 완료 → 재검수 대기.
+- 2026-10-20 후속(Stephen 지시): 새 고객 메시지는 정상 매칭 자동답변 저장을 AUTO_REPLY_SETTLE_MS(1.5초) 기다린 뒤 목록을 새로 받아, 아직 사람의 답이 필요한 메시지에만 숫자·소리·토스트를 낸다(`cmsChatInbox.svelte.ts`). 상담 화면(AdminChatPanel)의 메시지별 소리는 제거(레이아웃 알림으로 일원화).
+- 관리자 입력창(ChatInput, isAdmin 한정): 폰트 --text-pc-title-16(굵게)·Enter=줄바꿈·Ctrl/⌘+Enter=전송(한글 조합 중 제외)·3행(66px)까지 세로 확장, 안내 문구에 전송 방법 표기. 고객 입력창 무영향. 알림 대기 뒤 조회 실패 시 1초 간격 최대 3회 재시도·종료 후 알림 차단.
+
+## NOW — 채팅 글 속 링크 클릭 열기 + 쿠폰/빠른답변 링크 주소 보존 (2026-10-20, 🟡 BOUNDARY)
+
+- 증상: 고객 채팅 대화카드의 링크가 눌리지 않음. 원인 ① 말풍선·카드 문구가 일반 글자라 주소가 링크로 안 바뀜 ② 빠른답변 편집기의 링크는 글자 변환 때 주소가 버려짐.
+- 조치: `linkify.ts`(http/https·www만, 문장부호·한글 조사 제외, 위험 스킴 미링크) + `LinkifiedText.svelte`(새 탭, noopener) → `MessageBubble`·`ActionCard` 적용. `cannedBlocks.ts` 글자 변환이 링크를 "문구 주소"로 보존(`linkToPlainText`).
+- 범위: DB·API 변경 없음. 테스트: linkify.test.ts(9) · cannedBlocks.test.ts 갱신(22/22 GREEN), svelte-check 신규 오류 0.
+- 상태: sp3-qa 검수 대기, 커밋은 Stephen 직접.
+
+## NOW — 🔴 CRITICAL(DB 변경): CMS 채팅 대화카드 개별 삭제(관리자 발송 취소) — 삭제 시 양쪽 창에 '대화가 삭제되었습니다.' 표시 (Migration #733, 2026-10-20, 이 세션'만', ✅ Stephen 지시("대화카드별 삭제 기능 — 상대방·관리자 창에서 삭제, 삭제 시 '대화가 삭제되었습니다.' 카드, 삭제 아이콘을 상태줄 우측 끝에, 관리자가 원치 않은 카드 발송 시 취소용") + AskUserQuestion 확정 3건: ①삭제 범위=관리자·시스템이 보낸 것만(고객 발신 삭제 불가) ②원본은 관리자 전용 기록(chat_message_deletions)에 보관 ③결제·계약·쿠폰 카드는 삭제 막기 · Stage 먼저, Production·커밋·배포는 Stephen · `src/routes/api/**`(프로즌) 신규 추가 — Stephen 지시 범위 → GATE C · sp3-qa-agent 검수 ⏳)
+
+- DB(#733): `chat_messages.deleted_at/deleted_by` + 원본 보관 테이블 `chat_message_deletions`(RLS 정책 0건, service_role 전용) + `cms_delete_chat_message(p_message_id, p_admin_id)`(SECURITY DEFINER, service_role 전용) — 한 트랜잭션으로 원본 보관 → 행을 message_type='system'·content='대화가 삭제되었습니다.'·action_payload={type:'message_deleted'}로 교체(고객 RLS로 읽어도 원본 노출 없음). 거절: 없음/이미 삭제/고객 발신/막힌 카드 종류(contract_link·contract_signed·payment_request·PAYMENT_REQUEST_CARD·coupon_issued·COUPON_GIFT_CARD·refund_failed).
+- 서버: `DELETE /api/cms/chat/messages/[id]`(상담 메뉴 권한 + CMS 역할, menuAccessMap 등록).
+- 화면: 말풍선 상태줄 우측 끝(북마크 오른쪽)에 표준 삭제 아이콘(act-del 휴지통) — 관리자 화면에서 삭제 가능한 메시지에만, 삭제 안전 토스트 2단계 확인. 실시간 UPDATE 이벤트로 고객·관리자 양쪽 창이 즉시 '대화가 삭제되었습니다.'(기존 system 메시지 렌더)로 바뀜.
+- 한계(확인 문구에도 안내): 이미 나간 문자·푸시·SMS 알림은 회수되지 않는다.
+
+## DONE — 🟢 ROUTINE: CMS 채팅 화면 '대화 영역 ↔ 하단 작성 그룹(답변 입력+상담 메모)' 위아래 높이 조절(30%~70%) (2026-10-20, 이 세션'만', ✅ Stephen 지시("상하폭 조절 가능한지 검토" → "제안한 방향으로 진행해") · DB·API 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 통과)
+
+- 구조: `.chat-split`(대화 영역 + 손잡이 + 하단 작성 그룹, 높이 합 100%) / 손잡이 `.compose-resizer`(role=separator horizontal, 위아래 5px씩 걸침). 하단 작성 그룹 30%~70%(=대화 영역 70%~30%).
+- 기본값: 저장값 없음(null)이면 기존처럼 내용 높이(자동) — 처음 끌 때부터 비율 모드(`--compose-pct`), 더블클릭 = 자동 복귀. 값은 localStorage `cms-chat-compose-pct`. 방향키 ↑↓ 2%·Home/End.
+- 보완: 낮은 화면에서 30%가 내용보다 작으면 내용 최소 높이(`COMPOSE_MIN_PX`=220px)가 우선(30% 규칙 예외). 비율 모드에서 메모 목록이 늘고 줄며 스크롤.
+- 규칙·테스트: `panelSplit.ts`(위아래 함수 추가) · `panelSplit.test.ts` 10건. 좌우 폭 조절(INFO)과 독립.
+- QA(2026-10-20): MAJOR-1 반려 — 비율 모드 `overflow:hidden`이 입력창 위 팝업을 잘라냄 → 제거(메모 목록 min-height:0이 넘침 흡수)로 수정. 재검수 통과(BLOCKER 0·MAJOR 0, MINOR: 극저해상도에서 220px 하한 초과 시 아래로 넘침 — 수용). 한계: 로컬 화면 직접 확인 전(Stephen 화면 확인 대기).
+
+## NOW — 🟢 ROUTINE: CMS 입력폼 포커스 아웃라인 색을 더 옅은 토큰으로 변경 — 신규 단일 토큰 `--cs-focus-ring`(=`--cs-purple-pale`)로 CMS 입력폼 전역 반영 (2026-10-20, 이 세션'만', ✅ Stephen 직접 지시("입력폼 아웃라인 컬러토큰값을 더 옅은 컬러토큰값으로 수정해 관련 입력폼 전역에 반영") · DB·API 변경 없음 · 커밋·배포는 Stephen)
+
+- 토큰: `src/app.css`에 `--cs-focus-ring: var(--cs-purple-pale)` 신설(이후 색 조정은 이 한 줄). 표준 문서 `cms-uiux.md §7-7` 갱신.
+- 적용: `src/routes/cms/**`·`src/lib/components/cms/**`·`chat/AdminChatPanel.svelte`·`chat/ChatInput.svelte`의 입력폼 포커스 규칙(`:focus`/`:focus-within`·날짜선택 트리거) 61개 규칙·39개 파일의 `outline`(및 같은 규칙의 `border-color`) `--cs-purple` → `--cs-focus-ring`.
+- 제외(그대로 유지): 키보드 포커스 링 `.cms-shell :focus-visible`, 툴바 버튼 `.tb-btn:focus-visible`, 대표 이미지 표시 `.img-card.primary`, 사용자(front) 화면·front 관리 모달(`*/admin/*`).
+- ⚠️ 커밋 주의: 이 변경은 다른 세션이 수정 중인 파일(예: reservation·ProductDetailPanel 등)의 CSS 줄도 건드린다 — 커밋 시 이 세션 줄만 골라 담을 것(`git add -p`).
+- sp3-qa-agent 검수: ⏳
+
+## DONE — 🟡 BOUNDARY: CMS 상담 메모 목록 인라인 수정 — 글자를 누르면 바로 수정 모드, 커서가 벗어나면 즉시 저장 (2026-10-20, 이 세션'만', ✅ Stephen 직접 지시 · DB·마이그레이션 없음(기존 `cs_records.summary` 갱신) · `src/routes/api/chat/sessions/[id]/cs-record/+server.ts`(프로즌 경로 `src/routes/api/**`)에 PATCH 추가 — Stephen 지시 범위(수정 기능에 서버 갱신 필수) → GATE C · 커밋·배포는 Stephen · sp3-qa-agent 검수 통과)
+
+- QA(2026-10-20): 통과(BLOCKER 0·MAJOR 0) — 반영: 상태 글자 토큰 script-12, 저장 중 해당 메모 삭제 버튼 비활성, 수정 버튼 aria-label. 미검증: 실화면에서 blur 저장↔삭제 클릭 경합(Stephen 육안 확인 대기).
+- 화면(`AdminChatPanel.svelte`): 메모 글자 누르면 입력칸(수정 모드) → blur 즉시 저장(Enter 동일, Esc 취소, 한글 조합 중 Enter 무시). 바뀐 게 없으면 요청 생략, 비우면 원래 내용 유지+경고(삭제는 휴지통). 저장 버튼·토스트 없이 행 옆 상태 글자(저장 중… / 자동 저장됨 / 저장 실패 — cms-uiux.md §0-10-H). 세션 전환 시 수정 상태 초기화, 저장 중 세션이 바뀌면 화면 미반영.
+- 서버: `PATCH …/cs-record?id=<메모 id>` — 상담 메뉴 권한+CMS 역할, `checkCsMemo`(100자·줄바꿈 합침·빈 값 거절) 서버 재검증, `id`+`session_id` 동시 조건, 없으면 404, 이중언어 병기 학습 훅 유지. 권한 가드 테스트(`chatMenuGuard`) 핸들러 수 16→17.
+- 테스트: `csRecordPatchApi.test.ts` 7건 + `chatMenuGuard`·`menuAccessMap` 통과. svelte-check 기존 오류 2건 외 신규 없음.
+
+## DONE — 🟢 ROUTINE: CMS 채팅 화면 '대화 영역 ↔ 고객 정보 영역' 가로폭 조절(30%~70%) + 폭에 맞는 유연한 내용 배치 (2026-10-20, 이 세션'만', ✅ Stephen 직접 지시(두 선택영역 가로폭 조절, 합 100% 중 최대 70%·최소 30%, 조절 시 내용 레이아웃 유연 대응) · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 대상: `AdminChatPanel.svelte`(`.chat-messages` 대화 영역 + `.customer-info-float` 고객 정보 영역). 기존 고정 300px → 비율(`--info-pct`, 기본 36%≈300px).
+- 조절: 두 영역 경계의 손잡이(`.info-resizer`, role=separator)를 끌거나 방향키(←→ 2%)·Home/End·더블클릭(기본값)으로 조절. 고객 정보 영역 30%~70% = 대화 영역 70%~30%. 값은 localStorage(`cms-chat-info-panel-pct`)에 저장. 규칙은 `src/lib/utils/panelSplit.ts`(테스트 `panelSplit.test.ts` 5건).
+- 유연 배치: 대화 영역(`@container chatmsg`, 안쪽 폭 360px 이하)은 말풍선 좌우·안쪽 여백 축소 / 고객 정보(`@container cinfo` — 280px 이하: 라벨을 값 위로 쌓고 여백 축소·예약 항목 줄바꿈, 420px 이상: 라벨 칸·여백 확대) — `chat/CustomerDetailPanel.svelte`.
+- 한계: 로컬 화면 직접 확인 전(브라우저 세션이 Production을 가리킴 — Stephen 화면 확인 대기).
+- sp3-qa-agent 검수: 통과(BLOCKER 0·MAJOR 0, MINOR-1 손잡이가 대화 목록 스크롤바를 가림 → 손잡이를 경계 안쪽 10px로 이동해 반영, MINOR-2 화면 미검증은 위 한계).
+
+## DONE — 🟢 ROUTINE: 조회 실패를 빈 목록으로만 바꾸던 곳에 서버 로그 추가 — 상품 상세 후기·CMS 채팅 QnA (2026-10-20, 이 세션'만', Stephen 지시 · 위 DB 정렬 블록의 sp3 MINOR 후속 · DB 변경 없음 · 커밋은 Stephen)
+
+- 배경: 후기 함수·동의어 후보 조회가 실패해도 코드가 오류를 버리고 빈 목록을 보여줘 결함이 138건/33건 쌓일 때까지 코드 쪽에서는 보이지 않았음(DB 로그에서만 발견).
+- 변경: `src/routes/products/[id]/+page.server.ts` 후기 RPC 호출이 `error`를 받아 `console.error('[products/[id]] get_product_reviews 실패:', …)` 기록(화면 동작·반환값 불변). `src/routes/cms/chat/qna/+page.server.ts`는 5개 조회(canned_responses·auto_reply_settings·synonym_group_members·chat_reply_candidates·get_zero_result_search_terms) 실패 시 `[cms/chat/qna] … 조회 실패` 로그(빈 목록 처리 그대로).
+- 범위 밖(손대지 않음): 같은 패턴이 다른 화면에도 있을 수 있음 — 필요 시 별건.
+- 확인: svelte-check 완료(2 오류·428 경고, 두 오류는 `vite.config.ts`·`subscribe/success` 기존, 이 두 파일 관련 출력 0) · eslint 두 파일 무출력.
+- sp3-qa-agent 검수(2026-10-20): 1차 REJECT(MAJOR 1 — 729 파일에 주석 교체 중 남은 활성 `CREATE` 한 줄·MINOR 2[734 롤백 서술형·기존 `as unknown` 캐스트]) → 2줄 삭제·734 롤백 실행 가능화 후 2차 재검수 **GATE E 통과**(BLOCKING 0·MAJOR 0·MINOR 0, 활성 문장 파일별 1개 확인, 롤백 블록 576/732 정의와 일치). 오류 삼킴 개선(A) 자체는 1차에서 통과. 보안 sp5 불필요(SKIP). DB 해시 재대조는 sp3 도구 없음 → 메인 세션 SELECT 확인값(92f4ce·0da4b7 Stage=Production) 인용.
+
+## DONE — 🔴 CRITICAL: Stage↔Production DB 정렬(10-17 점검) + 연결 슬롯 분석 + Production 오류 2건 수정(Migration #729·#730·#732) (2026-10-20, 이 세션'만', Stephen 지시 · #729 Stage 적용·#730 Production 적용·#732 Stage·Production 적용 완료 · 커밋·배포는 Stephen · sp3-qa-agent 검수 GATE E 통과 · 커밋 6c97c48(Stage)·PR #570 d314fce(Production) 배포 READY · 2026-10-20 Stephen 지시로 DONE 처리)
+- (최근 수정분부터 기록)
+- sp3-qa-agent 검수(2026-10-20): **GATE E 조건부 통과**(BLOCKING 0·MAJOR 0·MINOR 5). sp3는 DB 조회 도구가 없어 DB 대조를 '확인 불가'로 남겼고, 이 세션이 읽기 전용 SELECT로 보완 확인: `get_product_reviews` 해시 4256f7 Stage=Production 일치 · `get_most_viewed_products` 해시 92f4ce 일치 · 후기 함수 anon/authenticated 실행 권한 양쪽 동일 · 이 함수에 의존하는 DB 객체 0건 · `synonym_group_members.first_observed_at` 양 DB 존재 · `_migration_491_backup` RLS 켜짐. 남은 MINOR(1차 기준 3건 — 최종 5건은 아래 '재검수' 줄 기준이며 그 후속 조치는 'MINOR 후속 조치' 줄 참조).
+- MINOR 후속 조치(2026-10-20, Stephen 지시 "경미 5건 최소 수정 + 오류 삼킴 개선 별도 진행"): ① 번호 728·729 중복 — 실제로는 다른 세션 파일 3개(`728_cs_records_created_by`[Production 728·Stage 725로 기록], `728_prior_issue_reports`, `729_prior_issue_report_hardening`)와 겹치고 DB 기록 이름(Stage에 729 2건)과 파일명 대응이 감사 근거라 이번 세션 파일은 이름을 바꾸지 않음(타임스탬프 버전이 달라 적용 충돌 없음) — 정리 필요 시 Stephen이 번호 체계를 정해야 함(미해결·문서화) ② 729·732·734 롤백 주석을 실행 가능한 SQL 블록으로 교체(주석만 수정, DB 영향 없음) — sp3 2차 검수(REJECT, MAJOR 1)가 729 파일에 활성 문장 `CREATE OR REPLACE FUNCTION …(...)` 한 줄이 주석 교체 중 남아 새 DB 재실행 시 문법 오류가 나는 결함을 지적 → 해당 2줄 삭제, 파일의 활성 문장은 CREATE 1개만 남음(적용 완료된 DB에는 영향 없었음) ③ 오류 삼킴 개선은 아래 별도 블록으로 처리 ④ 기록 개수 표기 정정 완료 ⑤ #734 `get_product_reviews` 한 번에 가져오는 후기 수 1~50 상한·OFFSET 0 이상 보정(`CREATE OR REPLACE`, 시그니처·권한 불변) — Stage 적용 후 확인(기본 5건·거대 limit 5건·음수 1건·NULL 5건, 해시 0da4b7, 권한 동일), Production 적용 후 해시 0da4b7 일치·권한 동일·호출 정상.
+- sp3 재검수(2026-10-20, 최근 수정분 순): **GATE E 조건부 통과**(BLOCKING 0·MAJOR 0·MINOR 5, T1). 최종 MINOR 5건 = ① 마이그레이션 번호 728·729 중복(커밋 전 정리) ② 729·732 롤백 주석이 서술형이라 그대로 실행 불가 ③ 후기 RPC·동의어 조회 오류를 조용히 삼킴(이월, 로그 남기기 권고) ④ 위 1차 검수 기록의 MINOR 개수 표기 불일치(1차 '5건' vs 본문 3건 — 본 줄로 정정) ⑤ `p_limit` 상한 없음(Migration 124부터의 설계). svelte-check는 sp3가 `npm run check` 직접 실행: 오류 2건(`vite.config.ts`·`subscribe/success/+page.svelte`, 이번 변경 밖), `qna/+page.server.ts` 관련 출력 0 → 확인됨. 보안 연계: **sp5 필요 없음(SKIP)** — 후기 함수 권한은 Migration 124·Stage와 동일한 복원이고 user_id 비노출로 노출이 줄며, 730 RLS는 접근을 줄이는 방향, 스캐너 high 0. sp3는 DB 조회 도구가 없어 DB 수치 7개는 '메인 세션 SELECT 확인 인용'으로 처리.
+- DB 대조 재확인(2026-10-20, Stephen 지시 "DB 대조 항목 다시 시도", 읽기 전용): 후기 함수 해시 4256f7 Stage=Production·함수 1개·권한 동일·의존 객체 0·호출하는 다른 DB 함수 0 / `get_most_viewed_products` 92f4ce 일치 / `synonym_group_members`에 first_observed_at 있음·created_at 없음(양 DB) / `_migration_491_backup` RLS 켜짐·정책 0·42행(Production, Stage는 테이블 없음) / Production 최신 이력 732·730 확인. `pr.deleted_at` 함수 6개는 price_rules 별칭이라 정상.
+- 완료 처리(2026-10-20, Stephen 지시): 커밋 `6c97c48`(Stage 배포 READY 14:24 KST)·PR #570 `d314fce`(Production 배포 READY 14:34 KST, crazyshot.kr 연결, 최근 30분 런타임 에러 0건) 반영 확인. 이 세션 코드 변경 중 QnA 수정은 `d91724e`에 포함돼 `3aaaece` 빌드(READY)로 컴파일 확인. 아래 '남은 일' 중 사후 확인 2건은 DONE 이후 후속으로 이관(미수행): ① Stage에서 QnA '동의어 후보' 목록 육안 확인 ② 2026-10-21 이후 Production 로그에서 `pr.deleted_at` 오류 0건 확인.
+- 남은 일: 코드 수정 Stage 배포 후 QnA 탭 "동의어 후보" 표시 육안 확인 · 내일 Production 로그에서 `pr.deleted_at` 오류 0건 확인 · 마이그레이션 번호 728·729가 파일 2개씩 중복(다른 세션 작업과 충돌, 커밋 전 정리 필요) · 커밋은 Stephen.
+- Production 반복 오류 2건 원인·수정:
+  ① 후기 목록 `get_product_reviews` — Production 정의가 Migration 124(저장소·Stage)와 달라 없는 `product_reviews.deleted_at`로 거르다 호출마다 실패(24시간 138건, 화면은 "후기 없음"으로 숨김, Production 후기 0건이라 피해 미발생). #732: DROP 후 Migration 124 정의로 재생성 + anon·authenticated 실행 권한. Stage·Production 모두 함수 해시 4256f7… 일치, 권한 동일, 호출 정상(Stage 5건 반환). `create_product_review`는 양쪽 동일(주석만 다름).
+  ② CMS 채팅 QnA 동의어 후보 — `src/routes/cms/chat/qna/+page.server.ts`가 `synonym_group_members.created_at`(없는 컬럼)을 조회·정렬해 후보 목록이 항상 비었음(양 DB 공통 코드 버그, 24시간 33건). `first_observed_at`으로 조회·정렬·화면용 변환 수정(4줄, 화면 파일 무변경). `get_zero_result_search_terms` 함수는 정상(오류 메시지의 오해).
+- 별건 미처리(건수 적어 범위 제외): `calculate_cart_total` 권한 거부 1건, uuid 입력 오류 3건.
+- DB 연결 슬롯 고갈 분석(읽기 전용, 변경 없음): 앱은 supabase-js(HTTP→PostgREST)만 사용, 직접 DB 드라이버·6543·pgbouncer·max:1 없음. 최대 60(예약 3) 중 35 사용(약 61%), PostgREST 21 고정, 트랜잭션 멈춤 0, 3일간 연결 한도 오류 로그 0건 → 발생 가능성 낮음(최고치는 미확인). 위험 요소: Micro 60 한도·idle_session_timeout 0·PostgREST 풀 재초기화 274회/일. Small 업그레이드·연결 최고치 점검은 Stephen이 추후 검토(계획 없음). Vercel 환경변수 조회는 권한 403, 런타임 로그는 Pro 1일 보관.
+- 10-17 후속: #729(`get_most_viewed_products` "전체" 조회 그룹 순서 — Production에 이미 있던 변경을 저장소·Stage에 기록, Stage 적용·함수 해시 92f4ce 양 DB 일치), #730(Production 전용 백업 테이블 `_migration_491_backup` RLS 켬 — 정책 0건, 42행 유지, anon·authenticated 0행 확인).
+- 10-08/10-16 누락 점검: 643·644·683 Production 누락 확인 → 적용 완료(이전 단계).
+- Vercel 배포 점검: Stage `fb3aa9e`·Production `8ca5ef9`(PR #440) 모두 READY. 중간 ERROR 빌드(c3b316b)는 15995c3로 해소, 단독 배포된 적 없음.
+
+## NOW — 🔴 CRITICAL: 예약현황 '임시예약' 칩 + '임시' 배지 + 임시예약 예약코드 미발행 (Migration #713) (2026-10-15, 이 세션'만', Stephen 지시 · #713 **Stage·Production 적용 완료(Production 2026-10-15, Stephen 지시 — 트리거 정의·임시예약 코드 0건 확인)** · 커밋·배포는 Stephen)
+
+- 칩: `/cms/reservation` 맨 왼쪽 '임시예약'(status=draft) — 장바구니에 담기만 하고 신청 제출 전인 건 조회(구매 패턴 파악용). 진입 기본값은 그대로 '신청대기'. '전체' 등 다른 칩은 기존대로 임시예약 제외.
+  목록 행 배지 '임시', 예약번호 칸 '-', 상세 패널은 헤더 '임시예약'·QR 숨김·예약변경/취소 버튼 숨김(읽기 전용).
+- 예약코드(Migration #713): 임시예약 INSERT 트리거가 코드를 발행해 담기·취소마다 번호가 소모되고 실제 코드 사이에 빈 번호가 생겼음(예: 신청 건 CSRSV26100089 앞뒤 취소 임시예약 85~88·90).
+  → 트리거가 draft·취소·만료 상태에는 코드를 만들지 않고, INSERT + 상태 변경(UPDATE OF status)에 걸어 draft→hold 승격(예약신청) 때 처음 발행. 기존 draft 행 코드는 비움. 주문 단위 통합 코드(create_reservation_order)는 무변경.
+- Stage 검증: 트랜잭션 테스트로 draft 코드 NULL / 취소된 draft NULL / 승격 시 발행 확인(롤백), 라이브 테스트 `draftNoReservationCode.test.ts`·`rentalListHideDrafts.test.ts` 통과, svelte-check 신규 오류 0.
+- 남은 일: Production #712·#713 적용(Stephen 지시 후), 화면 확인. 이미 취소된 과거 임시예약의 코드는 그대로(목록에서는 #712로 숨김).
+- 추가(2026-10-15, Stephen 승인): 임시예약 표시 이름 `임시-{id}`(저장 안 하는 화면 표시용 — 목록 예약번호 칸·패널 헤더) + 임시예약 칩에서만 '임시-292'·'292' 검색을 id 조회로 처리(서버 로더). DB 변경 없음.
+- 참고(미변경): 묶음 주문(상품 여러 개)은 승격 때 개별 코드가 소모된 뒤 대표 코드로 통일되므로 번호 빈칸이 여전히 생길 수 있음 — 필요 시 별건.
+
+## NOW — 🟡 BOUNDARY: CMS 우측 하단 플로팅 채팅 아이콘(읽지 않음 개수 + 간추림 바 목록, 드래그·꼭지점 자석) + 구체적·장시간 토스트 + 탭 제목 개수 — 1단계 A안 (2026-10-19, 이 세션'만', ✅ Stephen 지시("대화카드 수신 알림을 능동적으로 관리자에게 전달 — 제안" → "A안으로 1단계 진행해") · DB·마이그레이션 없음 · 신규 `src/routes/api/cms/chat/inbox/+server.ts`(프로즌 경로 `src/routes/api/**`) 추가 — Stephen 지시 범위 → GATE C · 커밋·배포는 Stephen)
+
+- 정책(A안): 응대 필요 = 종료되지 않은 세션의 마지막 메시지(관리자 전용 제외)가 고객 발신. 서명 완료 카드(contract_signed)는 관리자 발신으로 저장되므로 "이벤트"로 별도 취급 — 마지막 메시지이고 24시간 이내일 때만, 이 브라우저(localStorage)에서 "확인" 처리하면 숨김. 읽음 기록 컬럼은 2단계(B안) 후보.
+- 서버: `GET /api/cms/chat/inbox`(상담 메뉴 권한 `consulting.chat`, menuAccessMap 등록) — 읽기 전용, 최근 14일·세션 150·메시지 1500 상한, 개수는 전체·목록은 최대 10건 + 고객명 + 긴급 배지(CS_ESCALATE). `?exclude=`로 확인 처리한 이벤트 제외.
+- 화면: `CmsChatFab.svelte`(본문 우측 하단 플로팅 채팅 아이콘 — 프론트 채팅 FAB 규격, 빨간 개수 배지·누르면 아이콘 옆에 간추림 바 목록·[채팅 전체 보기]·드래그 후 네 꼭지점 자석·위치 localStorage 저장·/cms/chat에서는 숨김). 상단바 벨은 중복이라 제거(2026-10-19 Stephen 지시) / `cmsChatInbox.svelte.ts`(실시간 구독 + 포커스 복귀 + 60초 주기 갱신) / `+layout.svelte`(토스트를 "고객명 · 내용" 4초·[열기]로 교체, 탭 제목 "(N)" 배지). 판정·표시 규칙은 `chatInbox.ts`.
+- 테스트: `chatInbox.test.ts` 11건 + `cmsChatInboxApi.test.ts` 6건 + 메뉴 권한 가드 테스트(qnaMenuGuard·menuAccessMap) 통과. svelte-check 기존 오류 2건 외 신규 없음.
+- 추가(2026-10-19, Stephen 지시): "정확한 답변을 위해 담당자가 확인 후 안내드릴게요…" 담당자 대기 안내(sender_type='ai', WAIT_REPLY)는 답변이 아니므로 건너뛰고 직전 고객 문의를 응대 필요로 유지(라벨 '담당자 연결 대기'), 새 대기 안내 수신도 알림 대상. 공통 앞부분은 chatInbox.ts WAIT_NOTICE_PREFIX(WAIT_REPLY 문구 변경 시 테스트가 감시).
+- 추가(2026-10-19, Stephen 지시): 간추림 바 선택 → 채팅 대화 화면이 열려 있는 브라우저 탭이 있으면 그 탭에서 해당 대화를 열고(`cmsChatTabBridge.ts` BroadcastChannel 요청/ACK, `AdminChatPanel.svelte`가 수신·창 이름 `cms-chat-window` 지정), 없으면 새 창으로 연다. 브라우저 보안상 다른 탭을 강제로 앞에 띄울 수는 없어 `window.focus()`만 시도(한계).
+- 부하 개선(2026-10-19, 부하 검증 후 Stephen 지시 "1~5번 전부"): ① 탭 대표 1곳만 조회·실시간 구독(Web Locks 선출 + BroadcastChannel 스냅샷 공유, 대표 종료 시 자동 승계, 미지원 환경은 기존 방식) ② 갱신 합치기(진행 중이면 끝난 뒤 1회) ③ 대화 변경 실시간은 '종료'만 반영(이중 갱신 제거) ④ 주기 갱신 대표 탭만·보이면 30초/숨김 120초, 화면 이동·탭 복귀는 마지막 조회 10초 이내면 건너뜀 ⑤ 모션(바운스·틸트·파동)은 탭이 보일 때만 재생(모션 자체는 그대로). 측정: 실서비스 기준 핵심 조회 1.2ms — 비용은 호출당 인증·권한 확인(고정 7회 왕복)이었음. 테스트 `cmsChatInboxLeader.test.ts` 8건.
+- 한계(QA 참고): 세션 150·메시지 1500·14일 상한이라 매우 바쁠 때 개수가 실제보다 작을 수 있음 / 이벤트 카드 확인 처리는 브라우저별 / 자동응답(AI·빠른답변)이 마지막이어도 사람 응대 없는 세션의 긴급(CS_ESCALATE) 고객 문의는 유지(QA MAJOR 반영, service-operations.md §13 ③④ 동일 규칙), 일반 FAQ 자동응답 건은 벨에서 제외.
+- sp3-qa-agent 검수: 조건부 통과(MAJOR 1건 자동응답 가림 → 수정 반영, MINOR 하드코딩 색상 2건 토큰 교체) · 재검증 ⏳
+
+## NOW — 🟡 BOUNDARY: 채팅 상품검색 팝업 '결과 무제한 스크롤 조회' — 서버 페이지 모드(후보 최대 500건) + 스크롤 끝 추가 조회 (2026-10-19, 이 세션'만', ✅ Stephen 지시("검색 결과 목록 수량 무제한: 스크롤 시 결과값 쿼리 노출해 DB 부하 줄임" → 제안 승인 "제안한 방향으로 진행해. 후보 최대 500건.") · DB·마이그레이션 없음 · `src/routes/api/cms/products/search-suggestions/+server.ts`(프로즌 경로 `src/routes/api/**`) 수정 — Stephen 지시 범위 → GATE C · 커밋·배포는 Stephen)
+
+- 범위: 채팅 입력창 상품검색 팝업만. 같은 API·컴포넌트를 쓰는 다른 화면(홈 카테고리·상품 그리드·테마·하이프팩 모달)은 `offset`/`paginate`를 쓰지 않아 동작 불변.
+- 서버: `offset` 파라미터가 있으면 페이지 모드 — 가벼운 칼럼으로 후보 최대 500건을 한 번 순위화(20초 메모리 캐시) → 요청 페이지(최대 40건)만 잘라 이미지·슬러그·24시간 가격을 그 건만 추가 조회. 다음 페이지 유무는 응답 헤더 `x-has-more`(본문은 배열 그대로). 첫 페이지 결과가 3건 이하로 약하면 기존 자연어 보강 경로로 처리(다음 페이지 없음).
+- 화면: `CmsSimilarNameInput`에 `paginate`/`pageSize` 추가(스크롤 끝 48px 전 추가 조회·중복 제거·검색어 바뀌면 취소), `ChatInput`은 `paginate pageSize=20`으로 전환하고 기존 Enter 확장(8→20건) 코드 제거.
+- NLSearch: 기존과 동일(ilike 4필드+품번+초성 → 동의어 → MiniSearch 자연어 보강) 유지.
+- 테스트: `src/__tests__/server/cmsSearchSuggestionsPaged.test.ts` 9건 + 기존 검색 제안 테스트 27건 = 36건 통과. svelte-check 기존 오류 2건 외 신규 없음.
+- sp3-qa-agent 검수: ⏳ 아래 기록 예정
+
+## NOW — 🔴 CRITICAL(DB 변경): 대여현황 '반납/회수 → 검수 → 완료' 3단계 — CS 사전 이슈 접수·고객 증빙 폼·[사전접수건] 배지 (Migration #728, 2026-10-18, 이 세션'만', ✅ Stephen 지시("3단계 이어서 구현") · 플랜 정본 `~/.claude/plans/users-stevenmac-documents-pseries-crazy-mossy-lovelace.md` · 2단계(#724~#727)의 `has_prior_issue` 컬럼·returned 진입 트리거(사전 접수 건은 issue 로 시작)를 그대로 사용 · Stage 먼저, Production·커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 범위(3단계만): ① DB `reservation_issue_reports`(토큰·증빙·상태) + RPC `register_prior_issue`·`cancel_prior_issue`(service_role 전용) ② 알림 `issue_report_request`(카드·푸시·문자, 증빙 폼 링크) ③ 고객 `/issue-report/[token]` 증빙 폼(로그인 없는 토큰 링크, 사진·영상·상세) + 서명/제출 API ④ CMS 예약 패널 [이슈 사전 접수]/[사전접수 해제](manager 이상), 검수 탭에 사전 접수 내용 표시, 목록 [사전접수건] 배지·검수 칩 상단 정렬.
+- 로컬 실테스트(2026-10-19, Claude Browser·Stephen 지시): 공개 증빙 폼·고객 퀵/무인함 반납 제출(사진 업로드→반납요청 전환)·CMS 검수 탭(무인함 번호·비밀번호·사진 2장)·방식별 버튼('무인함 회수 확인'/'집하지 회수 확인')·검수 칩 모두 정상. 발견·수정: `/issue-report/*`에 전역 헤더·FAB·푸터가 겹침 → `src/routes/+layout.svelte` 3곳에 `/issue-report` 제외 추가. 미검증: 택배 체크리스트 UI, 실제 승인/이슈 처리(실고객 알림 방지), 실 푸시·SMS. 예약 62 원복 완료, Stage 스토리지 `return-evidence/62/*` 테스트 파일 2개는 SQL 삭제 불가로 잔존(Storage API로 정리 필요).
+- '반납중' 칩 통합(2026-10-19, Stephen 지시 — 반납요청+반납완료 칩을 '반납중'으로): ① Migration #731(get_rental_list p_inspection_scope='returning', Stage 적용·Production 미적용): 반납요청 + 반납완료(검수 대기, 이슈 제외) + 대여중(택배·퀵·무인함이며 반납일 도래 또는 알림 발송 기록 있음) ② 행 배지 '반납요청 예정/발송'(알림 전/후)·'반납등록'(고객 제출) + 정렬 예정→발송→등록(attachReturnStage.ts, 페이지 내 정렬) ③ 옛 링크 status=return_requested/returned는 returning으로 redirect ④ 고객 반납 제출 시 관리자 푸시 신설(return-submit API, 전용 수신 설정 없이 기존 '신규 상담'(new_session) 설정 재사용 — 전용 토글은 별건) ⑤ 검수 칩 = 반납중 목록에서 관리자가 이슈로 등록한 건(기존 동작 유지). 알림 시각(택배 마지막 날 18시/퀵 5·2·1시간 전/무인함 2시간 전)은 claim_return_notice_targets SQL 재확인 — 반납 시각 기준 정상. 한계: 방문·미지정 반납 대여중 건은 반납중에 들어오지 않음(알림 기록 없음), 정렬은 페이지(30건) 안에서만. 예약 62는 end_date를 테스트로 바꿨다가 원래 2026-08-01로 복원(rental_days는 0으로 계산됨 — 원래 값 미확인).
+- 칩 '처리 대기' 건수 배지(2026-10-19, Stephen 확정 기준="처리 대기 건, 열람 무관"): 대여현황(`cms/rentals`) 계약완료=반출 대기·배송중=수령 확인 대기·대여중=반납일 도래/초과·반납중=반납중 목록 전체·검수=이슈 건 / 예약현황(`cms/reservation`) 신청대기=예약승인 대기·계약대기=계약 발송 후 서명·결제 대기(임시예약·취소·전체 칩은 배지 없음). 주문 1건=1행 기준(get_rental_list total_count, 대여중만 예약 단위 직접 count), 스타일=상품 패널 tab-count-badge 차용(있음 red-5%/red, 0=surface-gray). 파일: `+page.server.ts`(chipCounts)·`+page.svelte`(.chip-count). 로컬 확인: 대여현황 19/0/0/1/0, 예약현황 0/0(Stage에 hold 없음). 커밋 제안 목록·메시지 제시(미실행). sp3-qa-agent 검수는 이어서 진행.
+- 플랜 잔여 3건 구현(2026-10-19, Stephen 지시 "1~3번 진행"): ① 무인함 반납 화면에 [반납 시간 연장 요청 (크레이지챗)] 링크 — `/chat?context=reservation&id=` 딥링크(플랜 기본값), 연체 경고 문구 ② 검수 이슈 담당자 지정 — 기존 컬럼 `reservation_inspection_issues.assigned_admin` 사용(마이그레이션 없음), 이슈 등록 폼에 담당자 칩(CMS 직원, 선택)·`assignInspectionIssue`(직원 검증, fail-soft)·이슈 블록에 '담당 OOO' 표시, 조회 API가 `assignees`(직원 목록)·`assignee_name` 반환 ③ 고객 제출 시 `log_rental_action('customer_return_submit')` 기록(note customer_submit/customer_resubmit, 상태 불변, fail-soft; Stage에서 기록만 남고 상태 불변 확인 후 테스트 행 삭제). 테스트 `inspectionAssign.test.ts` 3건, 전체 vitest 2714 통과, svelte-check 기존 2건뿐. 한계: 담당자에게 개별 푸시는 없음(기존 관리자 푸시 그대로). 플랜 대비 의도적 차이로 남기는 것: 감사로그 미기록(테이블 CHECK), 증빙 버킷 return-evidence 단일 사용, RPC·헬퍼 이름.
+- 로컬 실테스트 2·3차 + 결함 수정(2026-10-19~20, Claude Browser·Stephen 지시): ① 무인함 연장 요청 링크(딥링크 200, 44px)·이슈 담당자 칩(선택/해제) 화면 확인 ② 담당자 후보 이름 보완 — 이름 없는 계정은 이메일, 동명이인은 이메일 앞부분 병기, 삭제 계정 제외(`return-evidence` API) ③ 택배 반납 제출 전 과정(체크리스트 4·사진 3·확인 → return_requested·액션 로그 1건 저장) + '반납중' 칩 '반납등록' 배지 + 반납완료 후 검수 탭([반납 검수 승인]·이슈 칩) 확인 ④ 🔴결함 발견·수정: `return-evidence` API가 저장된 제출 방식('courier')에 `toReturnSubmitMethod`(예약 return_method 변환용)를 적용해 항상 null → 택배 체크리스트 미표시·사진 정렬 무시 → 저장 방식 직접 해석으로 수정, 회귀 테스트 `returnEvidenceMethod.test.ts`(소스 스캔 2건). 실제 [반납 검수 승인]·이슈 등록은 실고객 알림 우려로 미실행. 예약 62 원복, Stage 스토리지 `return-evidence/62/*` 테스트 사진 5개 잔존(SQL 삭제 불가 — Storage API 정리 필요). 해당 수정 후 sp3-qa-agent 재검수 진행.
+- ✅ Production DB 적용(2026-10-20, Stephen 지시 "722→…→731 순서로 적용"): 코드는 PR #568 머지로 2026-10-20 08:19(KST) 이미 Production 배포돼 있었으나 DB 마이그레이션 722~731이 미적용이라 /cms/rentals 목록이 `get_rental_list(p_inspection_scope …) not found` 오류(코드 배포 ≠ DB 적용 사고 재발, 2026-08-18 선례). Production(vnbpmvxruyciuuaermyh)에 722·723·724·725·726·727·728(prior_issue_reports)·729·731 순서로 파일 본문 그대로 적용(registry 이름 충돌 없음: Production에 다른 세션의 `728_cs_records_created_by` 존재 — 번호만 같고 별개). 적용 전 확인: 5개 테이블 미존재·get_rental_list 13인자 시그니처·get_return_remind_targets 기준 본문 일치. DRIFT_CHECK(Stage↔Production): 함수 14종 본문 md5 13종 일치, get_return_remind_targets만 주석 위치 차이(로직 동일)·권한(anon/authenticated 차단, service_role만) 일치·컬럼 47/제약 18/트리거/인덱스 10/RLS/버킷 return-evidence(비공개 100MB)/알림 설정 8행 해시 동일. 검증: Production get_rental_list(returning·issue 스코프) 정상 호출. 반납 알림 크론 대상(대여중 택배·퀵·무인함) 현재 0건이라 적용 직후 발송 없음.
+- 파손 신고·대여 종료 알림 흐름 정합(2026-10-21, Stephen 확정 3건 — 파손 버튼=이슈 사전접수 전환 / 회수 확인 전에도 검수 승인·이슈 가능 / 대여 종료 알림=승인과 동일 완료 처리): ① 대여정보 탭 [파손 신고 접수 처리]는 예약을 종료(damage_claimed)시키지 않고 `/api/.../prior-issue {action:'damage'}`로 '외관 파손' 이슈 접수(반납 전=사전접수+이슈 기록, 반납완료=검수 이슈 등록→검수 칩), 노출 범위를 반납완료까지 확대(반납중 칩 포함) ② `ensureReturnedForInspection`(inspection.ts): 반납요청 건·같은 주문 반납요청 형제를 먼저 반납완료로 전환(정시반납 적립 포함) 후 승인/이슈 처리, 검수 탭 canInspect에 return_requested 추가 ③ `sendChatNotify` rental_complete → `approveInspection` 호출(manager 이상, 이슈 건 거절, 완료 칩으로 이동·완료 안내), 수동 알림 허용 단계에 return_requested 추가. 문서: rental-lifecycle.md. 테스트: inspectionEnsureReturned.test.ts 6건 + 기존 inspection·manualNotifyStageGate 갱신, vitest 2787 통과. 미검증: 화면 직접 확인(Claude Browser 미사용). 마이그레이션 없음.
+- 패널 하단 공통 액션바(2026-10-22, Stephen 지시): `RentalDetailPanel`의 대여정보 탭 안에 있던 액션 영역(상태 전환·파손 신고·채팅 알림 4종·이슈 사전 접수)을 패널 하단 `.panel-action-bar`(헤더처럼 모든 탭에서 항상 노출, 본문만 스크롤)로 이동. 모든 버튼을 항상 노출하고 상태칩 단계에 따라 활성/비활성만 전환(파손=계약완료~반납완료+매니저, 이슈 사전 접수=계약완료~반납요청+매니저, 알림 4종=각 단계, 종료 상태는 전부 비활성; 예약 단계 hold·draft·pending은 기존 예약승인/취소 버튼 유지). 로컬 확인: 계약완료 건 7버튼(활성 4·비활성 3)·완료 건 6버튼 전부 비활성, 대여·고객·결제·계약서 탭 모두 하단 고정. 검수 탭 안의 [반납 검수 승인] 등 탭 전용 버튼은 이동하지 않음. 마이그레이션 없음.
+- 검수 탭 상시 노출·상태 무관 이슈 등록(2026-10-22, Stephen 지시): ① `showInspectionTab` 항상 true ② `registerInspectionIssue`가 상태별 분기 — 반납요청·반납완료=기존 검수 이슈(반납완료 전환 포함), 계약완료~대여중=사전 접수(has_prior_issue+고객 증빙 요청)+이슈 기록, 그 밖(완료·취소·신청대기 등)=이슈 기록만 ③ 증빙 업로드 서명(`inspection/sign`)의 반납완료 제한 해제(예약 존재만 확인) ④ 화면: 이슈 칩·등록은 항상, [반납 검수 승인]은 반납요청·반납완료에서만 활성(그 외 비활성+안내), 반납 전·종료 건 이슈 등록은 칩 이동 없이 패널 새로고침 ⑤ 🔴결함 수정: 담당자 지정 필터가 `assigned_admin IS NULL`이라 RPC가 등록자를 기본 담당으로 기록하는 경우 선택한 담당자가 무시되던 문제 → 조건 제거. 테스트 `inspectionAnyStatusIssue.test.ts` 4건, vitest 통과. 로컬: 계약완료 건 검수 탭 노출·칩·비활성 승인 버튼 확인(등록 미실행).
+- [파손 신고 접수 처리] 하단 버튼 제거(2026-10-22, Stephen 확정 — 고객 파손 신고는 채팅으로 받아 '검수' 탭에서 수동 이슈 등록으로 통합): `RentalDetailPanel`의 버튼·`runDamageClaim`·`damageBusy`·`damageStageOk` 삭제, `prior-issue` API의 'damage' 동작 삭제(미사용), 테스트 갱신(버튼 부재 확인). 고객 알림 `damage_claimed` 카드 경로(상태 전환 시)는 유지. vitest 2790 통과.
+- [이슈 사전 접수 💬] 실행 후 '검수' 탭 랜딩(2026-10-22, Stephen 지시): `runPriorIssue('register')` 성공 시 `activeTab='inspection'`. 로컬 확인(예약 62: 대여정보 탭에서 클릭 → 검수 탭 전환·사전 접수 내용 표시). 테스트 데이터(사전 접수·증빙 요청 기록) 삭제하지 않음.
+- 고객 CS 증빙 제출 시 'CS 등록완료' 대화카드 + 구체적 관리자 푸시(2026-10-22, Stephen 지시): `submitPriorIssueReport`가 성공 후 ① 고객 상담 세션에 `send_return_notice_card`(notify_type=issue_report_submitted, 접수 유형·첨부 수·내용 요약, 버튼 '접수 내역 확인'→/account/rental) 발송 ② 관리자 푸시를 '고객명·상품(예약코드)·유형·첨부 N건·내용 요약'으로 구체화(검수 탭을 열지 않고도 확인). 새 알림 유형이 아닌 기존 카드 타입 재사용이라 마이그레이션·푸시 문구 레지스트리 변경 없음. 테스트 priorIssue.test.ts 2건 추가(12건), 로컬 Stage에서 제출 API 호출 → 채팅 카드 생성 확인(예약 62 본인 계정).
+- 검수 탭 'CS 접수' UI 재구성(2026-10-22, Stephen 지시 — 분리 UI는 오버엔지니어링, 배지 분류로 단순화): ① CS 등록 폼을 목록 위로 이동, 이슈 칩 우측 끝에 '기타'(key etc) 추가, 칩 아래 한 줄 입력(100자, `INSPECTION_ISSUE_TITLE_MAX`=100, 고객 증빙 폼 상한 INSPECTION_DETAIL_MAX 1000과 분리) ② 고객 제출·관리자 등록 기록을 한 'CS 목록 카드'로 통합 — 좌측 배지(고객CS=red 계열·관리자CS=purple 계열)·제목='유형 — 내용' 한 줄 말줄임·날짜·펼침(클릭 시 상세·사진·담당·처리메모) ③ 버튼 문구 'CS 접수 등록'. 로컬 확인(예약 62): 칩 6개·입력 maxlength 100·카드 2건·말줄임·펼침 동작. 테스트 inspectionAnyStatusIssue 2건 추가·inspection 칩 목록 테스트 갱신. DB 변경 없음(issue_types는 자유 텍스트 배열).
+- 이슈 담당자 지정 기능 제거(2026-10-22, Stephen 지시 — 오버엔지니어링, 담당자=현재 로그인한 등록 관리자 자동 적용): 화면 담당자 칩·`issueAssignee`, 검수 API의 `assignee_id` 처리, `assignInspectionIssue` 헬퍼, 조회 API의 담당자 후보 목록(`assignees`) 삭제. 담당자는 이슈 등록자(`assigned_admin`=등록 관리자)로만 기록되고 CS 카드 펼침의 '담당 OOO' 표시는 유지(조회 API는 이슈에 기록된 담당자 이름만 조회). 테스트 `inspectionAssign.test.ts`(제거된 헬퍼 전용 3건) 삭제. vitest 2791 통과.
+- 진행 기록(2026-10-18, 3단계 구현 완료 — **Stage DB #728만 적용, Production 미적용·커밋 미실시**):
+  · DB #728(`20261018010000_728_prior_issue_reports.sql`): `reservation_issue_reports`(토큰 64자·상태·기한 14일·제출 내용, RLS 켬·service_role만), RPC `register_prior_issue`(반납 전 예약만·has_prior_issue 켜기·토큰 발급/재사용)·`cancel_prior_issue`·`submit_prior_issue_report`(토큰·기한·취소 확인) 전부 service_role 전용, `push_notification_config` 1행. Stage 롤백 시나리오 검증: 접수→같은 토큰 재사용→제출→잘못된 토큰 거절→반납완료 시 `issue`로 시작→반납완료 후 접수 거절→해제(제출 기록은 유지), 권한(anon/authenticated 불가) 확인.
+  · 서버: `lib/server/priorIssue.ts`(접수=증빙 요청 카드·푸시·문자(forceSms, 링크=폼)/해제/제출=관리자 푸시), `lib/server/attachPriorIssue.ts`(목록 [사전접수건] 표식, 같은 주문 형제 포함), `lib/utils/inspection.ts`(유형 3종·검증·토큰 형식), API `api/cms/reservations/[id]/prior-issue`(manager 이상, `menuAccessMap` 등록)·공개 `api/issue-report/[token]`(+`/sign`), `return-evidence` 조회에 고객 제출 내용 추가, 알림 `issue_report_request`(push.ts·sms.ts·notifyTemplate.ts). ⚠️ `src/routes/api/**`(프로즌) 신규 3개 — Stephen 지시 범위 → GATE C.
+  · 화면: 고객 `/issue-report/[token]`(유형 토글·상세·사진/영상, 만료/취소 안내), CMS 패널 [이슈 사전 접수]/[증빙 재요청]/[사전접수 해제](manager 이상, 반납 전 단계), 검수 탭 "고객 사전 접수 내용", `/cms/rentals` 행 [사전접수건] 배지·검수 칩 상단 정렬.
+  · 검증: 신규 `priorIssue.test.ts` + 갱신(알림 개수 단언), vitest 서버·유틸·보안·컴포넌트 2,752 통과, svelte-check 신규 오류 0(기존 2건). 미검증: 실제 푸시/문자, 고객 폼 실사용(업로드), 패널 버튼·배지 실화면 — Stephen 확인 필요.
+  · sp3-qa-agent 검수(2026-10-18): BLOCKING 0 · MAJOR 3 · MINOR 5 → 조치: **Migration #729**(Stage 적용·롤백 시나리오 검증) — M1 공개 폼 업로드 서명 30회·제출 5회 상한(`issue_report_take_upload_slot` 신설, 서명 API가 사용), M2 사전 접수 해제 시 제출된 요청도 닫음(재접수는 새 토큰), M3 반납완료 이후 제출·서명 불가, 닫힌 링크는 상품명·예약코드·이전 내용 비움(MINOR). 재검수는 미실시.
+  · 미조치 MINOR(Stephen 판단): 재요청(register 재호출) 시 카드·푸시·문자 쿨다운 없음(manager 이상만 호출 가능) / 고아 업로드 파일 정리 크론 없음 / 사전 접수 후 예약이 취소·만료되면 has_prior_issue 가 남음(목록 영향 거의 없음) / 묶음 주문에서 사전 접수는 해당 예약 1건에만 걸려 형제는 pending 으로 시작할 수 있음(배지는 주문 단위로 표시) — 의도 확인 필요.
+  · 남은 일: Production #722→#729 순서 적용은 Stephen 지시 후(코드 배포 전에 DB 먼저, DRIFT_CHECK 포함).
+
+## NOW — 🔴 CRITICAL(DB 변경): 대여현황 '반납/회수 → 검수 → 완료' 2단계 — 반납 검수 승인·이슈 등록·완료 알림/적립 이동·'검수' 칩 (Migration #724, 2026-10-17, 이 세션'만', ✅ Stephen 지시("2단계 이어서 구현, TASK.md 블록 먼저") · 플랜 정본 `~/.claude/plans/users-stevenmac-documents-pseries-crazy-mossy-lovelace.md` · AskUserQuestion 확정: 검수 상태는 별도 컬럼 `inspection_status`(pending/issue/pass/resolved) · 완료 알림·적립은 검수 통과 시점으로 이동 · 1단계(#722·#723)는 Stage만 적용 상태에서 이어서 진행 · Stage 먼저, Production·커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 범위(2단계만): ① DB `inspection_status`·`inspected_at/by`·`has_prior_issue`(3단계용 선반영) + `reservation_inspection_issues` + returned 진입 시 초기화 트리거 + 검수 없이 returned→completed 차단 트리거 + RPC `approve_return_inspection`·`register_return_inspection_issue`·`resolve_return_inspection_issue`(service_role 전용) + `get_rental_list`에 `p_inspection_scope`(라이브 정의 앵커 치환) ② 서버: `rentalCompletion.ts`(완료 적립+알림 한 곳), returned 시점 3곳에서 대여완료 적립·`rental_complete` 알림 제거, `updateStatus`·QR의 `completed` 직접 전환 차단, 검수 API(승인·이슈·해소·증빙 서명) ③ 알림 `inspection_pass`·`inspection_issue` ④ CMS: 검수 탭 승인/이슈 UI, '검수' 칩.
+- 결정/편차: 정시반납 적립(`award_on_time_return_points`)은 호출 시점(오늘)을 반납 시점으로 보는 로직이라 **returned 시점에 그대로 둔다**(승인 시점으로 옮기면 늦은 승인이 지각 처리됨). 이슈 → 해소(완료-추가청구) 때는 대여완료 포인트만 적립하고 완료 알림은 보내지 않는다(Stephen 확정). 이슈 담당자는 등록한 관리자로 기록(별도 지정 UI 없음). 이전에 이미 반납완료된 건은 inspection_status 가 비어 있어 '검수 대기'로 취급(승인 시 적립은 멱등 키로 중복 지급 안 됨, 완료 안내는 승인 시 새로 발송됨).
+- 3단계(CS 사전 접수 UI·증빙 폼)는 이 블록에서 착수하지 않는다(컬럼·트리거 분기만 준비).
+- 진행 기록(2026-10-17, 2단계 구현 완료 — **Stage DB #724만 적용, Production 미적용·커밋 미실시**):
+  · DB #724(`20261017040000_724_return_inspection.sql`): `inspection_status`(CHECK)·`inspected_at/by`·`has_prior_issue` 컬럼, `reservation_inspection_issues`(RLS 켬·service_role만), 트리거 `trg_rental_inspection_status`(returned 진입 초기화 + 검수 없는 returned→completed 차단), RPC `approve_return_inspection`·`register_return_inspection_issue`·`resolve_return_inspection_issue`·`inspection_target_ids`(service_role 전용, 같은 주문 returned 형제 일괄), `get_rental_list`에 `p_inspection_scope`(라이브 정의 앵커 치환·DROP 후 재생성·service_role만), `push_notification_config` 2행.
+  · Stage 롤백 시나리오 검증: 초기값 pending / 승인 없는 완료 거절 / 반납완료 칩·검수 칩 필터 / 이슈 등록 / 이슈 건 승인 거절 / 해소→completed·resolved / 사전 접수(has_prior_issue) 건은 issue 로 시작 — 전부 기대대로.
+  · 서버: `lib/server/inspection.ts`(승인=대여완료 적립+inspection_pass 알림, 이슈=처음일 때만 고객 알림+관리자 푸시, 해소=적립·알림 없음), `lib/utils/inspection.ts`(이슈 항목 5종·검증), API `api/cms/reservations/[id]/inspection`(+`/sign`, manager 이상, `menuAccessMap` 등록), `return-evidence` 조회 확장(검수 상태·이슈·증빙 서명 URL). returned 시점 3곳(updateStatus·QR·두발히어로)에서 대여완료 적립·rental_complete 알림 제거(정시반납 적립은 유지), `updateStatus`·QR의 completed 직접 전환 차단, `nextStatus`에서 returned→completed 제거. ⚠️ `src/routes/api/**`(프로즌) 신규 2개 — Stephen 지시 범위 → GATE C.
+  · 알림 `inspection_pass`·`inspection_issue`: push.ts·sms.ts·notifyTemplate.ts 3곳 + 설정 행(카드는 `send_return_notice_card` 재사용).
+  · CMS: 검수 탭에 [반납 검수 승인]/이슈 등록(5종 항목 칩·상세·증빙 첨부)/이슈 처리 완료 UI(manager 이상), `/cms/rentals` '검수' 칩(반납완료 칩은 검수 대기만), 승인·이슈 후 옮겨간 칩으로 전환해 패널 유지(`oninspectionchange`), 링크 진입 시 칩 자동 보정.
+  · 검증: 신규 `inspection.test.ts` 10건 + 갱신 테스트(옛 동작 고정분: dheroAutoAdvance 케이스 5·9·11, rentalCompletePointsManualTrigger EC-1/EC-3, 알림 개수 단언), vitest 서버·유틸·보안·컴포넌트 2,709+ 통과, Stage 라이브 통합 5파일 38건 통과, svelte-check 신규 오류 0(기존 2건). 미검증: 실제 푸시/문자 발송, 증빙 업로드·검수 탭 실화면 — Stephen 확인 필요.
+  · sp3-qa-agent 검수(2026-10-17): BLOCKING 0 · MAJOR 2 · MINOR 8 → 조치: **Migration #725·#726**(Stage 적용·롤백 시나리오 검증) — M-1 승인 시 이슈로 건너뛴 형제까지 `completed_ids`에 담겨 미완료 예약에도 포인트가 나가던 문제를 "실제 완료된 예약만 반환"으로 수정(혼합 주문에서 a만 완료·b는 issue 유지 확인), 이슈 해소 시 같은 주문 형제 전체(상태 무관)의 열린 이슈 기록 마감, 승인·해소 UPDATE에 status='returned' 조건, 증빙 서명 API는 반납완료 예약에만 발급. 재검수는 미실시.
+  · **M-2 확정(Stephen 2026-10-17)**: 이슈를 거쳐 해소(완료-추가청구)된 건에도 대여완료 포인트(구독자 더블 적립 포함)를 적립하고 알림은 보내지 않는다 → **Migration #727**(해소 RPC가 완료된 예약 id를 반환, Stage 적용) + `resolveInspectionIssue`가 `finalizeRentalCompletion` 호출, 테스트 갱신. Production은 #722→#727 순서.
+  · 미조치 MINOR: 일부 형제만 returned 인 주문은 UI로 승인 불가(정상 흐름엔 없음) / 과거 returned 건 승인 시 고객에게 완료 안내가 한 번 더 감(포인트는 멱등) / 승인 RPC 커밋 후 서버 중단 시 적립 누락(이전과 동일 한계) / 대표=pending·형제=issue 혼합 주문의 링크 이동 막다른 길.
+  · 남은 일: Production #722→#726 순서 적용은 Stephen 지시 후(코드 배포 전에 DB 먼저, DRIFT_CHECK 절차 포함). 3단계(CS 사전 접수·증빙 폼)는 별도 착수.
+
+## NOW — 🔴 CRITICAL(DB 변경): 대여현황 '반납/회수 → 검수 → 완료' 1단계 — 반납 방식별 알림 크론 + 고객 반납폼 + 예약 패널 '검수' 탭(읽기 전용) (Migration #722~, 2026-10-17, 이 세션'만', ✅ Stephen 지시(요구사항 정의서 + 3단계 순차 플랜 승인 "1단계부터 구현") · 플랜 정본: `~/.claude/plans/users-stevenmac-documents-pseries-crazy-mossy-lovelace.md` · AskUserQuestion 확정: 방식별 신규 알림이 기존 09시 return_remind 대체(방문만 유지) / 완료 알림·포인트는 2단계에서 검수 승인 시점으로 이동 / 검수 탭=계약서 탭 우측·반납요청 전 미노출·항목별 사진 정렬 · 검수 상태는 별도 컬럼(`inspection_status`, 2단계) 권장안 · Migration #721은 다른 세션이 사용해 이 작업은 #722부터 · Stage 먼저, Production·커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 범위(1단계만): ① DB `return_notice_logs`·`reservation_return_submissions`·`reservation_return_media`·`claim_return_notice_targets`(service_role 전용)·`get_return_remind_targets` 방문 한정, 비공개 버킷 `return-evidence` ② 크론 `/api/cron/return-notice`(10분) + 신규 notify_type(택배·퀵 3단계·무인함) 4지점 세트(채팅 RPC 줄 치환·push.ts·sms.ts·notifyTemplate.ts) ③ 고객 `/account/rental/[id]/return-submit` ④ `rentalTransition.ts` 방식별 라벨 ⑤ 예약 패널 '검수' 탭(읽기 전용, 사진·체크리스트 목록).
+- 2단계(검수 승인·이슈·완료 알림/적립 이동)·3단계(CS 사전 접수)는 이 블록에서 착수하지 않는다. `completed` 직접 전환 차단도 2단계.
+- 진행 기록(2026-10-17, 1단계 구현 완료 — **Stage DB #722만 적용, Production 미적용·커밋 미실시**):
+  · DB #722(`20261017020000_722_return_notice_and_submissions.sql`): `return_notice_logs`·`reservation_return_submissions`·`reservation_return_media`(RLS 켬·정책 없음·service_role만), 비공개 버킷 `return-evidence`(사진+영상, 100MB), RPC `claim_return_notice_targets`(원자 선점)·`release_return_notice_claim`·`send_return_notice_card`(채팅카드 래퍼 — 기존 `send_rental_chat_notification` 본문은 건드리지 않고 `RESERVATION_STATUS_CARD` 타입 재사용 → ActionCard·chat.ts 변경 없음), `get_return_remind_targets`는 방문·미지정만, `push_notification_config` 5행. 서버 전용 함수 3종 anon/authenticated 실행 불가·service_role만 확인.
+  · Stage 롤백 시나리오 검증: 무인함 반납 90분 전 → `locker_2h` 선점 / 같은 건 재호출 없음(중복 방지) / 고객 제출 있으면 제외 / 퀵 4시간 전 → `quick_5h` / 방문 대상 아님 / 선점 해제 후 재선점 — 전부 기대대로, 테이블 잔여 0건.
+  · 크론 `src/routes/api/cron/return-notice/+server.ts`(10분, `vercel.json` 등록): 채팅카드 → 푸시+문자(허브) → 퀵 2시간 전만 운영자 푸시(`urgent_chat_message` 재사용). 카드 전달 실패 시 선점 되돌려 재시도. 순수 정의 `src/lib/utils/returnNotice.ts`.
+  · 알림 레지스트리 5종(`return_notice_courier|quick_5h|quick_2h|quick_1h|locker`): `push.ts`·`sms.ts`(링크=반납 제출 화면)·`notifyTemplate.ts` 추가, 기존 테스트의 SMS 유형 수(9→14)·설정 행 수(23→28) 갱신. 채팅카드 문구는 푸시 기본 문구와 동일(CMS 편집 문장은 푸시·문자에만 적용 — 기존 정책과 동일).
+  · 고객 화면 `/account/rental/[id]/return-submit`(택배: 체크리스트+사진 / 무인함: 사진+번호·비밀번호+연체 경고 / 퀵: 진행 확인) + API `api/account/rental/[id]/return-submit`(제출)·`/sign`(서명 업로드, 영상은 브라우저가 버킷에 직접 업로드). 제출 시 `in_use→return_requested`를 RPC로 직접 전환(AUTO_NOTIFY 미경유로 `return_registration` 카드 중복 방지). ⚠️ `src/routes/api/**`(프로즌 경로) 신규 3개 — Stephen 지시 범위 → GATE C.
+  · CMS: 예약 패널 '검수' 탭(계약서 탭 우측, 반납요청·반납완료·완료에서만 노출, 읽기 전용: 체크리스트·무인함 정보·항목별 사진/영상, 사진은 공용 `MediaViewer`) + API `api/cms/reservations/[id]/return-evidence`(서명 URL 10분, `menuAccessMap` 등록). `rentalTransition.ts` 반납요청 단계 버튼 문구: 택배류 '집하지 회수 확인'·무인함 '무인함 회수 확인'(전환 규칙 불변).
+  · 검증: 신규 테스트 `returnNotice.test.ts`·`returnSubmission.test.ts`, vitest 서버·유틸·보안·컴포넌트 2,699 통과, svelte-check 신규 오류 0(기존 2건). 미검증: 실제 푸시/문자 발송, 고객 화면 실사용(사진 업로드·서명 업로드 URL 동작), CMS 검수 탭 실화면 — Stephen 확인 필요.
+  · 문서 갱신 완료: service-operations.md §32 · rental-lifecycle.md · security-auth.md 매트릭스 2행.
+  · sp3-qa-agent 검수(2026-10-17): BLOCKING 0 · MAJOR 2(+확인 1) · MINOR 8 → 조치: **Migration #723**(Stage 적용·롤백 시나리오 검증) — M-1 이미 발송한 건이 LIMIT 슬롯을 차지해 신규 건이 선점되지 못하던 문제 수정(후보 단계에서 발송 로그 제외 후 LIMIT; 두 건·limit 1로 서로 다른 건이 선점됨을 확인), M-2 09시 return_remind 를 "신규 크론이 맡는 6개 방식만 제외"하는 반대 조건으로(알 수 없는 방식 키도 계속 안내), 시각 파싱 범위 검증(25:99 방지), courier 단계는 대여중만, 제출 있음 판정=반납요청 상태+제출 존재. 코드: M-3 제출 API 순서 변경(새 사진 저장 성공 후 이전 행 삭제, 첫 제출의 상태 전환 실패 시 제출 되돌림), 업로드 파일 실존 확인, 무인함 비밀번호는 manager 이상에게만 CMS 응답에 포함(partner는 안내 문구). 재검수는 미실시.
+  · 미조치 MINOR(Stephen 판단): 서명 URL 호출 레이트리밋·고아 파일 정리 크론 없음 / 카드 RPC 응답 유실 시 카드 중복 가능(푸시·문자는 중복 없음) / 동시 재제출(이중 탭) 시 사진 순서 중복 가능. 미검증: courier 18:00 단계는 현재 시각상 Stage에서 직접 재현하지 못해 로직 검토로만 확인, `update_reservation_status` return_requested 전환의 부가 효과(알림) 본문 미확인.
+  · 남은 일: Production #722·#723 적용은 Stephen 지시 후(코드 배포 전에 DB 먼저, 순서대로 둘 다). 2단계(검수 승인·이슈·완료 알림/적립 이동)·3단계는 별도 착수.
+
+## NOW — 🟡 BOUNDARY: 공통 이미지·문서 뷰어(MediaViewer) 신설 + 두 문서 편집기(RichContentEditor·doc-editor) 이미지 도구 통합 모듈화 + 실제 브라우저 자동 검증(Playwright) (2026-10-16~17, 이 세션'만', ✅ Stephen 직접 지시(뷰어 하단 도구줄·편집 기능 / 라이트박스 전부 교체 / 편집기 더블클릭 뷰어·점 끌기 크기 조절·정렬 / 중복 기능 제거 / 보장 수준 향상 1~3단계) · DB·마이그레이션 변경 없음 · `src/routes/api/**` 변경 없음 · 계약서 문서 편집기 고유 기능(변수칩·서명/직인·표 반복영역·치환·저장 포맷) 보호 · Claude Browser: Stephen 요소 선택 세션(조건 ①) · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+1. 공통 이미지·문서 뷰어 `src/lib/components/common/MediaViewer.svelte`(+ `src/lib/types/media-viewer.ts`): 하단 도구줄(썸네일 정렬·축소·확대·크기 맞춤·회전·이미지 편집·내려받기·삭제), 이미지·PDF·유튜브 영상, 이미지 편집(자르기·명암·컬러감·배경색 24색 자동 인식·회전)을 하단 아코디언으로 제공. 상품 패널·구독 패널·상품 신규등록·모바일 CMS·채팅 ActionCard·계약서 캔버스/스프레드시트의 기존 라이트박스를 모두 이 뷰어로 교체. 뷰어가 열려 있는 동안 토스트를 도구줄 위로 올림(삭제 경고 토스트가 삭제 버튼을 가리던 결함).
+2. 편집기 이미지 도구: 문서 속 이미지 더블클릭·도구줄 '편집' → 뷰어(편집 저장 반영), 모서리 점을 끌어 크기 조절(상품설명=묶음 폭 %, 계약서=이미지 폭 px), 서식 도구줄 정렬이 이미지에 적용, 크기 조절 점 표시/숨김 토글(기억), 2장 이상 묶음은 "묶음 전체 NN%". 중복·충돌 기능(사진 크기·정렬 시트, 소/중/대·너비 입력·정렬 버튼) 제거. 높은 묶음·폭 100% 묶음(가로로 화면 밖에 걸림)에서도 도구줄·점이 화면 안에 오도록 위치 계산 보정.
+3. 통합 모듈화: 이미지 도구 공통 계산을 `src/lib/modules/doc-editor/core/imageTools.ts`(모서리·정렬별 허용·끌기 거리·화면 안 도구줄/점 위치·점 표시 선호 저장, 외부 의존 없음)로 분리해 두 편집기가 사용. 화면 그리기·저장은 각 편집기 유지.
+4. 검증: vitest 모듈·유틸 789건, 컴포넌트 195건(간헐 실패 2건은 편집기 마운트 대기 1초→5초로 보강), Playwright(Chrome·Safari) 38건(`e2e/editors.spec.ts` 14 + `e2e/mediaViewer.spec.ts` 24 = 편집기 이미지 도구·뷰어 도구줄 전 기능), svelte-check 신규 오류 0(기존 2건). 검증 전용 화면 `/dev-e2e/editors`(개발 서버 한정, 배포 빌드 404). 기능 계약 문서 `.claude/rules-ref/editor-capabilities.md` 신설, `MODULE.md` 0.1.6.
+5. 변경 파일: 신규 `MediaViewer.svelte`·`media-viewer.ts`·`imageTools.ts`·`imageTools.test.ts`·`e2e/*`·`playwright.config.ts`·`src/routes/dev-e2e/editors/*`·`editor-capabilities.md` / 수정 `RichContentEditor.svelte`·`doc-editor/ui/{DocEditor,DocToolbar,DocWorkspace}.svelte`·`core/types.ts`·`index.ts`·`ContractFlowEditor.svelte`·`ActionCard.svelte`·`ProductDetailPanel.svelte`·`SubscriptionDetailPanel.svelte`·`products/new/+page.svelte`·`cms/mobile/[id]/+page.svelte`·`ContractCanvasEditor.svelte`·`ContractSpreadsheetEditor.svelte`·`ContractTemplatePanel.svelte`·`ContractEditorModal.svelte`·`vite.config.ts`(vitest에서 e2e 제외)·`package.json`(@playwright/test·test:e2e)·`.gitignore`·관련 테스트.
+5-1. 후속(2026-10-17, Stephen 지시): MINOR②③ 수정 — MediaViewer 단축키가 입력창(input·textarea·select·contenteditable)에서는 동작하지 않도록 가드 + e2e 고정 대기 제거(위치 안정 poll) + 입력창 단축키 시나리오 추가. **서버 업로드 5MB 상한**: `src/routes/api/cms/upload/+server.ts`(프로즌 경로 `src/routes/api/**`) POST가 파일 1건당 5MB 초과 시 413 — 상품 이미지(thumb·large)·자산 라벨 이미지 모두 적용(Stephen 직접 지시 → GATE C). 테스트 `uploadMenuGuard.test.ts` 4건 추가. ⚠️ 모바일 CMS 자산 라벨 스캔(`cms/mobile/[id]` → OcrScanner)은 카메라 원본을 리사이즈 없이 그대로 올려 5MB를 넘는 사진은 업로드가 거절됨(클라이언트 축소 미구현, 별건 판단 대기).
+5-2. 후속(2026-10-17, Stephen 지시): 업로드 전 자동 줄임 — 공통 함수 `shrinkImageToLimit`(`src/lib/utils/imageResize.ts`): 5MB 이하는 원본 그대로, 초과면 화질→크기 순 6단계로 줄여 5MB 이하로(긴 변 최대 2000px, 기본 JPEG), 끝까지 못 줄이거나 읽을 수 없으면(일부 HEIC) 안내 문구와 함께 실패. 적용: 모바일 CMS 자산 라벨 스캔 업로드(`cms/mobile/[id]/+page.svelte`, 5MB 상한 회귀 해소) + 콘텐츠 에디터(`RichContentEditor.svelte`, 상품설명·구독·빠른답변·크레이지로그 공용 — 기존 1200×900 WebP 리사이즈 뒤 5MB 초과 시 추가 축소, 뷰어 편집 저장 경로 포함). 참고: 콘텐츠 에디터는 이미 업로드 전 1200×900 WebP로 줄이고 있었고, 원본 10MB 상한(표준 §15-1a)은 그대로 유지(그 초과 원본은 줄이기 전에 거절). 테스트: `shrinkImage.test.ts` 2건, Playwright `imageShrink.spec.ts` 4건 + `editors.spec.ts` 큰 사진 업로드 2건(Chrome·Safari), 전체 46건 통과.
+5-3. sp3-qa-agent 재검수(2026-10-17): **GATE E 조건부 통과 — BLOCKING 0·MAJOR 0·신규 MINOR 4**. 실행: svelte-check 신규 0, vitest 810 통과, 컴포넌트 195 통과(재현 안 됨), Playwright 46/46(Chrome·Safari). 1차 MINOR: ③ 해결, ② 단축키 가드 해결(Esc 전달·포커스 트랩은 유지), ①④⑤⑥ 유지. `/api/cms/upload` 호출부 전수 — 리사이즈 없이 원본을 보내는 경로 없음, 기존 인증·메뉴 게이트·log/ 예외·DELETE 무변경 확인.
+   신규 MINOR(미조치, Stephen 판단 대기): N-1 5MB 상한이 Vercel 요청 본문 한도(약 4.5MB, 코드로 재현 못 함·알려진 제한 기준)보다 커서 4.5~5MB 사진은 우리 검사 전에 Vercel이 거절할 수 있음 → 상한을 약 4MB로(클라·서버·테스트 동일) 권장 / N-2 줄임 WebP 모드에서 브라우저가 PNG를 돌려줘도 type 미확인(Safari 일부·드묾) / N-3 줄임 반복문 canvas를 단계마다 해제하지 않음(모바일 메모리) / N-4 줄임 실패·WebP 모드 테스트 부족.
+5-4. 재검수 MINOR 조치(2026-10-17, Stephen 지시): N-1 업로드 상한 5MB→**4MB**(Vercel 요청 본문 한도 약 4.5MB 대비 — `imageResize.ts` `SERVER_UPLOAD_MAX_BYTES`·`/api/cms/upload` `MAX_UPLOAD_BYTES` 동일, 테스트 값 동기화) / N-2 줄임 결과 형식이 요청한 형식과 다르면(WebP 인코딩 불가 시 PNG 등) 그 단계 결과를 쓰지 않음 / N-3 단계마다 임시 캔버스 즉시 해제(width·height 0) / N-4 테스트 추가(WebP 모드, 끝까지 못 줄이는 경우). 검증: Playwright 50/50, vitest 810, 컴포넌트 195, svelte-check 신규 0. (5-2의 "5MB" 서술은 이 항목에서 4MB로 갱신됨)
+5-5. sp3-qa-agent 3차 검수(2026-10-17): **GATE E 통과 — BLOCKING 0·MAJOR 0·신규 MINOR 3(표기 정리)**. 실행: svelte-check 신규 0, vitest 810, 컴포넌트 195, Playwright 50/50(Chrome·Safari). 2차 N-1~N-4 조치 확인(4MB 통일·서버 413 위치·형식 불일치 단계 제외·캔버스 await 후 해제·신규 테스트). 신규 MINOR(미조치): N-5 `uploadMenuGuard.test.ts:82` 테스트 이름 "5MB 초과"·상수명 `SIX`(값 5MB, 동작 정상) / N-6 `e2e/imageShrink.spec.ts:2` 머리 주석 "5MB" / N-7 `e2e/editors.spec.ts:164` 원본 크기 단언(5MB)이 상한 4MB와 혼동 가능 → 설명 주석 권장. 1차 유지 MINOR(Esc 전달·포커스 트랩·배포 빌드 404 미확인·ALT 스타일·CORS)는 그대로.
+5-6. 3차 검수 MINOR N-5·N-6·N-7 표기 정리(2026-10-17, Stephen 지시): `uploadMenuGuard.test.ts` 테스트 이름·상수명(`SIX`→`OVER_LIMIT`)·주석, `e2e/imageShrink.spec.ts` 머리 주석, `e2e/editors.spec.ts` 원본 크기 단언(상한 4MB 기준 + 설명 주석). 동작 변경 없음 — uploadMenuGuard 9건·Playwright 24건 통과.
+5-7. 후속(2026-10-17, Stephen 지시 — "툴바는 캔버스 상단에 고정, 스크롤 시 틈·겹침 없음 / CMS 화면 전체 점검" → AskUserQuestion 확정: "스크롤 영역 맨 위에 딱 붙여 고정"): 원인 = 서식 도구줄(`.rc-toolbar-wrap`, sticky top:0)이 스크롤 영역(예: products/new의 `.form-wrap`, 안쪽 위 여백 20px)의 여백을 뺀 위치에 멈춰 위에 20px 틈이 생기고 스크롤된 내용이 비쳐 보임. 수정(`RichContentEditor.svelte`, 공용 에디터): 가장 가까운 스크롤 영역의 위 여백을 읽어 `top`을 그만큼 음수로 보정(`stickyTop`, 창 스크롤이면 0) — 화면별 개별 CSS 없음. 검증: Playwright 신규 1건(안쪽 여백 20px 스크롤 상자, 수정 전 20px 틈으로 실패 확인→수정 후 0)·전체 52/52, 컴포넌트 195, svelte-check 신규 0. 실화면 측정: products/new(여백 20px→보정 -20px, 스크롤 후 간격 0·도구줄 최상단) ✅, 상품 상세 패널(여백 0 → 보정 0) ✅, **구독 상세 패널·빠른답변 패널은 데이터 화면 진입 실패로 실측 못 함**(같은 코드 경로). 미조치: 이미지 도구줄(.rc-ctx, z-index 8)이 서식 도구줄(6)보다 위에 그려지는 점.
+5-8. 후속(2026-10-17, Stephen 지시 — "선택영역 하단 끝을 늘려 캔버스 영역을 넓힐 수 있도록"): 콘텐츠 에디터(`RichContentEditor.svelte`, 공용 — PC·편집 가능 상태에서만)에 캔버스 아래쪽 끝 높이 조절 손잡이(`.rc-grow`, role=separator) 추가 — 끌면 편집 영역 최소 높이가 끈 만큼 커지고(내용이 더 길면 내용 높이, 최소 320px·최대 4000px), 더블클릭·Home 키=기본 높이, ↑↓ 키 ±40px. 구현은 CSS 변수 `--rc-min-h`(canvas-wrap·host·canvas 최소 높이). 면(fill)·배경색 호버만 사용(윤곽선·그림자 없음). 모바일(`rc-mobile`)은 기존 50dvh 규칙 유지로 손잡이 미노출. 높이는 화면을 다시 열면 기본값(저장 안 함). 검증: Playwright 신규 1건(끈 만큼 정확히 +300·방향키 +40·더블클릭 복귀·입력 정상, Chrome·Safari) · 실화면 products/new 320→471px ✅.
+5-9. sp3-qa-agent 4차 검수(2026-10-17, 5-7·5-8 후속 수정분 대상): **GATE E 통과 — BLOCKING 0·MAJOR 0·신규 MINOR 4**. 실행: svelte-check 신규 0, vitest 810, 컴포넌트 195, Playwright 54/54(Chrome·Safari). 신규 MINOR(미조치): ① `measureStickyTop`이 마운트·창 크기 변경 때만 재측정(스크롤 조상이 나중에 바뀌면 stale, `overflow:hidden` 조상은 미감지 — 문제 보고 시 ResizeObserver 추가) ② `.rc-grow` border-top 1px 구분선(규칙 위반은 아님, "선보다 면" 선호상 제거 가능) ③ `aria-valuenow`가 실제 높이가 아닌 설정 최소 높이 ④ 모바일 폭 전환 시 `--rc-min-h` 잔존(50dvh 규칙이 우선, 조치 불필요). 이전 MINOR(Esc 전달·포커스 트랩·ALT 스타일·CORS·이미지 도구줄 z-index)는 유지.
+5-10. 후속(2026-10-17, Stephen 지시 — 계약서 양식 편집 영역 "하단 끝을 늘려 캔버스 영역 확대"): `ContractTemplatePanel.svelte`(호스트)에 편집 영역 높이 조절 손잡이(`.ct-grow`, role=separator) 추가 — doc-editor 모듈 내부 무변경. 계약서 화면은 화면 높이에 맞춘 고정 레이아웃(contracts-page 이하 전부 overflow:hidden)이라 낮은 화면에서 캔버스가 좁았음. 끌면 `.editor-layout`을 고정 높이(240~4000px)로 키우고 `.template-panel`이 안에서 스크롤(`.ct-grown`), 저장·삭제 버튼 줄(`.panel-actions`)은 sticky로 아래 고정. 더블클릭·Home=화면 높이 맞춤, 위아래 방향키 ±40px. 모든 작성 방식(문서형·캔버스·HTML)에서 노출(authoringMode가 null이 아닐 때). 면(fill)만, 구분선 없음. 검증: 실화면 /cms/reservation/contracts(문서형 새 양식) 끌기 +60px 확인(463→523), 방향키 10회 +400(→923, 캔버스 399→799, 버튼 줄 고정·Home 복귀) 확인, 컴포넌트 195·모듈/유틸 801·svelte-check 신규 0. **자동 e2e 없음**(이 패널은 로그인·폼 액션이 필요해 검증 전용 화면에 올리지 못함).
+5-11. sp3-qa-agent 5차 검수(2026-10-17, 5-10 계약서 양식 높이 손잡이 대상): **GATE E 통과 — BLOCKING 0·MAJOR 0·신규 MINOR 3~4**. 실행: svelte-check 신규 0(해당 파일 a11y 경고 2건), vitest 810, 컴포넌트 195, Playwright 54/54. doc-editor 모듈·저장/발행/서명/치환·업로드 API 무변경, form 중첩 금지 규칙 유지, 기본 상태(growH=null)는 기존 레이아웃과 동일 확인. MINOR(미조치): ① `ContractTemplatePanel.svelte:1329` 포커스 가능한 separator에 이벤트가 붙어 a11y 경고 2건(`rc-grow`와 같은 패턴 — 두 곳 함께 svelte-ignore 정리 권장) ② `:1335` growH가 null일 때 `aria-valuenow=0`이 min(240) 밖 → 실측 높이 사용 또는 속성 생략 권장 ③ 자동 테스트 없음 — 소스 스캔(손잡이는 form 안, `.panel-actions`는 form 밖) 또는 jsdom 컴포넌트 테스트(`docEditorHost.mount.test.ts` 선례)로 최소 안전장치 권장 ④ `lostpointercapture` 미처리·재마운트 없이 템플릿 교체 시 growH 유지 가능(현재 사용처는 재마운트됨). 참고: 검수 에이전트는 로그인 필요로 실화면 측정을 못 했다고 보고했으나, 이 세션에서 개발 서버 /cms/reservation/contracts(문서형 새 양식) 실측은 이미 완료(5-10: 끌기 +60, 방향키 +400, 버튼 줄 고정, Home 복귀). 이전 MINOR(Esc 전달·포커스 트랩·ALT·CORS·이미지 도구줄 z-index·4차 MINOR 4건)는 유지.
+5-12. 5차 검수 MINOR ①②③ 조치(2026-10-17, Stephen 지시): ① 높이 손잡이 접근성 경고 정리 — `ContractTemplatePanel.svelte`·`RichContentEditor.svelte` 두 손잡이(`.ct-grow`·`.rc-grow`)에 svelte-ignore(포커스·키보드로 조절하는 separator 패턴, 사유 주석) → 경고 430→428 ② 계약서 손잡이 `aria-valuenow`는 높이를 키우기 전에는 속성 생략(기존 0은 최소값 밖) ③ 안전장치 테스트 신설 `src/__tests__/components/contractTemplatePanelGrow.mount.test.ts` 4건(jsdom 컴포넌트): 손잡이는 저장 폼 안·`.panel-actions`는 폼 밖 형제·중첩 폼 없음 / 기본 상태 레이아웃 무변경 / 방향키로 ct-grown·고정 높이, Home·더블클릭 복귀 / Enter 미가로채기·폼 미제출. 검증: 컴포넌트 199×3회 연속 통과, 모듈·유틸 801, Playwright 54, svelte-check 신규 0. 4번(lostpointercapture·재마운트 없이 템플릿 교체) 미조치 — 현재 사용처는 재마운트됨.
+5-13. sp3-qa-agent 6차 검수(2026-10-17, 5-12 조치분 대상): **GATE E 통과 — BLOCKING 0·MAJOR 0·신규 MINOR 3**. 실행: svelte-check 신규 0(두 파일 a11y 경고 0건), vitest 810, 컴포넌트 199, Playwright 54/54. svelte-ignore 문법·범위(해당 요소 1개만) 유효, 5-7·5-8·5-10 동작 훼손 없음, doc-editor·업로드 API 무변경. MINOR(미조치): M1 계약서 손잡이 `aria-valuenow`를 growH null일 때 생략(`ContractTemplatePanel.svelte:1336`) — 포커스되는 separator는 ARIA상 valuenow 필수, 마운트 후 `editorLayoutEl` 실측 높이를 쓰거나 사유 주석 권장(RichContentEditor는 항상 값 있음) / M2 신규 테스트 `contractTemplatePanelGrow.mount.test.ts` 약점: `.mode-buttons button` 첫 번째=문서형 순서 의존(버튼 텍스트로 찾기 권장), 100×20ms 대기 루프 뒤 단언 없음(실패 원인 파악 어려움), jsdom 높이 0이라 최소 clamp(240)만 검증하고 +40 증분은 미검증 / M3 참고(문제 없음). 이전 MINOR(Esc 전달·포커스 트랩·ALT·CORS·이미지 도구줄 z-index·4차 MINOR 4건·5차 ④)는 유지.
+5-14. 6차 검수 MINOR M1·M2 조치(2026-10-18, Stephen 지시): M1 계약서 높이 손잡이 `aria-valuenow`를 편집 영역 실측 높이로 — `ContractTemplatePanel.svelte`에 `layoutH`(ResizeObserver로 `.editor-layout` 크기 추적) 추가, 키우기 전(화면 높이 맞춤)에도 값이 있고 높이 변화·Home 복귀를 따라감, `aria-valuemin`은 min(240, 실측)로 범위 안 유지. M2 `contractTemplatePanelGrow.mount.test.ts` 보강: 모드 버튼을 순서가 아니라 글자('문서형')로 찾기 / 대기 루프를 마감시간 방식 + 손잡이 부재 시 명확한 실패 메시지 / jsdom 높이 흉내(.editor-layout 500px, 고정 높이를 주면 그 값)+ResizeObserver 흉내로 ↓+40·↑-40·최소 240·최대 4000 clamp·Home·더블클릭 복귀·aria 값 추적 검증(구 최소값 보정 우회 제거). 검증: 컴포넌트 199×3회 연속 통과, svelte-check 신규 0, 실화면 /cms/reservation/contracts(문서형 새 양식) aria-valuenow 463→503→463 확인.
+5-15. sp3-qa-agent 7차 검수(2026-10-18, 본 건 최종 상태 + 다른 세션 연관 기능 B 포함): **GATE E 통과 — A(본 세션) BLOCKING 0·MAJOR 0·MINOR 0, B(다른 세션 소유) BLOCKING 0·MAJOR 0·MINOR 4**. 실행: svelte-check 신규 0, vitest 886(본 건+B 관련 서버 테스트), 컴포넌트 199, Playwright 54/54. B = 계약 특약 조회 오류 처리(`api/cms/reservations/[id]/contract-specs/+server.ts` GET: '컬럼 없음'일 때만 빈 목록, 그 외 DB 오류 500) + 자동발행 특약 선택(`contractAutoIssue.ts`: 대표 행(주문 내 id 최소) 우선·없으면 다음 행). 인증·메뉴 게이트·manager 권한·PUT 무변경, 마이그레이션 #720 컬럼 사용(DB 추가 변경 불필요), 화면은 500이면 특약 영역 숨김→빈 목록 저장으로 기존 특약 소실 경로 차단 확인. B MINOR(다른 세션 소유, 미조치): B-1 '컬럼 없음' 판정의 메시지 매칭 `/contract_specifications/`가 느슨(컬럼명이 든 일시 오류가 빈 목록으로 숨겨질 수 있음 — 코드 42703만 보거나 `column ... does not exist` 패턴으로 좁히기 권장, PUT이 404로 막아 데이터 유실은 없음) / B-2 수동 발행 모달(`ContractTemplatePreviewModal.svelte:309-311`)은 특약 조회 500이어도 `reservationSpecs=[]`로 진행 → 예약별 특약 없이 발행될 수 있음(경고 또는 발행 차단 권장) / B-3 모달·`ReservationContractSpecs`는 받은 예약 행을 그대로 읽고 씀, 자동발행은 대표 행 우선 — 화면이 대표 행을 넘기는 한 일치(서버 PUT이 대표 행 강제는 아님) / B-4 `contractSpecsReadRules.test.ts`는 소스 문자열 검사(정적)라 42703·일반 오류를 모의로 던져 200/500을 확인하는 행동 테스트 아님. A 이전 MINOR(Esc 전달·포커스 트랩·ALT·CORS·이미지 도구줄 z-index·4차 4건·5차 ④·6차 M3)는 유지.
+5-16. sp3-qa-agent 8차(종결) 검수(2026-10-18, 배포된 최종 상태 190f34b+1ec679d 대상): **GATE E 통과 — 신규 BLOCKING 0·MAJOR 0·MINOR 0**. 실행: svelte-check 신규 0(경고 428), vitest 810, 컴포넌트 199×3회 연속 통과(간헐 실패 재발 없음), Playwright 54/54. 이전 조치 항목(단축키 가드·4MB 상한 일치·shrink 안전장치·손잡이 aria 실측·stickyTop 보정) 최종 코드에 모두 잔존, doc-editor 무변경·이식성 통과, /api/cms/upload는 a0f78bc 대비 상수 2개+413 검사 2곳뿐. 이전 MINOR 현황: 해소 2건(배포 빌드 404 — 운영 직접 확인, aria-valuenow), 후속으로 유지 8건(Esc 전달·포커스 트랩, ALT 인라인 스타일, CORS 이미지 편집/내려받기, measureStickyTop 재측정 시점, .rc-grow border-top, 모바일 전환, lostpointercapture, 6차 M3 — 모두 기능 영향 없음·저빈도). 배포: stage 1ec679d·main 8cccf90(PR #562) Vercel Stage·Production READY, 운영 /dev-e2e/editors 404 확인. 이 블록은 GATE E 통과로 DONE 처리.
+5-17. **재오픈(2026-10-18, Stephen 보고 — "이미지 크기를 한 번 줄이거나 늘린 뒤 사방 점이 뜨지 않아 조절 불가" + 이전 검수 결과 진위 확인 요청)**: 헤더를 DONE→NOW로 되돌림. 재현·원인: 실제 CMS 화면(products/new, 상품 상세 패널)·harness에서 줄이기/늘리기/되돌리기/정렬 변경/재선택을 반복해도 점이 유지되는 경로는 재현 못 했으나, **여백 있는 600px 스크롤 상자 모드에서 이미지(높이 825px)가 상자보다 크면 아래쪽 두 점이 스크롤 상자 밖(y=698, 상자 아래 600)에 놓여 페이지 푸터에 가려 눌리지 않음(처음 두 번 끌기가 효과 없음)**을 확인 — 점·이미지 도구줄 위치를 창 기준으로만 계산하고 편집기를 감싼 스크롤 상자(overflow 조상)의 보이는 영역은 반영하지 않던 결함(5-7·5-8 때 만든 `visibleBandOf`/`handleSpanXOf`의 누락). 수정: `imageTools.ts` `ClipBox`·`intersectClipBoxes` 신설, `visibleBandOf`·`handleSpanXOf`에 clip 인자 추가, `RichContentEditor.svelte` `clipBounds()`(overflow가 visible이 아닌 모든 조상 교집합, 크기 0 무시)로 세로·가로 모두 스크롤 상자 안으로 제한. 검증: 신규 e2e('이미지가 스크롤 상자보다 커도 네 점이 모두 상자 안에서 눌리고 아래쪽 점으로도 조절·반복 조작', Chrome·Safari — 수정 전 코드에서 실패 확인), imageTools 단위 +2건, Playwright 56·모듈/유틸 803·컴포넌트 199×2·svelte-check 신규 0. 상품 상세 패널 실화면은 네 점 모두 눌림 확인. 미해소 가능성: 사용자 환경(창 크기·화면)에서의 다른 원인, 도구줄 '크기 조절 점 표시/숨김' 아이콘을 눌러 점을 꺼 둔 상태(localStorage 'rc-image-resize-handles'='off'가 모든 에디터에 지속됨 — 아이콘 의미가 '크기 조절'로 오해되기 쉬움). 검수 진위: 이전 검수의 테스트·실행 결과는 실제였으나(조작한 적 없음), '전체 검수 완료' 서술은 과대 — 스크롤 상자 시나리오·반복 조작 시나리오가 e2e에 없었고 sp3 차수들은 주로 코드 읽기+기존 테스트 통과 확인에 의존.
+5-18. sp3-qa-agent 9차(적대적) 검수(2026-10-18): **GATE E 불통과 — BLOCKING 1·MAJOR 1·MINOR 2**. 검수가 실제 마우스 조작으로 Stephen 증상을 **재현**: 스크롤 상자 맨 아래 + 큰 이미지를 빠르게 크게 줄이면(또는 가로로 넓은 페이지에서 소폭만 끌어도) 점 4개·배지가 DOM에서 사라지고 포인터 캡처를 잃어 `endResize`가 호출되지 않아 `resizing`이 고착 → 재선택·본문 클릭 후 재선택으로도 점 복구 불가(정렬 변경 시에만 폭이 문서 값으로 복귀), 화면 폭(인라인)과 문서 `data-width`가 어긋남. 천천히(8단계) 끌 때는 재현되지 않아 이전 e2e가 못 잡음. 5-17의 clip 수정은 별개 원인(아래 점이 상자 밖)을 해결했으나 이 경로는 막지 못함. **수정(5-18)**: `RichContentEditor.svelte` ① `measureHandleBox`가 끄는 중(`resizing`)에는 `handleBox`를 지우지 않음(줄이는 순간 묶음이 잠깐 보이는 영역 밖으로 계산돼도 점 유지) ② `startResize`가 창 전체(`window`)에 pointermove/pointerup/pointercancel을 걸어 점 요소가 사라지거나 점 밖에서 놓아도 끌기가 반드시 끝나도록 + `endResize`에서 해제·컴포넌트 정리 시 해제 ③ 안전장치 `$effect`: 끄는 도중 선택이 사진 이외로 바뀌면 `endResize(false)`로 고착 방지. 검증: 신규 e2e 3건(스크롤 상자 맨 아래+빠른 큰 줄이기 → 점 4 유지·`data-width` 저장·재조절 / 가로로 넓은 페이지 변형 / 점 밖에서 놓기) — **수정 전 코드에서 실패(점 0·dw 100) 확인, 수정 후 Chrome·Safari 통과**(초안 시나리오는 8단계 천천히 끌기라 수정 전에도 통과해 빠른 끌기(steps 1)로 교체). Playwright 62·모듈/유틸 803·컴포넌트 199×2·svelte-check 신규 0. 실제 CMS 화면 재확인은 환경(이미지 로드 불가·창 0×0)으로 못 함. 미조치: MAJOR '크기 조절 점 표시/숨김' 토글 단서 약함(localStorage 'off'가 모든 에디터에 지속, 아이콘 의미 오해 가능) — Stephen 결정 대기, MINOR 가로 스크롤 페이지에서 점이 실제 가장자리와 어긋나 첫 이동에 폭이 크게 줄어듦, `overflow:clip` 상자에서 아래쪽 도달 불가(설계 한계). 계약서 문서 편집기(doc-editor) 반복 조절은 별도 탐색에서 6회 연속 점 유지 확인(변경 없음).
+5-19. sp3-qa-agent 10차(적대적 재검수)(2026-10-18, 5-17·5-18 미커밋 수정 대상): **GATE E 조건부 통과 — BLOCKING 0·MAJOR 신규 0·MINOR 4**. 9차 재현 증상(스크롤 상자 맨 아래+큰 이미지 빠르게 크게 줄이면 점 영구 소실)은 Chrome·Safari에서 끌기 속도(steps 1·2·8·60)·가로 넓은 페이지 모두 재현되지 않음(점 4 유지·`data-width` 저장·재조절 가능). 끌기 고착 경로 시도(Esc·Tab·창 밖 놓기·끌기 중 입력/Ctrl+Z/선택 변경/휠/우클릭/보조 포인터·pointercancel·즉시 놓기·20회 연속) 모두 고착 없음, Ctrl+Z 1회=원래 폭(이중 기록 없음), window 리스너 균형. 자체 고안 D1~D10(삽입 직후 끌기·묶음 2개 교대·뷰어 편집 후·토글 새로고침·모바일 폭·계약서 편집기 12회 연속 등) 정상. 실행: svelte-check 신규 0, vitest 803, 컴포넌트 199×2, Playwright 62/62. MINOR(미조치): ① window 레벨 pointerup/move가 `pointerId`를 확인하지 않아 멀티터치에서 다른 손가락을 떼면 끌기가 끝남(합성 이벤트로 확인) — 시작 pointerId만 처리 권장 ② 끌기 취소 키(Esc) 없음·끌기 중 Ctrl+Z는 되돌린 문서 위에 끌기 폭을 다시 적용 ③ 놓은 직후 점이 1프레임 깜빡임 ④ 끌기 중 우클릭하면 선택이 풀려 점 소실(재선택 시 정상). 미조치 MAJOR: '크기 조절 점 표시/숨김' 토글 단서(끈 상태 안내 없음) — Stephen 결정 대기. 한계: 실제 터치 화면 미확인(합성만), 개발 서버 합성 이미지 기준, 작성자의 '수정 전 코드에서 e2e 실패' 주장은 검수가 직접 확인 못 함(작성자는 세션 중 되돌려 실패 확인함). 이 수정은 미커밋·미배포.
+5-20. 후속(2026-10-18, Stephen 지시 — "조절 점이 이미지 툴바 레이어에 밀려 배치", "점은 이미지 사각 네 끝에 정상 배치", "이미지 크기에 따라 점을 가리지 않는 위치로 도구줄 재배치(작은 이미지: 위쪽 점 위/아래쪽 점 아래, 큰 이미지: 위쪽 점 아래)"): 원인 — `imageTools.ts` `handleSpanOf`가 도구줄이 이미지 안쪽에 놓이면(`inside`) 위쪽 점을 도구줄 높이만큼 아래로 밀어(topLimit = bar.topV+48+14) 점이 실제 모서리를 벗어나 옆면 중간에 놓였고, 도구줄이 이미지 위에 놓일 때도 점 크기만큼의 간격(4px)이 없어 위쪽 점을 가림. 수정: ① 점은 항상 이미지 실제 위·아래 모서리(보이는 영역 밖으로 나갈 때만 영역 안으로 당김, 도구줄과 무관) ② `barPlacementOf`: 점 실제 위치(당겨진 값) 기준 간격 15px(`HANDLE_CLEAR`)로 우선순위 ①이미지 위 바깥 ②이미지 아래 바깥 ③화면을 가득 채우는 큰 이미지만 안쪽·위쪽 점 바로 아래. 상수 `HANDLE_SIZE`(14, CSS .rc-resize와 동일) 신설. 검증: imageTools 단위 +1(위치·크기 격자 훑기 — 도구줄이 어떤 위치·높이에서도 점을 가리지 않음·실제 모서리 일치), 신규 e2e('조절 점은 이미지의 실제 네 모서리에…' Chrome·Safari — 작은 이미지(폭<40%)에서 점 y=이미지 모서리 ±1.5px·도구줄이 이미지 바깥·점과 사각형 겹침 없음, 큰 이미지에서도 겹침 없음; 수정 전 동작으로 되돌리면 실패), Playwright 64·모듈/유틸 804·컴포넌트 199×2·svelte-check 신규 0. 실제 CMS 화면 재확인은 환경 제약으로 미실시. 10차 MINOR 4건·토글 단서(MAJOR)는 미조치 유지. 이 수정은 5-17·5-18과 함께 미커밋.
+5-21. sp3-qa-agent 11차(적대적) 검수(2026-10-18, 5-20 점 위치·도구줄 배치 대상) + **Stephen 실화면 확인("현재 수정이 정상 적용됨을 확인했음" — 이미지 폭 34%·가운데 정렬에서 점 4개가 이미지 실제 모서리, 도구줄은 아래쪽 점 아래 바깥에 배치된 캡처)**: **GATE E 조건부 통과 — BLOCKING 0·MAJOR 1(이전부터 있던 문제)·MINOR 3**. 전수 측정(폭 4종×정렬 3종×1·2장×창 3종×스크롤 위치 6종 = 일반 432조합 Chrome·Safari, 스크롤 상자 144조합): 점-이미지 모서리 오차 0~2px(화면 끝 14px 이내에서만 최대 3~10px 당김), 도구줄-점 겹침 0건, 끌기 반복·고착(9·10차 시나리오)·2장 배지·높이 손잡이·sticky 틈·계약서 편집기 빠른 끌기 모두 정상. 실행: svelte-check 신규 0, vitest 804, 컴포넌트 199×2, Playwright 64/64(editors 3회 재실행 안정). 미조치: MAJOR-1(5-20 이전부터) 오른쪽 정렬한 작은 이미지에서 이미지 도구줄이 화면 오른쪽 밖으로 나가고 스크롤 상자에서는 잘림(`RichContentEditor.svelte` ~1117행 `left = max(8, r.left - w.left)` — 가로 보정 없음, 창 1000/1280px에서 재현, 모바일·2400px 정상) → `clipBounds` 재사용해 `min(..., 보이는 오른쪽 - 도구줄 폭)` 권장 / MINOR-1 이미지가 문서 첫 블록이고 맨 윗부분 40px만 창 맨 아래에 걸친 극단에서 도구줄이 창 밖으로 잘려 아래쪽 점과 겹침(`barPlacementOf` ③ 안쪽 분기에 하단 한계 검사 없음 → `visBottom - barH` 제한 권장) / MINOR-2 화면·상자 끝 14px 이내에서 점이 모서리에서 3~10px 당겨짐 / MINOR-3 스크롤 상자 300px에서는 165px 이미지도 도구줄이 안쪽(공간 부족, 불가피). 이전 미조치(10차 MINOR 4건·토글 단서 MAJOR)는 유지. 한계: 브라우저 확대/축소는 창 크기 변경으로 대체, 이미지 로딩 전(높이 0) 미재현. 5-17·5-18·5-20은 미커밋·미배포.
+5-22. 후속(2026-10-18, Stephen 지시 — 11차 MAJOR-1 "오른쪽 정렬 도구줄 가로 보정"): 원인 — `RichContentEditor.svelte` 선택 도구줄 가로 위치가 `left = max(8, 대상 왼쪽 - 편집 영역 왼쪽)`뿐이라 오른쪽 정렬한 작은 이미지(왼쪽 끝이 화면 오른쪽에 있음)에서 도구줄(약 560px)이 화면·스크롤 상자 오른쪽 밖으로 나감(창 1000px: 707~1270, 1280px: 847~1410). 수정: `imageTools.ts` `barLeftOf(anchorLeft, barWidth, bounds, margin=8)` 신설 = max(min(대상 왼쪽, 오른쪽 한계-여백-도구줄 폭), 왼쪽 한계+여백) — bounds는 창∩스크롤 상자(`clipBounds()`), 도구줄 폭은 `bind:this` 실측(`ctxEl.offsetWidth`), 폭이 바뀌면(ResizeObserver) 위치 재계산; 표 도구줄에도 동일 적용. 검증: 단위 +1(barLeftOf 경계·clip·너무 넓은 도구줄), 신규 e2e 3조건×Chrome·Safari(창 1000/1280/스크롤 상자 — 오른쪽 정렬 25% 2장 묶음에서 도구줄이 범위 안·맨 오른쪽 버튼 눌림; **수정 전 동작으로 되돌리면 3조건 모두 실패 확인**), Playwright 70·모듈/유틸 805·컴포넌트 199×2·svelte-check 신규 0. 미커밋. 미조치 유지: 11차 MINOR-1(극단 위치 도구줄 하단 잘림)·MINOR-2·3, 10차 MINOR 4건, 점 표시/숨김 토글 단서(MAJOR).
+6. 남은 일: Stage 저장소 테스트용 webp 1건 삭제 여부(Stephen 확인 대기), 터치(모바일) 기기 자동 검증은 미실시, 묶음 안 이미지 장별 크기 조절은 데이터 구조 변경 필요(미착수). sp3-qa-agent 검수(2026-10-17): **GATE E 조건부 통과 — BLOCKING 0·MAJOR 0·MINOR 6**. 실행: svelte-check 신규 0(기존 2건), vitest 790 통과, 컴포넌트 195(첫 실행 1건 간헐 실패→재실행 통과, 이후 편집기 마운트 대기 보강), Playwright 38/38(Chrome·Safari). 계약서 편집기 고유 기능·저장 포맷 파일 미변경, 이식성(portability) 통과 확인.
+   MINOR(미조치, Stephen 판단 대기): ① 컴포넌트 테스트 간헐 실패 재확인 ② MediaViewer 키보드 단축키(+ - r 0 ←→)에 입력창 대상 가드 없음·Esc가 뒤 모달에도 전달·포커스 트랩 없음 ③ e2e `waitForTimeout(500)` 1곳(회전 애니메이션) → expect.poll 교체 권장 ④ 배포 빌드에서 `/dev-e2e/editors` 404를 빌드로 직접 확인하지 못함(코드 가드만 확인) — 배포 전 build+preview 1회 확인 필요 ⑤ DocEditor ALT 입력창 인라인 스타일(1px 보더·색 fallback, 이식성 목적) ⑥ 뷰어 편집·내려받기는 교차 출처(CORS 차단) 이미지에서 안내 토스트로 종료 — 운영 도메인 이미지로 1회 확인 권장.
+
+## NOW — 🔴 CRITICAL(DB 변경): 대여현황 수동 알림 버튼 단계별 활성화 + 본인증명 등록요청 문자 발송 기록('알림발송' 탭 표시) (Migration #721, 2026-10-17, 이 세션'만', ✅ Stephen 지시("a 구현 적용, 대여 단계별로 해당 버튼 활성화" → "a안으로 수정" → "Production DB #721 적용") · **Stage·Production DB #721 적용 완료(Production 2026-10-17, Stephen 지시 — 인덱스 정의 조회로 identity_request 제외 확인)** · `src/routes/api/cms/customers/[id]/doc-request/+server.ts`(프로즌 경로 `src/routes/api/**`) 수정 포함 — Stephen 지시 범위 → GATE C · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 수동 알림 4종(반출 알림·반납 요청·반납 정보 요청·대여 종료 알림)을 항상 노출하고 해당 단계에서만 활성화(`RentalDetailPanel.svelte` NOTIFY_BUTTONS). 서버 `rentals/+page.server.ts` `sendChatNotify`가 같은 단계 규칙을 재검사해 다른 단계는 400. 테스트 `manualNotifyStageGate.test.ts`.
+- 본인증명 등록요청 문자(`identityDocRequest.ts`)를 `sms_notification_logs`에 `identity_request`로 기록(성공·실패, 솔라피 customFields에 예약번호·유형). 연결 예약: 예약승인·예약 패널 [재요청]은 해당 예약, 그 외 경로는 취소·만료 제외 최근 예약, 없으면 기록만 생략. `smsDelivery.ts` 라벨·`smsCardTypes.ts` 카드 매핑 추가. 테스트 `identityRequestSmsLog.test.ts`.
+- Migration #721: 같은 날 재요청 기록이 고유 인덱스에 막히지 않도록 `sms_notification_logs_dedup_idx`에서 `identity_request` 제외.
+- sp3 1차: 조건부 통과 — MAJOR 1건(지정 예약이 요청 고객 소유인지 미검증) → `resolveSmsLogReservationId`가 소유 확인 후 아니면 최근 진행 예약으로 대체하도록 수정(재검수 미실시). MINOR: doc-request 한 줄 가독성(미조치). 미확인: svelte-check 완료 요약, Stage/Production 드리프트 절차 대조.
+- 특약 후속(2026-10-18, #720 커밋 `a0f78bc` 코드 — sp3 지적 MINOR 1·2 조치): `contract-specs/+server.ts` 조회는 컬럼 없음일 때만 빈 목록·그 외 오류는 500, `contractAutoIssue.ts` 특약 선택은 대표 행(id 최솟값) 우선으로 수정. 테스트 `contractSpecsReadRules.test.ts` 5건(소스 스캔 방식).
+  · B-1 (✅ 2026-10-18 수정: 오류 코드 42703만 '컬럼 없음'으로 판정): 조회 API의 '컬럼 없음' 판정이 오류 코드 `42703`에 더해 오류 메시지에 컬럼명(`contract_specifications`)이 들어 있는지도 본다 — 컬럼명이 들어간 일시 오류가 빈 목록으로 숨겨질 수 있다(저장 쪽 PUT이 조회 실패를 404로 막아 데이터 유실은 없음). 권장: `42703`만 보거나 'column … does not exist' 패턴으로 좁힌다.
+  · B-2 (✅ 2026-10-18 수정·확인: `ContractTemplatePreviewModal.svelte`가 조회 실패 시 빈 목록 대신 오류로 멈춤): 수동 계약서 발행 모달이 특약 조회가 500이어도 빈 목록으로 진행해 예약별 특약 없이 계약서가 발행될 수 있다(다른 세션 검수 보고). 권장: 경고를 띄우거나 발행을 막는다.
+  · 수정 파일(이 세션, 미커밋): `src/routes/api/cms/reservations/[id]/contract-specs/+server.ts`(조회 오류 코드 42703만 빈 목록·그 외 500) · `src/lib/server/contractAutoIssue.ts`(특약 선택 = 주문 내 id 최솟값 우선) · `src/lib/components/cms/ContractTemplatePreviewModal.svelte`(특약 조회 실패 시 오류로 멈춤) · 테스트 `src/__tests__/server/contractSpecsReadRules.test.ts`(정적 검사 7건). DB·마이그레이션·`src/routes/api/**` 신규 변경 없음(기존 파일 수정 1곳은 #720 API). 검증: 서버·컴포넌트 vitest 1,997건 통과, svelte-check 신규 오류 0. 화면에서 조회 실패를 일으켜 오류 문구를 직접 확인하지는 않음. sp3 2차 검수 결과는 아래 줄에 기록.
+  · sp3 2차: 조건부 — MAJOR 1건(자동발행 특약 선택이 취소·만료 예약의 옛 특약을 고를 수 있음) → select에 status 포함·취소/만료 제외(활성 없으면 전체)로 수정, 정적 테스트 1건 추가(재검수 미실시). MINOR: 42703 판정 타당(PGRST204는 500으로 안전 측), 모달 viewOnly·partner 영향 없음, 오류 문구 화면 표시 미확인, 테스트가 정적 검사뿐이라 동작 모킹 테스트 추가 권장.
+  · 동작 모킹 테스트 추가(2026-10-18): `src/__tests__/server/contractSpecsBehavior.test.ts` 9건 — GET 특약 API(정상·42703 빈 목록·메시지에 컬럼명이 있어도 코드가 다르면 500·코드 없는 오류 500) + 자동발행 특약 선택(대표 행 우선·다음 예약 대체·취소/만료 제외·활성 없으면 전체). 취소·만료 제외 로직을 일부러 되돌려 2건이 실패함을 확인(변이 확인)한 뒤 원복. B-4(정적 검사뿐) 해소.
+  · (참고) B-3: 서버 저장이 대표 행을 강제하지 않는다(화면이 대표 행을 넘기는 한 일치). B-4: 새 테스트는 정적 검사 — 오류를 모의로 던져 200/500을 확인하는 동작 테스트는 없음.
+- 검증: vitest 서버·컴포넌트·유틸 2,610건 통과, svelte-check 신규 오류 0(기존 2건). 실제 문자 발송·'알림발송' 탭 표시는 배포 후 [재요청]으로 Stephen 확인 필요. 예약 304의 과거 문자는 소급 기록하지 않음.
+
+## NOW — 🟡 BOUNDARY: /products 상품 그리드 설정 모달 '고정노출 정렬'(카테고리별 고정 상품 최대 30개) + 상품 헤더 설정 모달 콤보·카드 정리 (2026-10-15, 이 세션'만', ✅ Stephen 지시(노출 순서에 "고정노출 정렬" 추가 → "카테고리 필터별 설정 가능 여부 재확인" → "권장안으로 카테고리별 구현" → 이후 UI 세부 지시 다수) · DB·마이그레이션 변경 없음(기존 설정 키 `product_page_grid` JSON 확장 — Stage 설정값에 테스트용 고정 3건 존치, Stephen 확인 전 삭제 금지) · `src/routes/api/**` 변경 없음(기존 `/api/cms/products/search-suggestions`의 `category` 파라미터 재사용) · Claude Browser: Stephen 요소 선택 세션(조건 ①) · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 기능: 노출 순서에 '고정노출 정렬' 추가. 선택하면 상단 카테고리 필터 칩(전체 포함)별로 고정 상품 목록(최대 30개, 드래그 순서)을 따로 설정하고, 고객 /products 에서는 그 카테고리 보기에서 고정 상품이 맨 앞(지정 순서)·나머지는 조회수순으로 이어진다. 다른 정렬 선택 시 고정 영역은 흐리게(비활성) 보이고 조작 불가(`inert`).
+- 저장: `product_page_grid.fixedByCategory = { all | 카테고리id: [{id, order}] }`(옛 `fixedProducts`는 '전체' 목록으로 읽음). 서버 병합은 `productGrid.ts`(`pickFixedIdsForCategory`·`mergeFixedFirst`·`fetchGridRowsWithFixed`) 한 곳 — 첫 페이지(`products/+page.server.ts`)와 무한스크롤(`products/_more/+server.ts`)이 같은 규칙(고정 먼저 + 일반 행에서 중복 제거, 누적 limit 후 offset)으로 순서 일관.
+- 검색 카테고리 연동(오늘 확인·수정): 고정노출 검색창이 칩 값과 무관하게 전체 상품을 검색하던 것을 칩이 '전체'가 아니면 `category` 파라미터로 그 카테고리만 검색(요청 주소로 확인). 서버는 카테고리 완전 일치(대소문자 구분) — 현재 Stage 칩 값과 상품 카테고리 값 일치.
+- UI 정리(`ProductGridModal.svelte`): 칩 통합·동일 폭(측정), 노출 순서 콤보(3열 격자·동일 폭·행 12px/열 6px), 라벨 폰트 통일(카테고리 선택과 동일 12px/700/보조색 — 노출 순서·고정노출 설정 제목), 고정노출 카드(패딩 20px·검색창↔목록 12px·섹션 간격 36px), 칩 옆 개수 숫자 제거.
+- `ProductHeroModal.svelte`(상품 헤더 설정 모달): 노출 방식 라디오 → 콤보 버튼(front-uiux §16, 그리드 모달과 같은 규격), '선택된 상품' 아코디언 제목줄·화살표 제거(목록 항상 펼침), 상품 추가 카드 그리드 모달 고정노출 카드와 동일 규격(패딩 20px·제목 폰트·여백)·개수 배지 우측 끝.
+- 테스트: `productGridFixed.test.ts` 22건 통과. svelte-check 신규 오류 0(기존 2건: vite.config.ts·subscribe/success). sp3 1차: 조건부 통과 → 저장 버튼 잠금(불러오는 중·실패 시) 반영.
+- 카테고리 목록 무한스크롤(2026-10-15, Stephen 지시 "카테고리 선택 목록에도 썸네일이 존재하는 한 무제한"): 카테고리를 선택한 /products 목록도 '전체'와 같은 무한스크롤(초기 20개·10개씩·최대 200)로 변경 — `products/+page.server.ts`(infiniteMode 상시 true), `products/_more/+server.ts`(`?category=` 우선, 없으면 설정 카테고리), `products/+page.svelte`(추가 조회에 category 전달). 노출 수량(count) 상한은 이 화면에서 미사용(고정 16개 초과 잘림 한계 해소). `mobileGridCount`는 반환만 남음. `_more` 응답 검증: category=other 10건 모두 other·hasMore true, category=camera offset 20 → 0건. 화면 스크롤 이어붙임은 미확인(Stage 렌즈 1건뿐).
+- 카테고리 대소문자 무시(2026-10-15, Stephen 지시 "대소문자 구분은 불필요"): `productGrid.ts` `resolveCategoryCase`로 주소 카테고리를 등록 표기에 맞춰 첫 페이지·`_more` 모두 변환(칩에 없는 카테고리는 종전 동작). 테스트 24건. sp3 2차 조건부(저장 불러오기 `.catch`·안내 반영) → 3차 통과(`_more`의 카테고리 조회 실패 보호 try/catch 반영).
+- 알려진 한계: 다른 모달 4곳의 라디오는 미변경. 칩에 없는 카테고리(예: other)는 대소문자가 다르면 0건. 고정 영역 ✕/검색의 실제 마우스 클릭 차단은 미확인(프로그램 클릭은 inert 무시됨).
+
+## NOW — 🔴 CRITICAL: 관리자 '취소·환불' 목록의 장바구니 잔재(미제출 임시예약) 숨김 + 취소확인 버튼 반응 개선 (2026-10-15, 이 세션'만', Stephen 지시 · Migration #712 **Stage·Production 적용 완료(Production 2026-10-15, Stephen 지시 — 취소 171→49건·anon/authenticated 실행 불가 확인)** · 커밋·배포는 Stephen)
+
+- 원인 조사(Production 실데이터): 294·295·296·298은 상품 "SET13. Z90+OMBRA2"(25,000/30,000원 요금 정상 등록)를 장바구니에 담을 때 생긴 **날짜 없는 임시예약(draft)** 이다.
+  상품상세 [장바구니 담기]는 누를 때마다 임시예약 1건을 만들고(`create_draft_reservation`에 중복 방지 없음), 담은 뒤 수량·옵션을 바꾸면 "담김 자동 취소"(2026-10-11 정책, `handleOptionEdited`)가
+  그 임시예약들을 취소한다 → 같은 고객·같은 상품으로 몇 초 간격 생성·1초 뒤 취소가 반복된 것처럼 보인다. 주문·결제 연결 없음(order_items·payment 0건), 금액 변동·숨은 DB 오류 없음.
+  "0원"은 날짜·대여기간이 정해지기 전이라 요금이 계산되지 않은 상태의 표시(요금 규칙은 정상). 버튼 클릭이 새 예약을 만든 것이 아니라, '취소·환불' 칩이 이런 잔재까지 보여준 것.
+  (예약 293 자체는 1건만 취소 확인됨 — 취소 확인 시각 1회.)
+- 변경: ① Migration #712 — `get_rental_list` 두 모드에 "단건 조회가 아니면 status='cancelled' AND 날짜 없음 AND 주문 연결 없음 행 제외"(앵커 치환, 시그니처·권한 불변). Stage: 취소 192건 중 115건 잔재 제외 → 77건, anon 실행 불가 유지.
+  ② `RentalDetailPanel.svelte` — 고객취소 확인 버튼: 1차 클릭 시 글자 "한번 더 누르면 확인"(6초 후 자동 복귀), 처리 후 "확인 완료"로 비활성(연타 방지) / [예약취소] 1차 클릭 시 "한번 더 누르면 취소".
+- 테스트: `rentalListHideDrafts.test.ts`(Stage 라이브 3건) + 기존 `cmsRentalsCancelledView.test.ts` 통과. svelte-check 신규 오류 0(기존 2건 그대로).
+- 남은 일: Production #712 적용(Stephen 지시 후), 화면 확인. 잔재 근본 정리(중복 임시예약 생성 억제)는 별건 — 필요 시 Stephen 판단.
+
+## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
 
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
+
+## NOW — 🔴 CRITICAL(DB 변경): '예약승인' 분기 후속 — 승인 요청 표식·서류 승인 시 자동 발행·고객정보 서류 승인 UI·채팅 고객패널 승인상태 (Migration #718, 2026-10-15, 이 세션'만', ✅ Stephen 지시(예약승인 헤더 버튼·등록요청 연동·고객정보 서류 상태/승인·서류 승인 → 예약승인 눌렀던 예약만 자동 발행) · AskUserQuestion 확정: 신청대기 유지+계약 발송 / 승인된 서류만 '등록' 판정 / 승인 요청 시각 컬럼 1개 · **Stage·Production DB #717(다른 세션 파일)·#718 적용 완료(Production 2026-10-15, Stephen 지시 "Production DB 반영 순서대로") — 함수 해시 Stage 일치·권한·표식 0건 확인** · `src/routes/api/**`(프로즌) 수정 포함(approve-doc·customer-docs·chat customers detail) — Stephen 지시 범위 → GATE C · 자동발행 본체(contractAutoIssue.ts·service-operations.md §31)는 **다른 세션 구현**, 이 세션은 그 위의 연동만 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+### 이 세션이 구현한 것
+- **예약승인 버튼(헤더·하단 중복 배치)**: 라벨 '예약승인'·'예약취소', 승인 액션을 공용 `approveEnhance`·`rejectEnhance`로 통합. 계약서 발송 후 '계약대기' 칩으로 이동하며 패널 유지(`oncontractsent`, 신청대기→계약대기 전환·스크롤·다른 페이지 행 보정).
+- **본인증명 등록요청 연동**: 승인 액션이 서류 미등록 고객에게 `requestIdentityDocRegistration`(카드+푸시+SMS) 발송, 24시간 중복 방지, CMS '본인증명 등록요청' 안내문장을 카드·SMS에 반영(`identityDocRequest.ts`).
+- **승인 요청 표식(Migration #718)**: `rental_reservations.approve_requested_at` — 예약승인을 눌렀으나 서류 미승인(미등록·승인대기)이면 기록. 서류 승인(`/api/cms/approve-doc`) 직후 `autoIssueAfterDocApproval`이 표식 있는 신청대기 예약에만 자동 발행·발송 후 표식을 비운다(성공·실패 무관, 컬럼 없는 환경은 조회 오류를 대상 없음으로 처리). 버튼 '승인대기'는 표식 기준(누르지 않은 예약은 '예약승인'으로 요청 가능).
+- **예약 패널 고객정보 탭**: 본인·외국인 증명 등록/승인 상태 행 + manager 이상 [승인] 버튼(같은 approve-doc API), 필수 서류 미비 안내 (`/api/cms/reservations/[id]/customer-docs`, menuAccessMap 등록).
+- **채팅 고객정보 패널**: 승인 취소·재승인 대기가 '등록완료'로 보이던 결함 수정(승인대기/승인완료/필수 서류 미비 표시, 승인 시각 응답 추가), 전화번호 하이픈 표시, 임시예약 라벨.
+- **취소 목록 분리·패널 유지**: 아래 블록(#714) 참고.
+
+### 검증
+- 서버 테스트 174파일 1873건·컴포넌트 테스트 통과(신규: autoIssueOnDocApproval 8건·approveReservationIdentityRequest 2건·identityDocAutoRequest 2건·chatCustomerDocRequestButton 6건 추가), svelte-check 신규 오류 0(기존 2건 그대로), Stage·Production 컬럼·인덱스·함수 해시·권한 직접 조회.
+- 미확인: 실제 Stage 화면 end-to-end(표준양식 토글 ON 필요 — 현재 Stage·Production 모두 ON 양식 0개), 실제 SMS·푸시 발송.
+- **sp3-qa-agent 검수(2026-10-15): BLOCKING 1·MAJOR 3·MINOR 6 → 조치**
+  · B-1 서류 상태 조회 effect 무한 재조회(내가 만든 결함) → 로딩 플래그 `untrack` + 조회 키 가드, 회귀 테스트 `rentalPanelCustomerDocsFetchGuard.test.ts` ✅
+  · M-1 서류 승인 동시 처리 중복 발행 가능성 → 표식 선점(claim: update…returning) 후 발행, 동시 2회 호출 테스트 ✅
+  · M-3 토글 OFF에서도 계약서 발송 건 '승인하기'가 화면에서 막힘(§9 위반) → 표준양식 ON일 때만 '승인완료/승인대기' 단계 표시 ✅
+  · MINOR 1 표식 잔존 → 계약서 발송·기존 계약서 존재·확정 시 표식 비움 ✅ / MINOR 3 등록요청 토스트가 실제 발송과 다를 수 있음 → 서버가 발송 여부(`identityRequestSent`) 반환, 미발송이면 경고 문구 ✅ / MINOR 4 user_profiles id 불일치 → Production 47명 전수 id=user_id 확인(문제 없음) ✅
+  · **M-2 조치(Stephen 지시 2026-10-15)**: 자동발행이 건너뛰어져도(발행·발송 실패·일시 오류 등) 예약을 확정하지 않는다 — 신청대기 유지 + 사유 안내(`contractNotIssued`), 해결 후 '예약승인' 재실행. ⚠️ service-operations.md §31의 "자동발행을 못 하면 승인은 기존대로 진행" 서술과 어긋남 → 문서 개정 필요(다른 세션 작성분, 미수정). 표준양식 토글 OFF 시 즉시 확정 경로는 그대로(Stephen 확인 대기).
+  · **정책 확정(Stephen 2026-10-15): 서명·결제 없는 수동 확정 경로 폐지** — '예약승인'은 토글 ON·OFF 모두 확정하지 않음(OFF+서류 승인 시 '표준양식 미지정' 안내). `approveReservation`에서 확정 RPC·형제 확정·승인 알림 제거(서류 미승인=등록요청+표식, 승인=자동발행), `updateStatus`는 status='confirmed' 400 거절. 계약완료는 try_confirm_reservation(서명 AND 결제)만. 테스트 재작성(approveReservationOrderWide·AutoIssue·IdentityRequest), service-operations.md §9·§31·GATE C, rental-lifecycle.md 갱신. DB 함수 update_reservation_status는 try_confirm이 내부 호출해 DB에서는 못 막음(문서화).
+  · **토글 OFF 수동 발행 흐름(Stephen 2026-10-15, Migration #719)**: `rental_reservations.approved_at`(예약승인 시각) 신설 + `get_rental_list` '계약대기'·'신청대기' 칩 판정에 승인 반영. 서류 승인 고객의 '예약승인' → approved_at 기록(토글 ON·OFF·자동발행 실패 공통), 토글 OFF면 `approvedManual`, 버튼 '승인완료'·계약대기 칩 이동, 예약승인 전 hold는 계약서 탭 발행·미리보기&발송·재발송 잠금(`approvalLocked`). 서류 승인 시 표식 예약도 approved_at 기록. 서명+결제 후 자동 확정 → 대여현황 '계약완료'(기존). Stage #719 적용·필터 시험(롤백) 확인, **Production #717·#718·#719 중 #719 미적용** — 배포 순서: DB 3건 → 코드.
+  · **프로세스 재점검 후속 3건 조치(Stephen 2026-10-15)**: ① 승인 시각 컬럼 없는 환경(#719 미적용)에서 화면이 계약서 탭을 잠그지 않음(`customer-docs.approvalTracking`) ② 서버 집행 — `contractApprovalGuard.ts`, `init-contract`·`send-chat`이 '신청대기+승인 전+발송 계약서 없음'이면 409(컬럼 없는 환경·형제 승인·기존 발송분은 허용) ③ 계약대기 칩의 발송 전 행에 '승인완료 · 계약 미발송' 배지. 테스트 `contractApprovalGuard.test.ts` 12건. 미조치: 서류 승인 취소 후에도 승인 상태 유지·예약변경/계약 폐기 후 승인 기록 유지(설계 확인 대기).
+  · **2차 sp3 검수 대상(2026-10-15)**: M-2 정책 확정(건너뜀·OFF 모두 확정 안 함), 토글 OFF 수동 발행 흐름(#719), 서버 가드, 배지, fail-open, 문서 정합. 결과는 아래 기록.
+  · **2차 sp3 검수(2026-10-15): BLOCKING 0·MAJOR 1·MINOR 6 → 조치**: M-1 QR 상태전이 API·모바일 QR 액션이 `newStatus='confirmed'`를 그대로 통과(내가 1차 전수 점검에서 놓친 경로 — 리터럴 grep으로는 변수로 넘기는 호출이 안 잡힘) → `processRentalQrTransition`에 허용 상태 집합(shipped·in_use·return_requested·returned·completed) 제한 + 테스트 ✅. MINOR 5 문서 누락(security-auth 매트릭스 2행·rental-lifecycle approved_at·계약대기 정의) ✅. 미조치(정책·설계 확인 대기): MINOR 1 approved_at 소거 시점, MINOR 6 수동 발행 모드의 승인~발송 사이 고객 알림 없음, MINOR 2·3·4는 배포 순서(#717→#718→#719→코드)·문서화로 대응.
+  · (이전 서술) M-2 미조치(정책 결정 대기): 자동발행이 건너뛰어진(발행 실패 등) 경우 승인을 기존대로 진행해 서명·결제 없이 확정됨(§31 의도). `send_failed`·`issue_failed` 등 일시 오류에서도 확정되는 것이 맞는지 Stephen 확인 필요. 남은 MINOR(색 토큰화·changeReservation 표식 소거·문자열 시각 비교)는 미조치.
+- 남은 일: 코드 배포(DB는 두 환경 적용 완료), 표준양식 토글 지정, partner가 승인완료 건을 취소할 때 계약서가 남는지(기존 동작) 확인, 서버에서 '계약서 있는 신청대기 건 강제 확정' 차단 여부 결정.
+
+### 2026-10-15 후속 구현(이 세션'만', 구현 완료 · 화면 일부 미확인 · 커밋·배포는 Stephen)
+- **서류 행 공용화·재요청·직접 등록**: `CustomerDocRows.svelte` 신설 — 고객 관리 패널과 예약 패널 고객정보 탭이 같은 컴포넌트(유형 배지·등록일·승인·파일 보기/다운로드). 라벨·날짜 규칙 `utils/customerDocLabels.ts`. [재요청] = `POST /api/cms/customers/[id]/doc-request`(manager 이상, 서류 상태 무관·5분 중복 방지, 채팅 카드+푸시+SMS, `requestIdentityDocRegistration` force 옵션), [직접 등록] = 기존 `/api/cms/upload-doc`(서류 종류 선택 시 파일 창 자동 열기·행의 [직접 등록]은 종류 미리 선택·자동 열기 없음·이미 등록된 종류 선택 시 교체 경고 토스트·상자 열고 닫을 때 선택칸 재생성). menuAccessMap 등록.
+- **예약별 계약 특약 사전 등록**: Migration #720 `rental_reservations.contract_specifications`(jsonb) — **Stage·Production 적용 완료(Production 2026-10-15 Stephen 지시)**. `ReservationContractSpecs.svelte`(계약서 탭 '계약서 미생성' 배너 아래, 발송·서명 전까지 노출, 취소·만료 예약은 비활성 안내), API `GET/PUT /api/cms/reservations/[id]/contract-specs`(메뉴 `rental.reservation` + manager 이상), 규칙 `utils/contractSpecs.ts`. 자동발행(`contractAutoIssue.ts`)·수동 발행 모달(`ContractTemplatePreviewModal`)이 양식 특약 뒤에 이어 붙이고, 이미 생성됐지만 미발송인 계약서는 저장 즉시 특약·HTML '특약사항' 칸도 갱신(발송·서명된 계약서는 불변).
+- **자동발행 결함 수정**: 내용·발송 이력 없는 빈 계약서 초안이 '이미 계약서 있음'으로 자동발행을 막던 문제 → 빈 초안은 재사용(`contractAutoIssue.ts`).
+- **예약취소 결함 2건**: ① 토스에서 이미 취소된 결제(`ALREADY_CANCELED_PAYMENT`)를 오류로 막아 취소가 영구 실패 → 성공 처리·취소 시각 조회(`tossPaymentCancel.ts`). ② 신청대기 예약의 패널 맨 위 [예약취소]가 옛 '거부' 처리(`rejectEnhance`)를 써 취소 후 패널이 닫힘 → 하단 버튼과 같이 '취소' 칩 전환·패널 유지(`oncancelled`) + 취소 진행 중 자동 닫힘 방지(`keepOpenId`, 예약현황·대여현황). 실제 Stage에서 재현→수정→재확인(예약 4688).
+- **검증**: 서버·컴포넌트 테스트 1,937건 통과(신규: customerDocRowsShared·identityDocReregisterRequest·reservationContractSpecs·tossPaymentCancelAlready·contractAutoIssue 빈 초안), svelte-check 신규 오류 0(기존 2건). 미확인: 특약 입력 화면의 실제 입력·저장 흐름(Stage에 계약서 없는 신청대기 예약 없음)·실제 파일 업로드·재요청 실발송·실서버 취소 동작.
+- **sp3 검수(2026-10-15, sp3-qa-agent 읽기 전용)**: 1차 = 수정 후 재검수(BLOCKING 1·MAJOR 3 → 전부 수정: 깨진 기존 테스트 customerDetailPanelDocSlotLayout을 CustomerDocRows 기준으로 재작성 / 특약 `$&`·`$1` 치환 패턴 해석 → 함수형 치환 / 삭제된 계약서 갱신 방지 / 주문 전체 예약 id로 계약서·특약 조회), 2차 재검수 = BLOCKING 0·MAJOR 1(`$` 회귀 테스트 부재 → 추가 완료)·MINOR 2(자동발행 특약 선택을 id 오름차순으로 결정적화 완료, 계약서 주문당 1건 정책이라 수용). 직접 등록 시 승인 취소 전 확인창 추가. 미확인: 특약 입력 화면 실동작·#720 적용 상태 대조(검수자는 읽기 전용). 남은 MINOR: CustomerDocRows a11y 경고 2건(CustomerDetailPanel에서 옮긴 코드)·재요청 type 구분.
+- ⚠️ 테스트 데이터: Stage 예약 4688의 상태 값을 취소↔신청대기로 여러 번 바꿈(현재 취소).
+
+## NOW — 🔴 CRITICAL(DB 변경): 예약현황 '취소'·대여현황 '취소·환불' 목록 분리 + 취소 실행 시 취소 칩 이동·패널 유지 (Migration #714, 2026-10-15, 이 세션'만', ✅ Stephen 지시("취소목록 분리 정렬" → AskUserQuestion 확정: 분리 기준="계약완료 도달 이력 있음" → 데이터상 직접 판정 불가해 결제완료 이력 payment_confirmed_at으로 대체 적용·보고) · **Stage·Production DB #714 적용 완료(Production은 다른 세션에서 적용, 이 세션이 함수·권한·건수 직접 검증)** · `src/routes/api/**` 변경 없음 · 취소 후 패널 유지는 Stephen 실화면 확인 완료("정상 동작 확인"), 칩 색상 통일은 미확인 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+- 문제: 예약현황 '취소' 칩과 대여현황 '취소·환불' 칩이 같은 취소 건을 섞어 보여 관리 혼선.
+- 분리 기준(`rental_reservations.payment_confirmed_at`, 취소해도 지워지지 않음 — 되돌림 RPC #492/#499만 NULL로 되돌림): 결제완료 이력 있음='paid' → 대여현황 '취소·환불' / 없음='unpaid'(만료 포함) → 예약현황 '취소'.
+  "계약완료 도달 이력"은 취소 시 과거 상태가 남지 않아 직접 판정 불가 → 결제완료 이력으로 대체(관리자 수동 승인 후 결제 전 취소한 건은 예약현황 '취소'에 남음). 묶음(주문 단위) 모드는 주문 내 최대 결제완료 시각(g_paid_at)으로 판정.
+- 변경: ① Migration #714 `get_rental_list`에 `p_cancel_payment_scope text DEFAULT NULL` 추가(시그니처 변경 → DROP 후 재생성, 앵커 치환·멱등, service_role 전용 권한 재설정). 호출부는 전부 이름 있는 인자라 영향 없음.
+  ② `reservation/+page.server.ts`: '취소' 칩에 scope 'unpaid', 취소·만료 예약 링크(?selected=)를 결제 여부에 맞는 칩으로 리다이렉트(결제완료→대여현황 '취소·환불'), 다른 페이지 취소 건은 행 단독 조회 후 맨 위 보정(총 건수는 보정 전 기준).
+  ③ `rentals/+page.server.ts`: '취소·환불' 칩 scope 'paid', 취소대기 행 조회도 'paid', 결제 전 취소 링크는 예약현황 '취소'로 리다이렉트.
+  ④ `reservation/+page.svelte`·`rentals/+page.svelte`: 취소 실행 시 해당 취소 칩으로 이동(goto) 후 선택 행 scrollIntoView, 예약현황 칩 이동 시 `selected` 해제(취소 칩 리다이렉트 루프 방지), 예약현황 '취소' 칩 색상·호버를 '취소·환불' 칩과 동일(chip-refund).
+  ⑤ `RentalDetailPanel.svelte`: 취소 성공 시 기존 목록 새로고침(`update()`·`onstatuschange`)을 건너뛰고 `oncancelled`를 먼저 await — 기존 목록을 먼저 새로고침하면 취소된 행이 그 목록에 없어 패널이 먼저 닫히던 원인 제거(취소확인 흐름 동일).
+- 검증: Stage·Production 직접 SQL — 함수 1개(오버로드 없음)·anon/authenticated 실행 불가·service_role 가능, 분리 건수 합계=필터 없음 건수(Production 3+63=66), svelte-check 신규 오류 0(기존 2건: vite.config·subscribe/success 그대로).
+- 남은 일: 서버 코드 배포(DB는 두 환경 적용 완료라 순서 문제 없음), 칩 색상 화면 확인, Migration #712·#713(다른 세션)과 함께 커밋 예정.
+
+## NOW — 🟡 BOUNDARY: 구독 공통 정책·이용안내·서비스 기본 정보를 설정 서브메뉴 '정책관리'(`/cms/set/policy`)로 이동 (2026-10-15, 이 세션'만', ✅ Stephen 지시로 GATE B 명시 승인 · DB 마이그레이션 없음 · 커밋·배포는 Stephen)
+
+Stephen 지시 3항(후속 지시로 codes 탭 → 설정 서브메뉴 독립 항목으로 재배치, 메뉴키 `settings.policy`): ① '정책관리' 화면 신설 ② `/cms/set/rental`의 '대여·예약 이용안내'·'서비스 기본 정보' + `/cms/subscriptions/new`의 '⑤ 정책설정' 3개 영역을 레이아웃 그대로 이동 ③ 구독등록(`/cms/subscriptions/new`)에서 '⑤ 정책설정' 제거.
+
+```
+[CONTEXT BRIDGE]
+이동 대상 서버 액션(전부 hasSettingsAccess=manager+ 유지, 로직 무변경): saveGuide·savePolicy·saveServiceInfo·addConsent·deleteConsent·reorderConsents(← set/rental) + addPolicyItem·updatePolicyItem·deletePolicyItem·reorderPolicyItems(← subscriptions/new)
+데이터 소스·RPC·테이블 무변경(rental_guide_settings·rental_policy_settings·service_info_settings·rental_consent_items·subscription_policy_items)
+소비처 무변경: 장바구니 이용안내/동의문(cart/+page.server.ts)·푸터(+layout.server.ts)·계약서·/members 정기구독 이용안내
+수정 파일: cmsMenus.ts(settings.policy 추가) · set/policy/+page.svelte·+page.server.ts(신규) / set/rental/+page.svelte·+page.server.ts / subscriptions/new/+page.svelte·+page.server.ts / 문서 포인터 갱신
+```
+
+- [x] 서버: codes load·actions 이관 → rental·subs/new에서 제거 (완료)
+- [x] UI: `set/policy/+page.svelte` 신규, 설정 서브메뉴 등록, rental·subs/new 마크업·상태·CSS 제거 (완료)
+- [x] 검증: svelte-check 신규 에러·경고 0(기존 에러 2건 무관) · 신규 가드 테스트 66건 GREEN · server+security 166파일 1848건 GREEN · 문서 포인터 갱신(rental-cms-settings.md·security-auth.md) (완료)
+- [x] 후속 수정 ①(2026-10-15, Stephen 지시): 두 번째 영역 제목 '정책설정' → '정기구독 이용안내' + 안내 문장(section-desc) 제거 + 헤더 간격을 다른 영역과 동일한 `.section-head`(30px)로 통일 (완료)
+- [x] 후속 수정 ②(2026-10-15, Stephen 지시): 같은 영역에서 입력 UI(`.policy-add-wrap`+개수 안내)를 목록 위로 재배치 + 목록 행 간 표준 여백 적용 — cms-uiux.md §5 행 간격(gap) 중 15px(`.policy-list :global(.policy-drag-list)`), 값은 AI 선택(8/20px 대안) → Stephen 확인 대기 (완료)
+- [x] 테스트: `policyPageGuards.test.ts` 63건 + `policyMenuEntry.test.ts` GREEN · svelte-check 신규 0 · server+security+menu 168파일 1909건 GREEN
+- [x] GATE E: @sp3-qa-agent 검수 ✅ 통과(CRITICAL 0·HIGH 0·MEDIUM 1·LOW 5) — 10개 액션 로직·권한 원본과 동일, 진입 게이트·메뉴 오버레이·소비처 무변경·범위 외 수정 없음 확인, 지정 테스트 158건 + server/security 1849건 GREEN
+  - MEDIUM(load 진입 게이트 테스트 부재) → 즉시 보강: `policyPageGuards.test.ts`에 load 케이스 추가(세션 없음→/cms/login, 권한 없음·partner→access_denied, manager·superadmin 통과) — 68건 GREEN
+  - LOW(미조치, 참고): 낡은 주석 3곳이 `/cms/set/rental` 가리킴(cart/+page.server.ts 106·117행, contract-module.ts 137행 — 범위 밖이라 수정 안 함) · 액션 단 메뉴 오버레이 미집행(다른 settings.* 페이지와 동일한 기존 패턴) · 소스 문자열 스캔 테스트의 오탐 가능성 · 새 페이지 state_referenced_locally 경고(원본과 동일 패턴)
+- [ ] Stephen 실화면 확인(설정 서브메뉴 '정책관리' 표시·3개 영역 저장 동작) → 확인 시 헤더를 `## DONE`으로 변경 · 커밋은 Stephen 직접 (실브라우저 확인은 CLAUDE.md 기본값에 따라 미실시)
+
+## NOW — 🔴 CRITICAL: 문서 & 양식 통합 편집기 이식형 모듈 신설(src/lib/modules/doc-editor) — 계약서 양식(문서형) 적용, P0~P6 단계 실행 (2026-10-14, 이 세션'만', ✅ Stephen 계획 승인·하네스 플로 실행 지시 · ⏳ GATE B 확정 대기 · DB 마이그레이션 없음 · 기존 정상 로직 보호 원칙 · 기존 파일 수정은 허용된 2곳뿐(P4 ContractTemplatePanel flow 분기 플래그 교체 / P6 렌더 확장 가산 등록) · 커밋·배포는 Stephen)
+
+생성일: 2026-10-14 | 아젠다: 계약서 양식(문서형) 편집기와 공통 편집기(RichContentEditor)의 장점을 합친 이식형 '통합 편집기' 모듈을 신규 폴더에 만들고 계약서 양식에 적용 | 계획 원문: `/Users/stevenmac/.claude/plans/launch-selected-element-element-tag-div-polymorphic-adleman.md`
+
+```
+[CONTEXT BRIDGE]
+plan_source: 위 계획 원문(2026-10-14 Stephen 승인)
+핵심제약: ① 기존 정상 동작 로직 구조 절대 보호 ② 저장 포맷 TipTap 문서 JSON 유지(content_blocks=[{type:'tiptap-doc',doc}])
+TDD도메인: core(치환·렌더·확장) — 계약·치환·서명 인접이라 테스트 선행(RED→GREEN→REFACTOR, @sp2-tdd-agents). GATE C 강화: YES
+절대금지: RichContentEditor·사용처 5곳 변경 / P1~P4 중 기존 파일 수정 / DB 마이그레이션 / 프로즌 경로(src/routes/api/**, $env import 파일) 변경 / 고객 서명 화면 로직 변경 / 커밋·푸시
+실패롤백: P4는 플래그 USE_UNIFIED_DOC_EDITOR=false로 즉시 복귀, P6은 서식 기능 플래그 off. 신규 폴더 삭제로 전체 철회 가능
+```
+
+### Context
+- 계약서 양식 문서형(flow) 편집기(`ContractDocumentEditor.svelte` 1860줄 + `ContractFieldPanel.svelte` 444줄)는 표·반복행·서명/직인·줌·소스·변수 칩이 있으나 글꼴·글자크기·들여쓰기·구분선 등 일반 문서 서식이 부족하다.
+- 공통 `RichContentEditor.svelte`(1823줄, 5곳 사용)는 서식이 풍부하지만 표 편집·반복행·변수·서명이 없고 `/api/cms/upload`·`ContentBlock[]`·`$lib`에 묶여 이식이 안 된다.
+- 목표: 두 편집기의 장점을 합친 신규 모듈을 별도 폴더에 만들어 계약서 양식(문서형)에 적용한다. 다른 SvelteKit5 프로젝트가 폴더 복사 + 어댑터 주입 + SQL 실행만으로 DB 연동까지 쓸 수 있어야 한다.
+
+### Stephen 확정 사항 (2026-10-14)
+1. `RichContentEditor` 및 사용처 5곳은 무변경, 신규 모듈로 분리 구현
+2. 저장 포맷은 TipTap 문서 JSON 유지 — 발행·서명·치환·PDF 경로 무변경
+3. 이식 범위: 편집기 UI + 변수 패널 + 저장 인터페이스 / Supabase 어댑터 + SQL 번들 / 치환·렌더 엔진 / README + 예제 + 단독 테스트
+4. 변수 카탈로그는 props 주입, 계약서 변수는 어댑터가 제공
+5. 하네스 플로로 단계 실행하되 기존 정상 동작 로직 구조는 절대 보호
+
+### 기존 로직 보호 원칙 (모든 단계의 불변 조건)
+- P1~P4 동안 기존 파일 수정 없음 — `ContractDocumentEditor`·`ContractFieldPanel`·`tiptapExtensions.ts`·`tiptapRender.ts`·`contract-substitution.ts`·`RichContentEditor`는 그대로. 신규 폴더로 복제·이관 후 독립(shim으로 기존 파일을 바꾸는 방식 금지)
+- 기존 코드 수정은 정확히 두 곳, 각각 별도 게이트·승인 후: ① P4 `ContractTemplatePanel.svelte` flow 분기 1곳(상수 `USE_UNIFIED_DOC_EDITOR`, false면 기존 그대로) ② P6 렌더 경로에 새 서식(글꼴·글자크기·배경색·들여쓰기·구분선)을 가산(additive)으로만 등록(골든 테스트 통과가 선행 조건)
+- 기존 렌더러가 모르는 노드·마크는 버려질 수 있으므로 P1~P5는 현재 계약서 편집기와 동일한 서식 범위(기능 동등). 일반 문서 서식 확장은 P6에서만(기능 플래그 off 기본)
+- 저장 JSON은 사용자 편집 시에만 쓰기. 기존 양식 열기→저장 시 JSON·렌더 HTML 드리프트 0을 골든 테스트로 강제
+- 프로즌 경로·DB 마이그레이션·고객 서명 화면 로직 변경 없음
+
+### 모듈 구조 (`src/lib/modules/doc-editor/`, 선례 `src/lib/server/searchEngine/core|adapters`)
+```
+doc-editor/ README.md · MODULE.md · index.ts
+  core/     순수 TS($lib/$app/$env/supabase import 금지): types · extensions(기능 동등) · nodes/ · substitute · render · table-colwidth
+  ui/       Svelte 5: DocEditor · DocToolbar · VariablePanel · dialogs/(Source·SignaturePicker·LinkPopover·ImageNodeView) · icons.ts · doc-editor.css(--de-* 토큰)
+  adapters/ crazyshot/(csToast·업로드·signature-assets·contract-templates 바인딩 + 계약서 변수 카탈로그) · supabase/(createDocStore·createSignatureStore, 클라이언트 주입)
+  sql/      doc_templates·doc_signature_assets·버킷·RLS(service_role) 번들 + 롤백
+  examples/ 최소 SvelteKit 라우트 예제
+```
+- 공개 API: `DocEditor` props — `value`(bind JSON)·`catalog`·`features`·`uploadImage`·`listSignatureAssets`·`notify`·`labels`·`readonly`·`onchange`·`extraTabs`. export: `insertVariable`·`getJSON`·`getHTML`·`setContent`·`flush`·`isDirty`·`focus`
+- 툴바: 기록 / 텍스트(굵게·기울임·밑줄·취소선·글자색·배경) / 문단(정렬·목록·H1~H3·링크) / 표(삽입·행열·병합분할·헤더·삭제) / 반복행 / 삽입(이미지·서명직인·변수) / 보기(줌 50~200%·소스). 글꼴·글자크기·20색 팔레트·들여쓰기·구분선·인용·서식지우기는 P6 이후 활성. 제외(기본 off): ImageGroup·유튜브·LegacyHtml·키워드·모바일 하단 바
+
+### 단계 체크리스트 (각 단계 끝 GATE C — 공통 점검: `git diff --stat`로 기존 파일 변경 0 확인 · svelte-check 신규 오류 0)
+- [ ] **P0 준비** | GSD | 완료기준: 이 블록 GATE B 승인 + Stage 기존 flow 양식 JSON(3종 이상) 읽기 전용 추출 → 골든 픽스처(렌더 HTML·치환 결과 스냅샷) 확보
+  - GATE C: 추출은 SELECT만(Stage `ezyvffjvuwmtuhpxdjrw`), 데이터 변경 0
+- [ ] **P1 core** | TDD(15분 단위 분해) | 완료기준: 타입·확장(기능 동등)·치환/렌더 복제 이관, 골든 일치·라운드트립 무드리프트
+  - 테스트 선행: 골든 일치 · 열기→저장 드리프트 0 · 기존 `contractTiptapRender`·`contractHtmlSubstitution`·`contractTableEditCommands`·`contractSsrSafety` 수정 없이 그대로 통과
+  - GATE C: `git diff --stat -- src/lib/components src/lib/utils src/routes` 0 · `grep -rnE "\$lib|\$app|\$env|@supabase|/api/|csToast" src/lib/modules/doc-editor/core` 0건
+- [ ] **P2 ui** | TDD(mount 테스트) | 완료기준: 툴바·본문·줌·소스·표·반복행·이미지·서명/직인 다이얼로그·CSS 토큰·아이콘
+  - mount 테스트(jsdom, `*.mount.test.ts`): 명령 동작·선택 유지·반복행·소스 적용
+  - GATE C: `npm run test:component` 통과 · 하드코딩 색상 0(`--de-*`만) · 터치/클릭 타겟·Svelte 5 문법(onclick) 확인 · 기존 파일 diff 0
+- [ ] **P3 변수 패널** | TDD | 완료기준: `VariablePanel`(카탈로그 주입·탭·칩·검색·`extraTabs`로 특약 탭), 칩 클릭→커서 삽입(mousedown 선택 유지), 직렬화 `{{변수}}` 보장
+  - GATE C: 칩 클릭 후 선택 유지·삽입 위치 테스트 · 기존 파일 diff 0
+- [ ] **P4 adapters + 통합** | TDD+GSD | 완료기준: crazyshot 어댑터(바인딩·계약서 카탈로그 — 패널 18개 + 타입에만 있던 변수 정리) + `ContractTemplatePanel` flow 분기 교체(플래그 on)
+  - 점검: 저장·dirty·`serializeBlocks`·모드 불일치 거부 로직 동작 동일
+  - ⚠️ 첫 기존 파일 수정(①) — 별도 CRITICAL GATE 질문 후 진행. 롤백 = `USE_UNIFIED_DOC_EDITOR=false`
+  - GATE C: `git diff --stat`에 `ContractTemplatePanel.svelte` 외 기존 파일 0 · 플래그 false 시 기존 동작 확인
+- [ ] **P5 이식 패키징** | GSD+TDD | 완료기준: supabase 어댑터·SQL 번들(Stage `BEGIN…ROLLBACK` 검증, 마이그레이션 적용 아님)·예제·README·MODULE.md·이식성 소스 스캔 테스트
+  - 실화면(표·반복행·서명/직인·줌·소스·변수 칩·저장·고객 서명 화면 렌더 비교)은 Claude Browser — Stephen이 명시 요청한 세션에서만(CLAUDE.md 조건 ②), 아니면 Stephen 직접 확인
+  - GATE C: 예제 라우트가 README 절차대로 mount 되는지 테스트
+- [x] **P6 서식 확장 (별도 GATE B)** | TDD | 완료기준: 글꼴·글자크기·배경·들여쓰기·구분선을 모듈과 기존 렌더 확장 목록에 가산 등록(②) → 골든·고객 서명 화면 렌더 비교 통과 후 기능 플래그 on — ✅ P6-a·b·c 완료(아래 진행 기록), sp3 P6 전체 재검수 통과(2026-10-14)
+  - 골든 통과 없이 플래그 on 금지. 기존 렌더 파일은 추가 등록만(기존 항목 변경 금지)
+- [ ] **GATE E** | `@sp3-qa-agent` 검수 + TASK.md 기록. 구 `ContractDocumentEditor` 삭제는 이번 범위 밖(별도 승인)
+
+### 이식성 게이트 (자동 테스트로 강제)
+- `core/`·`ui/` 소스 스캔: `$lib`·`$app`·`$env`·`@supabase`·`/api/`·`csToast` 금지, import 화이트리스트(svelte, svelte-tiptap, @tiptap/*, prosemirror-*, 상대경로). `adapters/crazyshot`만 `$lib`·`/api/cms/*` 허용. 하드코딩 색상 금지(`--de-*`)
+- 예제 라우트가 README 절차(패키지·SQL·어댑터 주입)대로 mount 되는지 테스트
+
+### 재사용(참조·복제 원본, 원본 수정 금지)
+- 확장·노드: `contract-editor/tiptapExtensions.ts`, `nodes/MergeFieldNode.ts` · 치환·렌더: `utils/tiptapRender.ts`, `utils/contract-substitution.ts`, `utils/docImport/tableColwidthFill.ts`
+- P6 서식: `editor/RichContentEditor.svelte`·`editor/extensions.ts`의 팔레트·글꼴·`Indent`·`keepSelection` · 서명 자산: `/api/cms/signature-assets`, `utils/fileValidation.ts`(adapters/crazyshot에서만)
+- 테스트 인프라: `vitest.component.config.ts`, `richContentEditor.mount.test.ts`, `pdfViewer.mount.test.ts`
+
+### 검증 항목
+1. `npm run test`: 기존 계약 서버 테스트 24개 + 치환 테스트 + 신규 core 테스트 통과(기존 테스트 파일 수정 없이 통과)
+2. `npm run test:component`: 통합 편집기 mount 테스트
+3. 이식성 스캔 + `npx svelte-check` 신규 오류 0
+4. 골든 비교: 기존 양식 3종 이상이 신/구 편집기에서 열기→저장 시 JSON·렌더 HTML 동일
+5. 실화면(Stephen 확인 또는 명시 요청 시 Claude Browser): 양식 열기·표·반복행·서명/직인·줌·소스·변수 칩 삽입·저장, 고객 서명 화면 렌더 비교
+6. 단계별 `git diff --stat`로 기존 파일 변경이 허용된 2곳뿐임을 확인 + sp3-qa-agent GATE E
+
+### 열린 위험
+- P6 서식은 렌더러가 모르는 마크·노드를 무시할 수 있어 가산 등록과 골든 비교 없이는 켜지 않는다
+- 서명 이미지 절대위치(`overlay,x,y`)는 canvas 좌표 패딩 체인과 연관 — 이미지 노드 속성 스키마 불변
+- `src/lib/modules/`는 신규 규약 — 완료 후 `.claude/rules-ref/`에 이식 모듈 규칙 1문서 추가(후속 문서 작업)
+
+### 진행 기록
+- [x] P0 준비(2026-10-14): GATE B 블록 생성, Stage 기존 flow 양식 구조 확인(읽기 전용) — 실양식은 표/변수/이미지 구조가 소수라 실양식 구조 + 합성 픽스처(서식·변수·이미지 겹치기·반복행·셀 색)로 골든을 구성하고, 기존 구현과 직접 비교하는 동등성 방식 채택
+- [x] P1 core(2026-10-14): `src/lib/modules/doc-editor/core/`(types·extensions·nodes/MergeFieldNode·render·substitute·table-colwidth) + `index.ts`. 기존 구현과 동등성 24건, 이식성 게이트 13건(`src/__tests__/modules/docEditor/`) 통과. 기존 계약 테스트 7파일 123건 무회귀, 기존 보호 파일 `git diff` 0, core에 `$lib/$app/$env/supabase/csToast` 없음, svelte-check 신규 오류 0
+  - 관찰: 문서형 치환은 반복행의 `{{NO.}}`를 해석하지 않는다(기존 동작 — 동등성 유지, 변경하지 않음)
+- [x] P2 ui(2026-10-14): `ui/DocEditor.svelte`(기존 `ContractDocumentEditor`에서 검증된 로직을 그대로 이관 — 표·반복행·이미지 NodeView·줌·소스·서명/직인·글꼴/색), `features.ts`(기능 on/off), `iconFont.ts`·`imageFile.ts`(호스트 유틸 비의존 자체 구현). 호스트 의존은 props 주입으로 치환: 토스트→`notify`, 업로드→`uploadImage`(없으면 data URL), 서명 목록→`listSignatureAssets`, 저장 콜백 제거(호스트가 `getEditorJSON()`), 디자인 토큰→`--de-*`(기본값 내장). 클래스 접두 `cde-`→`de-`. mount 테스트 15건(`docEditor.mount.test.ts`)
+- [x] P3 변수 패널(2026-10-14): `ui/VariablePanel.svelte`(카탈로그 주입·탭·칩·검색·호스트 탭 스니펫·mousedown 선택 유지), `ui/DocWorkspace.svelte`(편집기+패널 결합). `index.ts` barrel에 ui 노출. mount 테스트 8건(`docEditorPanel.mount.test.ts`) — 칩 클릭→`mergeField` 노드→`{{변수}}` 직렬화 확인
+  - GATE C: 모듈 테스트 6파일 126건 + 컴포넌트 테스트 11파일 99건 통과, svelte-check 신규 오류 0, 기존 보호 파일 변경 0(`contract-editor/`·`tiptapRender`·`contract-substitution`·`docImport`·`RichContentEditor`·`ContractTemplatePanel` 전부 무변경)
+  - ⏸ 다음: P4(첫 기존 파일 수정 — `ContractTemplatePanel` flow 분기 플래그 교체)는 별도 CRITICAL 게이트 질문 후 진행
+- [x] P4 어댑터 + 통합(2026-10-14, ✅ Stephen 확정: "연결하고 기본으로 켠다"): `adapters/crazyshot/`(`contractCatalog`·`bindings`·`SpecsTab`·`ContractFlowEditor`·`ContractFlowPanel`·`host-tokens.css`). 카탈로그는 기존 패널 21개(주석의 "18개"는 오기)를 키·순서 그대로 보존하고 패널에 없던 변수 14개(일정·지점·할인반영·임대인 등)를 추가 노출, 구성품 라벨의 "(50자 말줄임)"은 현행 전문 표기에 맞게 정정. **기존 파일 수정 ①: `ContractTemplatePanel.svelte` flow 분기만(4개 hunk, 상수 `USE_UNIFIED_DOC_EDITOR = true`, false면 기존 `ContractDocumentEditor`+`ContractFieldPanel` 그대로)**. 기존 편집기·렌더·치환·`RichContentEditor` 파일은 무변경. mount 테스트 6건(`docEditorHost`)·카탈로그 테스트 3건
+  - 모듈 보완: `onchange`는 초기화 중 update를 기준 문서로 기록만 하고 실제 변경 때만 호출(예제 테스트에서 발견 — 저장 버튼이 처음부터 활성화되던 문제)
+  - `npx vite build` 정상 완료(경고는 기존 puppeteer·ws 관련)
+- [x] P5 이식 패키징(2026-10-14): `adapters/supabase/`(`createDocStore`·`createSignatureStore`·`createStorageUploader`·`toEditorAssets`), `sql/001_doc_editor.sql`+`.rollback.sql`, `examples/MinimalHost.svelte`, `README.md`·`MODULE.md`. **SQL은 Stage에서 롤백 방식으로만 검증**(제약 5종 거절·`updated_at` 트리거·종류별 기본 자산 1개 제한·RLS 켜짐·anon/authenticated 권한 없음·함수 EXECUTE 차단·버킷 생성 확인 → 사후 Stage에 테이블·버킷·함수 잔존 0 확인, 마이그레이션 적용 아님). 테스트: 어댑터 15건·SQL 구조 7건·예제 mount 1건, 이식성 게이트에 `examples/` 추가
+  - 한계: Claude Browser 실화면 확인은 브라우저 패널 정책(숨김) 때문에 접속이 거부돼 **미실시** → Stephen 화면 확인 필요(`/cms/reservation/contracts` 문서형 양식)
+- sp3-qa-agent 1차 검수(2026-10-14): **GATE E 보류 — BLOCKING 1 · MAJOR 2 · MINOR 4** (기존 파일 보호·core 동등성·이관 정확성·보안은 통과)
+  - B1 예제 mount 테스트 상시 실패 / M1 저장 후 원래 내용으로 되돌리면 dirty 감지 못함(내가 넣은 "기준 문서 비교" 방식의 설계 결함 — 기존 편집기는 모든 update마다 알림) / M2 누락 테스트(되돌리기·첫 편집·docx 가져오기·rowspan/blockquote 등)
+  - **조치(같은 날)**: 근본 원인 확정 — 초기 `onchange`는 `setEditable()` 기본값이 update 이벤트를 내보내서 생긴 것(기존 편집기에도 있던 부수 효과). `setEditable(…, false)`로 끄고 `onUpdate`는 기존과 같은 "실제 변경마다 알림"으로 복원(기준 문서 비교 로직 제거 → M1 해소). `prosemirror-state` → `@tiptap/pm/state`(README 설치 목록 검증 테스트가 `package.json`에 없는 패키지 의존을 발견·해소). eslint 이월 오류 2건 제거(`colCount`·표현식문). 구성품 라벨 변경은 의도(현행 전문 표기). 테스트 추가: 저장→되돌리기·docx 교체/삽입·첫 편집 놓침 없음·rowspan/헤더열/blockquote/code/구분선/취소선 렌더 동등·README 패키지 ↔ package.json
+  - 재검증: 모듈 5파일 81건 + 기존 계약 5파일 포함 171건, 컴포넌트 13파일 110건 5회 연속 통과, svelte-check 관련 오류 0, eslint 오류 0(경고 3 = detect-object-injection), `vite build` 정상
+
+- [x] **P6-a 서식·툴바 UI 이식(2026-10-14, 렌더 확장 집합 무변경)**: `ui/DocToolbar.svelte`(공통 문서 편집기 방식 2줄 툴바 + 선택 시트: 서체 7종+기존 3종·20색 글자색·문단 유형·링크·표 크기·이모지·서명/직인) · `ui/TableContextBar.svelte`(표 안 커서 시 떠 있는 도구줄: 행/열 추가·삭제, 병합/분할, 헤더행/열, 반복행, 표 삭제) · `ui/Icon.svelte`·`ui/toolbarData.ts` 신설, `DocEditor.svelte`의 구 툴바·피커 상태·CSS 제거. 새 서식(양쪽 정렬·구분선·인용/제목 유형·서체·글자색·서식 지우기·이모지)은 기존 렌더 확장으로 신/구 동일 HTML 렌더됨을 `p6aRender.test.ts`로 고정. 글자 크기·글자 배경색·들여쓰기는 `features` 플래그(기본 꺼짐)로 UI만 준비 — **P6-b(렌더 확장 가산 등록 + 골든 비교) 전에는 켜지 않음**. 기존 파일 변경 없음(모듈 폴더 내부만). 검증: 모듈 테스트 90건·컴포넌트 112건 통과, svelte-check 모듈 관련 0, eslint 오류 0. sp3 재검수·Stephen 실화면 확인 대기.
+
+- [x] **P6-b 글자 크기·글자 배경색·들여쓰기 활성화(2026-10-14, Stephen 지시 "P6-b 진행")**: 렌더 확장 목록에 **가산 등록**(기존 파일 수정 ② — `contract-editor/tiptapExtensions.ts` 6줄 추가: `FontSize`·`BackgroundColor`·`Indent` import/등록). `Indent`는 모듈 `core/nodes/Indent.ts`(RichContentEditor 동일 규칙, 원본 무변경)를 공유 — 노드 속성 `indent`(기본 0, 0이면 스타일 없음). 모듈 `DOC_EDITOR_EXTENSIONS`에도 동일 3종 등록해 신/구 스키마 동일. `features.fontSize/bgColor/indent` 기본 켜짐. 골든: 새 서식 없는 문서 HTML 고정 문자열 대조(무변경), 새 서식은 고객 서명 화면 렌더(`renderTiptapDocToHtml`)와 모듈 렌더 동일, 스키마 동일(`p6bRender.test.ts` 3건). 주의: 저장 JSON의 문단·제목에 `indent:0` 속성이 추가될 수 있음(편집·저장 때만 기록, 렌더 HTML 영향 없음). 검증: 모듈+서버+유틸 1014건·컴포넌트 114건 통과, svelte-check 관련 0, eslint 오류 0. sp3 검수·Stephen 실화면 확인 대기.
+
+- [x] **P6-c 붙여넣기·이미지·안내문구(2026-10-14, Stephen 지시 "P6-c 진행")**: ① `core/pasteClean.ts`(`cleanPastedHtml` — 주석·style·script·meta·MS 전용 스타일·원본 서체 제거, 공통 문서 편집기와 동일 규칙) → 에디터 `transformPastedHTML` ② 이미지만 복사한 붙여넣기(스크린샷)·이미지 파일 끌어다 놓기 → 기존 이미지 검증·업로드(`uploadImage`, 없으면 data URL) 경로로 삽입(텍스트/HTML이 함께 있으면 기본 붙여넣기 우선, 문서 안 노드 이동은 기본 동작) — `insertImageFile` 로 정리해 파일 선택 버튼도 같은 경로 사용 ③ `placeholder` prop(에디터 전용 확장, 스키마·렌더 무영향). **끝 문단 자동 유지(TrailingParagraph)는 의도적으로 제외** — 문서를 클릭·편집만 해도 저장 JSON에 빈 문단이 추가돼 계약 내용이 바뀌고 dirty가 오탐될 수 있어 계약서에는 부적합. 기존 파일 변경 없음(모듈 내부만). 테스트: pasteClean 3건(내부 복사 보존 포함)·붙여넣기/placeholder mount 2건 추가 — 모듈+서버 409건·컴포넌트 116건 통과, svelte-check 관련 0, eslint 오류 0. sp3 검수(조건부 통과: BLOCKING 0·MAJOR 1·MINOR 4) → 같은 날 조치: ⓐ MAJOR(@tiptap/extensions가 package.json 직접 의존이 아님) — 외부 패키지 대신 `ui/placeholderExtension.ts`(@tiptap/core·pm만)로 교체해 필수 패키지 목록 불변 ⓑ 에디터 내부 복사(data-pm-slice)는 정화하지 않아 사용자 서체 유지 ⓒ placeholder 마운트 시점 값만 반영됨을 주석에 명시. 재검증: 모듈 102건·컴포넌트 116건 통과. 남은 MINOR(정규식이 본문 텍스트에도 적용·여러 장 드롭 순서)는 보류. Stephen 실화면 확인 대기.
+
+- [x] **변수값 치환 시 글꼴·크기·굵기 유지(2026-10-14, Stephen 지시 "tiptapRender.ts 포함해서 수정 진행")**: 점검 결과 — 변수 칩(mergeField)을 값 글자로 바꿀 때 칩의 서식을 버려(`substituteTiptapDoc`·모듈 `substituteDoc` 공통) 양식에서 13pt·휴먼명조로 쓴 문장 옆의 값이 편집기 기본 서체(14px 굵게)로 나왔고, 칩 삽입 자체도 커서 서식을 이어받지 않았음. **수정(기존 파일 1곳 허용 — 사용자 승인)**: ① 신규 `core/chipMarks.ts`(`marksForChip` — 칩 자신의 서식, 없으면 같은 문단 가장 가까운 앞 글자(없으면 뒤 글자) 서식을 이어받음, 링크 제외) ② 모듈 `substitute.ts`·기존 `src/lib/utils/tiptapRender.ts`(+15/−1)가 같은 규칙으로 값 글자에 marks 부여(고객 서명 화면·발송 전 미리보기 반영) ③ `MergeFieldNode` 삽입 명령이 커서 위치 서식(링크 제외)을 칩에 붙임. 서식 없는 문서의 HTML은 변하지 않음(고정 문자열 테스트). 테스트 `chipMarks.test.ts` 15건(모듈·기존 치환 각각: 칩 서식·앞/뒤 글자 상속·링크 제외·무서식 무변경·표 셀·삽입 상속). 유틸·서버·모듈 2486건, 컴포넌트 119건, vite build 통과. `tiptapRender.ts`의 eslint `N` 미사용 오류는 HEAD에도 있는 기존 건. **영향: 앞으로 값이 채워지는 계약서(미리보기·서명 화면)의 글자 모양이 바뀜 — 이미 서명 완료된 최종본(저장된 스냅샷)이 이 렌더를 다시 쓰는지는 미확인(sp3·Stephen 확인 필요).** sp3 검수 대기.
+
+- [x] **서명/직인 버튼 정리 + 이미지 겹치기 버그 수정(2026-10-14, Stephen 지시)**: ① `ContractTemplatePanel.svelte` 토글 줄의 "서명/직인 삽입"(발행자 서명 이미지 설정)은 HTML 고정 템플릿(html 모드) 전용이라 문서형(flow)에서는 눌러도 본문에 반영되지 않음 → `authoringMode === 'html'`일 때만 노출(편집기 툴바 '서명/직인'과의 중복 해소, "서명 & 직인 이미지 등록" 버튼은 그대로). ② 편집기 이미지 "겹치기"(`DocEditor.svelte` NodeView): (a) 켜면 (0,0)=문서 좌상단으로 튀던 문제 → 이미지가 있던 자리 기준 좌표(.ProseMirror 안쪽, 화면 확대 배율 보정)로 시작 (b) 확대/축소(--de-zoom)에서 드래그 좌표가 배율만큼 어긋나던 문제 보정 + 아래·오른쪽 문서 밖으로 나가 렌더에서 사라지는 것 방지(상한) (c) 너비 입력란에서 값을 안 바꾸고 나가도 같은 값을 다시 써 문서가 바뀐 것으로 처리(저장 버튼 활성)되던 문제 (d) 이미지·칩이 선택된 상태에서 서명/직인·파일 이미지를 넣으면 선택된 노드를 덮어쓰던 문제(`DocToolbar.insertSigAsset`·`DocEditor.insertImageFile`) → 선택 뒤에 삽입. 테스트 mount 4건 추가(겹치기 시작 좌표·확대 200% 환산·blur 무변경·선택 이미지 보존), 컴포넌트 123건·모듈 통과, vite build 통과. **확대 배율 보정은 jsdom에서 getBoundingClientRect를 모의해 검증 — 실제 브라우저(Chrome CSS zoom) 확인 필요**. sp3 검수 미실시.
+
+- [x] **통합 편집기 툴바 전수 동작 검증(2026-10-14, Stephen 지시)**: 신규 `docEditorToolbarAll.mount.test.ts` 31건 — 실행취소/다시실행·굵게/기울임/밑줄/취소선·정렬 4종·글머리/번호 목록·들여쓰기/내어쓰기·글자 크기(−/+/프리셋)·서체·글자색(20색)·배경색·문단 유형(본문/제목1~3/인용)·링크(적용/해제/비허용 주소)·서식 지우기·사진·이모지·표(행·열 지정)·구분선·HTML 소스(적용/취소)·확대/축소/초기화·시트 닫기(Esc/바깥 클릭/토글)·readonly·표 도구줄(행·열 추가/삭제, 헤더행/열, 반복행, 병합/분할, 표 삭제) 전부 문서 JSON 반영 확인. 발견·수정한 실제 결함 2건: ① 링크 입력이 type=url 폼 검증에 걸려 'example.com' 같은 스킴 없는 주소를 제출할 수 없던 문제 → 폼 `novalidate`(주소 정리는 normalizeUrl) ② 글자 크기 표시·증감이 pt(한글·워드 가져오기 문서, 13pt)를 px로 착각해 13으로 표시하고 +를 누르면 14px(더 작아짐)로 줄던 문제 → pt는 px로 환산(13pt→17, +→18px). 참고(수정 안 함): Ctrl+A 후 목록·문단 유형 해제는 StarterKit의 끝 자동 빈 문단(trailingNode) 때문에 일부 안 풀림 — 기존 계약서 편집기와 같은 StarterKit 동작. jsdom 한계: 시트 위치·마우스 선택·실제 화면 배치는 미검증. 컴포넌트 154건·모듈 119건 통과, vite build 완료. sp3 검수 미실시.
+
+
+
+
+
+### sp3-qa-agent 검수 (P0~P5)
+- 1차(2026-10-14): GATE E 보류(BLOCKING 1·MAJOR 2·MINOR 4) → 위 진행 기록의 조치 후 재검수
+- **재검수(2026-10-14): ✅ GATE E 통과 — BLOCKING 0 · MAJOR 0 · MINOR 0.** 모듈+기존 계약 테스트 10파일 171건, 컴포넌트 13파일 110건 4회 반복 통과, svelte-check 관련 오류 0, eslint 오류 0(경고 3 = 원본에도 있던 detect-object-injection). `onChange` 의미가 기존 편집기와 동일함 확인(초기 로드는 무알림). 기존 파일 변경은 `ContractTemplatePanel.svelte` 1곳뿐
+- 미확인(검수자): `readonly` 실제 토글 전용 테스트 없음(현재 `ContractTemplatePanel`에는 readonly를 바꾸는 경로가 없음)
+- ✅ P6 서식 확장 완료·sp3 P6 전체 재검수 GATE E 통과(BLOCKING 0·MAJOR 0·MINOR 4) · ⏸ 남은 것: Stephen 실화면 확인 · 커밋·배포(Stephen) — 확인 완료 시 이 블록 헤더를 `## DONE`으로 갱신
+
+## NOW — 🔴 CRITICAL: 전자계약 자동발행 표준양식 + 토글(예약승인 시 자동발행) (2026-10-15, 이 세션'만', ✅ Stephen 지시 + GATE B 서비스 의도 4문항 확정 · DB Migration #717 **Stage·Production 모두 적용 완료(Production 2026-10-15, Stephen 승인 "Production #717 적용" — 컬럼·부분 유일 인덱스·트리거·RPC 존재, anon·authenticated 실행 불가·service_role만 가능, 함수 정의 해시 Stage와 일치, 지정 양식 0건=기능 꺼짐 상태)** · 기존 파일 수정 포함(Stephen 지시 범위) · sp3 검수 대기 · 커밋·배포는 Stephen)
+
+### 확정된 서비스 의도(Stephen)
+1. **시점**: 토글 ON(표준양식 지정) 상태에서 예약목록 '예약승인' = **계약서 자동 발행·발송만** 한다. 예약 확정(계약완료)은 **고객 서명·결제 후**(기존 서명+결제 자동확정 정책). OFF = 기존 동작 그대로(승인 즉시 확정 + 계약서는 수동 선택·발행).
+2. **양식 종류**: 문서형·HTML·캔버스·스프레드시트 **모든 종류** 지원.
+3. **자동발행 불가 시**: **승인은 기존처럼 진행**하고 발행만 건너뛰며 사유를 관리자에게 안내(토스트).
+4. **여러 상품 주문**: 주문당 1건(수동 발행과 같은 규칙).
+
+### 구현
+- **DB(#717, Stage 적용·검증)**: `contract_templates.auto_issue_default boolean`(삭제되지 않은 양식 중 부분 유일 인덱스로 최대 1개) · `cms_set_auto_issue_template(uuid,boolean)` RPC(원자적 단독 지정, service_role 전용 — anon·authenticated 차단 확인) · 보관·삭제된 양식은 지정 자동 해제 트리거. 라이브 테스트 5건(`contractAutoIssueDefault.test.ts`).
+- **서버 `src/lib/server/contractAutoIssue.ts`**: 표준양식 조회(없으면 off) → 이 주문에 이미 계약서 있으면 건너뜀 → 발행자 서명 필수 충족 불가 시 건너뜀 → `contract-data` 조회(권한·실패 시 건너뜀) → 양식 종류별 치환(수동 발행 모달 `applySelectedTemplate`과 같은 규칙, 발행일 KST, HTML은 코드 상수·잔존 변수 검사) → 수동 발행과 같은 API 순서(`init-contract` → `PATCH content` → `send-chat`)를 **이벤트 fetch(관리자 세션)** 로 호출(권한 게이트 그대로 적용) → 발송 실패 시 방금 만든 계약서 되돌림(DELETE content). `contract-apply-template.ts`에 `fetchFn` 옵션 추가(하위호환).
+- **`approveReservation`(cms/reservation/+page.server.ts)**: 자동발행 `sent` → 확정 RPC·승인 알림 없이 `{contractIssued}` 반환(본인증명 등록요청은 그대로) / `off` → 기존 / `skipped` → 기존 승인 + `contractSkipped` 사유 반환. `RentalDetailPanel.approveEnhance`가 안내 토스트 표시.
+- **UI**: `ContractTemplatePanel`의 "발행자 서명·직인 필수" 토글 오른쪽에 "자동발행 표준양식" 토글(즉시 저장, 신규 양식은 저장 후 지정 가능) · 양식 목록 카드에 "자동발행" 배지 · `contracts/+page.server.ts` `setAutoIssue` 액션(manager 이상, UUID 검증).
+- **테스트**: 자동발행 서버 8건 · 승인 액션 연동 4건 · setAutoIssue 액션 5건 · 라이브 5건. 서버·모듈·유틸 2611건, 컴포넌트 155건, vite build 통과.
+
+### 실화면 테스트(2026-10-15, Stephen 지시 "자동발행 표준양식 실화면 테스트", Stage DB·localhost:5174)
+- 토글 ON 확인: 양식 `html 표준 계약서01`(HTML 모드, 발행자 서명 필수·서명 이미지 등록됨)이 표준양식으로 저장됨, 목록에 "자동발행" 배지 1개.
+- 예약 CS261015007(예약 id 42905, 본인증명 승인 고객)에서 '예약승인' 클릭 → 토스트 "계약서가 고객에게 발송되었습니다. 서명·결제가 끝나면 예약이 확정됩니다." · 버튼 '승인완료' 전환 · 목록 '계약대기' 칩 이동(다른 세션 구현분과 정상 연동).
+- DB 확인: contracts 1건(template_id=표준양식, authoring_mode=html, 제목 일치, 치환 후 잔존 `{{변수}}` 없음, 발행자 서명 이미지 포함) · contract_signings 발송 1건·서명 0건 · 예약 상태 `hold` 유지(확정은 서명·결제 후) · 고객 채팅에 `contract_link` 카드(서명 링크) 도착.
+- CMS '계약서' 탭: "계약서 발송됨 · 서명 대기 중" + 발행 목록 + 전자계약서 PDF 영역 표시.
+- **토글 OFF 실화면(2026-10-15, Stephen 지시)**: 양식 화면에서 토글 OFF → 토스트 "자동발행 표준양식이 해제되었습니다…"·"자동발행" 배지 사라짐·DB 지정 0건. 예약 CS261019586(예약 id 48271, 서류 없는 고객)에서 '예약승인' → **기존 동작 그대로** — 예약 `confirmed` 즉시 확정, 계약서 0건 생성, 고객 채팅에 `reservation_approval`(승인 카드)+`identity_request`(본인증명 등록요청) 카드 도착. 테스트 후 토글을 ON으로 복원(테스트 전 상태). Stage 예약 48271은 확정 상태로 남음.
+- **다상품 주문 1건 실화면(2026-10-15, Stephen 지시)**: 주문 7959(예약 42968 Manfrotto 055 + 42969 [TDD-BRA] 결합…, 한 행으로 묶여 보임, 코드 CS261015070). 테스트 고객이 서류 미등록이라 **테스트 고객 프로필에 승인된 서류 값을 임시로 넣고 테스트 후 원래 값(전부 NULL)으로 복원**함. 토글 ON 상태에서 '예약승인' → '승인완료'·'계약대기' 전환. DB: 계약서 **1건**(대표 예약 42968에 연결, 표준양식·HTML, 잔존 변수 없음, 발송 1건), 형제 예약 42969에는 별도 계약서 없음, 두 예약 모두 `hold` 유지, 계약서 본문에 **두 상품명이 모두 포함**. 주문당 1건 규칙 확인.
+- **문서형 양식 실화면(2026-10-15, Stephen 지시)**: 양식 `표준 근로계약서 한글버전`(문서형, 한글 가져오기 문서·발행자 서명 필수 아님)에서 토글 ON → 기존 HTML 표준양식 지정이 자동 해제되고 목록 "자동발행" 배지가 이 양식에만 붙음(단독 지정 확인). 예약 id 42970(단독 예약, 테스트 고객 서류 임시 승인 후 복원)에서 '예약승인' → 토스트 "계약서가 고객에게 발송되었습니다…"·'승인완료'·'계약대기' 전환. DB: 계약서 1건(template_id=문서형 양식, authoring_mode=flow, 제목 일치, 본문 1블록 ≈10만 자·글자 서식(예: 16pt) 보존, 발송 1건, 예약 `hold` 유지). CMS '계약서' 탭에 "계약서 발송됨 · 서명 대기 중"·발행 목록 표시. 테스트 후 토글을 HTML 표준양식으로 복원, 고객 프로필 서류 값 원복. ⚠️ 이 양식에는 변수 칩이 0개라 **문서형 변수 치환은 화면으로 확인하지 못함**(단위 테스트로만 검증).
+- **스프레드시트형 양식 실화면(2026-10-15, Stephen 지시)**: 양식 `계약서 스프레드시트`(발행자 서명 필수 아님)에서 토글 ON → 이전 지정 자동 해제·배지 이동 확인. 예약 id 42970(앞선 문서형 테스트의 발행 계약서를 **soft-delete + 서명 링크 sent_at을 비워** 신청대기 상태로 되돌린 뒤 사용, 테스트 고객 서류는 임시 승인 후 복원)에서 '예약승인' → 토스트·'승인완료'·'계약대기'. DB: 계약서 1건(template_id=스프레드시트 양식, authoring_mode=spreadsheet, 시트 1개, 발송 1건, 예약 `hold` 유지). **변수 치환 확인**: 양식의 `{{요금유형}}` 셀이 계약서에서 값("-", 이 테스트 예약의 요금유형 값)으로 치환되어 잔존 `{{변수}}` 0건. 테스트 후 토글을 HTML 표준양식으로 복원.
+- **캔버스형 양식 실화면(2026-10-15, Stephen 지시)**: Stage에 캔버스 양식이 없어 **테스트 양식 `TEST_캔버스 자동발행`을 DB에 직접 생성**(배경 1쪽 + 텍스트 필드(고객이름 바인딩) + 서명 필드, 발행자 서명 필수 아님) 후 토글 ON(이전 지정 자동 해제 확인). 예약 id 42970(이전 스프레드시트 계약서를 soft-delete + 서명 링크 sent_at 비워 신청대기로 되돌려 사용, 고객 서류 임시 승인 후 복원)에서 '예약승인' → 토스트·'승인완료'·'계약대기'. DB: 계약서 1건(template_id=캔버스 양식, authoring_mode=canvas, content_blocks 0건, canvas_document 1쪽·필드 2개(text:고객이름, signature) 복사, 발송 1건, 예약 `hold` 유지). 캔버스는 설계상 변수 치환이 **고객 서명 화면 렌더 시점**(필드 바인딩)이라 발행 시점에는 치환하지 않음 — 그 렌더는 미확인. 테스트 후 토글을 HTML 표준양식으로 복원, `TEST_캔버스 자동발행` 양식은 soft-delete(지정 플래그 자동 해제됨).
+- 미확인: 고객 서명 화면 렌더 · 고객 서명 화면(/contract/[token]) 렌더 · 서명 후 자동 확정 종단 · 푸시/SMS 수신. 테스트로 Stage 예약 42905에 계약서가 발행된 채 남아 있음(정리 필요하면 알려줄 것).
+
+### 범위 정리(2026-10-15, Stephen 답변)
+- 이 세션의 책임 = **토글 ON/OFF에 따른 표준양식 ↔ 예약목록 전자계약 연동(발행·발송 지원)** 까지. '예약승인 → 승인완료 버튼·계약대기 목록 전환', 그 상태의 기록 방식, 승인완료 이후 관리자 가능 동작(취소·강제확정), 승인 시점 고객 알림은 **다른 세션에서 구현 중**이라 이 세션에서 결정·구현하지 않는다. sp3 MAJOR-1(자동발행 성공 후 '예약승인' 재클릭이 서명 없이 확정) 판단도 그 세션의 '승인완료' 버튼 비활성 전환에 맡긴다(작업 트리의 `approveReservation`에는 이미 그 세션의 서류 승인 분기·`hasAutoIssueTemplate`가 더해져 있음 — 이 세션은 더 건드리지 않는다).
+- sp3(2026-10-15): 조건부 통과(MAJOR 2·MINOR 4) → MAJOR-2(발송 부분 실패 시 되돌리기 거부 안내)·MINOR-1(승인 대상 예약 id 사용) 수정·테스트 반영(자동발행 서버 9건). 남은 것: MAJOR-1(위 다른 세션), MINOR-2(더블클릭 동시 요청 이중 발행 가능성 — 화면 제출 잠금에 의존), MINOR-3(Production #717 선적용 필수), MINOR-4(작업 트리에 타 세션 변경 혼재 — 커밋 시 분리).
+
+### 이 세션 수정 내역 정리 + 재검수 요청(2026-10-15) — ✅ sp3 재검수 GATE E 통과(BLOCKING 0·MAJOR 0·MINOR 4: 문서 문구 불일치→수정 완료 / 더블클릭 동시 요청 이중 발행 이론상 가능 / 신규 파일 미추적·타 세션 변경 혼재 → 커밋 범위 분리 / #717 롤백 안내만)
+- 1차 sp3(조건부 통과) 이후 반영: `contractAutoIssue.ts` — 발송 실패 시 되돌리기(DELETE content) 결과 확인(거부되면 "일부만 발행되었을 수 있어요 — 계약서 탭에서 확인" 안내, MAJOR-2) · 승인 대상 예약 id(`primaryId`)로 호출(MINOR-1, `+page.server.ts`). 테스트: 자동발행 서버 9건·승인 연동 5건·토글 액션 5건·라이브 5건.
+- 별건 반영(툴바 검수 후): `DocToolbar.curSize` — px·pt가 아닌 단위(em·rem·%)는 기본 크기(16)로 표시(MINOR-4, 컴포넌트 테스트 1건 추가).
+- Production #717 적용 완료(Stephen 승인). 실화면(Stage): HTML·문서형·스프레드시트형·캔버스형 자동발행, 토글 OFF, 다상품 주문 1건 — 위 "실화면 테스트" 항목 참조.
+- 재검수 대상: 위 1차 sp3 이후 변경분(MAJOR-2·MINOR-1 수정, curSize 단위 처리). sp3 MAJOR-1은 다른 세션 소관(승인완료 버튼).
+
+- **양식 목록 배지 재배열(2026-10-15, Stephen 지시)**: '자동발행' 배지가 추가돼 카드 폭(약 240px)에서 배지 글자가 줄바꿈("자동발/행")되던 문제 → `contracts/+page.svelte` 배지(상태·작성모드·자동발행) 폰트 토큰을 두 단계 낮춤(`--text-pc-script-12` → `--text-pc-descript-10`, 굵기 700 유지) + `white-space:nowrap`·`flex-shrink:0`, 메타 줄 `flex-wrap`·간격 4px 6px, 날짜는 오른쪽 정렬·nowrap(공간이 모자라면 배지가 아니라 날짜가 다음 줄로). 실화면 측정: 배지 높이 18px(1줄)·글자 10px, 배지 3개인 카드에서만 날짜가 2번째 줄로 이동. CSS만 변경.
+- **양식 목록 폭 조정(2026-10-15, Stephen 지시)**: 목록 영역 280px → 290px(삭제 아이콘을 카드 우상단으로 합쳐 별도 열 제거 — 배지 3개+날짜 한 줄). 실화면 측정: 카드 7장 모두 한 줄.
+- **문서 뷰어 영역 확보용 접기/펼치기(2026-10-15, Stephen 지시)**: 좌측 양식 목록은 목록 상단 좌측의 닫기(✕, close-red 표준) 아이콘, 우측 변수 패널은 탭 메뉴 위 상단 좌측의 닫기(✕) 아이콘(문서형·HTML형·스프레드시트형)으로 접고, 접힌 뒤에는 폭 36px 띠로 남아 같은 자리의 아이콘이 펼침 화살표(ChevronIcon)로 바뀐다(글자 버튼 제거). 접힌 우측 패널 내용 숨김은 자식 컴포넌트 루트를 위해 `:global` 선택자 사용. 접힘 상태는 브라우저에 기억(localStorage `cs-contracts-list-open`·`cs-contracts-fieldpanel-open`, 실패 시 펼침 기본). 실화면: 목록 접으면 뷰어 영역 990→1280px, 변수 패널 접으면 220px→0. CSS·화면 상태만 변경.
+- **자동발행 표준양식 단일성 확인(2026-10-15, Stephen 지시)**: Stage·Production 모두 부분 유일 인덱스(삭제 안 된 양식 중 ON 1개 한정) 존재. Stage 실험(롤백): 직접 두 번째 ON 시도 → DB 거절 / 지정 함수로 다른 양식 ON → 이전 지정 자동 해제(ON 1개) / 보관 처리 → 지정 해제(ON 0개). 앱 코드에서 이 값을 쓰는 곳은 지정 함수 1곳뿐. 현재 Stage ON=1(html 표준 계약서01), Production ON=0.
+- **CMS 풍선형 도움말 표준화(2026-10-15, Stephen 지시)**: 신규 공용 컴포넌트 `CmsHelpBubble.svelte`(마우스 오버·포커스 시 안내문 풍선 자동 노출) + `cms-uiux.md §7-18`·`uiux-index.md` 등록. 양식 패널 '발행자 서명·직인 필수'·'자동발행 표준양식' 토글의 긴 안내문을 풍선으로 이동(화면 라벨은 필수/선택·ON/OFF만). 실화면 hover 확인.
+- **풍선 도움말 sp3 MINOR 1·2 수정(2026-10-15, Stephen 지시)**: ① 풍선 id를 `Math.random()` → `$props.id()`로 교체(SSR·hydration 일치) ② `aria-describedby`를 래퍼가 아니라 포커스를 받는 자식(버튼 등)에 연결, disabled 버튼('저장 후 지정')만 있으면 래퍼에 tabindex=0을 줘 키보드로도 노출, Esc로 닫기(마우스 이탈·포커스 이탈 시 복귀) 추가. svelte-check 신규 경고 0건. 실화면: id 고유(chb-c1·c2)·버튼 describedby 연결·Esc 닫힘/이탈 시 복귀 확인. `cms-uiux.md §7-18` 접근성 행 갱신.
+### 알아둘 점(동작 변화·한계)
+- 토글 ON 중에는 **'예약승인'이 계약서 없이 곧바로 확정하는 우회 수단이 아니게 됨**(자동발행 성공 시 확정 안 함). 이미 계약서가 있는 주문(`contract_exists`)은 **확정하지 않고** 안내만 한다(더블클릭 즉시 확정 방지 — 다른 세션의 승인 분기). 그 외 자동발행 불가(양식 없음·권한 없음·서명 필수 미충족·발송 실패 등)는 기존처럼 승인을 진행하고 사유만 안내.
+- 계약서 발송 시점부터 **1시간 안에 서명·결제하지 않으면 예약이 자동 만료**(service-operations.md §10 기존 정책 — 승인 직후 자동 발송이 되므로 체감 영향 큼).
+- 자동발행은 계약서 발행 API의 권한(manager 이상)을 따른다 — partner 계정이 승인하면 건너뛰고 기존 승인 + 안내.
+- 발행자 서명 필수 양식은 HTML 양식(서명 이미지 등록)만 자동발행 가능, 그 외 종류는 기존부터 서명을 받을 UI가 없어 건너뜀.
+- 수동 발행(`ContractTemplatePreviewModal`)과 자동발행(서버)의 치환 로직이 별도 구현 — 한쪽을 바꾸면 다른 쪽 확인 필요.
+- ✅ Production #717 적용 완료(2026-10-15) — 이제 코드 배포 가능(배포는 Stephen). 배포 직후에는 지정된 표준양식이 없어 기존 동작 그대로이며, 양식 화면에서 토글을 켜야 자동발행이 시작된다.
+
+## NOW — 🟡 BOUNDARY: 계약서 양식 '문서 가져오기' — 한글(.hwp/.hwpx) 변환 연결 + .doc 안내 (2026-10-14, 이 세션'만', ✅ Stephen 지시(".doc 안내 / .hwp 변환 추가·.hwpx 올바른 방식으로 수정") · DB·마이그레이션 변경 없음 · `src/routes/api/**` 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 조건부 통과 → 조치 완료(재검수 미실시) · 실화면 확인 대기)
+
+### 배경(확인된 사실)
+- 가져오기 버튼이 받는 형식은 .docx·.xlsx·.xls·.hwp·.hwpx(10MB). `.doc`(Word 97~2003 이진)는 `mammoth`가 읽지 못하고 허용 목록에도 없어 "지원하지 않는 형식" 토스트만 나왔다.
+- 기존 .hwpx "실험 변환"(`hwpxImport.ts`)은 `hwp-convert@1.13.0`에 없는 `convert`/기본 함수를 호출해 **항상 실패**하고 안내 모달로 떨어졌다(Node 재현: `fn is not a function`). 패키지의 실제 API는 `HwpxReader.loadFromArrayBuffer → extractHtml`, HWP 5.0 이진은 `hwpToHwpx`.
+- 패키지는 이미 설치돼 있어 **새 의존성 없음**.
+
+### 구현
+- `.doc`: `ContractTemplatePanel.svelte`·`ContractEditorModal.svelte` — 파일 선택에서 `.doc` 허용 + 선택 시 ".docx로 저장해 올려주세요" 경고 토스트(가져오기 진행 안 함, 기존 확장자 처리·10MB 제한 무변경).
+- `src/lib/utils/docImport/hwpxImport.ts` 재작성: `importHwpx`(HwpxReader, 이미지 data URL 인라인) · `importHwp`(`hwpToHwpx` 후 같은 경로) · 오류를 한글 안내로 매핑(암호·배포용/HWP 3.0·형식 불일치·일반). 동적 import로 번들 분리(브라우저 번들 약 830KB, 변환 시작 시에만 로드).
+- `ContractImportModal.svelte`: .hwp도 동의 → 변환 → 미리보기 → 가져오기 흐름, 실패 시 `hwpError` 사유를 안내 화면에 표시(파일 재선택·변환 시작 때 초기화), "실험 변환" 문구를 "한글 문서 변환"으로 변경.
+
+### 검증
+- 실문서 확인: 이 컴퓨터 Downloads의 실제 .hwp 2개를 임시로 변환(내용 비열람, 개수만): 표 1개/25개, 셀 병합, 50ms/226ms 성공. 새 `importHwp`로 1개 재확인 후 임시 테스트 삭제. 저장소에는 실문서 샘플을 두지 않음.
+- 테스트: `hwpxImport.test.ts` 4건(HWPX 변환·표 병합·`<script>` 이스케이프·오류 메시지) + `hwpImportFlow.test.ts` 7건(`hwpToHwpx` 대체로 .hwp 성공 경로 배선, 오류 5종 `err.name` 매핑 + 일반 오류). 컴포넌트 116건, `vite build` 완료, svelte-check·eslint 관련 파일 오류 0(기존 무관 오류 제외).
+- sp3 검수: 조건부 통과(BLOCKING 0·MAJOR 1). **MAJOR: 오류 분류가 `constructor.name` 의존 → 프로덕션 번들에서 클래스명이 줄어들어(`Mf` 등) 암호·배포용 안내가 일반 문구로만 나옴** → `err.name` 기반으로 수정 + 테스트 추가. MINOR: `hwpError` 미초기화 → 초기화 추가.
+
+### 후속 보완(2026-10-14, Stephen 지시 "더 보완" → "모두 진행")
+- 신규 `src/lib/utils/docImport/hwpxFormatting.ts`: `hwp-convert`가 풀지 않는 HWPX 스타일 참조(paraPrIDRef·charPrIDRef·borderFillIDRef)를 JSZip+DOMParser로 직접 읽어 변환 HTML에 순서 기준으로 덧붙임 — 문단 정렬(가운데·오른쪽·양쪽)·왼쪽 여백→들여쓰기 단계·내어쓰기는 첫 줄 시작 위치 기준·글꼴(문단 첫 글자 서식 기준)·표 열 너비(colwidth, 본문 폭 초과 시 비율 축소)·셀 배경/테두리색/정렬/글꼴. 문단·표·행·셀 개수가 어긋나면 해당 부분은 건드리지 않고, 어떤 오류든 원본 HTML 유지(fail-soft).
+- 추가 보완: 연속 공백·문단/셀 맨 앞 공백·공백뿐인 조각(밑줄 칸)을 nbsp로 보존(빈칸 입력란 보존) · 문서 맨 앞 빈 문단 제거.
+- 실문서 확인(개수만): Downloads의 실제 .hwp 2개 — 정렬 230/94·글꼴 213/63·열 폭 42/93·테두리색 42/80·셀 배경 1/9, nbsp 2196곳, 선두 빈 문단 제거 확인. 편집기 왕복(`hwpxEditorRoundtrip.test.ts`)에서 정렬·글꼴·글자 크기·열 폭·셀 색 보존 확인.
+- 테스트: `hwpxFormatting.test.ts` 10건 + `hwpxEditorRoundtrip.test.ts` 1건. 유틸·모듈 736건+, 컴포넌트 119건, vite build 통과. sp3 재검수 미실시.
+- 미반영(편집기 기능 부재): 줄 간격·문단 간격·셀 세로 정렬·표 테두리 '없음'·자동 번호·문단 내 글꼴 혼용·한글 전용 글꼴 표시. 본문 기본 서체가 굵게(700)인 것은 편집기 기존 설정(별도 결정).
+- 외부 조사 결과(rhwp·hwp.js·@ohah/hwpjs·hwpx-js·한컴 변환 API·ONLYOFFICE): 편집 가능한 문서로 바꿔 주는 더 나은 도구는 확인하지 못함. rhwp(`@rhwp/core` 0.8.7, MIT, 약 12.5MB)는 SVG/Canvas 렌더 전용(HTML 내보내기 확인 안 됨) — '원본 미리보기' 용도로만 검토 가능. 서버 변환(LibreOffice/ONLYOFFICE/한컴)은 인프라·계약서 외부 반출 검토가 선행 필요 → **미착수**, Stephen 결정 대기.
+
+### 남은 것·한계
+- 미해결(보류): 미리보기 `{@html}`은 변환 라이브러리의 이스케이프에만 의존(.docx 경로와 동일 수준, CMS 관리자 업로드) — 추가 sanitize 여부는 별도 판단. 큰 파일은 메인 스레드 변환이라 잠시 멈출 수 있음. 이미지가 든 한글 문서·.hwp 변환 품질·.doc 토스트 후 흐름은 실화면 미검증.
+- 지원 불가: 차트·OLE·글맵시, 머리말·꼬리말·각주는 본문에 평탄화, 암호·배포용·HWP 3.0. `.doc` 직접 변환은 별도 과제(LibreOffice 변환 서버 또는 외부 API 필요, 비용·개인정보 검토 선행).
+- Stephen 실화면 확인 후 이 블록 헤더를 `## DONE`으로 갱신.
+
+## NOW — 🟡 BOUNDARY: 상담 메모 '단일 덮어쓰기' → 단문 메모 무한 등록 목록 (2026-10-17, 이 세션'만', ✅ Stephen 직접 지시(5항목: 100자 제한 / 등록 년월일시 명기 / 목록 스크롤 + 폰트 토큰(년월일시=saved-at, 메모 내용=label) / 헤더 우측 끝 쓰기(연필)+모두 삭제(쓰레기통) / 최신순) · DB·마이그레이션 변경 없음(cs_records에 session_id 유일 제약 없음 — Stage 확인) · `src/routes/api/chat/sessions/[id]/cs-record/+server.ts`(프로즌 경로 `src/routes/api/**`) 수정 포함 — Stephen 지시 범위 → GATE C · 커밋·배포는 Stephen · sp3-qa-agent 검수 대기)
+
+```
+변경: 
+  · API cs-record: GET 목록(최신순, 최대 500건, 호환용 record=최신 1건 병행) · POST 항상 새 행 INSERT(덮어쓰기 제거) + 서버 검증(공백 정리 후 100자, 줄바꿈→공백) · DELETE 세션 메모 전체 삭제(기존 유지)
+  · 공용 검증 src/lib/utils/csMemo.ts(CS_MEMO_MAX=100, checkCsMemo — 이모지 1자) + csMemo.test.ts 5건
+  · AdminChatPanel.svelte: 메모 상태를 csRecords[]로 교체, 헤더 우측 끝 [연필=입력란 열기/닫기][쓰레기통=모두 삭제(삭제 안전 토스트 handleAction 'all', 2단계)], 입력란 maxlength 100 + 글자수 N/100,
+    목록은 영역 내 스크롤(max-height 96px) — 년월일시는 .cs-record-saved-at 토큰(12px/400/text-light), 메모 내용은 .cs-record-label 토큰(12px/700/text-mid), 최신 메모 맨 위, 세션 전환 시 응답 경합 무시
+  · CSS: 쓰지 않게 된 8개 규칙 제거(선택자 집합 HEAD 대조 — 유실은 의도한 8개뿐)
+검증: server/utils/components 스위트 2606건 통과, svelte-check 신규 오류 0(기존 2건 무관).
+주의: /api/chat/close가 종료 시 summary를 cs_records에 INSERT(resolved)하므로 그 요약도 메모 목록에 함께 보인다(100자 초과 가능, 표시만). 기존에 1건이던 메모는 목록의 마지막 항목으로 이어진다.
+미확인: 실화면(Claude Browser 미사용). 고객 RLS(user_select_own_cs_records)로 고객이 본인 세션 메모를 직접 조회할 수 있는 기존 설계는 이번 범위 밖(별도 확인 권장).
+
+[1차 QA 후속 + 추가 요청 반영 — 2026-10-17]
+  · 1차 sp3 MAJOR 반영: 모두 삭제 무장 키를 세션별(`all:${sid}`)로 구분(세션 A 무장 → B 전환 시 경고 없이 삭제되던 결함) · 옛 주석 정리.
+  · 요청 반영: 입력란을 목록 아래 한 행(입력란+저장 우측 끝)·항상 노출 / 글자수 표시 제거 / 메모별 삭제 버튼 복원(DELETE ?id= 단건, 삭제 안전 토스트 키 `item:${id}`) /
+    placeholder 옅은 토큰 / 메모 영역 전체를 카드 하나(surface-gray, 라운드 '중')로 구성 / 헤더 행(제목·건수·연필·모두 삭제) 제거 / 행 단순화(카드 bg 제거) / 행 간격 10px /
+    저장 버튼 = 초소형 라운드 버튼형(cms-uiux §0-10-C, 카드 bg와 구분되도록 기본 면만 white) / 입력 중 퍼플 아웃라인(메모 입력란 + 관리자 답변 입력창, ChatInput `isAdmin` 한정 bg 토큰 통일).
+  · 등록 관리자 아이디 표시: cs_records.created_by(uuid → auth.users, ON DELETE SET NULL) — **Migration #728**(파일 `20261017080000_728_cs_records_created_by.sql`). 번호 이력: 725(타 세션 충돌) → 727(타 세션 충돌) → 728로 확정.
+    Stage에는 이름 `725_cs_records_created_by`로 적용(내용 동일, 이름만 상이 — 드리프트 대조 시 참고), **Production에는 `728_cs_records_created_by`로 적용 완료(2026-10-17, Stephen 승인 "728로 번호 변경하고 Production 적용") — 칼럼 존재·nullable·FK(SET NULL) 확인, 기존 5건 모두 created_by 비어 있음.** 코드 배포 전 선행 조건 충족. 서버는 GET 때 user_profiles에서 이메일 앞부분을 붙여 created_by_label로 내려줌(고객 비노출). 기존 메모·종료 자동 요약은 빈 값.
+  · 입력창 아이콘 3종(첨부·상품검색·쿠폰 선물): 제공 SVG 적용(currentColor, 선 굵기 값 2배·크기 70%·hover 퍼플 원형 BG 12%, svg overflow visible). **파일 첨부 아이콘은 고객 채팅 입력창에도 같이 바뀐다.**
+  · 변경 파일(총 7): 마이그레이션 #728 · cs-record/+server.ts · csMemo.ts · chat.ts · AdminChatPanel.svelte · ChatInput.svelte · csMemo.test.ts. server 스위트에 다른 작업(inspection/push/sms/dhero) 기인 7건 실패는 이번 변경과 무관.
+```
+
+## NOW — 🔴 CRITICAL: 빠른답변 '내용' 입력칸을 공통 문서 편집기로 교체 — 채팅은 텍스트+썸네일(확대 보기), help 목록은 편집기 서식 그대로 (Migration #706, 2026-10-14, 이 세션'만', ✅ Stephen 지시("선택영역 단순 입력폼을 공통 문서 편집기 모듈로 반영 / 채팅=서식 무시 텍스트 + 이미지·동영상 썸네일·확대 보기 / help 목록 펼침=편집기 서식 그대로") · Stage DB(#706) 적용·검증 완료, **Production DB #706 적용 완료(2026-10-14, Stephen 승인 "Production DB #706 적용") — 기존 269건 content_blocks=NULL 확인, 코드 배포는 Stephen** · `src/routes/api/chat/message`·`admin-reply`·`api/cms/canned-responses`(프로즌 경로 `src/routes/api/**`) 수정 포함 — Stephen 지시 범위 → GATE C · 커밋·배포·Production 적용은 Stephen · sp3-qa-agent 검수 대기)
+
+```
+설계(A안): canned_responses.content_blocks(JSONB, NULL 허용) 추가. content(순수 텍스트)는 항상 서식 본문의 파생 텍스트로 서버가 만들어 함께 저장
+  → 채팅·검색·자동답변·크레이지챗·단축키는 content만 읽으므로 무영향. 서식 본문이 NULL인 기존 답변은 편집기에 줄 단위 문단으로 불러온다.
+채팅: 글자만 content로 전송 + 이미지·동영상은 canned_cta 카드 payload.media(최대 6개) 썸네일 → 누르면 확대(이미지)/재생(유튜브). 썸네일만 있는 카드는 버튼 숨김(button_label='').
+      확대 보기는 body로 옮겨 렌더링(채팅창 transform 조상 안 fixed 충돌 회피).
+help(/help): 빠른답변 펼침 시 content_blocks를 서버에서 정화(sanitizeContentBlocks)해 rc-content 서식 그대로 표시. 서식 본문 없는 답변은 기존 텍스트.
+저장 검증(서버): content_blocks 정화·크기 제한(200KB)·글자 없는 본문(이미지/영상만) 거절. 글자만 PATCH 시 남은 서식 본문 해제.
+변경 파일: supabase/migrations/20261014040000_706_canned_responses_content_blocks.sql · src/lib/utils/cannedBlocks.ts(신규) · src/lib/server/cannedContentBlocks.ts(신규) ·
+  src/lib/server/cannedCtaPayload.ts · src/lib/server/matchCannedResponse.ts · src/routes/api/cms/canned-responses/+server.ts·[id]/+server.ts · src/routes/api/chat/message/+server.ts·admin-reply/+server.ts ·
+  src/lib/types/chat.ts · src/lib/components/chat/ActionCard.svelte · src/lib/components/cms/CannedResponsePanel.svelte · src/routes/help/+page.server.ts·+page.svelte
+테스트: cannedBlocks(11) · cannedContentBlocks(6) · cannedCtaPayload(+3) — server/utils/components 스위트 2342건 통과, svelte-check 신규 오류 0(기존 2건 무관).
+배포 순서: ① Production #706 적용(✅ 완료) → ② 코드 배포. (코드 먼저 배포되면 content_blocks 칸이 없어 빠른답변 자동매칭 조회가 실패)
+1차 sp3 검수(수정 후 재검수): MAJOR 2·MINOR 5 → 반영: ① CannedResponsePanel 동기화 effect의 editorKey++를 untrack으로 감싸 자기 재예약(무한 갱신) 방지 ② message/+server.ts candidates 조회 error를 console.error로 기록(칼럼 누락 시 조용한 '매칭 없음' 방지) ③ 706에 ROLLBACK 주석 ④ ActionCard 렌더 직전 media 검증(유튜브 ID 11자·이미지 http(s)/내부경로) ⑤ Escape 처리는 확대 보기가 열려 있을 때만 ⑥ 미사용 .field-textarea CSS 정리.
+  ⚠️ 회귀 발견·수정: ⑥ 정리 때 .field-input과 한 묶음(공유 셀렉터)이던 스타일이 함께 삭제돼 제목·이미지URL·버튼 입력칸이 브라우저 기본 모양으로 깨짐 → 원본 값 그대로 복원(.field-input / :focus). 공유 셀렉터 정리 시 이웃 규칙 보존 확인 필수.
+  후속(Stephen 선택 1번): CTA '이미지 URL' 라벨에 안내 문구 추가("카드 대표 이미지(주소 직접 입력). 본문에 넣을 사진·동영상은 위 편집기에 추가하세요."). 미반영 MINOR: 확대 보기 포커스 이동·트랩·복귀(접근성).
+  [커밋 2945647 이후 후속 — 2026-10-14] CSS 회귀 2차 수정(.shortcut-preview,.content-preview 묶음 규칙 복원, 선택자 전수 대조) · 코드 배포 완료(stage READY, main PR #545 production READY, 배포 직후 로그 이번 변경 관련 오류 0건).
+  자동답변 경로 검증에서 발견·수정: chat_messages.content는 DB CHECK 1000자 → 편집기 서식 본문(목록 기호·문단 빈 줄로 글자 수 증가)이 1000자를 넘기면 자동답변 INSERT가 조용히 실패(로그 없음, 고객에겐 '대기 안내')하고 관리자 전송은 400.
+    → cannedContentBlocks.ts에 CANNED_CONTENT_MAX=1000 + resolveCannedBlocks 상한 거절, canned-responses POST/PATCH 글자만 수정 경로도 상한 검사, 패널 글자수 '현재/1000자'(초과 시 red-badge)·저장 전 토스트 차단, message route 자동응답 저장 실패 console.error 추가. 테스트 +2(1001자 거절/1000자 허용). Production 기존 269건 최대 640자(영향 없음).
+    상태: 로컬 수정, **커밋·배포 전**(Stephen). 변경 파일: src/lib/server/cannedContentBlocks.ts · src/routes/api/cms/canned-responses/+server.ts·[id]/+server.ts · src/routes/api/chat/message/+server.ts · src/lib/components/cms/CannedResponsePanel.svelte · src/__tests__/server/cannedContentBlocks.test.ts
+  타입검사: 이번 변경 신규 오류 0. 기존 무관 2건(vite.config.ts, subscribe/success) + 타 작업의 docEditor/coreEquivalence.test.ts 5건(이번 변경과 무관).
+미확인: 실화면(편집기 렌더·채팅 썸네일·확대·help 서식)은 Claude Browser 미사용 정책으로 Stephen 확인 필요. 모바일 help의 정적 FAQ(MOBILE_FAQ_ITEMS)는 이 기능과 무관한 별도 목록.
+```
+
+## NOW — 🔴 CRITICAL(DB 변경): /members 이용안내 영역 배경 사진 2장 교체·초점 관리모달 신설(PC 전용) + 모바일 상단 사진 교체 + 관리 버튼 표준화 (Migration #715, 2026-10-15, 이 세션'만', ✅ Stephen 지시("모바일 사진 PC 반응형 사진으로 반영" → "PC반응형 배경이미지 두 곳을 교체관리 가능한 관리모달 구현: ① 셋째·넷째 선택영역(히어로 배너 버튼·모달) 응용 ② 설정값은 PC·모바일 비율에 맞춰 적용 ③ 관리모달·버튼은 PC반응형에만 노출" → AskUserQuestion 확정: 저장=신규 설정 키 / 항목=이미지 교체+초점 위치 / 버튼=front 표준(선호 없음→권장) → "방금 구현한 버튼이 공통 표준에 맞는지" → "히어로 '배너 관리' 버튼도 표준에 맞춰 수정") · **Stage DB(#715) 적용·검증 완료, ✅ Production DB(#715) 적용·대조 완료(2026-10-15, Stephen 지시 "Production #715 적용 진행해줘") — 코드 커밋·배포는 미실시** · `src/routes/members/+page.server.ts`(`$env` import → 프로즌 규칙) 수정 포함 — Stephen 지시 범위 → GATE C · `src/routes/api/**` 변경 없음(기존 `/api/cms/members/hero-banner` 업로드·삭제 재사용) · Claude Browser: Stephen 요소 선택 세션(조건 ①)에서 로컬 확인 · 커밋·배포·Production 적용은 Stephen · sp3-qa-agent 검수 아래 기록)
+
+생성일: 2026-10-15 | 아젠다: `/members` 하단 "정기구독 이용안내" 영역의 배경 사진 2장(상단·하단)을 CMS 관리자가 PC 화면의 관리모달에서 교체하고, 같은 설정값이 PC·모바일 표시 비율에 맞게 적용되게 한다. 이에 앞서 모바일 상단 사진을 컨셉에 맞는 PC 사진으로 교체했다.
+
+### 구현 내역
+- **A. 모바일 상단 사진 교체**: `mobile-cta1.png`(한복 관광) → `benefits-photo1.png`(카메라·렌즈를 든 크리에이터), alt "카메라와 렌즈를 들고 웃는 크리에이터". 이후 B의 설정 방식에 흡수.
+- **B. DB(Migration #715, `supabase/migrations/20261015120000_715_members_benefits_photos_setting_key.sql`)**: `upsert_product_page_setting` 허용 키 + `cms_settings: public read display keys` 공개 읽기 정책에 `members_benefits_photos` 한 줄 추가(#628 방식 그대로). 적용 전 Stage·Production 본문 지문 동일 확인(함수 `db83c3a3…`, 정책 `7a122e66…`, 키 목록 #628과 일치). **Stage 적용 후** 키 포함·정책 1개·권한(anon 실행 불가, authenticated 가능) 확인. 롤백 SQL은 파일 하단 주석.
+- **C. 설정값 규칙** `src/lib/utils/membersBenefitsPhotos.ts` + 테스트 `src/__tests__/utils/membersBenefitsPhotos.test.ts`(13건): 값 `{ top, bottom }`(항목 = `{ url|null, path|null, x, y }` 또는 null) — url·path 둘 다 있어야 업로드 사진, 없으면 기본 사진 + 초점만 적용. `normalizeBenefitsPhotos`(깨진 값 → null), `resolveBenefitsPhoto`, `compactBenefitsPhoto`(기본 사진+기본 초점이면 null 저장), 초점 0~100 보정. 기본 초점 상단 (50,45)·하단 (50,15) — 상단은 55에서 PC 가로 띠가 눈을 자르는 것을 로컬 확인 후 45로 조정.
+- **D. 서버 로드** `src/routes/members/+page.server.ts`: `cms_settings` 키 읽어 정규화 → `benefitsPhotos`를 3개 반환 경로(조기 반환 2 + 최종 1) 모두에 추가.
+- **E. 관리모달(신규)** `src/lib/components/members/admin/MembersBenefitsPhotosModal.svelte`: front 관리모달 표준 골격(§9-2-A, 히어로 모달 동일 값). 사진마다 **PC 가로 띠(1240:400)·모바일 띠(390:200) 실제 비율 미리보기**, 사진 교체·기본 사진으로, 가로·세로 초점 슬라이더(0~100%)·초점 기본값으로. 업로드는 기존 `/api/cms/members/hero-banner` 재사용(이미지 형식 + `validateUploadFileSize` 10MB). 저장은 `upsert_product_page_setting` RPC. **임시 파일 정리**: 같은 모달에서 재교체한 이전 업로드·저장 없이 닫을 때(취소·배경·✕) 올린 파일 삭제, 저장 성공 후 더 이상 쓰지 않는 이전 업로드 삭제. 열릴 때마다 부모 `{#if}`로 재마운트(`$state(prop)` 금지 규칙의 허용 패턴 1) — `state_referenced_locally` 경고 4건은 이유 주석과 함께 `svelte-ignore`.
+- **F. 표시** `CommonBenefits.svelte`: props `photos`·`isCms`·`onEditPhotos` 추가. PC 배경 사진을 영역 위·아래 절반 `object-fit: cover` + 인라인 `object-position`(초점 %)로 교체(이전의 높이 % 확대·이동 방식 폐기), 모바일 상단·하단 사진도 같은 설정 사용. **관리 버튼은 PC 블록(`.benefits-pc`, ≥1024px) 안에만** 있어 모바일에는 렌더되지 않음(표준 §9-1-B: 200×50·BG 알파 0.4·반경 20·호버 BG만·우측 40·위 20). 하단 사진 alt "촬영 장비 모음". (선행 작업 이월: `.benefits-pc-inner` `min-height:800px; padding:100px 0`.)
+- **G. `/members` 페이지** `+page.svelte`: 모달 상태·import·렌더(`showBenefitsPhotosModal && data.isCms`)·`CommonBenefits`에 `photos/isCms/onEditPhotos` 전달.
+- **H. 히어로 '배너 관리' 버튼 표준화** `src/lib/components/members/MembersHero.svelte`: 105×36·반경 15·BG 0.55·blur·SVG 아이콘 → 200×50·반경 20·BG 0.4(호버 0.6)·blur 제거·`--text-pc-body-14`·좌측 정렬·우측 40/위 20·라벨 "⚙ 배너 관리"(§9-1-B). 같은 페이지의 두 관리 버튼이 같은 규격.
+- **이 세션 소관 파일**: 신규 4(`membersBenefitsPhotos.ts`·테스트·`MembersBenefitsPhotosModal.svelte`·마이그레이션 #715) + 수정 4(`CommonBenefits.svelte`·`members/+page.svelte`·`members/+page.server.ts`·`MembersHero.svelte`). 선행 `SubscriptionPolicyNotice` 제거 블록(아래 DONE 블록)과 `CommonBenefits.svelte`·`members/+page.svelte`를 공유 — 커밋은 함께 해도 무방.
+
+### 검증
+- 단위·서버 테스트: 신규 13건 GREEN, `src/__tests__/utils/membersBenefitsPhotos.test.ts` + `src/__tests__/server` 합 165개 파일 통과(1810 passed). `svelte-check --threshold error`: 이 작업 파일 오류 0건(전체 기존 2건 무관). `check-rpc-error-handling`: 신규 위반 없음.
+- 로컬(Stage DB) 브라우저 확인(Claude Browser, 조건 ①): PC 1400px — 사진 2장 400px씩·버튼 200×50·`SubscriptionPolicyNotice` 0개 / 모달 열림(패널 420px, 미리보기 372×120·372×191) / 슬라이더→미리보기 연동 / **저장 → Stage DB에 `{top:{x:50,y:30,url:null,path:null},bottom:null}` 확인**(PC·모바일 사진 둘 다 `50% 30%` 적용) / **업로드 → Storage 공개 URL 반환, 저장 없이 취소 → 임시 파일 삭제(200→400)** / 테스트 값 `{top:null,bottom:null}`로 복구 / 모바일 375px — 버튼 미노출·`.benefits-pc` display none·사진 얼굴·카메라·렌즈 / 두 관리 버튼 계산 스타일 동일.
+- **미검증**: 업로드 후 "저장"(업로드 사진을 실제 설정에 반영) 경로와 저장 후 이전 파일 삭제는 코드 확인만 — 로컬에서 업로드 후 저장은 실행하지 않음(Stage 데이터 변경 방지). 운영 17건 이용안내에서 영역이 길어질 때 배경 사진 구도는 미확인. 호버 동작은 코드 확인만.
+
+### 남은 사항
+- ✅ **Production DB(vnbpmvxruyciuuaermyh) #715 적용 완료(2026-10-15, Stephen 지시)**: 적용 전 Production 함수 지문 `db83c3a3…`(=#628 시점, 키 미포함)·정책에 키 없음 확인 → `apply_migration`(이름 `715_members_benefits_photos_setting_key`, 파일과 동일 SQL) → **DRIFT 대조(Stage ↔ Production 완전 일치)**: 함수 지문 `8d63abeb…`·정책 지문 `1a0964fd…`·정책 1개·roles `{anon,authenticated}`·SECURITY DEFINER·키 포함 true·anon 실행 false·authenticated 실행 true·이력 `715_…` 등록. Production `cms_settings`에 `members_benefits_photos` 행 0건(관리자가 저장 전까지 기본 사진). 같은 날짜대 #716~718은 다른 세션 소관이라 건드리지 않음. **이제 코드 커밋·배포가 가능**(원래 순서 주의: DB 먼저 → 코드 배포 — 충족).
+- (기록: 적용 전 서술) Production DB #715 적용 — 코드 배포 전에 적용(순서 주의: 미적용 상태로 코드만 배포하면 관리자 저장 시 `invalid key` 오류, 일반 방문자는 기본 사진으로 정상). 적용 후 DRIFT 1~4(함수 본문·정책·권한) 대조.
+- 업로드 엔드포인트 `/api/cms/members/hero-banner` DELETE는 요청한 `path`를 검증 없이 `product-images` 버킷에서 삭제(기존 구조·CMS 권한 필요) — 이번에 재사용만 했고 수정하지 않음(별건 검토 후보).
+- 모달 마운트 테스트(로그인 배너 모달처럼)는 미작성.
+- `SubscriptionPolicyNotice.svelte` 미사용 파일 삭제 여부는 Stephen 판단.
+
+### sp3 검수 기록 (2026-10-15, sp3-qa-agent 읽기 전용 — 코드 읽기·Stage 읽기 조회·테스트 실행 기준, 브라우저 미사용)
+- **결론: GATE E 조건부 통과 — BLOCKING 0 · MAJOR 1(수정 완료) · MINOR 4.** `npx vitest run src/__tests__/utils src/__tests__/server` 237개 파일 통과(2 skipped, 실패 0) · `membersBenefitsPhotos.test.ts` 13건 통과 · `svelte-check` 이 작업 파일 오류 0(기존 2건 무관) · `check-rpc-error-handling` 이 작업 신규 위반 없음(기존 6건) · loginBanner 계열 3개 테스트 영향 없음.
+- 확인된 사항: #715는 #628 대비 함수 허용 키·공개 정책에 `'members_benefits_photos'` 한 줄씩만 추가(기존 키 누락·오타 없음, SECURITY DEFINER·search_path·`is_cms_user()`·`TO anon, authenticated` 유지) / Stage: 익명으로 신규 키 행 읽힘(값 `{top:null,bottom:null}`)·익명의 저장 함수 호출은 42501 거부 / **코드가 Production DB보다 먼저 배포돼도 방문자는 기본 사진으로 정상, 관리자 저장만 `invalid key` 오류(안전한 방향)** / 공개 읽기 값은 공개 URL·경로·초점뿐 / 유틸 정규화 엣지(깨진 JSON·문자열·NaN·범위 밖·url만 있고 path 없음) 안전 / 모달 패널·헤더·푸터 값이 §9-2-A와 일치, 신규 하드코딩 색은 표준 표의 rgba뿐 / 부모 `{#if}` 재마운트 전제 성립(`invalidateAll` 뒤 `onclose` 순서에서 편집값이 덮이지 않음) / 서버 `hero-banner` API는 cms_role 없으면 403, 저장 RPC는 `is_cms_user()` 예외 — 권한 없는 사용자 이중 차단 / `+page.server.ts` 3개 반환 경로 모두 `benefitsPhotos` 포함·기존 `heroBanner*` 무영향·서버 키 비노출 / 관리 버튼은 `.benefits-pc`(display:none <1024px) 안에만 있어 접근성 트리·탭 이동에도 안 잡힘 / 히어로 버튼은 표준값 일치·`onEditBanner`·`aria-label` 유지(SVG→"⚙" 문자만 변경)·`/help`의 같은 이름 클래스는 컴포넌트 범위가 달라 무영향.
+- **MAJOR M-1(수정 완료)**: 저장 요청 진행 중 배경 클릭·✕로 닫으면 `saved`가 아직 false라 방금 올린 파일이 삭제되고, 설정은 그 파일 주소로 저장돼 `/members` 전체에 깨진 사진이 나올 수 있음(취소 버튼만 `disabled={isSaving}`). **조치**: `busy = isSaving || uploading !== null` 도입 — `cleanupAndClose`가 busy면 무시, ✕·취소 버튼 `disabled={busy}`(✕ 비활성 스타일 추가). MINOR m-1(업로드 중 닫으면 응답이 늦게 도착해 임시 파일이 고아로 남음)도 같은 가드로 해소. **로컬 확인(Claude Browser, 조건 ①)**: 업로드 중 ✕·취소·저장 모두 disabled, 배경·✕ 클릭해도 모달 유지, 업로드 끝나면 활성화, 이후 취소하면 파일 삭제(200→400). 이 가드 수정은 sp3 재검수 전 변경.
+- MINOR: ② 업로드 형식에서 PDF를 뺀 것은 정당(서버 `hero-banner`가 PDF를 400 거절 — 표준 accept와의 차이는 근거 있는 예외, 문서에 한 줄 남기길 권장; 서버에는 크기 제한이 없음 — 기존 구조) ③ `(supabase.rpc as any)`+`eslint-disable`는 기존 `MembersHeroBannerModal`과 같은 패턴 답습(RPC 타입이 `database.ts`에 반영될 때 정리) ④ `front-uiux.md` §9-1-B "적용 완료" 목록(551행)에 `/members`(`.photos-edit-btn`·`.hero-edit-btn`) 누락 — 문서 갱신 필요(지적만, 미수정).
+- **별건(이번 변경이 만든 결함 아님)**: `DELETE /api/cms/members/hero-banner`가 요청 `path`를 검증 없이 `product-images` 버킷에서 삭제 — CMS 역할(파트너 포함) 누구나 버킷 내 임의 파일 삭제 가능. 이 모달은 업로드로 받은 path·저장된 설정 path만 보내며 기본 사진(`/members/*.png`)은 정적 파일이라 삭제 대상 아님 → 이번 모달로 새로 생기는 위험 없음. `members/hero-banner/` 접두사 검증 추가를 별도 태스크로 권장.
+- 검수자 미확인: 실화면(기본 사진·기본 초점에서 PC 시각이 이전 확대 방식과 달라지는지 — 코드로는 달라진다는 점만 확인), **Production DB 조회**(이 환경에 접속 수단 없음 — #715 미적용·함수 지문 동일 여부는 TASK 서술로만), Stage `pg_get_functiondef`·정책 개수·authenticated 권한(이 세션이 SQL 조회로 이미 확인: 키 포함 true·정책 1개·anon 실행 false·authenticated true).
+- **Stephen 결정·확인**: ① **Production #715 적용 시점·순서** — 코드 배포 전에 적용 권장, 적용 후 DRIFT 1~4 대조 ② PC 기본 사진 구도 눈으로 확인(마음에 안 들면 `BENEFITS_DEFAULT_FOCUS` 조정) ③ `front-uiux.md` §9-1-B 목록 갱신 ④ 별건 삭제 API 경로 검증을 별도 태스크로 올릴지 ⑤ 가드 수정 후 sp3 재검수 여부.
+- 커밋은 Stephen: 신규 4(`membersBenefitsPhotos.ts`·테스트·`MembersBenefitsPhotosModal.svelte`·마이그레이션 #715) + 수정 4(`CommonBenefits.svelte`·`members/+page.svelte`·`members/+page.server.ts`·`MembersHero.svelte`) + `.claude` 문서(TASK.md는 다른 세션 변경 포함 — 일괄 커밋). 헤더는 Stephen 완료 확인·Production 적용 후 `## DONE` 전환.
+
+## DONE — 🟢 ROUTINE: /members PC 정기구독 이용안내 중복 노출 제거 — `SubscriptionPolicyNotice` 제거·`CommonBenefits`만 유지 + PC 이미지 영역 높이 보정(800px 고정→min-height) (2026-10-15, 이 세션'만', ✅ Stephen 지시(원인 조사 → "PC에서 SubscriptionPolicyNotice 제거하고 CommonBenefits만 남겨줘" 설명 요청 → "높이 보정 포함해서 CommonBenefits만 남겨줘") · DB·마이그레이션·`src/routes/api/**` 변경 없음 · 실화면(PC 폭·항목 많을 때 배경 사진 구도) Stephen 확인 대기 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+생성일: 2026-10-15 | 아젠다: `/members` 페이지가 같은 안내 문구(`data.policyItems`)를 PC에서 두 컴포넌트로 두 번 그리던 문제 — 원인 확정 후, Stephen 선택(CommonBenefits만 유지)대로 정리.
+
+### 원인 조사 결과 (코드·DB 읽기 전용 조회)
+- 같은 `policyItems`를 ① `SubscriptionPolicyNotice`(PC ≥1024px에서만 표시, 흰 둥근 카드 목록) ② `CommonBenefits`의 PC 블록 `writing-block`(PC ≥1024px, 사진 영역 위 붉은 박스) ③ `CommonBenefits`의 모바일 블록 `m-red-block`(<1024px) 세 곳이 그림 → **PC에서는 ①②가 동시에 노출**(모바일은 ③ 하나라 중복 없음).
+- 발생 시점: ①은 8/16(`e88bd67`)부터 있었고, 8/23 커밋(`905542c`)이 ②의 제목을 "정기구독 이용안내"로 바꾸며 같은 목록을 넣어 중복이 생김.
+- 데이터 출처: `subscription_policy_items`(`members/+page.server.ts:118`, service role 조회, `sort_order` 정렬) — 등록·수정·삭제는 CMS `/cms/subscriptions/new` "⑤ 정책설정"(`+page.server.ts`, 최대 20개·항목당 200자). 로컬은 Stage DB(5건), 운영은 Production DB(17건)로 서로 독립(DB 중복 행 없음, 두 DB 모두 distinct 문구).
+
+### 구현 내역
+- `src/routes/members/+page.svelte`: `SubscriptionPolicyNotice` import와 `<section aria-label="정기구독 이용안내">` 블록 삭제(−5줄). 이제 PC도 이용안내는 `CommonBenefits` 한 곳.
+- `src/lib/components/members/CommonBenefits.svelte` `.benefits-pc-inner`: `height: 800px` → `min-height: 800px` + `padding: 100px 0`(+주석). 근거: 기존 고정 800px + `overflow:hidden`이라 운영 17개(최대 20개) 항목이면 붉은 박스가 잘릴 수 있음(어림 ~960px+). 위아래 100px는 박스가 800px 이상이어도 배경 사진이 가려지지 않게 남기는 여백(항목이 적을 때는 기존과 동일).
+- `SubscriptionPolicyNotice.svelte` 파일은 미사용 상태로 **삭제하지 않고 유지**(삭제 여부는 Stephen 판단).
+- 이 세션 소관 파일 2개: `CommonBenefits.svelte`, `src/routes/members/+page.svelte` (git diff 확인 — 다른 세션 변경 없음).
+
+### 검증
+- `svelte-check --threshold error`: 이 파일들 오류 0건(전체 기존 2건 — `vite.config.ts`, `subscribe/success/+page.svelte` 무관). 두 파일을 참조하는 테스트 없음(grep).
+- 실화면 미확인: 운영 17개 구성에서 영역이 늘어날 때 배경 사진(높이 % 기준 배치) 구도, PC 폭에서 중복 제거 여부.
+
+### 남은 사항
+- 운영 구성(17개 항목) 또는 Stage에 항목을 추가한 상태에서 PC 화면 확인 필요(배경 사진 `bg-photo1/2`가 영역 높이의 %로 배치돼 높이가 늘면 함께 커짐).
+- Stage 이용안내 5건을 운영(17건)과 맞추는 작업은 미요청(Stage DB 변경이라 별도 지시 필요).
+
+### sp3 검수 기록
+### sp3 검수 기록 (2026-10-15, sp3-qa-agent 읽기 전용 — 코드 읽기 기준, 브라우저·DB 미사용)
+- **결론: GATE E 조건부 통과 — BLOCKING 0 · MAJOR 0 · MINOR 2.** 실화면(운영 17건 구도)은 코드만으로 확정 불가 → Stephen 확인 대기라 헤더는 `## NOW` 유지.
+- 확인된 사항: 변경은 2개 파일뿐(`+page.svelte` import 1줄+섹션 4줄 삭제, `CommonBenefits.svelte` `height:800px`→`min-height:800px; padding:100px 0`) / 모바일(`.benefits-mobile`·`m-red-block`) 미수정 / `policyItems={data.policyItems}` 전달 유지·`+page.server.ts` 무변경 / 이용안내는 PC `writing-block`·모바일 `m-red-block` 각 1곳만 렌더링 / `SubscriptionPolicyNotice` 참조 `src` 내 0건(파일은 유지) / 규칙 문서(`.claude/rules`·`rules-ref`)에 낡은 서술 없음 / 하드코딩 색·비표준 장식 없음, Svelte 5 유지, 미사용 import 없음 / `svelte-check` members 오류 0(기존 2건 무관) / members를 참조하는 테스트 없음.
+- CSS 판단(코드 읽기): `app.css:228` 전역 `box-sizing:border-box`라 min-height 800에 padding 상하 100 포함(콘텐츠 최소 600px) / 좌우 padding 0이라 폭 1240 불변 / **5건(Stage)**: 박스 약 310px(목록 5×26+4×20=210 + padding 100)로 600px 안에 들어가 외형 기존과 동일 / **17건(운영)**: 목록 한 줄 약 720px(약 45자) 기준 항목당 평균 2줄 가정 시 박스 약 1290px·영역 약 1490px(거의 한 줄씩이면 약 1000px)로 늘어나 잘림 해소.
+- MINOR ① 사진 구도: `.bg-photo1/2`가 영역 높이의 %(height 160.17%/170.07%, top -71.92%/47.89%)라 영역이 800→약 1490px로 커지면 사진도 약 1.9배로 확대·이동(`width:auto`, `overflow:hidden`으로 넘침은 잘림) — 확대된 모습이 어색한지는 이미지 비율·실화면 의존이라 **미확인**, 어색하면 사진 크기·위치 값을 따로 조정하는 후속 필요. MINOR ② PC 이용안내가 제목 요소 없이 `<p class="writing-head">`+`<ul>`로만 읽힘(변경 전부터의 상태, 중복 읽기 해소는 개선) — 별도 과제.
+- Guard 9(members 도메인 → M2·M3 회귀 확인 안내): 이번 변경은 표시 영역(마크업·CSS)만 바꾸고 비즈니스 로직 무변경이라 M2·M3 회귀테스트는 필수 아님(검수자 판단).
+- Stephen 확인: ① PC(≥1024px) Stage 5건 — 예전과 같은 모양 ② 운영 17건 안팎 — 영역이 길어지고 배경 사진이 어색하게 커지지 않는지 ③ 모바일 — 변화 없고 이용안내 1회 ④ `SubscriptionPolicyNotice.svelte` 파일 삭제 여부.
+- 커밋은 Stephen: 이 세션 소관 `src/lib/components/members/CommonBenefits.svelte`, `src/routes/members/+page.svelte` 2개(코드) + `.claude` 문서(TASK.md는 다른 세션 변경 포함 — 일괄 커밋).
+- ✅ **Stephen 완료 확인(2026-10-15): "모바일 & PC반응형 정상"** → 헤더 `## DONE` 전환. 위 Stephen 확인 ①②③(PC·모바일 표시)은 충족. 운영 17건 구성에서의 사진 구도(MINOR ①)는 별도 확인 언급 없음 — 어색하면 후속 조정. `SubscriptionPolicyNotice.svelte`(미사용) 삭제 여부는 미결정.
+
+## DONE — 🟡 BOUNDARY: 회원가입 모달 — 비밀번호 확인 일치 즉시 '성함' 입력란 노출·필수화 + PC 로그인 영문 문구 폰트 Config Condensed→Tilt Warp 교체 (2026-10-14, 이 세션'만', ✅ Stephen 지시("웹폰트 확인 → Config Condensed 사용처 확인 → 2번(Tilt Warp 교체) → 문서 표기 맞춤 → 가입 이름 입력 인터랙션 추가") · 로컬 실동작 Stephen 확인 완료 · DB·마이그레이션 변경 없음(기존 `update_user_profile` RPC 재사용) · `src/routes/api/**` 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+
+생성일: 2026-10-14 | 아젠다: ① 가입 단계 최소화 의도로 이름을 받지 않아 이름 없는 회원이 생기던 문제 → 가입 폼에서 이름을 필수로 받는다 ② 폰트 파일이 없어 대체 폰트로 표시되던 PC 로그인 영문 환영 문구를 Tilt Warp로 교체한다.
+
+### 구현 내역
+- **A. 가입 이름 입력** (`src/lib/components/auth/SignUpModal.svelte`)
+  - `passwordsMatched`(비밀번호 6자 이상 + 확인란 동일) 충족 즉시 `nameRevealed` 래치 → 비밀번호 확인란 아래에 "성함을 입력해주세요." 입력란이 `slide`(0.2초)로 노출. 한 번 열리면 비밀번호를 다시 고쳐도 닫지 않음(입력 중인 이름 보호).
+  - `canProceed`에 `nameRevealed && fullName.trim().length > 0` 추가 → 이름 없으면 [다음 단계 →] 비활성. `handleNextStep`에도 같은 검증(서버성 방어, "성함을 입력해주세요.").
+  - 입력란: 기존 `su-input` 클래스 재사용(신규 스타일 없음), `maxlength=30`, `autocomplete="name"`, `aria-label="성함"`, 한글 허용(이메일과 달리 비ASCII 차단 없음).
+  - 저장(후속 보정 2026-10-14, sp3 MINOR ② 해소): `handleSignUp`에서 **인증번호 검증·계정 전환보다 먼저** `update_user_profile(p_full_name=trim 값, p_email=null, p_birth_date=null)` 호출 — 마이페이지 이름 수정과 같은 RPC·같은 컬럼(`user_profiles.full_name`). 세 인자를 모두 명시(오버로드 모호성 방지). **실패하면 가입 중단**("성함 저장에 실패했습니다. 잠시 후 다시 시도해주세요.") — 인증번호가 아직 소진되지 않아 같은 화면에서 재시도 가능. 이름이 비어 있으면 같은 함수 진입부에서도 차단. 안전 근거: 인증 단계 진입 시 익명 세션·프로필 행이 이미 있고(`ensureSignupSession`), 익명→영구 전환은 같은 UID 유지, `ensure_user_profile`(#702)은 email만 갱신(`DO UPDATE SET email`)해 저장한 이름을 덮어쓰지 않음. 최초 구현(가입 후 저장·실패 시 경고 토스트만)은 폐기.
+  - `reset()`에 `fullName`·`nameRevealed` 초기화 추가.
+- **B. 폰트 교체** (`src/app.css:120`) — `--text-pc-ad-en-80`: `900 80px/120% var(--font-en-condensed)` → `400 80px/120% var(--font-en-display)`(Tilt Warp). 사유: Config Condensed는 `@font-face`·폰트 파일이 프로젝트에 없어 `sans-serif`로 대체 표시 중이었음. Tilt Warp는 400 단일 웨이트라 인위적 굵게(faux bold) 방지 위해 900→400. 사용처는 `auth/login/+page.svelte:809` `.d-welcome-en` 1곳뿐. `--font-en-condensed` 변수 선언(app.css:115)은 범위 밖이라 유지(현재 미사용).
+- **C. 문서 표기 맞춤** — `.claude/rules-ref/uiux.md:159`·`front-uiux.md:86` 타이포 표 `--text-pc-ad-en-80` 행을 "80px Regular | Tilt Warp"로 정정. `uiux.md:153`의 `--font-en-condensed` 선언 줄은 app.css와 같이 유지.
+- **이 세션 소관 파일 4개**: `SignUpModal.svelte`, `src/app.css`, `.claude/rules-ref/uiux.md`, `.claude/rules-ref/front-uiux.md` (git diff 확인 — 4개 모두 이 세션 변경만 포함, 다른 세션 변경 없음).
+- **결정 충돌 메모**: 같은 TASK.md의 Migration #702 블록(2026-10-12)에 "이름 입력란 추가는 Stephen 결정으로 불필요(가입 단계 최소화 의도)"라고 기록돼 있었으나, 이번 Stephen 지시("현재 가입편의 의도로 이름입력을 받지 않는 문제 발생")로 **이름 입력을 받는 것으로 번복**됐다. Stephen 지시(2026-10-14)로 #702 블록 헤더 줄의 해당 문구에 취소선 + 번복 표시만 추가(그 외 #702 내용은 미수정).
+
+### 검증
+- `svelte-check --threshold error`: 이 세션 변경 파일 오류 0건(전체 기존 오류 2건 — `vite.config.ts`, `subscribe/success/+page.svelte` — 이 세션과 무관). 후속 보정(이름 선저장·실패 시 가입 차단) 후에도 `SignUpModal` 오류 0건.
+- ⚠️ 후속 보정(이름 선저장·실패 차단)은 위 sp3 검수(GATE E 통과) **이후** 변경이라 sp3 재검수·로컬 재확인 미실시 — Stephen 판단.
+- 로컬 실동작: Stephen 확인 완료(2026-10-14).
+
+### 남은 사항
+- 기존에 이름 없이 가입한 회원의 `full_name` 보정은 범위 밖(미착수·Stephen 판단 — #702 후속 4명 보정과 별개).
+- `LegacyMemberVerifyModal.svelte`(레거시 회원 인증) 등 다른 가입 경로는 이번 범위 아님(이름 입력 여부 미확인).
+- 이름 최소 글자수 기준 없음(1자 이상) — "2자 이상" 등 기준이 필요하면 Stephen 확인.
+
+### sp3 검수 기록 (2026-10-14, sp3-qa-agent 읽기 전용, 이 세션 몫 4개 파일만)
+- **결론: GATE E 통과 — BLOCKING 0 · MAJOR 0 · MINOR 3.** 검수자 실행: `svelte-check --threshold error`(전체 오류 2건은 기존·무관, 이 세션 파일 0건). `SignUpModal` 관련 기존 단위 테스트가 없어 vitest는 미실행.
+- 확인된 사항: 래치(`nameRevealed`)·`canProceed`·`handleNextStep` 이중 방어·`reset()` 3경로(닫기·로그인 성공·가입 성공) 초기화 정상 / `update_user_profile` 시그니처 `(TEXT,TEXT,DATE)` 단일(오버로드 모호성 없음)·null=변경 없음(COALESCE)·`authenticated` 실행권한 유지(262 lockdown allowlist 포함, 289는 컬럼 직접 UPDATE만 차단)·익명→영구 전환 직후 프로필 행 존재 보장(`ensureSignupSession`+`performSignUp`) / `confirm-verified-signup`은 `full_name`을 덮어쓰지 않음 / `--text-pc-ad-en-80` 사용처 1곳(`auth/login/+page.svelte:809`)·Tilt Warp는 `app.html:8`에서 400 단일 웨이트로 로드 / 문서 표기 ↔ `app.css` 일치, `.claude/rules` 안 잔존 표기 없음.
+- 반증 시도: 이전 단계 복귀 시 slide 재생(철회 — Svelte 5 로컬 transition은 `{#if}` 토글 때만), 익명 전환 직후 RPC 권한(철회), 래치로 이름란 유지(의도 동작 — 판정 유지).
+- MINOR ① slide 중 부모 `gap:14px`가 즉시 생겨 200ms 동안 살짝 끊겨 보일 수 있음(미관만, 실화면은 Stephen 확인 완료) ② 이름 저장 RPC 실패 시 이름 없는 회원이 생길 수 있음(1차 검수 시점 기록 — **후속 보정으로 해소됨**: 이름 선저장·실패 시 가입 중단, 아래 재검수 기록 참고) ③ #702 블록 본문에 "이름 입력란 불필요" 번복 표시 없음(다른 세션 소관이라 미수정 — Stephen 정리 시 한 줄 메모 권장).
+- 검수자 미확인: 실화면 렌더링(Welcome 폭 약 330~400px 추정 vs 콘텐츠 폭 약 420px, slide 시각), Production DB의 `update_user_profile` 실제 권한(마이그레이션 파일만 대조).
+- 커밋은 Stephen: 이 세션 소관 4개 파일(`SignUpModal.svelte`, `src/app.css`, `uiux.md`, `front-uiux.md`)만 골라서. 작업 트리에는 다른 세션 수정이 많음. `.claude` 문서(이 TASK.md 포함)는 일괄 커밋 대상.
+
+### sp3 재검수 기록 (2026-10-14, sp3-qa-agent 읽기 전용 — 이름 선저장·실패 시 가입 차단 후속 보정분)
+- **결론: GATE E 조건부 통과 — BLOCKING 0 · MAJOR 0 · MINOR 3.** "이름 없이 가입이 완료되는 경로"는 코드상 없음(버튼 비활성 → `handleNextStep` → `handleSignUp` 진입부 → 이름 저장 실패 시 중단의 4중 방어, 이 모달에서 `performSignUp`으로 가는 길은 `handleSignUp` 하나). `svelte-check` 이 파일 오류 0건(기존 2건 무관), `check-rpc-error-handling` 신규 위반 없음(87행 `check_email_registered`는 기존 코드), SignUpModal 단위 테스트 없음.
+- 확인된 사항: 익명 세션(authenticated 롤)에서 `update_user_profile` 호출 가능(135 GRANT·262 allowlist, `verify_and_update_phone`과 동일 방식) / 가입 중 이름 덮어쓰기·삭제 경로 없음(`handle_new_user`는 익명 skip·정식은 email만, `ensure_user_profile`(#702)은 email만 갱신, `confirm-verified-signup`은 email_confirm만, 익명→정식 전환은 같은 UID 유지) / 래치·`handleNextStep`·`canProceed`·`reset()` 회귀 없음 / `/auth/login`·`products/[id]`·`cms/chat/qna`·`cms/login` 모두 같은 모달이라 동일 적용 / #702 블록 수정은 해당 문구 한 줄뿐.
+- **MINOR ① (보정으로 새로 생긴 위험, Stephen 판단 대기)**: `ensureSignupSession`(`SignUpModal.svelte` 228~232행)이 프로필 행 생성(`ensureUserProfile`) 실패를 try/catch로 삼키고 `true`를 반환 → 드물게 프로필 행이 없으면 `update_user_profile`이 `ok:false("프로필을 찾을 수 없습니다")`를 반환해 **이제 가입이 막힘**(보정 전에는 이름·번호 없이 조용히 가입되던 경로). 같은 화면에서 인증번호를 재발송하면 `ensureSignupSession`이 다시 돌아 프로필 생성을 재시도하므로 복구는 가능하나, 사용자에게는 "성함 저장에 실패했습니다"만 보임. 발생 빈도 미확인. 선택지: (a) 그대로 수용 (b) 이 경우 "인증번호를 다시 받아 주세요" 별도 안내 (c) 이름 저장 직전에 `ensureUserProfile` 재시도 1회 — **Stephen이 (c) 선택(2026-10-14) → 반영 완료**: `handleSignUp`에서 이름 저장 직전 `rpc.ensureUserProfile()` 1회 호출(오류는 무시, 최종 판단은 이름 저장 결과). `ensure_user_profile`은 멱등(행이 있으면 "기존 email이 비었고 새 email이 있을 때만" email 컬럼만 갱신 — `full_name`·`phone`은 건드리지 않음)이라 이미 있는 행에는 무해. 이 (c) 보정은 3차 재검수에서 확인됨(아래).
+- MINOR ② 인증번호 검증 실패 시 이름만 저장된 채 가입을 안 끝내면 이름이 든 고아 익명 프로필이 남음(재시도 시 같은 UID로 덮어씀·중복 가입 조회는 phone만 봐서 영향 없음 — 기존에도 email 빈 익명 프로필이 쌓이던 구조라 새 종류 문제 아님, 정리 대상에 이름이 포함된다는 점만 인지). MINOR ③ 1차 검수 기록 문구 정리 권고 → 이 기록으로 반영 완료.
+- 재검수자 미확인: 실화면 동작, Production DB `update_user_profile` 실제 권한(파일 대조만), `ensureUserProfile` 실패 실제 빈도.
+- ⚠️ 로컬 재확인(보정 후 실제 가입 1회)은 아직 미실시 — Stephen 확인 대기.
+
+### sp3 3차 재검수 기록 (2026-10-14, sp3-qa-agent 읽기 전용 — (c) `ensureUserProfile` 1회 재시도 보정분)
+- **결론: GATE E 통과 — BLOCKING 0 · MAJOR 0 · MINOR 2. 2차 재검수 MINOR ①(프로필 행이 없으면 가입이 막힘) 해소 확인.**
+- 확인된 사항: 호출 순서 `ensureUserProfile`(317행) → `update_user_profile`(321행) → `verify_and_update_phone` → `performSignUp` / `ensure_user_profile`(#702)은 SECURITY DEFINER, 익명 세션도 `auth.uid()`가 있어 행 생성 가능(`id`·`user_id`에 같은 uid — #634 제약 충돌 없음) / **핵심 반증 철회**: 재시도·이미 값이 저장된 프로필에서도 `ON CONFLICT (id) DO UPDATE SET email … WHERE 기존 email 비어 있음 AND 새 email 있음`으로 email만 조건부 갱신, `full_name`·`phone`은 SET 대상 아님 → 지우거나 덮어쓰지 않음, 익명 상태는 no-op / 호출 횟수 가입 1회당 최대 3회(`ensureSignupSession`·이번 추가분·`performSignUp` 내부)이나 모두 단일 행 멱등 작업이라 성능·레이트리밋 영향 근거 없음 / 1·2차 통과 항목(래치·`canProceed`·`handleNextStep`·`reset()`·선저장 실패 시 중단·이름 없는 가입 경로 부재) 회귀 없음.
+- 실행 검증: `svelte-check --threshold error` 이 파일 0건(기존 2건 무관) · `check-rpc-error-handling` 신규 위반 없음(87행 `check_email_registered`는 기존 코드) · SignUpModal 단위 테스트 없음 · Stage 라이브 테스트 미실행.
+- MINOR ① TASK.md 문구 부정확("DO UPDATE SET email"만 기재) → 이 기록 시점에 수정 완료. MINOR ② `ensureUserProfile`이 실패하고 프로필 행도 없는 극히 드문 경우 안내 문구는 "성함 저장에 실패했습니다" 하나뿐(인증번호 재발송 시 `ensureSignupSession` 재시도로 복구 가능, 발생 빈도 미확인 — 수용).
+- 검수자 미확인: 보정 후 실제 가입 1회의 실화면 동작, Production DB 두 함수의 실제 권한(파일 대조만), `ensureUserProfile` 실패 빈도.
+- 커밋은 Stephen: 이 세션 소관 5개 파일(`SignUpModal.svelte`, `src/app.css`, `uiux.md`, `front-uiux.md`, `TASK.md` — TASK.md는 `.claude` 일괄 커밋 대상이며 #702 블록 번복 표시 1줄 포함). 작업 트리에 다른 세션 수정이 많음.
+
+## NOW — 🟡 BOUNDARY: 예약 상세 '취소·환불 사유' 입력(SuggestPicker + 추가 입력, 자동 저장) (2026-10-14, 이 세션'만', Stephen 지시 — 구현 완료·Stage·Production 적용 완료(Production 2026-10-14 Stephen 지시 — 컬럼 2·CHECK·함수 권한 확인, 함수 해시 Stage와 동일), 화면 미확인)
+- **UI**: 취소된 예약의 상세 패널 대여정보 탭, 여정 스텝퍼('취소됨') 바로 아래. `SuggestPicker`(placeholder "취소·환불 사유를 등록하세요.", 대표 사유 5종 + 기타) + 그 아래 추가 입력 200자(글자 수 표시) + 우측 "저장 중…/자동 저장됨/저장 실패" 상태 글자. **저장 버튼 없음** — 항목 선택은 즉시 저장, 추가 입력은 입력 700ms 뒤·포커스 이탈 시 저장, 선택 입력을 모두 지우면 삭제. 저장은 사용자 조작에서만 일어나고 조회 결과 채우기는 저장을 일으키지 않음(루프 방지).
+- **항목(src/lib/utils/cancelReason.ts)**: 고객 단순 변심 / 고객 일정 변경·취소 / 장비 재고·상태 문제(당사 사정) / 계약·결제 미진행(고객 무응답) / 중복·오류 예약 / 기타.
+- **저장**: Migration #711(Stage 적용·테스트 GREEN) — `rental_reservations.cancel_reason_code`(6종 CHECK)·`cancel_reason_note`(200자 CHECK), `cms_set_reservation_cancel_reason`(service_role 전용, 취소된 예약에만·같은 주문의 취소된 형제에도 같은 값 기록). API `GET/PUT /api/cms/reservations/[id]/cancel-reason`(메뉴 `rental.reservation`, menuAccessMap 등록). `payment_transactions.cancel_reason`(PG 환불 때 시스템이 남기는 문구)과는 별개로 관리자가 분류하는 값.
+- **검증**: reservationCancelReason 테스트(Stage 라이브 포함)·menuAccess 관련 8파일 120건 GREEN, svelte-check 신규 오류 0, eslint 오류 0. 배포 순서: Production DB #711 적용 완료 → 이제 코드 배포 가능.
+- ⚠️ 한계: 취소 사유 분류가 대여현황 목록·예약목록 열에는 아직 표시되지 않음(패널에서만 입력·확인). 결제 전 취소건에도 입력 가능.
+
+## NOW — 🟡 BOUNDARY: 대여현황 '취소·환불' 칩 + 취소·환불 배지 + PG 환불정보 표시 보강 (2026-10-14, 이 세션'만', Stephen 지시 — 구현 완료·화면 미확인, 커밋은 Stephen)
+- **칩(2026-10-14 개정, Stephen 지시 "관리자 임의 취소도 취소·환불 목록으로 전환")**: `/cms/rentals` '완료' 우측·'전체' 앞 `취소·환불`(status=cancelled_refunded, 단계 화살표 없음, 미선택 극연한 레드·선택 레드). **취소된 예약 전부**(결제 전 취소 포함)를 보여 주고, 환불 완료 건은 행 배지 `취소·환불`·결제 전 취소는 `취소`로 구분. 칩 선택은 조회만 하며 환불·취소를 실행하지 않는다(환불은 기존 패널 [예약취소]/환불 흐름).
+- **조회**: 기존 `get_rental_list(p_status='cancelled', p_include_statuses=['cancelled'], 주문 단위)` 그대로 사용 — 총 건수·페이지네이션 정합. (초안의 `loadRefundedRentals` 별도 조회는 폐기·삭제) 고객이 취소했고 관리자 확인 전인 행은 `cancel_pending`(취소중)으로 표시해 헤더 [예약취소]=취소확인 흐름 유지. **링크 자동 전환**: `?selected=`가 취소된 예약이면 서버가 `status=cancelled_refunded`로 303 리다이렉트(이미 칩이면 반복 없음), 칩 클릭 시 화면이 `selected`를 지워 칩 이동이 막히지 않음. 링크 예약이 1페이지에 없으면(예: Stage 18976이 2페이지) 그 행만 따로 맨 위에 붙임. **관리자 취소 직후 전환**: 패널 `oncancelled`(예약취소·취소확인 성공) → `취소·환불` 목록으로 이동해 같은 예약을 다시 연다.
+- **배지**: 대여현황 목록 상태 배지(맨 왼쪽 열)·패널 헤더 배지·"현재 상태" 행·예약목록 배지에 `취소·환불`. 규칙: 상태 cancelled + 주문 최근 결제 status cancelled(환불 완료)일 때만. 결제 전 취소(결제 행 없음, 현재 Production 취소 166건 중 161건)와 환불 실패·미환불(결제 done)은 기존 `취소` 유지.
+- **PG 환불정보 보강**: 결제정보 탭이 환불시간을 `pg_cancelled_at`로만 표시했는데 고객 자가취소 경로는 이 값을 기록하지 않아(Production 환불 3건 모두 pg_cancelled_at=NULL, cancelled_at 있음) 환불정보가 비어 보였다 → `환불 상태·환불 금액·취소 환불시간(pg_cancelled_at ?? cancelled_at)·환불 사유` 표시, `findOrderPaymentTransaction`이 cancelled_at·cancel_reason도 조회. PG 취소 실행 상태(Toss 실시간 조회) 행은 기존 그대로.
+- **검증**: cmsRentalsCancelledView 8건 신규(칩 조회·자동 전환·반복 방지·링크 행 보충·취소중 표시·다른 칩 무변경)+기존 로더 4건 GREEN, 관련 17파일 GREEN, eslint 오류 0, svelte-check 신규 오류 0. Stage 실데이터: 취소 190건 중 18976은 2페이지(51번째)·결제 기록 없음→`취소`, 환불 완료 0건. 화면은 CMS 로그인 필요로 육안 미확인.
+- ⚠️ 한계: pg_cancelled_at 미기록 문제 자체(고객 자가취소 경로의 PG 취소 시각 미기록)는 표시 대체만 했고 기록 로직은 건드리지 않음. 환불 결제 500건 초과분은 목록에서 제외.
+
+## NOW — 🟡 BOUNDARY: 예약 상세 "알림발송" 탭(문자 발송 내역 + 솔라피 단말 도착 결과) (2026-10-14, 이 세션'만', Stephen 지시 — 구현 완료·화면 미확인, 커밋은 Stephen)
+- **배경**: 솔라피 콘솔에서 예약 297번 LMS가 `3000`(이통사 접수·리포트 대기)에서 멈춰 "실패"로 보임 → 테스트 발송으로 010-3917-1147 회선만 LMS 미도착(다른 번호는 SMS·LMS·URL 모두 4000)임을 확인. 우리 로그는 `sent`라 미도착을 알 수 없었음.
+- **솔라피 API 실측**: ① `getMessages({to, startDate, endDate})`로 "수신번호+기간" 조회 가능 — 예약 297의 실제 발송 3건도 조회됨 ② 발송 시 `customFields`(문자열 맵)를 심으면 조회 결과에 그대로 돌아옴(왕복 확인) ③ 고객·예약 정보는 솔라피에 원래 없으므로 우리 DB(`sms_notification_logs.reservation_id` + `user_profiles.phone`)와 짝지음.
+- **구현**: `src/lib/utils/smsDelivery.ts`(상태 판정·로그↔솔라피 매칭, 30분 이상 3000=미도착 의심) · `GET /api/cms/reservations/[id]/sms-delivery`(메뉴 `rental.reservation`, 조회 전용, 번호는 끝 4자리만 응답, 솔라피 실패 시 내역만 표시) · `RentalDetailPanel.svelte` 5번째 탭 "알림발송"(카드형, inlineListRow 표준) · `sms.ts` `sendSms`에 `customFields` 선택 인자 + 라이프사이클 문자에 `{reservationId, notifyType}` 부착 · `menuAccessMap.ts` 등록 · 테스트 `smsDelivery.test.ts` 7건.
+- **검증**: 관련 테스트 14파일 171건 GREEN, eslint 오류 0(경고 2: 객체 키 조회), svelte-check 신규 오류 0(기존 2건은 vite.config·subscribe/success). 프론트 화면은 CMS 로그인이 필요해 실화면 미확인.
+- ✅ **미도착 자동 알림 구현(2026-10-14, Stephen 승인 "권고안대로 진행")**: 별도 크론 없이 10분 크론 `locker-guide` 끝에 `checkUndeliveredSms`를 얹음(`src/lib/server/smsDeliveryAlert.ts`). 점검 대상은 `contract_link`·`reservation_approval`만, 최근 3시간 미확인 발송이 없으면 DB 조회 1회로 종료(솔라피 미호출). 수신 완료(4000)는 `delivery_confirmed_at`, 접수 후 30분 초과·실패는 `delivery_alerted_at`을 남기고 관리자 푸시 1회(`sendSmsUndeliveredAdminPush`, 이벤트 `sms_undelivered`, 메뉴 `rental.reservation`, 한 번 점검분은 한 통으로 묶음, 알림 표시를 먼저 조건부로 남겨 같은 건 최대 1회). **Migration #710(Stage·Production 적용·검증 완료 — Production 2026-10-14 Stephen 지시, 함수 분기·권한·기존 이벤트 무회귀·수신자 5명 확인)**: sms_notification_logs 컬럼 2개+부분 인덱스+service_role 컬럼 UPDATE 권한, user_profiles.admin_notify_sms_undelivered(기본 ON), get_admin_push_recipients·update_admin_notify_setting에 분기 추가(라이브 정의 앵커 치환). CMS 푸시알림 설정 "관리자 수신" 열에 "문자미도착" 추가. 테스트 smsUndeliveredAlert 7건(Stage 라이브 포함)+관련 36파일 525건 GREEN, eslint 오류 0, svelte-check 신규 오류 0. 배포 순서: Production DB #710 적용 완료 → 이제 코드 배포 가능(코드 미배포 상태에서는 점검이 돌지 않으므로 DB만 앞선 상태는 안전). 한계: 솔라피에서 짝을 못 찾은 로그는 판단하지 않음(오탐 방지), 인증번호·무인보관함 등 로그 없는 문자는 대상 아님.
+- ⚠️ 한계: `customFields` 부착 이전 발송분은 시각(180초) 매칭이라 같은 시각에 같은 번호로 여러 건이면 짝이 어긋날 수 있음. OTP·무인보관함 등 `sendLifecycleSms`를 거치지 않는 문자는 로그가 없어 이 탭에 안 나옴.
 
 ## NOW — 🔴 CRITICAL: 배송가능지역 관리(/cms/set/rental) + 장바구니 배송형 주소 제한(우편번호 구간) + 두발히어로 접수 주소 보정 (Migration #700~704, 2026-10-12~13, 이 세션'만', ✅ Stephen 지시(두발히어로 연동 점검·환경변수 안내 → "예약 주소 우선 사용 + 실패 경고" → "배송지역 관리정보 신설(목록·지도·장바구니 필터)" → "예약에 우편번호 컬럼 + 서버 방어" → "엑셀 주소정보 적재·더보기·묶음·검색·자체 배송 지역 추가") · Stage DB(#700~704) 적용·검증 완료, **Production DB #700~704 적용 완료(2026-10-13, Stephen 지시 "배송관리 DB마이그레이션 적용") — 카탈로그·허용지역 적재(`--production`)와 코드 배포는 미실시(적재 전 허용지역 0건 = 제한 없음)** · 카카오맵 지도보기는 `PUBLIC_KAKAO_MAP_KEY` 미설정으로 실화면 미확인 · `src/routes/api/cart/validate-delivery-address/+server.ts`(프로즌 경로 `src/routes/api/**`) 수정 포함 — Stephen 지시 범위 → GATE C · 커밋·배포·Production 적용은 Stephen · sp3-qa-agent 검수 아래 기록)
 
@@ -278,7 +1050,18 @@ GSD 약 14개×30분 + TDD 약 21개×15분 ≈ **약 12~13시간**(+ sp3 검수
 참고: 계정별 메뉴권한에 남아 있는 `customers.settings` 오버라이드 행은 대응 메뉴가 없어져 무효 — 고객코드 탭 접근은 '코드설정'(settings.code) 권한을 따름.
 수정 파일: `src/routes/cms/codes/+page.svelte`·`+page.server.ts`·`_CustomerCodeTab.svelte`(신규) · `src/routes/cms/customers/settings/+page.server.ts`(리다이렉트)·`+page.svelte`(삭제) · `src/lib/constants/cmsMenus.ts` · `src/__tests__/server/customersSettingsGuards.test.ts`·`src/__tests__/services/cmsMenus.test.ts`
 
-## NOW — 🔴 CRITICAL(가입·인증): 회원가입 후 프로필 이메일이 비어 번호만 있는 회원 발생 — ensure_user_profile() 이메일 동기화 + 기존 4명 보정 (Migration #702, 2026-10-12, 이 세션'만', ✅ Stephen 지시("번호만 있는 회원 원인 확인" → "가입 시 프로필 이메일 채우도록 수정" → "Production 적용하고 기존 4명도 보정") · Stage·Production DB 적용 완료 · 앱 코드·`src/routes/api/**` 변경 없음 · 이름 입력란 추가는 Stephen 결정으로 불필요(가입 단계 최소화 의도) · 마이그레이션 파일 커밋은 Stephen · sp3-qa-agent 검수 아래 기록)
+## NOW — 🔴 CRITICAL(고객 조회): 고객목록 검색 개선 — 회원코드 검색 추가 + 전화번호 하이픈 무관 검색 + 이름 미입력 표시 (Migration #705, 2026-10-14, 이 세션'만', ✅ Stephen 지시("선택영역 검색 가능 종류를 모두 확인" → "1, 2번 검색 개선 진행" → "Production에 적용") · Stage·Production DB 적용·해시 대조 완료 · 앱 코드는 커밋·배포 전 · `src/routes/api/**` 변경 없음 · sp3-qa-agent 검수 아래 기록, 커밋은 Stephen)
+
+- 현황 확인(Production 읽기 전용): `get_customer_list` 검색 조건이 이름·이메일·전화(원문 ILIKE)뿐 — 회원코드는 검색 대상 아님, 일반 회원 전화번호는 숫자만(22명)·하이픈 포함(13명) 저장 형식이 섞여 하이픈 포함 입력으로는 숫자만 저장된 회원이 안 나옴(관리대상 인물만 phone_digits 정규화). 이메일 검색 자체는 정상(프로필 이메일이 공란인 회원 3명은 이메일 검색 불가).
+- 수정: `supabase/migrations/20261014030000_705_customer_search_code_phone.sql` — 라이브 정의에서 검색 블록 한 곳만 정확 치환(불일치 시 중단·멱등): ① `c_member_code ILIKE` 추가 ② 입력이 전화번호 모양(숫자·하이픈·공백·괄호·+만)일 때만 저장 번호의 숫자만 뽑아 부분 일치(영문이 섞인 입력의 숫자 조각이 다른 번호에 우연히 맞는 것 방지). 권한은 CREATE OR REPLACE가 유지(service_role 전용, #364 정책).
+- 화면: `src/routes/cms/customers/+page.svelte` — 이름이 비어 있으면 "(이름 미입력)" 연한 글씨 표시, 검색창 안내문 "이름·이메일·전화번호·회원코드 검색".
+- 테스트: `src/__tests__/services/customerListSearchLive.test.ts`(Stage 라이브 4건: 코드(대소문자)·숫자저장↔하이픈검색·하이픈저장↔숫자검색·영문 섞인 입력 오탐 없음) + 기존 managedPersonsLive·components 포함 33건 통과, svelte-check 이번 파일 오류 0.
+- 검증: Stage·Production 함수 해시 일치(`e2c03817…`), ACL `{postgres, service_role}` 불변, Production에서 코드·소문자 코드·하이픈/숫자 전화·이메일 아이디·무일치(0건)·기본 목록(20건) 확인.
+- 롤백: 추가한 두 줄(`c_member_code ILIKE` · 숫자 전화 비교)을 제거한 정의로 CREATE OR REPLACE(직전 해시 `ab07124e…`).
+- 한계: 화면의 "(이름 미입력)"·안내문 변경은 코드 배포 후 반영(DB 검색 개선은 이미 동작). 프로필 이메일 공란 회원 3명(가입 전 임시 계정 등)은 이메일 검색 불가 — 별건.
+- **sp3-qa-agent 검수(2026-10-14)**: GATE E 통과 — BLOCKING 0·MAJOR 0·MINOR 5. 메인 세션 확인: Production ACL·함수 해시는 위 검증으로 이미 확인(anon·authenticated 실행 불가, service_role만), 이름이 빈 문자열('')인 회원 0명(NULL 7명)이라 aria-label(`row.name ?? row.email`) 이슈는 영향 없음. 남은 MINOR(수정 없음, 기록만): ① 롤백이 "치환의 반대"로만 서술 — 실행용 롤백은 `replace(pg_get_functiondef(...), <추가한 3줄 블록>, <원래 2줄 블록>)` DO 블록으로 수행(커밋된 마이그레이션 파일은 변경하지 않음) ② 오버로드가 생기면 proname만 조회하는 마이그레이션 가드가 첫 행만 봄 — 현재 오버로드 없음 ③ 라이브 테스트 3건이 Stage 실데이터 첫 행에 의존(해당 형식 회원 0명이면 실패 가능) ④ 'zz987654zz' 0건 케이스는 그 문자열 이메일이 없다는 전제. svelte-check 오류 2건은 이번 변경 밖.
+
+## NOW — 🔴 CRITICAL(가입·인증): 회원가입 후 프로필 이메일이 비어 번호만 있는 회원 발생 — ensure_user_profile() 이메일 동기화 + 기존 4명 보정 (Migration #702, 2026-10-12, 이 세션'만', ✅ Stephen 지시("번호만 있는 회원 원인 확인" → "가입 시 프로필 이메일 채우도록 수정" → "Production 적용하고 기존 4명도 보정") · Stage·Production DB 적용 완료 · 앱 코드·`src/routes/api/**` 변경 없음 · ~~이름 입력란 추가는 Stephen 결정으로 불필요(가입 단계 최소화 의도)~~ → **2026-10-14 Stephen 지시로 번복: 가입 시 이름을 필수로 받는다**(회원가입 모달에 '성함' 입력란 추가·필수화, 이름 저장 실패 시 가입 차단 — 맨 위 "회원가입 모달 — 비밀번호 확인 일치 즉시 '성함' 입력란" 블록 참고) · 마이그레이션 파일 커밋은 Stephen · sp3-qa-agent 검수 아래 기록)
 
 - 원인: 가입 화면이 휴대폰 인증을 위해 익명 세션+빈 프로필(email='')을 먼저 만들고, 인증 후 `updateUser`로 정식 전환한 뒤 `ensure_user_profile()`을 다시 호출하는데 이 함수가 `ON CONFLICT (id) DO NOTHING`이라 빈 프로필의 이메일을 채우지 못함(`handle_new_user` 트리거는 auth.users INSERT에만 걸려 전환(UPDATE)에는 미실행). 2026-10-03 이후 가입자 4명(CSBC2610005·2610024·2610026·2610030)이 프로필 이메일 공란.
 - 수정: `supabase/migrations/20261012050000_702_ensure_user_profile_sync_email.sql` — 이메일을 JWT가 아니라 `auth.users`에서 직접 읽고(전환 직후 토큰 미갱신 대비), 프로필 이메일이 비어 있을 때만 채움(기존 값 덮어쓰기 없음), `SET search_path` 추가, 권한 기존과 동일(authenticated 호출 가능).
@@ -287,6 +1070,19 @@ GSD 약 14개×30분 + TDD 약 21개×15분 ≈ **약 12~13시간**(+ sp3 검수
 - 별건 확인: CSBC2609027·2609028은 예약·주문·포인트·문의 0건·쿠폰 미사용·메시지 0건의 미완료 익명 가입 잔재로 삭제 가능(삭제는 미실행, Stephen이 고객목록에서 처리).
 - 한계: 실제 가입 화면으로 새로 가입해 보는 종단 확인과 자동 테스트 파일은 없음(Stage 롤백 SQL 검증으로 대체). 필요 시 라이브 테스트 신설 후속.
 - **sp3-qa-agent 검수(2026-10-13)**: 조건부 통과 → 메인 세션이 DB 4항목 직접 확인 완료(Stage·Production 함수 해시 `d35ee733…` 일치, ACL 불변, Production 이메일 불일치 잔여 0, 보정 4명 일치). BLOCKING 0·MAJOR 1(롤백 섹션 없음 → 파일 하단에 주석 롤백 블록 추가로 해소, 동작 무변경)·MINOR 3(보정 4명 실행 기록은 위 블록에 남김 / `CustomerDetailPanel.svelte`의 미사용 CSS `.inq-card`·`.inq-head` 등 잔존 — 미정리, 경고 수준 / 빠른문의 딥링크는 목록 현재 페이지 밖 문의면 자동 펼침이 안 되는 기존 한계). svelte-check 오류 2건은 이번 변경 밖(`vite.config.ts`, `subscribe/success`). 테스트 25건 통과.
+
+## NOW — 🔴 CRITICAL: 신규 가입자 ↔ 사전 등록 관리대상 대조 → 자동 분류(미확인) → 관리자 확인 — 칩 배지·패널 배너 (Migration #708, 2026-10-14, 이 세션'만', ✅ Stephen 지시("제안대로 적용 + 관리대상 두 종류(기존 고객 지정·사전 등록) 구분, 가입 중복정보 대조와 동시") · Stage DB(#708) 적용·라이브 테스트 6건·서버 액션 테스트 통과, **Production DB 적용 완료(2026-10-14, Stephen 지시) — 함수 해시 Stage와 일치(`52447d5a…`)·RLS ON·정책 0건·트리거 1·함수 3종 service_role 전용·고객목록/관리대상 필터 정상·대기 0건** · 코드 커밋·배포 전 · 가입 화면·`src/routes/api/**` 변경 없음(트리거 방식) · 푸시 알림은 별도 단계)
+
+- 설계: 가입 흐름 코드를 건드리지 않고 DB 트리거(`private.match_signup_to_managed_person`, user_profiles 전화·이메일 INSERT/UPDATE)로 대조 — 회원가입 인증·이메일 전환·레거시 인증·마이페이지 수정 모든 경로에서 "중복 정보 대조와 같은 시점"에 동작. 강한 일치만 분류(전화번호 숫자 일치 'phone' / 이메일 대소문자 무시 일치 'email'), 이름·아이디 유사는 오탐 위험으로 제외. 가입 차단 없음·블랙리스트 자동 지정 없음(관리자 확정 시 기존 toggle_blacklist 경로).
+- 일치 기록: `managed_person_matches`(RLS ON·정책 0건, service_role 전용 — user_profiles 컬럼이면 본인 조회로 노출될 수 있어 별도 테이블). 상태 pending/confirmed/dismissed, 해당 없음 후 재저장해도 되살아나지 않음.
+- 관리대상 목록 두 종류: ① 기존 고객이 관리대상으로 지정(blacklisted) ② 사전 등록(managed_persons) — 대조 대상은 ②만(신규 가입자 vs 사전 등록). `get_customer_list`의 '관리대상' 필터(p_blacklisted=true)에 pending 일치 가입자 포함(라이브 정의 한 줄 치환), 정상 필터에서는 제외.
+- 화면: 칩 '관리대상' 옆 미확인 건수 배지, 목록 이름 옆 "관리대상 일치" 태그, 상세 패널 상단 배너([해당 없음]/[관리대상 확정]). 서버 액션 `reviewManagedMatch`(manager 이상).
+- **sp3-qa-agent 검수(2026-10-14)**: BLOCKING 1·MAJOR 0·MINOR 6 → BLOCKING 해소(reviewManagedMatch confirm의 `cms_get_managed_match_flags` 오류를 버리던 것을 실제 오류로 반환 + 테스트 1건 추가, check-rpc-error-handling 이 파일 위반 0). 메인 세션 확인: `toggle_blacklist(true)` 재호출 멱등(`{"ok":true}` 두 번 — confirm 중간 실패 후 재시도 안전), Production 함수 해시·권한·RLS·트리거 직접 확인 완료. MINOR 미조치: 트리거가 오류를 완전히 삼킴(RAISE WARNING 추가는 새 마이그레이션 필요) / 국가번호(+82) 형식 번호는 숫자 완전 일치라 누락 가능 / 해당 없음·확정 뒤엔 재대조 안 함(의도) / `.mm-btn-danger` 소형 삭제 변형은 cms-uiux §0-10에 없는 조합(Stephen 확인 권장) / 들여쓰기 한 줄 / 숫자만 입력 시 전화번호 모양 판정(의도). 재검수는 BLOCKING 1건 수정 후 정적·테스트 확인으로 갈음.
+- **후속 #709(2026-10-14, 재판단 후 Stephen 승인 "제안한 기본값 그대로")**: 트리거 오류 은폐를 MINOR→중간으로 상향 — 트리거에 `RAISE WARNING`(흔적), `cms_rescan_managed_matches()`(미기록 활성 회원 재대조, 멱등·service_role 전용 — 놓친 건 구제·가입 이후 등록(역방향)·기존 회원 백필 해결), pg_cron `managed_match_rescan` 매일 03:30 KST(18:30 UTC), 관리대상 등록·수정 액션 직후 재스캔(fail-soft). Stage·Production DB 적용 완료(두 DB 함수 해시 일치 `757d77f4…`/`01f1f36d…`, 권한·크론·트리거 확인). Production 첫 재스캔 결과 0건(등록 관리대상 41명 중 일치 회원 없음), 대기 0건. 롤백: `SELECT cron.unschedule('managed_match_rescan'); DROP FUNCTION public.cms_rescan_managed_matches();` + 트리거 함수는 #708의 EXCEPTION 블록으로 복구.
+- **sp3 재검수(#709, 2026-10-14)**: BLOCKING 0·MAJOR 0·MINOR 3 → GATE E 통과. 테스트 46건·svelte-check(변경 파일 0)·rpc 오류처리 검사(cms/customers 위반 0) 통과, 버튼 규격 §0-10-G 일치. MINOR(미조치·규모 확대 시 검토): ① 이메일 비교용 `lower(btrim(email))` 함수형 인덱스 없음(관리대상 수천 건↑ 시 추가) ② RAISE WARNING의 SQLERRM에 값이 섞일 이론상 여지(현재 낮음) ③ 등록·수정 응답에서 재스캔을 동기 await(규모 커지면 비동기화). 첫 정기 실행(03:30 KST) 후 `cron.job_run_details` 확인 권장.
+- 롤백(Production 포함): `DROP TRIGGER trg_match_signup_to_managed_person ON user_profiles`; 함수 3종·`private.match_signup_to_managed_person` DROP; `managed_person_matches` DROP; get_customer_list의 관리대상 필터 줄(`OR EXISTS(... managed_person_matches ...)`)을 원래 `c.c_blacklisted = p_blacklisted`로 되돌림.
+- 한계/후속: 푸시 알림(관리자 수신 설정 7곳 세트) 미구현 — 배지로 대체. 관리대상을 가입 이후에 새로 등록하면 이미 가입한 동일 번호 회원은 자동 분류되지 않음(역방향 대조 미구현). 기존 가입자 일괄 대조(백필) 미실행.
+- 파일: `supabase/migrations/20261014060000_708_managed_person_signup_match.sql`, `cms/customers/+page.server.ts`·`+page.svelte`, `CustomerDetailPanel.svelte`, 테스트 `managedPersonSignupMatchLive.test.ts`·`managedPersonActions.test.ts`(추가 5건).
 
 ## NOW — 🔴 CRITICAL: 고객목록 '관리대상 등록' — 회원 가입 이력 없는 인물을 관리자가 직접 등록·목록 통합 표시·전용 QR 자동 발급 (2026-10-09, 이 세션'만', ✅ Stephen 직접 지시 + 확정 4건(대상=가입 이력 없는 사람 / 같은 목록에 함께 표시 / '정렬 배지'=기존 '관리대상' 칩 / QR=기존 회원 QR 체계) · ✅ GATE B 승인(Stephen: 열람 권한=기존 고객목록 권한 그대로·필수 항목=이름+전화+사유·설계대로 착수) · Stage(ezyvffjvuwmtuhpxdjrw) Migration #686 적용·테스트 완료, Production 미적용(Stephen 확인 대기) · sp3-qa-agent 검수 진행, 커밋·배포는 Stephen 대기)
 
@@ -15674,3 +16470,38 @@ Stephen이 실사용 중 제보한 가격 표시 불일치·저장 실패 토스
   별도 로컬 세션에서 시작 — 독립 실행 중이며 이 세션 소관 아님. 완료 후 `result.data`를
   `result.type` 판별 없이 접근하는 타입 에러 4건이 svelte-check에 남아있어 별도 확인 필요.
 - `/cms/set/rental` 나머지 미확인 fetch 호출부(있다면)는 이번 스코프 밖.
+- ✅ '취소·환불·CS' 칩(2026-10-22, Stephen 지시): 칩 이름 '취소·환불' → '취소·환불·CS'. CS 접수 등록 건(사전접수·검수 이슈 기록·이슈 해소 마감)이 '완료'가 되면 완료 칩에서 빠지고 이 칩 1페이지 맨 앞에 붙는다(총 건수 가감, 링크로 연 예약은 칩 자동 전환). 구현: src/lib/server/csRegistered.ts + cms/rentals/+page.server.ts. DB 변경 없음(앱 계산). 한계: 완료 칩은 행 제외 방식이라 페이지 안 행 수가 30건보다 적을 수 있음. 테스트 cmsRentalsCancelledView CV-9~11 추가(기존 모의 객체 낡은 부분 2건 보정).
+- ✅ 반납 검수 승인 버튼 헤더 이전(2026-10-22, Stephen 지시): 검수 탭 폼 안 버튼 제거 → 패널 헤더 [예약취소] 우측. 활성 = 반납요청·반납완료 + (고객 반납 제출 정보 or CS 접수 정보) + 이슈 검수중 아님. 반납완료·이슈 검수중에서는 [예약변경]·[예약취소] 숨김. 반납요청·반납완료 단계에서는 검수 탭을 열지 않아도 증빙 조회(활성 판정용). RentalDetailPanel.svelte.
+- ✅ '반납중' 칩 패널도 [예약변경]·[예약취소] 숨김(2026-10-22): 반납요청·반납완료·이슈 검수중·반납 안내 발송된 대여중. RentalDetailPanel hideChangeCancel.
+- ✅ 대여중 상태 예약 패널 [예약변경]·[예약취소] 숨김(2026-10-22, Stephen 지시). 계약완료는 활성, 배송중은 노출·비활성(기존 잠금 정책) 유지.
+- ✅ 대여중→반납중 자동 전환(2026-10-22, Stephen 지시, Migration #735 — Stage 적용·검증, Production 미적용): 반납 일시(반납일+반납시각 KST, 시각 없음·형식 오류=18:00, 24:00=그날 끝)가 지난 대여중은 방식 무관(방문 포함) '반납중' 칩으로 이동하고 '대여중' 칩에서는 제외(p_inspection_scope='in_use_pending'). private.rental_return_due 신설. '대여중' 칩 처리대기 배지 제거(반납중으로 이동). ⚠ Production은 코드 배포 전에 #735 먼저 적용할 것(코드만 먼저 배포되면 '대여중' 칩 조회 실패 — #722~731 사고와 동일 클래스).
+- ✅ '반납중' 칩 행 배지 정리(2026-10-22, Stephen 지시): 대여중 상태 배지 제거(반납중 칩의 in_use 행), '반납요청 예정' 배지는 반납요청 알림 발송 전까지만(발송되면 조용히 사라짐, '발송' 배지 삭제), 방문·미지정은 반납예정 카드 발송 여부로 판정(attachReturnStage). 반납중 칩에서만 배지 표시. 알림 발송 시각 조건은 확인 결과만 보고(변경 보류).
+- ✅ 반납 안내 알림 발송 시각 변경(2026-10-22, Stephen 확정, Migration #736 — Stage 적용, Production 미적용): 택배류=반납일 당일 09:00 KST / 퀵=반납 일시 3시간 전 1회(운영자 푸시 동반, 키 quick_5h) / 무인함=반납 일시 3시간 전 1회(키 locker_2h, 문구 '2시간'→'3시간') / 방문=기존 09시. 퀵 2시간·1시간 단계는 더 이상 발송되지 않음. 이미 발송된 기록은 유지. ⚠ Production은 #735·#736 적용 후 코드 배포.
+- 🔎 sp3-qa 검수(2026-10-22, 세션 최근 수정분): PASS-CONDITIONAL, BLOCKER 0·MAJOR 0·MINOR 6, sp5 생략(보안 의심 없음). MINOR-2(운영자 푸시 제목 '퀵 2시간 전') 즉시 수정. 남은 MINOR: #735 vs #736 return_time 해석 차이(24:00·HH:MM:SS), attachReturnStage chat_messages JSON 경로 조회 성능/1000행 상한, csRegistered 조회 상한(2000/2000/5000), 완료 칩 총건수 근사, 퀵 2·1시간 문구 데드코드. 배포 순서: Production #735→#736 적용 후 코드 배포.
+- ✅ Production DB 적용(2026-10-22, Stephen 지시 '마이그레이션 진행해'): #735(rental_list_return_due)→#736(return_notice_timing) 순서로 Production(vnbpmvxruyciuuaermyh)에 적용. 사전확인: registry 번호·이름 충돌 없음, #731 앵커 1회·#735 미적용. 적용 후 DRIFT: 함수 3종(claim_return_notice_targets·get_rental_list·private.rental_return_due) 본문 md5 Stage와 일치, 권한 anon/authenticated 차단·service_role만, get_rental_list 'inspection-735' 2곳. Production 목록 호출 정상(returning 1·in_use_pending 0). 이제 코드 배포 가능.
+- ✅ 패널 헤더 여정 스텝퍼 슬림화·모션(2026-10-22, Stephen 지시): RentalJourneyStepper 에 slim 변형 추가(점+라벨 가로 한 줄, 높이 약 50px), RentalDetailPanel 헤더 아래(.panel-journey, 모든 탭 공통)로 이동 — 취소 건은 취소·환불 사유 박스용 기존 스텝퍼를 대여정보 탭에 유지. 모션: 패널 열림·상태 변경 시 상태 배지 1회 버블(status-bubble), 단계 왼쪽부터 순차 등장·현재 점 1회 버블, 현재 단계 점 옅은 퍼플(--cs-purple-pale) 물결 2겹 반복(CmsChatFab ripple-wave 2.4s 동일). prefers-reduced-motion 시 모션 끔. 기본형 스텝퍼(고객 화면 등)는 무변경.
+- ✅ 헤더 슬림 스텝퍼 2차(2026-10-22, Stephen 지시): 단계 원형 배지를 기존 점(12px)의 4배(48px)로 키우고 상태 텍스트를 배지 안으로(4글자는 2줄, 폰트 14px = 한 단계 작게 — 이전 font-size 에 font 단축 토큰을 잘못 써서 16px 로 보이던 문제 해소), 현재 단계 오른쪽 화살표에 왼→오른 옅은 퍼플 그라데이션 물결 반복(SVG linearGradient animateTransform, 동작 줄이기 설정 시 정지). 기본형 스텝퍼 무변경. RentalJourneyStepper.svelte.
+- ✅ 헤더 슬림 스텝퍼 3차(2026-10-22, Stephen 지시): 모션 상하단 잘림 해소(원인=.stepper-scroll overflow-x:auto 가 y 도 잘라냄 → 슬림형 overflow visible), 배지 글자 12px(--text-pc-script-12), 모션 교체 — 구식 반복 물결 링 제거, 현재 단계에 회전 그라데이션 호(conic-gradient 링)+숨쉬는 글로+스프링 팝, 단계 등장도 스프링 곡선. 화살표 퍼플 물결은 유지. RentalJourneyStepper.svelte.
+- ✅ 헤더 슬림 스텝퍼 4차(2026-10-22): 비활성 원형 배지 아웃라인 제거(투명 테두리), 배지 글자 11px(--text-pc-tag-11, 배지 레이블 토큰).
+- ✅ 헤더 슬림 스텝퍼 5차(2026-10-22): 상하 패딩 6→16px, 배지 사이 간격(화살표 칸) 28→46px.
+- ✅ 헤더 슬림 스텝퍼 6차(2026-10-22): 현재 단계 원 퍼플 테두리 제거(흰 배경+회전 호 유지).
+- ✅ 헤더 여정 A안(2026-10-22, Stephen 확정): 반납 일시 도래·반납 안내 발송된 대여중은 여정 현재 단계를 '반납중'으로 표시(표시용, 실제 상태 대여중 유지). src/lib/utils/returnDue.ts(isReturnDue — DB rental_return_due 와 같은 규칙)+returnDue.test.ts 3건, RentalDetailPanel journeyStatus.
+- ✅ 헤더 여정 '계약발송' 단계(2026-10-22, Stephen 지시): 예약현황 패널(stepFilter 에 hold 포함)에서 전자계약서가 발행·발송된 예약(signing_sent_at)은 예약신청과 계약완료 사이에 '계약발송' 단계 표시 — 신청대기 중 발송 건은 계약발송이 현재 단계, 확정 이후는 지나온 단계. 대여현황·기본형 스텝퍼는 무변경. RentalJourneyStepper ALL_STEPS(contract_sent, steps 명시 시에만) + RentalDetailPanel journeySteps.
+- ✅ 계약발송 단계 상시 표시(2026-10-22, Stephen 지시): 발송 전(미도달)에도 예약현황 패널 여정은 항상 예약신청→계약발송→계약완료. 발송 건은 계약발송이 현재 단계.
+- ✅ 고객 화면 여정 '반납일' 이중 기능(2026-10-22, Stephen 확정): 대여중일 때 반납 단계 칸 이름을 '반납일'로 표시(알림 시각 전=대여중이 현재·반납일 회색, 알림 시각 도달=반납일이 현재), 반납 제출 후 반납중이 되면 '반납중'(기존 로직 유지). 알림 시각: 택배류·방문·미지정=반납일 09:00 KST, 퀵·무인함=반납 일시 3시간 전(DB #736과 동일). 구현: utils/returnNoticeTime.ts(+test 4건), RentalJourneyStepper returnDay prop(고객 전용·CMS 무변경), 고객 5곳(account 메인 2·내 대여 목록·PC 패널·대여 상세) + 조회에 return_method·return_time 추가.
+- 🔧 고객 여정 '반납일' 정정(2026-10-22, Stephen 재확인): 알림 시각 전에는 기존대로 '반납중' 비활성(대여중이 현재), 알림 시각 도달 시에만 칸 이름이 '반납일'로 바뀌며 현재 단계, 고객 제출 후 이름만 '반납중'. (직전 기록의 '대여중일 때 항상 반납일 표시'는 정정됨)
+- ✅ 칩 수량 배지 일관 표시(2026-10-22, Stephen 지시): 대여현황 '대여중' 칩(반납 일시 전 대여중 전체, in_use_pending 건수)·예약현황 '임시예약' 칩(draft 건수)에도 수량 배지 추가 — 신청대기·계약완료·배송중·반납중·검수 칩과 같은 방식(목록 건수=배지). 로컬 확인: 임시예약 2=목록 총 2건, 대여중 0=목록 총 0건.
+- ✅ 예약현황·대여현황 통합(2026-10-22, Stephen 확정 — 통합 주소 /cms/rentals, 칩 구성 임시예약·신청대기·계약대기·계약완료·배송중·대여중·반납중·검수·완료·취소·환불·CS·전체, 단계별 진행의 1~2단계 일괄): ① 통합 화면(rentals/+page.svelte — 검색·기간 필터·결제금액/계약/신청일 열·계약 잔여시간 배지·승인 후 계약대기 전환), ② 통합 로더(rentals/+page.server.ts + lib/server/cms/reservationStageList.ts), ③ /cms/reservation 화면 요청은 /cms/rentals 로 이동(폼 액션 유지), ④ 탭 메뉴(ReservationRentalTabBar) 삭제, ⑤ GNB 예약대여현황 → /cms/rentals + 옛 경로 권한 별칭, ⑥ 취소 칩 합치기('취소'+'취소·환불'+CS 완료 → '취소·환불·CS', 만료 포함), ⑦ 칩 없는 selected 링크 자동 칩 이동. 소스 점검 테스트 5개 통합 화면으로 재지정, 신규 unifiedRentalList.test.ts. 남은 일: sp3 검수, 알림·채팅 카드의 /cms/reservation 링크를 /cms/rentals 로 직접 정리(현재는 리다이렉트로 호환), 패널 액션(승인·취소) 실화면 통합 검증.
+- ✅ '전체' 칩 폐지(2026-10-22, Stephen 지시): 통합 화면에서 '전체' 칩·구분선 제거. 모든 상태가 다른 칩에 있어 중복이라 판단, 옛 '전체'에만 보이던 파손신고(damage_claimed) 건은 '완료' 칩(완료+파손신고)에 합침. 옛 status= 링크는 기본 칩으로 이동. 테스트 갱신(unifiedRentalList·CV-4).
+- ✅ '완료' 칩 수량 배지(2026-10-22, Stephen 지시): 오늘(KST) 완료된 건수만 표시 — 완료 시각=inspected_at(없으면 updated_at), 주문 1건=1건, CS 접수 건 제외. 칩을 누르면 목록은 완료된 전체(+파손신고). 로컬 확인: 배지 0(오늘 완료 없음)·목록 총 1건(전체 완료).
+- ✅ '취소·환불·CS' 칩 수량 배지(2026-10-22, Stephen 지시): 오늘(KST) 이 칩에 들어온 건수 — 오늘 취소·만료(updated_at 기준) + 오늘 완료된 CS 접수 건, 주문 1건=1건. 로컬: 배지 0, 목록 총 96건(전체). ⚠ 취소 시각은 마지막 갱신 시각이라 취소 사유 자동 저장 등으로 갱신되면 그날 건수로 잡힐 수 있음.
+- ✅ 헤더 여정 현재 단계 모션 2회 한정(2026-10-22, Stephen 지시): 패널 오픈 시 회전 호·글로 2회(약 4.4초)만 반복 후 호 소멸, 현재 단계 배지가 활성 배경(퍼플 채움·흰 글자)으로 전환. 동작 줄이기 설정은 모션 없이 바로 활성 배경. 화살표 퍼플 물결은 그대로 반복. 로컬 확인: 시작 흰 배경→6초 후 퍼플.
+- 🔧 정정(2026-10-22): 직전 '모션 2회+활성 배경 전환'을 현재 단계 배지 전체에 적용한 것은 요구 오해 — 사용자가 선택한 요소(마지막 '반납완료' 배지)를 '현재 단계 배지'로 일반화해 .step-item.active 에 걸었음. .step-item.active.last(마지막 단계가 현재일 때)만 2회+퍼플 전환, 나머지 현재 단계는 기존 계속 반복 모션으로 복원.
+- 🔎 sp3-qa 2차(통합 화면 등, 2026-10-22): PASS-CONDITIONAL, BLOCKER 0·MAJOR 1·MINOR 5, sp5 생략. MAJOR-1(통합 후 결제 후 취소 건 패널이 isRentalView=false 가 되어 계약서 탭 '전자계약 발행 취소' 노출) 즉시 수정 — 결제 전 취소·만료·신청 단계만 false, 결제 후 취소는 true(옛 대여현황과 동일). MINOR 일부 수정(링크 칩 조회 에러 로그, 만료 건 헤더 여정 제외). 남은 MINOR: 2000건 절단·updated_at 한계·csIds URL 길이·rgba 하드코딩·SSR 시각 고정. 미검증: 로그인 상태 실제 칩 숫자 비교, build.
+- ✅ 헤더 여정 등장 모션 복원(2026-10-22, Stephen 지시): 원형 배지가 아래에서 위로(22px) 올라오며 나타나고 좌→우 순차(지연 70ms) 펼침 유지. 기존 6px 상승은 눈에 띄지 않아 거리 확대. 로컬 샘플: 22→0px, 앞 배지부터 순차.
+- ✅ 고객 화면 여정에도 원형 배지 UI·모션 적용(2026-10-22, Stephen 지시): RentalJourneyStepper 에 fluid 옵션 추가(slim 과 함께 — 컨테이너 폭 cqw 기준 배지 34~46px 자동 축소, 아주 좁으면 가로 스크롤), 고객 5곳(account 메인 PC·모바일 2·내 대여 목록·PC 대여 패널·대여 상세)에 slim fluid 적용. 단계 목록은 기본 6단계 그대로('계약발송' 미노출). 확인: CMS 패널을 404px 폭·fluid 로 시험 — 배지 37px(7단계), 스크롤 없음. 고객 화면 실제 렌더는 로그인 필요로 미확인.
+- ✅ 고객 여정 첫 단계 '예약대기'(2026-10-22, Stephen 지시): 장바구니에 담기만 한 임시예약(draft)은 첫 단계를 '예약대기'로 표시·현재 단계 모션, 예약신청 등록(hold)되면 기존 '예약신청'. RentalJourneyStepper 라벨·현재 인덱스 처리. 고객 /account 실화면(PC)에서 '예약대기*' 확인. 또 PC(≥768px) 고객 화면 배지 간격 확대(--conn clamp(18px,7.5cqw,40px)) — 실측 배지 46px·간격 38px.
+- 🐛 수정(2026-10-22): 현재 단계 오른쪽 화살표(물결 그라데이션)가 내정보 화면에서 안 보이던 결함 — 원인: 그라데이션 id 'journey-wave' 가 고정이라 PC·모바일 스텝퍼가 함께 렌더되는 화면에서 같은 id 를 display:none 쪽이 차지해 fill 이 풀림. 인스턴스별 id($props.id())로 수정. 실화면(/account PC) 확인.
+- 🐛 수정(2026-10-22, Stephen 지시): 고객 화면 폭이 좁아질 때 현재 단계 모션(회전 호·글로)이 좌우 끝에서 잘리던 문제 — 가로 스크롤 컨테이너(fluid)의 가로 여백이 0이라 호 6px+글로 5px 가 잘림. 사방 12px 안쪽 여백 + 같은 크기 음수 마진으로 수정. 실측(/account): 폭 537~340px 좌우 여유 12px, 300·260px(가로 스크롤)에서도 시작·끝 모두 12px.
+- ⚡ 성능 개선(2026-10-22, Stephen 문의 '모션이 버벅임'): 현재 단계 모션을 합성기 처리(transform·opacity) 중심으로 교체 — ① 글로: box-shadow 키프레임(매 프레임 다시 그림) → ::after 의 opacity/scale ② 화살표 물결: SVG SMIL gradientTransform(매 프레임 SVG 다시 그림, 숨겨진 쪽 id 충돌 원인이기도 했음) → 화살표 모양 마스크 안 줄무늬 translateX(CSS) ③ 회전 호에 will-change ④ 노출 모션 fill-mode both→backwards(끝난 뒤 잔여 효과·레이어 방지). ⚠ 같은 파일(RentalJourneyStepper.svelte)을 다른 세션이 동시 수정 중(고객 fluid 모바일 스크롤·fade) — 겹치지 않게 현재 내용 기준 부분 치환으로 반영. 실측 fps 는 브라우저 패널이 숨김 상태라 못 잼.
+- 🔎 sp3-qa 3차(스텝퍼·고객 화면·성능, 2026-10-22): PASS-CONDITIONAL, BLOCKER 0·MAJOR 0·MINOR 3, sp5 생략. MINOR 3건 즉시 수정 — ① 현재 단계 화살표(.wave-arrow) 크기를 일반 화살표와 맞춤(모바일 16x10·PC 14x9) ② 글로 시작 전 지연 중 점프 방지(fill-mode backwards) ③ 동작 줄이기에서 마지막 단계 팝·채움 애니메이션도 끔. 미검증: 실브라우저 fps·Safari/Firefox 실측·고객 목록 쿼리의 draft 전달.
