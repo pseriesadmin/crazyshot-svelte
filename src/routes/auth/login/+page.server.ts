@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { isRealMemberSession } from '$lib/utils/authGuard'
+import { safeReturnPath } from '$lib/utils/safeReturnPath'
 import { parseLoginBannerSettings, orderLoginBanners, type LoginBannerRow } from '$lib/utils/loginBanner'
 
 // ──────────────────────────────────────────────────────────────
@@ -54,7 +55,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
 
     // 일반 로그인 사용자: 목적지로 이동
-    const redirectTo = url.searchParams.get('redirect')
+    // Open Redirect 방지(보안 베이스라인 B-1): 사이트 내부 경로만 허용, 그 외는 홈으로
+    const redirectTo = safeReturnPath(url.searchParams.get('redirect'))
     throw redirect(303, redirectTo ?? '/')
   }
 

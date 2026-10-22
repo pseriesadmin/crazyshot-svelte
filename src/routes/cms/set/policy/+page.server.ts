@@ -290,7 +290,7 @@ export const actions: Actions = {
     const cmsRole = await getCmsRoleForAction(locals)
     if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'reorderPolicyItems', error: '권한 없음' })
 
-    let orderedIds: string[] | null = null
+    let orderedIds: string[] | null
     try {
       orderedIds = JSON.parse(String((await request.formData()).get('ordered_ids') ?? '[]')) as string[]
     } catch {

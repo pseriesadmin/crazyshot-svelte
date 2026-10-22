@@ -5,6 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
 import { sendSms } from '$lib/server/sms'
 import { dev } from '$app/environment'
+import { generateOtpCode } from '$lib/server/otpCode'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   const { session } = await locals.safeGetSession()
@@ -24,7 +25,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ ok: false, error: '올바른 휴대폰 번호를 입력해 주세요. (010-XXXX-XXXX)' }, { status: 400 })
   }
 
-  const code = String(Math.floor(100000 + Math.random() * 900000))
+  const code = generateOtpCode()
   const expiresAt = new Date(Date.now() + 3 * 60 * 1000).toISOString()
 
   // service_role 클라이언트로 phone_otps 삽입 (RLS bypass)
