@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { attachReturnStage, RETURN_STAGE_RANK } from '$lib/server/attachReturnStage'
 
-function fakeAdmin(subs: number[], logs: number[]) {
+function fakeAdmin(subs: number[], logs: number[], reminds: number[] = []) {
   return {
     from(table: string) {
+      if (table === 'chat_messages') {
+        return { select: () => ({ eq: () => ({ in: async () => ({ data: reminds.map((id) => ({ action_payload: { action_url: `/account/rental/${id}/history` } })), error: null }) }) }) }
+      }
       const ids = table === 'reservation_return_submissions' ? subs : logs
       return { select: () => ({ in: async () => ({ data: ids.map((reservation_id) => ({ reservation_id })), error: null }) }) }
     },
@@ -20,6 +23,14 @@ describe('attachReturnStage — 반납중 칩 배지', () => {
     ] as { reservation_id: number; status: string; return_stage?: string }[]
     await attachReturnStage(fakeAdmin([1], [2]), rows as never)
     expect(rows.map((r) => r.return_stage)).toEqual(['registered', 'notice_sent', 'notice_due', undefined])
+  })
+  it('방문·미지정 반납 — 반납예정 카드가 발송됐으면 notice_sent(배지 없음), 없으면 notice_due', async () => {
+    const rows = [
+      { reservation_id: 5, status: 'in_use' },
+      { reservation_id: 6, status: 'in_use' },
+    ] as { reservation_id: number; status: string; return_stage?: string }[]
+    await attachReturnStage(fakeAdmin([], [], [5]), rows as never)
+    expect(rows.map((r) => r.return_stage)).toEqual(['notice_sent', 'notice_due'])
   })
   it('정렬 순위: 예정 → 발송 → 등록', () => {
     expect(RETURN_STAGE_RANK.notice_due).toBeLessThan(RETURN_STAGE_RANK.notice_sent)

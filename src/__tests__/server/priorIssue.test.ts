@@ -86,6 +86,27 @@ describe('submitPriorIssueReport', () => {
     expect(mockAdminPush.mock.calls[0][1]).toMatchObject({ link: '/cms/rentals?selected=7' })
   })
 
+  it("상담채팅에 'CS 등록완료' 카드를 보내고(유형·첨부·내용 요약), 관리자 푸시에도 같은 요약을 싣는다", async () => {
+    const admin = makeAdmin(() => ({ data: { ok: true, reservation_id: 7 }, error: null }))
+    await submitPriorIssueReport(admin, TOKEN, { types: ['damage', 'lost'], detail: '메모리를 분실했어요.', media: [{ path: '7/prior/a.jpg', kind: 'photo' }] })
+    const card = (admin.rpc.mock.calls as unknown[][]).find((c) => c[0] === 'send_return_notice_card')?.[1] as { p_notify_type: string; p_content: string; p_reservation_id: number }
+    expect(card.p_reservation_id).toBe(7)
+    expect(card.p_notify_type).toBe('issue_report_submitted')
+    expect(card.p_content).toContain('CS 등록완료')
+    expect(card.p_content).toContain('첨부: 사진·영상 1건')
+    expect(card.p_content).toContain('메모리를 분실했어요.')
+    const push = mockAdminPush.mock.calls[0][1] as { title: string; body: string }
+    expect(push.title).toContain('CS 접수 등록 완료')
+    expect(push.body).toContain('첨부 1건')
+    expect(push.body).toContain('메모리를 분실했어요.')
+  })
+
+  it('실패 제출은 카드도 보내지 않는다', async () => {
+    const admin = makeAdmin(() => ({ data: { ok: false, error: '만료' }, error: null }))
+    await submitPriorIssueReport(admin, TOKEN, input)
+    expect(admin.rpc).not.toHaveBeenCalledWith('send_return_notice_card', expect.anything())
+  })
+
   it('만료·잘못된 링크면 실패하고 푸시도 없다', async () => {
     const admin = makeAdmin(() => ({ data: { ok: false, error: '만료되었거나 취소된 요청이에요.' }, error: null }))
     const r = await submitPriorIssueReport(admin, TOKEN, input)

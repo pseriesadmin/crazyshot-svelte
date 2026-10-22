@@ -33,7 +33,7 @@ function makeAdmin(rpcImpl: (fn: string, args: Record<string, unknown>) => unkno
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => rpcImpl(fn, args))
   const chain: Record<string, unknown> = {}
   for (const m of ['select', 'eq']) chain[m] = () => chain
-  chain.maybeSingle = async () => ({ data: { products: { name: 'SONY FX3' } } })
+  chain.maybeSingle = async () => ({ data: { status: 'returned', products: { name: 'SONY FX3' } } }) // status: 회수 확인 전 전환 보조(ensureReturnedForInspection)는 이미 반납완료로 보아 통과
   return { rpc, from: () => chain }
 }
 
@@ -127,7 +127,7 @@ describe('이슈 입력 검증·상태 정규화', () => {
   const UUID = '123e4567-e89b-12d3-a456-426614174000'
 
   it('이슈 항목 5종과 허용 키만 인정, 비면 거절', () => {
-    expect(INSPECTION_ISSUE_TYPES.map((t) => t.key)).toEqual(['missing_part', 'mismatch', 'exterior_damage', 'malfunction', 'consumable_lost'])
+    expect(INSPECTION_ISSUE_TYPES.map((t) => t.key)).toEqual(['missing_part', 'mismatch', 'exterior_damage', 'malfunction', 'consumable_lost', 'etc'])
     expect(validateIssueInput({ types: [] }, owns).ok).toBe(false)
     expect(validateIssueInput({ types: ['unknown'] }, owns).ok).toBe(false)
     const ok = validateIssueInput({ types: ['malfunction', 'malfunction'], detail: ' 전원 불량 ' }, owns)

@@ -65,18 +65,15 @@ async function loadInspection(admin: SupabaseClient, reservationId: number) {
     submitted_at: string | null; expires_at: string; created_at: string
   }[]
 
-  // 이슈 담당자 이름 + 담당자 후보(CMS 직원) — 검수 탭의 담당자 지정 선택지(관리자 전용 API)
-  const { data: staffRows } = await admin.from('user_profiles').select('id, full_name, email').not('cms_role', 'is', null).is('deleted_at', null).order('full_name')
-  const rawStaff = (staffRows ?? []) as { id: string; full_name: string | null; email: string | null }[]
-  // 이름이 없으면 이메일, 같은 이름이 여럿이면 이메일 앞부분을 덧붙여 구분한다
-  const baseName = (u: { full_name: string | null; email: string | null }) => u.full_name?.trim() || u.email || '이름 없음'
-  const nameCount = new Map<string, number>()
-  for (const u of rawStaff) nameCount.set(baseName(u), (nameCount.get(baseName(u)) ?? 0) + 1)
-  const staff = rawStaff.map((u) => {
-    const b = baseName(u)
-    return { id: u.id, name: (nameCount.get(b) ?? 0) > 1 && u.email && b !== u.email ? `${b} (${u.email.split('@')[0]})` : b }
-  })
-  const staffName = new Map(staff.map((u) => [u.id, u.name]))
+  // 이슈 담당자(= 등록한 관리자) 이름 — 이슈에 기록된 담당자만 조회한다. 이름이 없으면 이메일
+  const adminIds = [...new Set(issues.map((i) => i.assigned_admin).filter((v): v is string => !!v))]
+  const staffName = new Map<string, string>()
+  if (adminIds.length > 0) {
+    const { data: staffRows } = await admin.from('user_profiles').select('id, full_name, email').in('id', adminIds)
+    for (const u of (staffRows ?? []) as { id: string; full_name: string | null; email: string | null }[]) {
+      staffName.set(u.id, u.full_name?.trim() || u.email || '이름 없음')
+    }
+  }
 
   const paths = [
     ...issues.flatMap((i) => (i.media ?? []).map((m) => m.path)),
@@ -102,7 +99,6 @@ async function loadInspection(admin: SupabaseClient, reservationId: number) {
       expires_at: rp.expires_at,
       media: (rp.media ?? []).map((m) => ({ kind: m.kind, url: urlByPath.get(m.path) ?? null })),
     })),
-    assignees: staff,
     issues: issues.map((i) => ({
       id: i.id,
       assignee_name: i.assigned_admin ? (staffName.get(i.assigned_admin) ?? null) : null,

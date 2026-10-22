@@ -141,7 +141,7 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
   },
   return_notice_locker: {
     title: '무인함 반납 안내',
-    body: (p) => `${p} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
+    body: (p) => `${p} 반납 3시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
   },
 }
 

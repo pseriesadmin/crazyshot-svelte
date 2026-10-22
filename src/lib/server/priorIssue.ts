@@ -11,6 +11,7 @@ import { priorKindLabel, type PriorIssueReportInput } from '$lib/utils/inspectio
 type AnyClient = any
 
 export const ISSUE_REPORT_BUTTON_LABEL = '증빙 등록'
+export const ISSUE_REPORT_DONE_BUTTON_LABEL = '접수 내역 확인'
 
 export function issueReportPath(token: string): string {
   return `/issue-report/${token}`
@@ -83,11 +84,44 @@ export async function submitPriorIssueReport(admin: AnyClient, token: string, in
   })
   const res = data as { ok?: boolean; error?: string; reservation_id?: number } | null
   if (error || !res?.ok) return { ok: false, error: res?.error ?? error?.message ?? '제출에 실패했습니다.' }
+  const types = input.types.map(priorKindLabel).join(' · ')
+  const photoCount = input.media.length
+  const detailShort = (input.detail ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)
+  const reservationId = res.reservation_id
+  const name = reservationId ? await productNameOf(admin, reservationId) : '상품'
+
+  // 상담채팅 고객 세션에 'CS 등록완료' 대화카드 — 고객 제출을 접수했다는 확인(고객·상담 관리자 양쪽에 보이는 접수 확인 카드, §17 예외와 같은 성격 — 관리자 전용 정보 없음)
+  if (reservationId) {
+    try {
+      await admin.rpc('send_return_notice_card', {
+        p_reservation_id: reservationId,
+        p_notify_type: 'issue_report_submitted',
+        p_content: `CS 등록완료 — ${name}\n접수 유형: ${types}${photoCount > 0 ? `\n첨부: 사진·영상 ${photoCount}건` : ''}${detailShort ? `\n내용: ${detailShort}` : ''}\n담당자가 확인한 뒤 안내드릴게요.`,
+        p_button_label: ISSUE_REPORT_DONE_BUTTON_LABEL,
+        p_action_url: '/account/rental',
+      })
+    } catch {
+      /* 카드 실패는 접수 결과에 영향 없음 */
+    }
+  }
+
+  // 관리자 푸시 — 고객·상품·유형·첨부·내용 요약을 담아 검수 탭을 열지 않고도 접수 내용을 알 수 있게 한다
   try {
+    let who = '고객'
+    let code = ''
+    if (reservationId) {
+      const { data: rr } = await admin.from('rental_reservations').select('reservation_code, user_id').eq('id', reservationId).maybeSingle()
+      const row = rr as { reservation_code?: string | null; user_id?: string | null } | null
+      code = row?.reservation_code ?? ''
+      if (row?.user_id) {
+        const { data: prof } = await admin.from('user_profiles').select('full_name').eq('id', row.user_id).maybeSingle()
+        who = (prof as { full_name?: string | null } | null)?.full_name?.trim() || '고객'
+      }
+    }
     await sendPushToAdmins('urgent_chat_message', {
-      title: '고객이 이상·파손 증빙을 등록했어요',
-      body: `${input.types.map(priorKindLabel).join(', ')} — 검수 시 고객 자료와 실물을 비교해 주세요.`,
-      link: res.reservation_id ? `/cms/rentals?selected=${res.reservation_id}` : '/cms/rentals',
+      title: `CS 접수 등록 완료 — ${who}님`,
+      body: `${name}${code ? ` (${code})` : ''} · ${types}${photoCount > 0 ? ` · 첨부 ${photoCount}건` : ''}${detailShort ? ` · "${detailShort}"` : ''} — 검수 시 고객 자료와 실물을 비교해 주세요.`,
+      link: reservationId ? `/cms/rentals?selected=${reservationId}` : '/cms/rentals',
     })
   } catch {
     /* 관리자 푸시 실패는 무시 */

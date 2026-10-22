@@ -9,7 +9,7 @@ const RULES: Record<string, string[]> = {
   shipment_notify: ['confirmed'],
   return_remind: ['in_use', 'return_requested'],
   return_registration: ['return_requested'],
-  rental_complete: ['returned'],
+  rental_complete: ['return_requested', 'returned'],
 }
 
 describe('수동 알림 단계 규칙', () => {

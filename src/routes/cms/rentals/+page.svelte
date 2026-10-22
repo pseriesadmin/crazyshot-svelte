@@ -24,8 +24,8 @@
     // 반납중 목록 중 반납 이력정보에 문제가 있어 이슈로 등록된 건(2026-10-17, Migration #724)
     { label: '검수',     value: 'inspection' },
     { label: '완료',     value: 'completed' },
-    // 결제까지 끝난 뒤 취소·환불된 대여 — 별도 조회(loadRefundedRentals), 단계 화살표 없음
-    { label: '취소·환불', value: 'cancelled_refunded' },
+    // 결제까지 끝난 뒤 취소·환불된 대여 + 완료된 CS 접수 건 — 단계 화살표 없음
+    { label: '취소·환불·CS', value: 'cancelled_refunded' },
     { label: '전체',     value: '' },
   ]
 
@@ -279,7 +279,8 @@
                   {#if row.cancel_pending}
                     <!-- 고객 취소 요청/취소 후 관리자 승인 대기 — 패널 헤더 [예약취소]로 처리(환불은 요청 건에서 이 버튼이 실행) -->
                     <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">취소대기</span>
-                  {:else}
+                  {:else if !(row.status === 'in_use' && (data.status ?? '') === 'returning')}
+                    <!-- '반납중' 칩에서는 대여중 배지를 달지 않는다(반납 일시가 지나 반납 단계 배지가 대신한다) -->
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
                       {rowStatusLabel(row)}
                     </span>
@@ -288,12 +289,12 @@
                     <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
                     <span class="status-badge" style="background:rgba(14,165,233,0.12);color:var(--cs-info)">일부 진행</span>
                   {/if}
-                  {#if row.return_stage}
-                    <!-- 반납중 칩 배지: 반납요청(알림 예정/발송) · 반납등록(고객이 반납 이력정보 등록) -->
+                  {#if row.return_stage && (data.status ?? '') === 'returning'}
+                    <!-- 반납중 칩 배지: 반납요청 예정(알림 발송 전까지만) · 반납등록(고객이 반납 이력정보 등록). 알림이 발송되면 예정 배지는 조용히 사라진다 -->
                     {#if row.return_stage === 'registered'}
                       <span class="status-badge" style="background:{STATUS_STYLE.confirmed.bg};color:{STATUS_STYLE.confirmed.color}">반납등록</span>
-                    {:else}
-                      <span class="status-badge" style="background:rgba(255,69,0,0.12);color:var(--cs-orange)">{row.return_stage === 'notice_sent' ? '반납요청 발송' : '반납요청 예정'}</span>
+                    {:else if row.return_stage === 'notice_due'}
+                      <span class="status-badge" style="background:rgba(255,69,0,0.12);color:var(--cs-orange)">반납요청 예정</span>
                     {/if}
                   {/if}
                   {#if row.prior_issue}
@@ -373,6 +374,7 @@
             oninspectionchange={openAfterInspection}
             oncancelstate={(pending) => { keepOpenId = pending ? selectedId : null }}
             isRentalView={true}
+            hideChangeCancelButtons={(data.status ?? '') === 'returning' || (data.status ?? '') === 'inspection'}
             stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
             cmsRole={data.cmsRole}
             canChangeOrCancelReservation={data.canChangeOrCancelReservation}

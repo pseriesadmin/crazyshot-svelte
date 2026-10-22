@@ -6,7 +6,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { approveInspection, registerInspectionIssue, assignInspectionIssue, resolveInspectionIssue } from '$lib/server/inspection'
+import { approveInspection, registerInspectionIssue, resolveInspectionIssue } from '$lib/server/inspection'
 import { isOwnedEvidencePath } from '$lib/server/returnSubmission'
 import { INSPECTION_NOTE_MAX, validateIssueInput } from '$lib/utils/inspection'
 
@@ -47,11 +47,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
       (path) => isOwnedEvidencePath(path, reservationId) && path.startsWith(`${reservationId}/issue/`),
     )
     if (!parsed.ok) return json({ error: parsed.error }, { status: 400 })
-    const startedAt = new Date(Date.now() - 5000).toISOString()
     result = await registerInspectionIssue(admin, reservationId, adminId, parsed.value)
-    // 담당자 지정(선택) — 형식이 UUID 가 아니면 무시, 지정 실패는 이슈 등록 결과에 영향 없음
-    const assignee = typeof body.assignee_id === 'string' && /^[0-9a-f-]{36}$/i.test(body.assignee_id) ? body.assignee_id : null
-    if (result.ok && assignee) await assignInspectionIssue(admin, reservationId, adminId, assignee, startedAt)
   } else if (action === 'resolve') {
     const note = typeof body.note === 'string' ? body.note.trim() : ''
     if (note.length > INSPECTION_NOTE_MAX) return json({ error: `메모는 ${INSPECTION_NOTE_MAX}자 이하로 입력해 주세요.` }, { status: 400 })

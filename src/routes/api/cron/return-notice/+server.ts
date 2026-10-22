@@ -1,13 +1,13 @@
 /**
  * GET /api/cron/return-notice — 반납 방식별 단계 알림 (Vercel Cron, 10분 간격)
  *
- * 택배류: 반납 마지막 날 18:00 / 퀵: 반납시각 5·2·1시간 전 / 무인함: 2시간 전 (KST).
+ * 택배류: 반납일 당일 09:00 / 퀵: 반납 일시 3시간 전 / 무인함: 반납 일시 3시간 전 (KST, Migration #736).
  * 단계 산출·중복 선점은 DB 함수 claim_return_notice_targets(Migration #722)가 원자적으로 한다 —
  * (예약, 단계)당 1회만 반환되므로 크론이 겹쳐 돌아도 같은 안내가 두 번 나가지 않는다.
  * 방문 반납은 기존 매일 09시 return-remind 크론이 그대로 맡는다.
  *
  * 발송 순서: ① 채팅카드(send_return_notice_card) ② 푸시+문자(sendReservationLifecyclePush — 허브가 같은 날 중복·로그 처리)
- *           ③ 퀵 2시간 전만 운영자 푸시.
+ *           ③ 퀵 3시간 전 안내(quick_5h 단계)만 운영자 푸시.
  * 채팅카드 전달에 실패하면 선점을 되돌려(release_return_notice_claim) 다음 크론에서 재시도한다.
  * 인증: CRON_SECRET (fail-closed). 스케줄: vercel.json crons.
  */
@@ -95,7 +95,7 @@ export const GET: RequestHandler = async ({ request }) => {
         if (RETURN_NOTICE_ADMIN_PUSH_STAGES.includes(stage)) {
           try {
             await sendPushToAdmins('urgent_chat_message', {
-              title: '퀵 반납 종료 2시간 전',
+              title: '퀵 반납 종료 3시간 전',
               body: `${productName} 반납 준비를 확인해 주세요.`,
               link: `/cms/rentals?selected=${row.reservation_id}`,
             })

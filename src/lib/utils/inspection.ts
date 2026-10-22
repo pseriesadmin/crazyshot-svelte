@@ -22,9 +22,12 @@ export const INSPECTION_ISSUE_TYPES: { key: string; label: string }[] = [
   { key: 'exterior_damage', label: '외관 파손' },
   { key: 'malfunction', label: '작동 이상' },
   { key: 'consumable_lost', label: '소모품 분실' },
+  { key: 'etc', label: '기타' },
 ]
 
 export const INSPECTION_DETAIL_MAX = 1000
+/** 관리자 CS 이슈 등록의 내용(목록 카드 제목을 겸함) 글자 수 상한 — 고객 증빙 폼의 INSPECTION_DETAIL_MAX 와 별개 */
+export const INSPECTION_ISSUE_TITLE_MAX = 100
 export const INSPECTION_NOTE_MAX = 500
 export const INSPECTION_MEDIA_MAX = 10
 
@@ -55,7 +58,7 @@ export function validateIssueInput(
   if (types.length === 0) return { ok: false, error: '이슈 항목을 1개 이상 선택해 주세요.' }
 
   const detail = typeof b.detail === 'string' ? b.detail.trim() : ''
-  if (detail.length > INSPECTION_DETAIL_MAX) return { ok: false, error: `상세 사유는 ${INSPECTION_DETAIL_MAX}자 이하로 입력해 주세요.` }
+  if (detail.length > INSPECTION_ISSUE_TITLE_MAX) return { ok: false, error: `내용은 ${INSPECTION_ISSUE_TITLE_MAX}자 이하로 입력해 주세요.` }
 
   const rawMedia = Array.isArray(b.media) ? b.media : []
   if (rawMedia.length > INSPECTION_MEDIA_MAX) return { ok: false, error: `증빙은 최대 ${INSPECTION_MEDIA_MAX}개까지 첨부할 수 있어요.` }
