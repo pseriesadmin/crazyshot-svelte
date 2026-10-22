@@ -56,7 +56,7 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
     menu_key: 'rental',
     label: '대여',
     subMenus: [
-      { menu_key: 'rental.reservation', label: '예약대여현황', href: '/cms/reservation' },
+      { menu_key: 'rental.reservation', label: '예약대여현황', href: '/cms/rentals' }, // 2026-10-22: 예약현황·대여현황 통합 화면(/cms/reservation 은 이 화면으로 이동하는 기존 주소)
       { menu_key: 'rental.history', label: '이력관리', href: '/cms/rental/history' },
       { menu_key: 'rental.contracts', label: '계약서양식', href: '/cms/reservation/contracts', requiresSettingsAccess: true },
       /** 비라우트 기능 권한: 예약변경·예약취소 버튼 접근 제어.
@@ -148,6 +148,8 @@ export function findCmsMenuByKey(menuKey: string): CmsMenuLookup | undefined {
  */
 export const CMS_MENU_PATH_ALIASES: readonly { href: string; menu_key: string }[] = [
   { href: '/cms/rentals', menu_key: 'rental.reservation' },
+  // 통합 전 예약현황 주소 — 이동(리다이렉트)·폼 액션 경로이며 같은 권한을 따른다. 하위 /cms/reservation/contracts 는 계약서양식 메뉴가 더 긴 경로로 먼저 매칭된다.
+  { href: '/cms/reservation', menu_key: 'rental.reservation' },
   // 1g(2026-10-05, Stephen 확정): CMS 모바일(홈·대여목록·상품상세·QR 착지 전체)은 예약대여현황 권한을 따른다
   { href: '/cms/mobile', menu_key: 'rental.reservation' },
 ]

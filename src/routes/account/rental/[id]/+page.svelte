@@ -1,6 +1,7 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import { returnDayState } from '$lib/utils/returnNoticeTime'
   import { goto } from '$app/navigation'
   import { browser } from '$app/environment'
   import type { PageData } from './$types'
@@ -97,7 +98,7 @@
       {/if}
 
       <div class="stepper-wrap">
-        <RentalJourneyStepper status={res.status} />
+        <RentalJourneyStepper slim fluid status={res.status} returnDay={returnDayState(res.status, res.end_date, res.return_method, res.return_time)} />
       </div>
     </div>
 

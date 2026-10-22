@@ -58,7 +58,7 @@ describe('DB 제한 시간과 화면 상수 일치', () => {
 })
 
 describe('예약목록 화면 배선(소스 점검)', () => {
-  const src = readFileSync('src/routes/cms/reservation/+page.svelte', 'utf8')
+  const src = readFileSync('src/routes/cms/rentals/+page.svelte', 'utf8') // 예약·대여현황 통합 화면(2026-10-22)
 
   it('잔여 시간은 마운트 후 값이 생긴 뒤에만, 타이머가 없거나 종료(null)면 렌더하지 않는다', () => {
     expect(src).toContain("import { contractSignRemainingSeconds, formatCountdown, isContractSignUrgent } from '$lib/utils/holdContractTimer'")

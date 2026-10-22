@@ -3,6 +3,7 @@
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { goto, invalidateAll } from '$app/navigation'
+  import { returnDayState } from '$lib/utils/returnNoticeTime'
 
   interface RentalItem {
     id: string
@@ -10,6 +11,8 @@
     reservation_code: string
     start_date: string | null
     end_date: string | null
+    return_method?: string | null
+    return_time?: string | null
     created_at: string
     product_name?: string | null
     product_category?: string | null
@@ -223,7 +226,7 @@
           </div>
 
           <div class="stepper-wrap">
-            <RentalJourneyStepper status={rental.status} />
+            <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} />
           </div>
 
           {#if rental.cancelling}

@@ -101,7 +101,7 @@ describe('서버 집행 배선(소스 확인)', () => {
     expect(panel).toContain('customerDocs.approvalTracking !== false')
   })
   it("계약대기 칩에서 발송 전 행은 '승인완료 · 계약 미발송' 배지를 보여 준다", () => {
-    const s = read('src/routes/cms/reservation/+page.svelte')
+    const s = read('src/routes/cms/rentals/+page.svelte') // 통합 화면(2026-10-22)
     expect(s).toContain('승인완료 · 계약 미발송')
     expect(s).toMatch(/row\.status === 'hold' && !row\.signing_sent_at && data\.contractPending/)
   })

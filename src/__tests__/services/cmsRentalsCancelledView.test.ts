@@ -34,7 +34,7 @@ vi.mock('@supabase/supabase-js', () => ({
     from: (table: string) => {
       const b: Record<string, unknown> = {}
       const self = () => b
-      b.select = self; b.eq = self; b.not = self; b.is = self; b.order = self; b.limit = self; b.in = self; b.neq = self; b.lte = self
+      b.select = self; b.eq = self; b.not = self; b.is = self; b.order = self; b.limit = self; b.in = self; b.neq = self; b.lte = self; b.or = self; b.gte = self
       b.maybeSingle = async () => ({ data: selectedStatus === null ? null : { status: selectedStatus, payment_confirmed_at: '2026-10-01T00:00:00Z' }, error: null })
       b.then = (resolve: (v: { data: unknown; error: unknown }) => void) => {
         if (table === 'rental_reservations') return resolve({ data: pendingMarkIds.map(id => ({ id })), error: null })
@@ -61,18 +61,18 @@ async function load(url: string) {
 describe('/cms/rentals — 취소·환불 칩', () => {
   beforeEach(() => { oneRowStatus = 'cancelled'; csIdList = []; selectedStatus = 'cancelled'; pendingMarkIds = []; rpcCalls.length = 0 })
 
-  it('CV-1 칩은 취소된 예약 전부를 조회한다(p_status=cancelled, 상태 범위=cancelled) — 총 건수는 원 목록 기준', async () => {
+  it('CV-1 칩은 취소·만료 예약 전부를 조회한다(상태 범위=cancelled·expired, 결제 전/후 구분 없음) — 총 건수는 원 목록 기준', async () => {
     const r = await load('http://x/cms/rentals?status=cancelled_refunded') as { rentals: unknown[]; totalCount: number; totalPages: number }
     const list = rpcCalls.find(c => c.p_reservation_id == null)
-    expect(list?.p_status).toBe('cancelled')
-    expect(list?.p_include_statuses).toEqual(['cancelled'])
+    expect(list?.p_status).toBeNull()
+    expect(list?.p_include_statuses).toEqual(['cancelled', 'expired'])
     expect(list?.p_group_by_order).toBe(true)
     expect(r.totalCount).toBe(60)
     expect(r.totalPages).toBe(2)
   })
 
   it('CV-2 취소된 예약을 가리키는 링크는 칩으로 자동 전환(리다이렉트)', async () => {
-    for (const u of ['http://x/cms/rentals?status=&selected=18976', 'http://x/cms/rentals?selected=18976', 'http://x/cms/rentals?status=confirmed&selected=18976']) {
+    for (const u of ['http://x/cms/rentals?selected=18976', 'http://x/cms/rentals?status=confirmed&selected=18976']) {
       await expect(load(u)).rejects.toMatchObject({ status: 303, location: '/cms/rentals?status=cancelled_refunded&selected=18976' })
     }
   })
@@ -83,7 +83,7 @@ describe('/cms/rentals — 취소·환불 칩', () => {
 
   it('CV-4 취소되지 않은 예약 링크는 전환하지 않는다', async () => {
     selectedStatus = 'confirmed'
-    await expect(load('http://x/cms/rentals?status=&selected=500')).resolves.toBeTruthy()
+    await expect(load('http://x/cms/rentals?status=confirmed&selected=500')).resolves.toBeTruthy()
   })
 
   it('CV-5 링크 예약이 1페이지 목록에 없으면 그 행만 따로 맨 위에 붙이고 총 건수는 그대로', async () => {
