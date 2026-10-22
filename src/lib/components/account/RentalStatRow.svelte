@@ -62,9 +62,14 @@
     justify-content: space-between;
   }
 
-  /* 모바일: 숫자 카운팅 박스 가로폭 2배(45px → 90px) 고정 */
+  /* 모바일: 숫자 카운팅 박스는 원형(45px) — 2026-10-22 Stephen 지시(기존 최대 90px 가로 박스). 고정 크기라 좁은 카드에서도 카드 밖으로 삐져나오지 않는다 */
   .stat-count-box {
-    width: 90px;
+    width: 45px;
+    flex: 0 0 45px;
+    border-radius: 50%;
+  }
+  .stat-body {
+    min-width: 0;
   }
 
   /* PC(≥768px, account/+page.svelte pc-layout 실제 기준)에서는 기존 배열 그대로 유지 */
@@ -83,9 +88,11 @@
       width: auto;
       justify-content: center;
     }
-    /* PC도 숫자 카운팅 박스 가로폭 2배(45px → 90px) 고정 */
+    /* PC도 모바일과 동일하게 원형(45px) — 2026-10-22 Stephen 지시(기존 90px 가로 박스) */
     .stat-count-box {
-      width: 90px;
+      width: 45px;
+      flex: 0 0 auto;
+      border-radius: 50%;
     }
   }
 </style>
