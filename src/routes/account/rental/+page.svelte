@@ -4,6 +4,7 @@
   import { returnDayState } from '$lib/utils/returnNoticeTime'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
+  import ReturnSubmitModal from '$lib/components/account/ReturnSubmitModal.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { authState } from '$lib/stores/auth'
   import { goto, invalidateAll } from '$app/navigation'
@@ -33,6 +34,22 @@
 
   // 서명 완료된 전자계약서를 새 창(탭)으로 열람 — ActionCard.svelte의 팝업차단 우회
   // 패턴(사용자 클릭 이벤트 핸들러 내부에서 동기적으로 window.open 호출)과 동일
+  // 반납정보 등록은 모바일 전용 화면 — PC(≥768px)에서는 모바일 해상도(390px) 모달로, 모바일에서는 화면 이동으로 연다
+  let returnModalSrc = $state<string | null>(null)
+  function openReturnSubmit(rentalId: string): void {
+    const path = `/account/rental/${rentalId}/return-submit`
+    if (window.matchMedia('(min-width: 768px)').matches) returnModalSrc = path
+    else goto(path)
+  }
+  async function closeReturnSubmit(): Promise<void> {
+    returnModalSrc = null
+    await invalidateAll() // 제출했다면 카드 버튼이 '등록 완료'로 바뀌게 목록을 다시 읽는다
+  }
+  async function gotoFromReturnSubmit(href: string): Promise<void> {
+    returnModalSrc = null
+    await goto(href)
+  }
+
   function openContractViewer(rentalId: string): void {
     window.open(`/account/rental/${rentalId}/contract`, '_blank', 'noopener,noreferrer')
   }
@@ -247,6 +264,17 @@
 
               </div>
 
+            {:else if rental.returnSubmittable}
+              <div class="card-actions">
+                <button
+                  type="button"
+                  class="card-actions-btn primary"
+                  disabled={rental.returnSubmitted}
+                  onclick={() => openReturnSubmit(rental.id)}
+                >
+                  {rental.returnSubmitted ? '반납정보 등록 완료' : '반납정보 등록하기'}
+                </button>
+              </div>
             {:else if rental.status === 'hold' || (rental.status === 'confirmed' && !rental.tracking_number)}
               <div class="card-actions">
                 {#if rental.status === 'hold'}
@@ -321,6 +349,10 @@
   <!-- 이 화면(/account)은 루트 레이아웃에서 FloatingBar가 제외되어 있어, 카드별 채팅
        버튼이 여는 공통 플로팅 채팅 모달(바텀시트)을 이 페이지에서 직접 마운트한다. -->
   <FloatingButton userId={chatUserId} userName={chatUserName} userHandle={chatUserHandle} hideFab />
+
+  {#if returnModalSrc}
+    <ReturnSubmitModal src={returnModalSrc} onclose={closeReturnSubmit} ongoto={gotoFromReturnSubmit} />
+  {/if}
 
   {#if cancelModalType}
     <!-- position:fixed 모달 — FloatingButton의 transform 서브트리 밖 형제로 배치돼 뷰포트 기준으로 정확히 렌더링됨 (ui-mobile.md §transform+fixed 충돌 규칙) -->

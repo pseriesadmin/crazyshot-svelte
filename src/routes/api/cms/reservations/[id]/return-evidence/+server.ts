@@ -7,7 +7,8 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { RETURN_EVIDENCE_BUCKET } from '$lib/server/returnSubmission'
-import { RETURN_CHECKLIST_ITEMS, RETURN_MEDIA_ITEMS, mediaItemLabel } from '$lib/utils/returnNotice'
+import { RETURN_MEDIA_ITEMS, mediaItemLabel } from '$lib/utils/returnNotice'
+import { loadReturnInspectionItems, loadReturnPhotoItems } from '$lib/server/returnInspectionItems'
 
 // 고객 반납 제출 내용 조회(조회 전용) — RentalDetailPanel '검수' 탭이 사용(Migration #722, 2026-10-17).
 // 사진·영상은 비공개 버킷(return-evidence)이라 클릭 시점에 만료가 짧은 서명 URL을 서버가 만들어 내려준다(공개 URL 없음).
@@ -112,6 +113,53 @@ async function loadInspection(admin: SupabaseClient, reservationId: number) {
   }
 }
 
+// 방문 반납 관리자 직접 등록 목록(Migration #737) — 등록한 관리자 이름과 서명 URL 을 붙여 내려준다.
+// 테이블이 없는 환경(DB 미적용)·조회 오류는 빈 목록(fail-open)으로 둔다 — 고객 제출 조회를 막지 않는다.
+async function loadAdminEntries(admin: SupabaseClient, reservationId: number, labelByKey: Map<string, string>) {
+  const { data, error } = await admin
+    .from('reservation_return_admin_entries')
+    .select('id, registered_by, memo, checklist, media, created_at')
+    .eq('reservation_id', reservationId)
+    .order('created_at', { ascending: false })
+  if (error || !data) return []
+  const rows = data as { id: number; registered_by: string | null; memo: string | null; checklist: string[] | null; media: { path: string; kind: 'photo' | 'video' }[] | null; created_at: string }[]
+
+  const ids = [...new Set(rows.map((x) => x.registered_by).filter((v): v is string => !!v))]
+  const names = new Map<string, string>()
+  if (ids.length > 0) {
+    const { data: staff } = await admin.from('user_profiles').select('id, full_name, email').in('id', ids)
+    for (const u of (staff ?? []) as { id: string; full_name: string | null; email: string | null }[]) {
+      names.set(u.id, u.full_name?.trim() || u.email || '이름 없음')
+    }
+  }
+  const paths = rows.flatMap((x) => (x.media ?? []).map((m) => m.path))
+  const urlByPath = new Map<string, string>()
+  if (paths.length > 0) {
+    const { data: signed } = await admin.storage.from(RETURN_EVIDENCE_BUCKET).createSignedUrls(paths, SIGNED_URL_TTL_SEC)
+    for (const e of signed ?? []) if (e.path && e.signedUrl) urlByPath.set(e.path, e.signedUrl)
+  }
+  return rows.map((x) => ({
+    id: x.id,
+    registered_by_name: x.registered_by ? (names.get(x.registered_by) ?? null) : null,
+    memo: x.memo,
+    checklist: (x.checklist ?? []).map((k) => labelByKey.get(k)).filter((l): l is string => !!l),
+    created_at: x.created_at,
+    media: (x.media ?? []).map((m) => ({ kind: m.kind, url: urlByPath.get(m.path) ?? null })),
+  }))
+}
+
+// 고객 제출 체크리스트 표시 — 현재 활성 항목 + (삭제됐지만 고객이 체크했던 항목은 그 문구로) 이어 붙인다
+function checklistRows(
+  active: { key: string; label: string; customerVisible: boolean }[],
+  checked: Set<string>,
+  labelByKey: Map<string, string>,
+) {
+  const rows = active.filter((i) => i.customerVisible || checked.has(i.key)).map((i) => ({ key: i.key, label: i.label, checked: checked.has(i.key) }))
+  const shown = new Set(rows.map((r) => r.key))
+  for (const k of checked) if (!shown.has(k)) rows.push({ key: k, label: labelByKey.get(k) ?? k, checked: true })
+  return rows
+}
+
 export const GET: RequestHandler = async ({ params, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
   if (denied) return denied
@@ -127,14 +175,19 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // 검수 상태·이슈 기록(2단계, Migration #724). 컬럼이 없는 환경(DB 미적용)에서는 null — 화면은 검수 액션을 숨긴다(fail-open).
   const inspection = await loadInspection(admin, reservationId)
+  const { active: inspectionActive, labelByKey } = await loadReturnInspectionItems(admin)
+  const photoMaster = await loadReturnPhotoItems(admin)
+  const admin_entries = await loadAdminEntries(admin, reservationId, labelByKey)
+  // 검수 탭 관리자 직접 등록 칩 — 고객검수 여부와 무관한 활성 항목 전체
+  const inspection_items = inspectionActive.map((i) => ({ key: i.key, label: i.label, customerVisible: i.customerVisible }))
 
   const { data: sub, error: subErr } = await admin
     .from('reservation_return_submissions')
-    .select('id, method, checklist, locker_number, locker_password, submitted_at')
+    .select('id, method, checklist, locker_number, locker_password, customer_feedback, customer_rating, submitted_at')
     .eq('reservation_id', reservationId)
     .maybeSingle()
   if (subErr) return json({ error: subErr.message }, { status: 500 })
-  if (!sub) return json({ submission: null, groups: [], inspection })
+  if (!sub) return json({ submission: null, groups: [], inspection, admin_entries, inspection_items })
 
   const s = sub as {
     id: number
@@ -142,6 +195,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     checklist: string[] | null
     locker_number: string | null
     locker_password: string | null
+    customer_feedback: string | null
+    customer_rating: number | null
     submitted_at: string
   }
 
@@ -167,11 +222,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // s.method 는 저장된 제출 방식 값('courier'|'quick'|'locker') — 예약의 return_method(epost 등)를 변환하는 toReturnSubmitMethod 를 쓰면 항상 null 이 돼
   // 체크리스트가 비고 사진 순서가 정의 순서를 따르지 않는다(2026-10-19 실테스트 발견·수정)
   const method = s.method === 'courier' || s.method === 'quick' || s.method === 'locker' ? s.method : null
-  const order = method ? RETURN_MEDIA_ITEMS[method].map((i) => i.key) : []
+  const order = method ? (method === 'courier' ? photoMaster.active : RETURN_MEDIA_ITEMS[method]).map((i) => i.key) : []
   const keys = [...new Set([...order, ...rows.map((r) => r.item_key)])].filter((k) => rows.some((r) => r.item_key === k))
   const groups = keys.map((k) => ({
     item_key: k,
-    label: mediaItemLabel(k),
+    label: photoMaster.labelByKey.get(k) ?? mediaItemLabel(k),
     items: rows
       .filter((r) => r.item_key === k)
       .map((r) => ({ id: r.id, kind: r.kind, url: urlByPath.get(r.storage_path) ?? null })),
@@ -183,14 +238,19 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       method: s.method,
       submitted_at: s.submitted_at,
       checklist: method === 'courier'
-        ? RETURN_CHECKLIST_ITEMS.map((i) => ({ key: i.key, label: i.label, checked: checked.has(i.key) }))
+        ? checklistRows(inspectionActive, checked, labelByKey)
         : [],
       locker_number: s.locker_number,
       // 비밀번호는 기존 CMS 무인함 배정정보와 같이 manager 이상에게만 내려준다(partner는 마스킹 안내)
       locker_password: hasSettingsAccess(cmsRole) ? s.locker_password : null,
       locker_password_hidden: !hasSettingsAccess(cmsRole) && !!s.locker_password,
+      // 고객 이용 평가(반납등록 미션 3단계, 100자·선택) — 읽기 전용 표시(Migration #739)
+      customer_feedback: s.customer_feedback,
+      customer_rating: s.customer_rating,
     },
     groups,
     inspection,
+    admin_entries,
+    inspection_items,
   })
 }

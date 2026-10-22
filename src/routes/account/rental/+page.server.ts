@@ -3,6 +3,11 @@ import type { PageServerLoad } from './$types'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { createClient } from '@supabase/supabase-js'
+import { toReturnSubmitMethod } from '$lib/utils/returnNotice'
+import { RETURN_SUBMIT_STATUSES } from '$lib/server/returnSubmission'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 export interface MyRental {
@@ -26,6 +31,10 @@ export interface MyRental {
   /** 고객이 취소했고 관리자 취소확인 전 — "취소중" 비활성 카드 */
   cancelling:             boolean
   tracking_number:        string | null
+  /** 반납정보 등록 화면 대상(대여중·반납요청 + 택배·퀵·무인함 방식) */
+  returnSubmittable:      boolean
+  /** 이미 반납정보를 제출함 */
+  returnSubmitted:        boolean
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -70,6 +79,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 마감 후 취소 요청(②구간)이 이미 접수된 예약 — 버튼 대신 "접수됨" 표시
   const cancelRequestedIds = await loadCancelRequestedIds(locals.supabase, reservationIds)
 
+  // 반납정보 등록 대상 예약의 제출 여부 — 제출 테이블은 RLS 정책이 없어 서버(서비스 롤)로만 읽는다
+  const submittableIds = ((data ?? []) as Array<Record<string, unknown>>)
+    .filter(r => RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null)
+    .map(r => r.id as number)
+  const submittedIds = new Set<string>()
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  if (submittableIds.length > 0 && serviceRoleKey) {
+    const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+    const { data: subs } = await admin.from('reservation_return_submissions').select('reservation_id').in('reservation_id', submittableIds)
+    for (const x of (subs ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
+  }
+
   const rentals: MyRental[] = (data ?? []).map((r: Record<string, unknown>) => {
     const product = (r.products as { name: string; category: string } | null) ?? null
     const status = contractStatus.get(String(r.id))
@@ -87,6 +108,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       has_signed_contract:    status?.signed ?? false,
       pending_contract_token: status?.pendingToken ?? null,
       tracking_number:        r.tracking_number as string | null,
+      returnSubmittable:      RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null,
+      returnSubmitted:        submittedIds.has(String(r.id)),
       cancelKind: cancelKinds.get(String(r.id)) ?? 'unavailable',
       cancelRequested: cancelRequestedIds.has(String(r.id)),
       cancelling: (r.status === 'cancelled' && !!r.customer_cancelled_at && !r.cancel_confirmed_at) || (r.status !== 'cancelled' && !!r.cancel_requested_at),
