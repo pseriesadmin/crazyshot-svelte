@@ -126,7 +126,7 @@
   }
 
 
-  // ─── 사진등록 항목(2026-10-22, Migration #739) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 ───
+  // ─── 사진등록 항목(2026-10-22, Migration #744) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 ───
   const PHOTO_MAX = 10
   const PHOTO_LABEL_MAX = 50
   let photoItems = $state<ReturnPhotoItem[]>(data.photoItems)

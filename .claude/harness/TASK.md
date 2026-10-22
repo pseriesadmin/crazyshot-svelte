@@ -22,16 +22,22 @@
 - [x] (sp3 MAJOR 반영, 2026-10-22) 서버도 사진 항목마다 1장 이상 필수로 집행(`returnSubmission.ts`, 테스트 15건 GREEN)
 - [x] (sp3 MAJOR-1 반영) 중복 지급 방지 Migration #741 `20261022075000_741_return_mission_dedupe.sql` — 예약 단위 advisory 잠금 + 부분 유일 인덱스. Stage만 적용·권한 확인(anon/authenticated false), 라이브 테스트 11건 GREEN(동시 호출 3회→적립 1회). Production 미적용
 - [ ] 포인트 만료일(expires_at) 정책은 이번 세션에서 관여하지 않음(Stephen 지시)
-- [ ] sp3 재검수 대기
+- [x] sp3 재검수 통과(2026-10-22, BLOCKER 0·MAJOR 0) · sp5 A-Lite 조건부 통과(MEDIUM 3: 쓰레기 파일 지급·업로드 서명 남발·동시 첫 제출 덮어쓰기)
+- [x] 포인트 지급 시점을 제출 즉시 → **관리자 검수 승인 후**로 변경(Stephen 확정): `inspection.ts` approveInspection → `awardReturnMissionForApproved`(고객이 등록한 예약만·승인(pass)만, 예약당 1회). 제출 API는 지급하지 않음. 완료 화면 문구 '검수가 끝나면 N 포인트를 적립해 드려요'로 변경. sp3 경미 A(시험 eslint)·B(as unknown as 제거)·D(RPC 오류 로그) 반영, 라이브 시험 14건·단위 15건 GREEN
+- [ ] sp5 잔여(MEDIUM 중 승인 후 지급으로 근본 해소된 것 제외): 업로드 서명 횟수 제한·고아 파일 정리, 동시 첫 제출(upsert→insert+409) — 별도 결정
+- [ ] 이슈 해소(resolved) 건에는 미션 포인트 미지급(승인 pass만) — 정책 확인 필요
+- [x] (최근순 2026-10-22~23, 이 세션만) ① 하단 버튼 영역 `.bottom-cta` z-index 5 — 스크롤 시 사진 카드가 버튼을 덮던 레이어 버그 수정(1~3단계·소개 동일 요소, 브라우저 실측) ② PC에서 반납정보 등록을 **모바일 해상도(390px) 모달**로 오픈: 신규 `src/lib/components/account/ReturnSubmitModal.svelte`(iframe `?modal=1`, ✕·Esc·화면 내 ‹ 닫기, 같은 출처·해당 iframe의 postMessage만 수신) + `/account/rental` 버튼(`openReturnSubmit`: ≥768px 모달, 그 미만 화면 이동, 닫을 때 invalidateAll) + `return-submit/+page.svelte`(embedded 판별·닫기/이동 메시지·'포인트 확인하기'→포인트 탭) ③ 완료 화면 서브 카피 '고객님께 N 포인트를 적립해 드릴게요. / 내정보 > 포인트에서 확인해보세요.'(승인 후 지급이라 미래형, Stephen 지시) ④ 포인트 지급 시점 승인 후 + sp3 경미 A·B·D(위 항목)
+- [ ] 알림 링크(채팅 카드·푸시·문자)로 여는 경우는 PC 새 탭 480px 열 그대로 — 모바일 크기 별도 창으로 열지 결정 필요
+- [ ] sp3 검수(포인트 승인 후 지급·PC 모달·z-index) 진행 중
 - [ ] 커밋(Stephen)
 
 ## NOW — 🟡 BOUNDARY: 대여관리 설정 '검수 항목 등록' — 반납 필수 체크리스트 추가·편집·삭제 + '고객검수' 노출 지정 (Migration #738, 2026-10-22, 이 세션'만', ✅ Stephen 지시(레이아웃 4항목) · Stage DB(#738) 적용·권한 확인, Production 미적용(Stephen 승인 대기) · 커밋·배포 전 · **1단계(편집 화면+마스터 저장) + 2단계(고객 반납 화면·검수 탭 연결) 완료**)
 
 2단계(2026-10-22): `src/lib/server/returnInspectionItems.ts`(마스터 조회, 실패·0건이면 기본 4종 fail-open) 신설 → 고객 반납 제출 검증/화면(`return-submit` API·page.server·page.svelte)은 '고객검수 ON' 항목만, 검수 탭 관리자 직접 등록 칩(`return-entries` API·`return-evidence` API·RentalDetailPanel)은 활성 항목 전체, 삭제된 항목은 과거 제출 문구 해석용으로 유지. 검증 함수 `validateReturnSubmit`/`validateAdminReturnEntry`는 3번째 인자(기본값=기존 상수)로 하위호환. 테스트 +returnInspectionItems.test.ts, vitest 26건 통과, eslint 에러 0, svelte-check 에러는 기존 2건(vite.config·subscribe/success, 이 작업과 무관).
 
-3단계(2026-10-22, Migration #739 — Stage만 적용): '사진등록 항목' 마스터(`return_photo_items`, 50자·최대 10개) + 설정 화면 섹션(검수 체크리스트 위) + 택배 반납 고객 사진 카드(`return-submit` page/sign/제출 검증)·검수 탭 사진 묶음 이름·순서 연동. 무인함 반납 사진 항목은 고정. 고객검수 토글은 사진 항목에는 없음(전부 고객 노출). 기존 규칙(사진 1장 이상) 유지. Production 미적용.
+3단계(2026-10-22, Migration #744 — Stage·Production 적용 완료, 파일 번호만 #739→#744 재명명, DB 이력명은 739_return_photo_items 그대로): '사진등록 항목' 마스터(`return_photo_items`, 50자·최대 10개) + 설정 화면 섹션(검수 체크리스트 위) + 택배 반납 고객 사진 카드(`return-submit` page/sign/제출 검증)·검수 탭 사진 묶음 이름·순서 연동. 무인함 반납 사진 항목은 고정. 고객검수 토글은 사진 항목에는 없음(전부 고객 노출). 기존 규칙(사진 1장 이상) 유지. Production 미적용.
 
-4단계(2026-10-22, Migration #740 — Stage만 적용): 사진등록 항목에도 '고객검수' 콤보버튼 추가(`customer_visible`, 기존 항목은 모두 노출) — OFF면 고객 반납 화면 사진 카드·업로드 서명·제출 검증에서 제외(검수 탭 사진 묶음 이름·순서는 전체 활성 기준). 사진등록 섹션은 '검수 항목 등록' 안으로 통합(소제목 2블록).
+4단계(2026-10-22, Migration #745 — Stage·Production 적용 완료, 파일 번호만 #740→#745 재명명, DB 이력명은 740_return_photo_items_customer_visible 그대로): 사진등록 항목에도 '고객검수' 콤보버튼 추가(`customer_visible`, 기존 항목은 모두 노출) — OFF면 고객 반납 화면 사진 카드·업로드 서명·제출 검증에서 제외(검수 탭 사진 묶음 이름·순서는 전체 활성 기준). 사진등록 섹션은 '검수 항목 등록' 안으로 통합(소제목 2블록).
 
 생성일: 2026-10-22 | 아젠다: `/cms/set/rental`에 '검수 항목 등록' 섹션 신설 — 1행 카드(항목명 자동 저장 입력 + 우측 끝 '고객검수' 콤보버튼 + 표준 삭제 버튼), 추가 폼(100자 이내 안내 + 고객검수 콤보버튼 + 추가), 드래그 순서
 
