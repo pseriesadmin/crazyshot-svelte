@@ -46,7 +46,7 @@ export function customerChecklistOf(active: InspectionChecklistItem[]): { key: s
   return active.filter((i) => i.customerVisible).map((i) => ({ key: i.key, label: i.label }))
 }
 
-// ─── 사진등록 항목 마스터(return_photo_items, Migration #739·#740) — 택배 반납의 사진 카드 목록. 같은 fail-open 규칙 ───
+// ─── 사진등록 항목 마스터(return_photo_items, Migration #744·#745) — 택배 반납의 사진 카드 목록. 같은 fail-open 규칙 ───
 export interface PhotoCardItem {
   key: string
   label: string

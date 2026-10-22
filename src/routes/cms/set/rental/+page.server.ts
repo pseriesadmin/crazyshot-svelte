@@ -41,7 +41,7 @@ export interface ReturnInspectionItem {
   display_order: number
 }
 
-/** 반납 사진등록 항목(Migration #739) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 마스터 */
+/** 반납 사진등록 항목(Migration #744) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 마스터 */
 export interface ReturnPhotoItem {
   id: string
   item_key: string
@@ -386,7 +386,7 @@ export const actions: Actions = {
     return { success: true }
   },
 
-  // ─── 반납 사진등록 항목(Migration #739) ────────────
+  // ─── 반납 사진등록 항목(Migration #744) ────────────
   addPhotoItem: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { error: '인증 필요' })
