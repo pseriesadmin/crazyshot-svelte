@@ -56,8 +56,9 @@ export function isOwnedEvidencePath(path: string, reservationId: number): boolea
   return re.test(path)
 }
 
-export function allowedItemKeys(method: ReturnSubmitMethod): string[] {
-  return RETURN_MEDIA_ITEMS[method].map((i) => i.key)
+/** courierPhotoItems: 택배 반납의 사진 카드 목록(CMS '사진등록 항목', 기본=코드 상수). 다른 방식은 고정 항목 */
+export function allowedItemKeys(method: ReturnSubmitMethod, courierPhotoItems: { key: string }[] = RETURN_MEDIA_ITEMS.courier): string[] {
+  return (method === 'courier' ? courierPhotoItems : RETURN_MEDIA_ITEMS[method]).map((i) => i.key)
 }
 
 export interface ReturnSubmitMediaInput {
@@ -71,26 +72,39 @@ export interface ReturnSubmitInput {
   locker_number: string | null
   locker_password: string | null
   media: ReturnSubmitMediaInput[]
+  /** 고객 이용 평가(반납등록 미션 3단계, 100자 이내·선택) — 없으면 null */
+  feedback: string | null
+  /** 고객 이용 평가 점수 1~5(선택) — 없으면 null */
+  rating: number | null
 }
+
+/** 이용 평가 최대 글자 수(화면 maxlength 와 DB CHECK 와 같은 값) */
+export const RETURN_FEEDBACK_MAX = 100
 
 export type ReturnSubmitValidation = { ok: true; value: ReturnSubmitInput } | { ok: false; error: string }
 
 /** 제출 본문 검증 — 방식별 요건(RETURN_SUBMIT_RULES)을 서버에서 다시 집행한다(화면 검증은 UX 보조) */
-export function validateReturnSubmit(method: ReturnSubmitMethod, reservationId: number, body: unknown): ReturnSubmitValidation {
+export function validateReturnSubmit(
+  method: ReturnSubmitMethod,
+  reservationId: number,
+  body: unknown,
+  checklistItems: { key: string }[] = RETURN_CHECKLIST_ITEMS,
+  courierPhotoItems: { key: string }[] = RETURN_MEDIA_ITEMS.courier,
+): ReturnSubmitValidation {
   const b = (body ?? {}) as Record<string, unknown>
   const rules = RETURN_SUBMIT_RULES[method]
 
   // 체크리스트 — 허용 키만, 중복 제거. 택배는 전 항목 확인 필수
   const rawChecklist = Array.isArray(b.checklist) ? b.checklist.filter((x): x is string => typeof x === 'string') : []
-  const validKeys = new Set(RETURN_CHECKLIST_ITEMS.map((i) => i.key))
+  const validKeys = new Set(checklistItems.map((i) => i.key))
   const checklist = [...new Set(rawChecklist.filter((k) => validKeys.has(k)))]
-  if (rules.checklist && checklist.length !== RETURN_CHECKLIST_ITEMS.length) {
+  if (rules.checklist && checklist.length !== checklistItems.length) {
     return { ok: false, error: '장비 확인 항목을 모두 체크해 주세요.' }
   }
 
   // 미디어 — 허용 항목·본인 예약 경로·항목당 장수 상한
   const rawMedia = Array.isArray(b.media) ? b.media : []
-  const keys = new Set(allowedItemKeys(method))
+  const keys = new Set(allowedItemKeys(method, courierPhotoItems))
   const media: ReturnSubmitMediaInput[] = []
   const perItem = new Map<string, number>()
   for (const m of rawMedia) {
@@ -107,7 +121,11 @@ export function validateReturnSubmit(method: ReturnSubmitMethod, reservationId: 
     perItem.set(item_key, n)
     media.push({ item_key, path, kind })
   }
-  if (rules.photosRequired && media.length === 0) return { ok: false, error: '사진을 1장 이상 올려 주세요.' }
+  // 사진이 필요한 방식은 화면에 나오는 사진 항목마다 1장 이상 올려야 한다(2026-10-22 Stephen 지시 — 전 항목 필수, 서버 재집행)
+  if (rules.photosRequired) {
+    const uploaded = new Set(media.map((m) => m.item_key))
+    if ([...keys].some((k) => !uploaded.has(k))) return { ok: false, error: '모든 사진 항목에 사진을 1장씩 올려 주세요.' }
+  }
 
   // 무인함 정보 — CMS 입력과 같은 규칙(lockerFields)
   let locker_number: string | null = null
@@ -119,7 +137,24 @@ export function validateReturnSubmit(method: ReturnSubmitMethod, reservationId: 
     if (!isValidLockerPassword(locker_password)) return { ok: false, error: LOCKER_PASSWORD_ERROR }
   }
 
-  return { ok: true, value: { checklist, locker_number, locker_password, media } }
+  // 이용 평가 — 선택 입력, 앞뒤 공백 제거, 100자 초과는 거절(화면이 막지만 서버가 다시 집행)
+  let feedback: string | null = null
+  if (typeof b.feedback === 'string') {
+    const trimmed = b.feedback.trim()
+    if (trimmed.length > RETURN_FEEDBACK_MAX) return { ok: false, error: `이용 평가는 ${RETURN_FEEDBACK_MAX}자 이내로 입력해 주세요.` }
+    feedback = trimmed || null
+  }
+
+  // 이용 평가 점수 — 선택 입력, 1~5 정수만(범위 밖·비정수는 거절, 아예 없으면 null)
+  let rating: number | null = null
+  if (b.rating !== undefined && b.rating !== null) {
+    if (typeof b.rating !== 'number' || !Number.isInteger(b.rating) || b.rating < 1 || b.rating > 5) {
+      return { ok: false, error: '평가 점수는 1~5점으로 선택해 주세요.' }
+    }
+    rating = b.rating
+  }
+
+  return { ok: true, value: { checklist, locker_number, locker_password, media, feedback, rating } }
 }
 
 export { toReturnSubmitMethod }

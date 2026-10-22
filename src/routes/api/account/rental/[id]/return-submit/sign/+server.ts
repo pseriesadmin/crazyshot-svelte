@@ -17,6 +17,7 @@ import {
   toReturnSubmitMethod,
   validateMediaFile,
 } from '$lib/server/returnSubmission'
+import { loadReturnPhotoItems, customerPhotoOf } from '$lib/server/returnInspectionItems'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request, params, locals }) => {
@@ -49,13 +50,19 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   const contentType = typeof body.content_type === 'string' ? body.content_type : ''
   const size = typeof body.size === 'number' ? body.size : Number.NaN
 
-  if (!allowedItemKeys(method).includes(itemKey)) return json({ error: '올릴 수 없는 사진 항목이에요.' }, { status: 400 })
-  const file = validateMediaFile(contentType, size)
-  if (!file.ok) return json({ error: file.error }, { status: 400 })
-
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ error: '서버 설정 오류' }, { status: 500 })
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  // 이미 등록한 예약은 사진을 더 올릴 수 없다(재등록 불가)
+  const { data: already } = await admin.from('reservation_return_submissions').select('id').eq('reservation_id', reservationId).maybeSingle()
+  if (already) return json({ error: '이미 반납 정보를 등록하셨어요.' }, { status: 409 })
+
+  // 택배 반납의 사진 카드는 CMS '사진등록 항목' 기준(조회 실패 시 기본 3종)
+  const photo = await loadReturnPhotoItems(admin)
+  if (!allowedItemKeys(method, customerPhotoOf(photo.active)).includes(itemKey)) return json({ error: '올릴 수 없는 사진 항목이에요.' }, { status: 400 })
+  const file = validateMediaFile(contentType, size)
+  if (!file.ok) return json({ error: file.error }, { status: 400 })
 
   const path = buildEvidencePath(reservationId, itemKey, contentType)
   const { data, error } = await admin.storage.from(RETURN_EVIDENCE_BUCKET).createSignedUploadUrl(path)

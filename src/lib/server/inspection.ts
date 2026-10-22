@@ -4,6 +4,7 @@
 //  · 이슈 등록: 고객 "검수 결과 안내" 카드·푸시·문자(처음 이슈로 바뀔 때만) + 관리자 푸시
 //  · 해소(resolved): 대여완료 포인트만 적립, 완료 알림은 없음 — 추가청구·협의로 마감된 건(Stephen 확정 2026-10-17)
 // 정시반납 적립은 returned 시점에 그대로 둔다(호출 시점을 반납 시점으로 보는 로직 — 승인 시점으로 옮기면 늦은 승인이 지각 처리됨).
+import { awardReturnMissionForApproved } from '$lib/server/awardReturnRegisterMissionPoints'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { registerPriorIssue } from '$lib/server/priorIssue'
@@ -124,6 +125,7 @@ export async function approveInspection(admin: AnyClient, reservationId: number,
   if (error || !res?.ok) return { ok: false, error: rpcFailMessage(error, data, '검수 승인에 실패했습니다.') }
   const ids = Array.isArray(res.completed_ids) && res.completed_ids.length > 0 ? res.completed_ids : [reservationId]
   await finalizeRentalCompletion(admin, ids)
+  await awardReturnMissionForApproved(admin, ids) // 반납등록 미션 포인트 — 검수 승인 후 지급(등록한 예약만, 예약당 1회)
   await sendInspectionNotice(admin, reservationId, 'inspection_pass')
   return { ok: true }
 }

@@ -6,6 +6,7 @@
  * 전환은 update_reservation_status RPC 직접 호출이라 AUTO_NOTIFY(return_registration 카드)를 거치지 않는다 —
  * 고객이 이미 이 화면에서 반납 정보를 등록하는 중이라 "반납 정보를 등록해 달라"는 카드가 중복되지 않게 한다.
  * 보안: 세션 + 예약 소유권 + 상태·방식 + 본문 재검증(returnSubmission.ts). 저장은 서비스 롤(테이블은 RLS 정책 없음).
+ * 2026-10-22(Migration #739): 고객 이용 평가(feedback, 100자·선택)·점수 저장. 미션 포인트는 제출 즉시가 아니라 관리자 검수 승인 후 지급(inspection.ts).
  */
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -18,6 +19,7 @@ import {
   validateReturnSubmit,
 } from '$lib/server/returnSubmission'
 import { sendPushToAdmins } from '$lib/server/push'
+import { loadReturnInspectionItems, loadReturnPhotoItems, customerChecklistOf, customerPhotoOf } from '$lib/server/returnInspectionItems'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ request, params, locals }) => {
@@ -46,13 +48,20 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   } catch {
     return json({ error: '잘못된 요청입니다.' }, { status: 400 })
   }
-  const parsed = validateReturnSubmit(method, reservationId, body)
-  if (!parsed.ok) return json({ error: parsed.error }, { status: 400 })
-  const input = parsed.value
-
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ error: '서버 설정 오류' }, { status: 500 })
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
+
+  // 한 번 등록한 예약은 다시 등록할 수 없다(재등록 불가, 2026-10-22 Stephen 지시)
+  const { data: already } = await admin.from('reservation_return_submissions').select('id').eq('reservation_id', reservationId).maybeSingle()
+  if (already) return json({ error: '이미 반납 정보를 등록하셨어요.' }, { status: 409 })
+
+  // 체크리스트는 CMS '검수 항목 등록'의 고객검수 ON 항목 기준(마스터 조회 실패 시 기본 4종)
+  const { active } = await loadReturnInspectionItems(admin)
+  const photo = await loadReturnPhotoItems(admin)
+  const parsed = validateReturnSubmit(method, reservationId, body, customerChecklistOf(active), customerPhotoOf(photo.active))
+  if (!parsed.ok) return json({ error: parsed.error }, { status: 400 })
+  const input = parsed.value
 
   // 올렸다고 주장하는 파일이 실제로 버킷에 있는지 확인(경로 형식만 맞는 가짜 제출 방지) — 없는 파일이 하나라도 있으면 거절
   if (input.media.length > 0) {
@@ -86,6 +95,8 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
         checklist: input.checklist,
         locker_number: input.locker_number,
         locker_password: input.locker_password,
+        customer_feedback: input.feedback,
+        customer_rating: input.rating,
         submitted_by: session.user.id,
         submitted_at: new Date().toISOString(),
       },
@@ -173,5 +184,6 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
     // 알림 실패는 제출 결과에 영향 없음
   }
 
+  // 반납등록 미션 포인트는 제출 즉시가 아니라 관리자 검수 승인 후 지급한다(2026-10-22, approveInspection → awardReturnMissionForApproved)
   return json({ ok: true })
 }

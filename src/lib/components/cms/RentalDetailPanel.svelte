@@ -448,6 +448,8 @@
     locker_number: string | null
     locker_password: string | null
     locker_password_hidden?: boolean
+    customer_feedback?: string | null
+    customer_rating?: number | null
   }
   const EVIDENCE_METHOD_LABEL: Record<string, string> = { courier: '택배 반납', quick: '퀵서비스 반납', locker: '무인함 반납' }
   let evFetchedFor  = $state<number | null>(null)
@@ -3525,6 +3527,13 @@
             <div class="ev-block-title">무인함 정보 (고객 입력)</div>
             <div class="ev-check">무인함 번호 {evSubmission.locker_number ?? '-'}</div>
             <div class="ev-check">비밀번호 {evSubmission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (evSubmission.locker_password ?? '-')}</div>
+          </div>
+        {/if}
+
+        {#if evSubmission.customer_feedback || evSubmission.customer_rating}
+          <div class="ev-block">
+            <div class="ev-block-title">고객 이용 평가{evSubmission.customer_rating ? ` · ${evSubmission.customer_rating}/5점` : ''}</div>
+            {#if evSubmission.customer_feedback}<div class="ev-check">{evSubmission.customer_feedback}</div>{/if}
           </div>
         {/if}
 

@@ -149,6 +149,7 @@
       rental_complete: '렌탈 완료',
       review:          '리뷰 작성',
       on_time_return:  '정시 반납',
+      return_register_mission: '반납등록 미션',
       referrer:        '추천인',
       referee:         '피추천인',
       birthday:        '생일 축하',
