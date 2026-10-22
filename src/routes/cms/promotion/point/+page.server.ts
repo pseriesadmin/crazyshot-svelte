@@ -52,6 +52,8 @@ export type PointUseSettingsRow = {
   min_use_points: number
   use_unit: number
   max_use_ratio: number
+  /** 자동 소멸 기한(적립일로부터 N일) — 0이면 소멸 없음 (Migration #742) */
+  expiry_days: number
 }
 
 export const load: PageServerLoad = async ({ parent, locals, url }) => {
@@ -124,7 +126,7 @@ export const load: PageServerLoad = async ({ parent, locals, url }) => {
     if (useErr) {
       console.error('[cms/promotion/point] get_point_use_settings 실패:', useErr.message)
     }
-    pointUseSettings = (useRules ?? { use_enabled: true, min_use_points: 0, use_unit: 1, max_use_ratio: 100 }) as PointUseSettingsRow
+    pointUseSettings = (useRules ?? { use_enabled: true, min_use_points: 0, use_unit: 1, max_use_ratio: 100, expiry_days: 0 }) as PointUseSettingsRow
   }
 
   return {
@@ -235,10 +237,15 @@ export const actions: Actions = {
     const min_use_points = Number(form.get('min_use_points') ?? 0)
     const use_unit = Number(form.get('use_unit') ?? 1)
     const max_use_ratio = Number(form.get('max_use_ratio') ?? 100)
+    // 빈 칸은 Number('')=0 → '소멸 없음'으로 조용히 저장되므로 값이 비어 있으면 거절한다(0은 직접 입력해야 함)
+    const expiryRaw = String(form.get('expiry_days') ?? '').trim()
+    if (expiryRaw === '') return { ok: false, error: '자동 소멸 기한을 입력해 주세요. 소멸 없음은 0을 입력하세요.' }
+    const expiry_days = Number(expiryRaw)
 
     if (!Number.isInteger(min_use_points) || min_use_points < 0) return { ok: false, error: '최소 사용 포인트는 0 이상의 정수여야 합니다.' }
     if (!Number.isInteger(use_unit) || use_unit < 1) return { ok: false, error: '사용 단위는 1 이상의 정수여야 합니다.' }
     if (!Number.isInteger(max_use_ratio) || max_use_ratio < 0 || max_use_ratio > 100) return { ok: false, error: '최대 사용 비율은 0~100 사이의 정수여야 합니다.' }
+    if (!Number.isInteger(expiry_days) || expiry_days < 0 || expiry_days > 3650) return { ok: false, error: '자동 소멸 기한은 0~3650 사이의 정수(일)여야 합니다. 0이면 소멸 없음.' }
 
     // 규칙 변경은 결제 금액에 직접 영향 → DB 함수는 service_role 전용(Migration #641). manager 이상 게이트를 통과한 이 액션만 호출한다.
     const db = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -247,6 +254,7 @@ export const actions: Actions = {
       p_min_use_points: min_use_points,
       p_use_unit: use_unit,
       p_max_use_ratio: max_use_ratio,
+      p_expiry_days: expiry_days,
     })
     if (error) return { ok: false, error: error.message }
     return { ok: true }
