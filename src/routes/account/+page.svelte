@@ -9,6 +9,7 @@
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import { returnDayState } from '$lib/utils/returnNoticeTime'
   import ProfileCard from '$lib/components/account/ProfileCard.svelte'
   import MemberQrModal from '$lib/components/account/MemberQrModal.svelte'
   import RentalStatRow from '$lib/components/account/RentalStatRow.svelte'
@@ -135,7 +136,7 @@
             {#if data.recentRental}
               <div class="w-full mt-[36px]">
                 <p class="text-[#444] tracking-[-0.3px] mb-[8px]" style="font: var(--text-m-script-14B);">최근 예약</p>
-                <RentalJourneyStepper status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} />
+                <RentalJourneyStepper slim fluid status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} returnDay={returnDayState(data.recentRental.status, data.recentRental.end_date, data.recentRental.return_method, data.recentRental.return_time)} />
               </div>
             {/if}
           </div>
@@ -267,7 +268,7 @@
               {#if data.recentRental}
                 <div class="mt-[24px]">
                   <p class="text-[#444] tracking-[-0.3px] mb-[8px]" style="font: var(--text-pc-body-14);">최근 예약</p>
-                  <RentalJourneyStepper status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} />
+                  <RentalJourneyStepper slim fluid status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} returnDay={returnDayState(data.recentRental.status, data.recentRental.end_date, data.recentRental.return_method, data.recentRental.return_time)} />
                 </div>
               {/if}
             </div>

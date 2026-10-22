@@ -7,6 +7,7 @@
   import { sanitizeLockerInput } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
+  import { isReturnDue } from '$lib/utils/returnDue'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
@@ -516,6 +517,17 @@
   const hasInspectionInfo = $derived(evSubmission !== null || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
   const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
   // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
+  // 헤더 여정 현재 단계(2026-10-22, Stephen 확정 A안): 반납 일시가 지났거나 반납 안내가 발송된 대여중은 목록 '반납중' 칩과 맞춰 '반납중' 단계로 강조한다(표시용 — 실제 상태는 대여중 그대로)
+  // 계약발송 단계(2026-10-22, Stephen 지시): 예약현황 패널(stepFilter 에 hold 포함)은 예약신청과 계약완료 사이에 '계약발송' 단계를 항상 둔다(발송된 건은 현재/지난 단계, 발송 전은 미도달 단계)
+  const hasContractSent = $derived(!!row.signing_sent_at && !!stepFilter?.includes('hold'))
+  // 아직 발송 전이어도 단계 자체는 보여준다(미도달 단계 표시) — 예약현황 패널은 항상 예약신청 → 계약발송 → 계약완료
+  const journeySteps = $derived(stepFilter?.includes('hold') ? ['hold', 'contract_sent', ...stepFilter.filter((s) => s !== 'hold')] : stepFilter)
+  const journeyStatus = $derived(
+    row.status === 'in_use' && (isReturnDue(row.rental_end, row.return_time) || row.return_stage === 'notice_sent' || row.return_stage === 'registered')
+      ? 'return_requested'
+      : (row.status === 'hold' && hasContractSent ? 'contract_sent' : row.status))
+  // 헤더 여정(슬림 스텝퍼) 노출 — 임시예약(draft)·취소 건 제외
+  const showHeaderJourney = $derived(row.status !== 'cancelled' && row.status !== 'expired' && row.status !== 'draft' && row.status !== 'damage_claimed')
   const hideChangeCancel = $derived(
     hideChangeCancelButtons || row.status === 'in_use' || row.status === 'returned' || row.status === 'return_requested' || inspStatus === 'issue')
 
@@ -2150,11 +2162,11 @@
 <div class="panel">
  <div class="panel-content">
   <!-- 패널 헤더 -->
-  <div class="panel-header">
+  <div class="panel-header" class:panel-header-joined={showHeaderJourney}>
     <div class="panel-title-wrap">
       <span class="panel-label">대여</span>
       <span class="panel-id">{row.status === 'draft' ? `임시-${row.reservation_id}` : reservationCode()}</span>
-      <span class="panel-status">{rowStatusLabel}</span>
+      {#key row.status}<span class="panel-status">{rowStatusLabel}</span>{/key}
       {#if row.status === 'hold' && row.payment_confirmed_at}
         <span class="payment-contract-badge">결제완료 · 계약대기</span>
       {/if}
@@ -2294,6 +2306,13 @@
     </div>
   </div>
 
+  <!-- 대여 여정 — 패널 공통 헤더 영역(모든 탭에서 보임). 취소 건은 취소·환불 사유 박스가 있는 대여정보 탭의 기존 스텝퍼를 쓴다 -->
+  {#if showHeaderJourney}
+    <div class="panel-journey">
+      <RentalJourneyStepper status={journeyStatus} steps={journeySteps} slim />
+    </div>
+  {/if}
+
   <!-- 탭 -->
   <div class="panel-tabs" role="tablist">
     {#each [
@@ -2321,7 +2340,8 @@
     {#if activeTab === 'rental'}
 
       <!-- 대여 여정 스텝퍼 -->
-      <RentalJourneyStepper status={row.status} steps={stepFilter} cancelledAlign="start" cancelledLabel="취소사유등록" compact={row.status === 'cancelled'}>
+      {#if row.status === 'cancelled'}
+      <RentalJourneyStepper status={row.status} steps={stepFilter} cancelledAlign="start" cancelledLabel="취소사유등록" compact>
         {#if row.status === 'cancelled'}
           <!-- 취소·환불 사유(2026-10-14): 스텝퍼 박스 안에 배치 — 대표 사유 선택 + 추가 입력 200자, 자동 저장(저장 버튼 없음) -->
           <div class="cancel-reason-box">
@@ -2373,6 +2393,7 @@
           </div>
         {/if}
       </RentalJourneyStepper>
+      {/if}
 
       <!-- 예약 정보 -->
       <div class="section-title">대여 정보</div>
@@ -3878,6 +3899,18 @@
     border-bottom: 1px solid var(--cs-lilac);
     flex-shrink: 0;
   }
+  /* 헤더 아래 여정 줄이 이어질 때는 헤더 구분선을 여정 줄 아래로 넘긴다 */
+  .panel-header.panel-header-joined { border-bottom: none; padding-bottom: 8px; }
+  .panel-journey { padding: 0 20px 12px; border-bottom: 1px solid var(--cs-lilac); flex-shrink: 0; }
+  /* 상태 배지 — 패널을 열거나 상태가 바뀔 때 1회 버블(오버슈트·언더슈트 후 안착) */
+  .panel-status { animation: status-bubble 0.5s ease-out both; transform-origin: 50% 60%; }
+  @keyframes status-bubble {
+    0%   { transform: scale(0.8); opacity: 0; }
+    45%  { transform: scale(1.18); opacity: 1; }
+    72%  { transform: scale(0.95); }
+    100% { transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) { .panel-status { animation: none; } }
   .panel-title-wrap {
     display: flex;
     align-items: center;

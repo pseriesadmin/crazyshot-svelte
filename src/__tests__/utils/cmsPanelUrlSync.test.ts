@@ -15,7 +15,7 @@ const fnBody = (src: string, name: string): string => {
   return src.slice(i, src.indexOf('\n  }\n', i))
 }
 
-for (const page of ['src/routes/cms/rentals/+page.svelte', 'src/routes/cms/reservation/+page.svelte']) {
+for (const page of ['src/routes/cms/rentals/+page.svelte']) { // 예약현황은 통합 화면으로 이동(2026-10-22)
   describe(page, () => {
     const src = read(page)
     it('replaceState를 가져온다', () => {

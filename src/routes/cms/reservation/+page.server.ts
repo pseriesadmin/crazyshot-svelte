@@ -12,14 +12,10 @@ import { getDocGateStatus, type DocGateStatus, type DocGateRow } from '$lib/util
 import { clearIssuedContractContent, discardSentContract, cancelIssuedContract } from '$lib/server/clearIssuedContractHelper'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
-import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
-import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
-import { attachCancelPending } from '$lib/server/attachCancelPending'
-import { resolveRepresentativeReservationId } from '$lib/server/resolveOrderRepresentative'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult } from '$lib/server/contractAutoIssue'
@@ -103,149 +99,11 @@ export interface RentalListRow {
   status_mixed:         boolean
 }
 
-export const load: PageServerLoad = async ({ parent, url }) => {
-  const { cmsRole, session } = await parent()
-  if (!cmsRole) throw redirect(303, '/cms/login')
-
-  const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-  // 화면 최초진입(URL에 ?status= 자체가 없음) 기본값 = '신청대기'(hold) — 요구사항 1(2026-08-20).
-  // '전체' 칩 클릭 시에는 +page.svelte가 status=''를 명시적으로 params에 채워 보내므로
-  // url.searchParams.has('status')가 true가 되어 이 기본값으로 되돌아가지 않는다.
-  const status   = url.searchParams.has('status') ? (url.searchParams.get('status') ?? '') : 'hold'
-  const search   = url.searchParams.get('search')    ?? ''
-  const dateFrom = url.searchParams.get('date_from') ?? ''
-  const dateTo   = url.searchParams.get('date_to')   ?? ''
-  const page     = parseInt(url.searchParams.get('page') ?? '1', 10)
-  const selectedParam = url.searchParams.get('selected')
-  const selectedRaw   = selectedParam ? parseInt(selectedParam, 10) : null
-  // 목록은 "주문 1건 = 1행"(대표 예약)이므로 비대표 형제 id로 들어온 딥링크도 대표 행으로 연다(Migration 618)
-  const selectedId    = selectedRaw != null && Number.isFinite(selectedRaw)
-    ? await resolveRepresentativeReservationId(admin, selectedRaw)
-    : null
-  // '계약대기' 필터칩(2026-08-20 신설 → 2026-09-08 범위 확정) — status='hold' 중 전자계약이
-  // 발송된 적이 있는 건 전부(서명 여부 무관, Stephen 확정) 골라내는 별도 차원의 조건.
-  // status와 독립적인 파라미터라 URL도 별도로 관리.
-  const contractPending = url.searchParams.get('contract_pending') === '1'
-  // '신청대기' 칩(2026-09-08 신설) — 위 '계약대기'와 상호배타적인 파티션이 되도록, 전자계약을
-  // 아예 보낸 적 없는 hold 예약만 남긴다. '신청대기' 칩이 선택된 경우에만 적용(전체·취소 등
-  // 다른 칩에는 영향 없음) — 서명은 끝났지만 결제가 아직 안 된 예약이 '계약대기'에서 빠져
-  // 다시 '신청대기'에만 보이던 오인 문제 해소(service-operations.md 관련 논의 참고).
-  const isReservationPendingTab = status === 'hold' && !contractPending
-
-  // confirmed 이후 상태는 /cms/rentals에서 관리 → 예약 목록에서 제외
-  // draft(날짜 미정 임시예약)도 제외 — 고객이 체크아웃에서 날짜를 입력해 hold로 승격해야 관리자에게 노출됨(Default-Exclude)
-  // p_exclude_statuses를 SQL WHERE에 반영해 LIMIT/OFFSET·total_count가 이 스코프 기준으로
-  // 계산되도록 함(2026-08-07 페이지네이션 정합성 수정 — RPC에서 필터링 전 count를 쓰면
-  // "총 N건"·페이지 수가 실제 표시 목록과 어긋남, migration 201 참고)
-  // '임시예약' 칩(status=draft, 2026-10-15)에서만 draft를 제외 목록에서 뺀다 — 그 외 칩('전체' 포함)은 기존대로 draft 제외
-  const isDraftTab = status === 'draft'
-  const RENTAL_VIEW_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', ...(isDraftTab ? [] : ['draft'])]
-
-  // '취소' 칩(2026-09-09 확장, Stephen 지시) — HOLD 30분 자동만료(release_reservation_hold,
-  // service-operations.md §10)로 만료된 예약은 status='expired'로 전환되는데, 이 화면에
-  // 'expired' 전용 탭이 없어 어느 필터에서도 조회할 수 없는 사각지대였다(만료 badge/라벨은
-  // 이미 있었음 — STATUS_LABEL.expired, rental-lifecycle.md RSV-A-B1 — 표시만 되고 목록
-  // 진입 경로가 없던 상태). 관리자 입장에서 "취소"와 "만료"는 둘 다 "이 예약은 더 이상
-  // 진행되지 않는다"는 같은 성격이라, '취소' 칩을 status='cancelled' 단일값이 아니라
-  // ['cancelled','expired'] 두 상태를 함께 보여주도록 확장한다 — 각 행 자체의 상태 배지는
-  // STATUS_LABEL로 여전히 "취소"/"만료됨"으로 구분 표시되므로 두 상태를 섞어도 구분이 안
-  // 되는 문제는 없다.
-  const isCancelledTab = status === 'cancelled'
-
-  // 임시예약 칩에서만 '임시-292'·'292' 형태 검색을 임시예약 id 조회로 처리한다(임시예약은 예약코드가 없어 화면 표시용 이름이 id 기반 — 2026-10-15)
-  const draftIdMatch = isDraftTab ? search.trim().match(/^(?:임시-?)?(\d{1,15})$/) : null
-  const draftIdSearch = draftIdMatch ? Number(draftIdMatch[1]) : null
-
-  // 취소·만료된 예약을 가리키는 링크(?selected=)는 그 예약이 속한 칩으로 보낸다 — 결제완료 이력이 있으면 대여현황 '취소·환불', 없으면 이 화면 '취소'(Migration #714)
-  if (selectedId != null) {
-    const { data: selRow } = await admin.from('rental_reservations').select('status, payment_confirmed_at').eq('id', selectedId).maybeSingle()
-    const sel = selRow as { status?: string; payment_confirmed_at?: string | null } | null
-    if (sel?.status === 'cancelled' && sel.payment_confirmed_at != null) {
-      throw redirect(303, `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`)
-    }
-    if ((sel?.status === 'cancelled' || sel?.status === 'expired') && !isCancelledTab) {
-      throw redirect(303, `/cms/reservation?status=cancelled&selected=${selectedId}`)
-    }
-  }
-
-  const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:                          (status && !isCancelledTab) ? status : null,
-    p_search:                          draftIdSearch != null ? null : (escapeLikePattern(search) || null),
-    p_reservation_id:                  draftIdSearch,
-    p_date_from:                       dateFrom || null,
-    p_date_to:                         dateTo   || null,
-    p_page:                            page,
-    p_per_page:                        30,
-    p_include_statuses:                isCancelledTab ? ['cancelled', 'expired'] : null,
-    // '취소' 칩 = 결제완료 이력이 없는 취소·만료(예약신청·계약대기 단계 취소). 결제완료 후 취소·환불은 대여현황 '취소·환불' 칩(Migration #714)
-    p_cancel_payment_scope:            isCancelledTab ? 'unpaid' : null,
-    p_exclude_statuses:                RENTAL_VIEW_STATUSES,
-    p_require_contract_sent_unsigned:  contractPending || null,
-    p_exclude_contract_sent:           isReservationPendingTab || null,
-    // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
-    p_group_by_order:                  true,
-  })
-
-  if (error) console.error('[cms/reservation] get_rental_list error:', error.message)
-
-  const rentals: RentalListRow[] = rows ?? []
-  // 총 건수는 링크 예약 행을 앞에 붙이기 "전" 원 목록 기준으로 확정(붙인 행의 total_count는 항상 1)
-  const totalCount = rentals[0]?.total_count ?? 0
-  // 링크로 연 취소 예약이 이 페이지(30건)에 없으면 그 행만 따로 가져와 맨 위에 붙인다 — 목록에 없으면 패널이 열리자마자 닫힌다(총 건수·페이지 수는 영향 없음)
-  // 계약대기 칩도 같은 보정 — 방금 계약서를 발송한 예약이 다음 페이지에 있어도 패널이 열려 있게 한다
-  if (contractPending && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
-    const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
-      p_status: null, p_search: null, p_date_from: null, p_date_to: null,
-      p_page: 1, p_per_page: 1, p_include_statuses: ['hold'], p_reservation_id: selectedId,
-      p_group_by_order: true,
-    })
-    if (selErr) console.error('[cms/reservation] 계약대기 링크 예약 조회 실패:', selErr.message)
-    const one = ((selOne ?? []) as RentalListRow[])[0]
-    if (one) rentals.unshift(one)
-  }
-  if (isCancelledTab && selectedId != null && !rentals.some(r => r.reservation_id === selectedId)) {
-    const { data: selOne, error: selErr } = await admin.rpc('get_rental_list', {
-      p_status: null, p_search: null, p_date_from: null, p_date_to: null,
-      p_page: 1, p_per_page: 1, p_include_statuses: ['cancelled', 'expired'], p_reservation_id: selectedId,
-      p_group_by_order: true,
-    })
-    if (selErr) console.error('[cms/reservation] 링크 예약 조회 실패:', selErr.message)
-    const one = ((selOne ?? []) as RentalListRow[])[0]
-    if (one) rentals.unshift(one)
-  }
-  // 고객 취소 요청 대기(서명+결제 후 취소 요청, Migration 687) — "취소대기" 배지·패널 안내
-  await attachCancelPending(admin, rentals)
-  await attachRentalDaysLabel(admin, rentals)
-  const totalPages = Math.max(1, Math.ceil(totalCount / 30))
-
-  // rental.change_cancel per-account 권한 판정
-  let canChangeOrCancelReservation = true
-  if (session?.user.id) {
-    const { data: permData } = await admin
-      .from('cms_menu_permissions')
-      .select('menu_key, allowed')
-      .eq('user_id', session.user.id)
-    const menuOverrides = (permData ?? []) as CmsMenuPermissionOverride[]
-    canChangeOrCancelReservation = hasMenuAccess(cmsRole, menuOverrides, 'rental.change_cancel')
-  }
-
-  // 칩별 '처리 대기' 건수(2026-10-19, 대여현황과 동일 방식): 신청대기=예약승인 대기, 계약대기=계약 발송·서명·결제 진행 대기. 주문 1건=1행 기준.
-  // 검색어·기간 필터와 무관한 전체 건수다. 임시예약·취소·전체 칩은 관리자 조치 대기 개념이 없어 배지를 두지 않는다. 실패하면 배지 없이 둔다.
-  const holdCountOf = async (pending: boolean): Promise<number | null> => {
-    const { data, error: e } = await admin.rpc('get_rental_list', {
-      p_status: 'hold', p_search: null, p_date_from: null, p_date_to: null, p_page: 1, p_per_page: 1,
-      p_exclude_statuses: ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed', 'draft'],
-      p_require_contract_sent_unsigned: pending || null,
-      p_exclude_contract_sent: !pending || null,
-      p_group_by_order: true,
-    })
-    if (e) { console.error('[cms/reservation] 칩 건수 조회 실패:', e.message); return null }
-    return ((data ?? []) as RentalListRow[])[0]?.total_count ?? 0
-  }
-  const [cHold, cContract] = await Promise.all([holdCountOf(false), holdCountOf(true)])
-  const chipCounts: Record<string, number | null> = { hold: cHold, contract_pending: cContract }
-  return { rentals, chipCounts, totalCount, totalPages, status, search, dateFrom, dateTo, page, selectedId, cmsRole, contractPending, canChangeOrCancelReservation }
+// 예약현황과 대여현황은 /cms/rentals 한 화면으로 통합됐다(2026-10-22, Stephen 확정) — 이 주소로 들어오는 기존 링크(채팅 카드·알림·북마크)는
+// 쿼리(status·contract_pending·search·date_from·date_to·page·selected)를 그대로 넘겨 통합 화면으로 보낸다.
+// 이 경로의 폼 액션(approveReservation·updateStatus·changeReservation 등)은 패널이 절대 주소로 호출하므로 그대로 둔다.
+export const load: PageServerLoad = async ({ url }) => {
+  throw redirect(303, `/cms/rentals${url.search}`)
 }
 
 export const actions: Actions = {

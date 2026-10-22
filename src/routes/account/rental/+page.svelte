@@ -1,6 +1,7 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
+  import { returnDayState } from '$lib/utils/returnNoticeTime'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
@@ -233,7 +234,7 @@
             </div>
 
             <div class="stepper-wrap">
-              <RentalJourneyStepper status={rental.status} />
+              <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} />
             </div>
 
             {#if rental.cancelling}

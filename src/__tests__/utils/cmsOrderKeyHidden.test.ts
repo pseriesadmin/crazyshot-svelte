@@ -9,7 +9,7 @@ import { join } from 'node:path'
  */
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf-8')
 
-for (const page of ['src/routes/cms/reservation/+page.svelte', 'src/routes/cms/rentals/+page.svelte']) {
+for (const page of ['src/routes/cms/rentals/+page.svelte']) { // 예약현황은 통합 화면으로 이동(2026-10-22)
   describe(page, () => {
     const src = read(page)
     it('주문번호 태그(order-key-tag)와 order_key 노출이 없다', () => {
