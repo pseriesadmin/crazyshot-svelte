@@ -82,7 +82,6 @@
   $effect(() => {
     if (!data.cmsRole || !canReceiveChatToast) return
     return chatInbox.start((found) => {
-      playChatChime() // 한 고객에게서 이어서 오는 메시지를 포함해 새 대화가 올 때마다 수신벨(개수 변화와 무관, 짧은 간격 중복만 내부에서 걸러짐)
       if (page.url.pathname.startsWith('/cms/chat')) return
       const text = found
         ? `${found.name} · ${found.label ?? found.preview}`
@@ -93,6 +92,9 @@
         actionLabel: '열기',
         onClick: () => { void goto(found ? `/cms/chat?session=${found.session_id}` : '/cms/chat') },
       })
+    }, () => {
+      // 수신벨 — 고객 메시지가 오는 즉시, 자동답변으로 해결되는 건도 포함(2026-10-23 Stephen 지시). 짧은 간격 중복만 내부에서 걸러짐
+      playChatChime()
     })
   })
 
