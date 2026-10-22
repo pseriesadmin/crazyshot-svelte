@@ -4,6 +4,8 @@
   import type { SubmitFunction } from '@sveltejs/kit'
   import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import { slide } from 'svelte/transition'
+  import { RETURN_CHECKLIST_ITEMS } from '$lib/utils/returnNotice'
   import { sanitizeLockerInput } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
@@ -468,6 +470,24 @@
   }
   let evInspection = $state<EvidenceInspection | null>(null)
 
+  // ── 반납정보 관리자 직접 등록(Migration #737, 2026-10-22) — 관리자 계정이 사진·체크리스트·메모를 직접 등록(방문·택배·퀵·무인함 등 모든 반납 방식) ──
+  interface AdminReturnEntry {
+    id: number; registered_by_name: string | null; memo: string | null; checklist: string[]; created_at: string
+    media: { kind: 'photo' | 'video'; url: string | null }[]
+  }
+  let evAdminEntries = $state<AdminReturnEntry[]>([])
+  // 관리자 직접 등록 칩 — CMS '검수 항목 등록'의 활성 항목(응답 전·조회 실패 시 기본 4종)
+  let evChecklistItems = $state<{ key: string; label: string }[]>(RETURN_CHECKLIST_ITEMS)
+  let adminRetOpen   = $state(false)   // 등록 폼(아코디언) 열림
+  let adminRetBusy   = $state(false)
+  let adminRetMemo   = $state('')
+  let adminRetChecks = $state<string[]>([])
+  let adminRetMedia  = $state<{ path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }[]>([])
+  let adminRetUploading = $state(0)
+  let adminEntryOpen = $state<Record<number, boolean>>({})
+  // 등록 가능한 상태(대여중·반납요청·반납완료)에서만 [+] 노출 — 반납 방식과 무관
+  const canRegisterAdminReturn = $derived(['in_use', 'return_requested', 'returned'].includes(row.status))
+
   $effect(() => {
     // 검수 탭이거나, 헤더 [반납 검수 승인] 활성 판정이 필요한 반납요청·반납완료 단계면 조회한다(탭을 벗어나면 다음 진입 때 다시 조회 — 서명 URL 만료 대비)
     if (activeTab !== 'inspection' && row.status !== 'return_requested' && row.status !== 'returned' && !hideChangeCancelButtons) { evFetchedFor = null; return }
@@ -482,10 +502,12 @@
       .then(async (r) => ({ ok: r.ok, body: await r.json() }))
       .then(({ ok, body }) => {
         if (evFetchedFor !== id) return
-        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; return }
+        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; evAdminEntries = []; return }
         evSubmission = body.submission ?? null
         evInspection = body.inspection ?? null
         evGroups = body.groups ?? []
+        evAdminEntries = body.admin_entries ?? []
+        if (Array.isArray(body.inspection_items) && body.inspection_items.length > 0) evChecklistItems = body.inspection_items
       })
       .catch(() => { if (evFetchedFor === id) evError = '네트워크 오류로 조회하지 못했습니다.' })
       .finally(() => { evLoading = false })
@@ -516,7 +538,7 @@
   const canInspect = $derived(canManagePaymentAndLocker && evInspection !== null)
   const canApproveStage = $derived(row.status === 'returned' || row.status === 'return_requested') // 검수 승인(완료 처리) 가능 단계
   // 헤더 [반납 검수 승인] 활성 조건: 반납요청·반납완료 단계 + 고객 반납 제출 정보 또는 CS 접수 정보가 등록돼 있고 이슈 검수중이 아닐 때
-  const hasInspectionInfo = $derived(evSubmission !== null || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
+  const hasInspectionInfo = $derived(evSubmission !== null || evAdminEntries.length > 0 || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
   const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
   // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
   // 헤더 여정 현재 단계(2026-10-22, Stephen 확정 A안): 반납 일시가 지났거나 반납 안내가 발송된 대여중은 목록 '반납중' 칩과 맞춰 '반납중' 단계로 강조한다(표시용 — 실제 상태는 대여중 그대로)
@@ -642,6 +664,67 @@
     const t = issueMedia[index]
     if (t) URL.revokeObjectURL(t.previewUrl)
     issueMedia = issueMedia.filter((_, i) => i !== index)
+  }
+
+  function toggleAdminRetCheck(key: string): void {
+    adminRetChecks = adminRetChecks.includes(key) ? adminRetChecks.filter((k) => k !== key) : [...adminRetChecks, key]
+  }
+
+  async function pickAdminRetFiles(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    for (const file of files) {
+      if (adminRetMedia.length >= INSPECTION_MEDIA_MAX) { csToast.warning(`사진·영상은 최대 ${INSPECTION_MEDIA_MAX}개까지 올릴 수 있어요.`); break }
+      adminRetUploading++
+      try {
+        const signRes = await fetch(`/api/cms/reservations/${row.reservation_id}/return-entries/sign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content_type: file.type, size: file.size }),
+        })
+        const sign = (await signRes.json().catch(() => ({}))) as { path?: string; token?: string; kind?: 'photo' | 'video'; error?: string }
+        if (!signRes.ok || !sign.path || !sign.token) { csToast.error(sign.error ?? '업로드 준비에 실패했습니다.'); continue }
+        const { error: upErr } = await supabase.storage.from('return-evidence').uploadToSignedUrl(sign.path, sign.token, file, { contentType: file.type })
+        if (upErr) { csToast.error('파일을 올리지 못했습니다.'); continue }
+        adminRetMedia = [...adminRetMedia, { path: sign.path, kind: sign.kind ?? 'photo', previewUrl: URL.createObjectURL(file), name: file.name }]
+      } catch {
+        csToast.error('파일을 올리는 중 오류가 발생했습니다.')
+      } finally {
+        adminRetUploading--
+      }
+    }
+  }
+
+  function removeAdminRetMedia(index: number): void {
+    const t = adminRetMedia[index]
+    if (t) URL.revokeObjectURL(t.previewUrl)
+    adminRetMedia = adminRetMedia.filter((_, i) => i !== index)
+  }
+
+  async function submitAdminReturn(): Promise<void> {
+    if (adminRetBusy || adminRetUploading > 0) return
+    adminRetBusy = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/return-entries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memo: adminRetMemo, checklist: adminRetChecks, media: adminRetMedia.map((m) => ({ path: m.path, kind: m.kind })) }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) { csToast.error(body.error ?? '등록에 실패했습니다.'); return }
+      csToast.success('반납정보를 등록했습니다.')
+      adminRetMemo = ''; adminRetChecks = []
+      for (const m of adminRetMedia) URL.revokeObjectURL(m.previewUrl)
+      adminRetMedia = []
+      adminRetOpen = false
+      evFetchedFor = null // 탭 effect 가 새 목록을 다시 조회한다
+      onrefresh?.()       // 대여중 → 반납중 전환이 목록·헤더에 반영되도록 새로 고친다
+    } catch {
+      csToast.error('등록 중 오류가 발생했습니다.')
+    } finally {
+      adminRetBusy = false
+    }
   }
 
   async function runInspection(action: 'approve' | 'issue' | 'resolve'): Promise<void> {
@@ -3502,8 +3585,42 @@
     <!-- ─── Tab: 검수 (고객이 등록한 반납 증빙 — 1단계 읽기 전용) ─── -->
     {#if activeTab === 'inspection'}
       <div class="section-title-row">
-        <div class="section-title">고객 반납 제출 내용{evSubmission ? ` · ${EVIDENCE_METHOD_LABEL[evSubmission.method] ?? evSubmission.method}` : ''}</div>
+        <div class="section-title">고객 반납정보 등록{evSubmission ? ` · ${EVIDENCE_METHOD_LABEL[evSubmission.method] ?? evSubmission.method}` : ''}</div>
+        {#if canRegisterAdminReturn && !evLoading && !evError}
+          <!-- 관리자 직접 등록(모든 반납 방식) — 라운드 정사각 [+] 버튼, 누르면 아래에 등록 폼(아코디언)이 펼쳐진다 -->
+          <button type="button" class="btn-add-square" class:is-open={adminRetOpen} aria-expanded={adminRetOpen} aria-label="반납정보 직접 등록" title="반납정보 직접 등록" onclick={() => (adminRetOpen = !adminRetOpen)}>＋</button>
+        {/if}
       </div>
+      {#if adminRetOpen && canRegisterAdminReturn}
+        <div class="ev-block cs-form admin-ret-form" transition:slide={{ duration: 200 }}>
+          <div class="ev-block-title">반납정보 직접 등록</div>
+          <div class="ev-thumbs">
+            {#each adminRetMedia as m, i (m.path)}
+              <div class="ev-thumb">
+                {#if m.kind === 'video'}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video src={m.previewUrl} muted></video>
+                {:else}
+                  <img src={m.previewUrl} alt={m.name} />
+                {/if}
+                <button type="button" class="ev-thumb-remove" onclick={() => removeAdminRetMedia(i)} aria-label="첨부 삭제">✕</button>
+              </div>
+            {/each}
+            {#if adminRetMedia.length < INSPECTION_MEDIA_MAX}
+              <label class="ev-thumb ev-thumb-add" aria-label="사진 추가">＋<input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,video/mp4,video/quicktime,video/webm" multiple onchange={pickAdminRetFiles} /></label>
+            {/if}
+          </div>
+          <div class="ev-chips">
+            {#each evChecklistItems as c (c.key)}
+              <button type="button" class="ev-chip" class:ev-chip-on={adminRetChecks.includes(c.key)} aria-pressed={adminRetChecks.includes(c.key)} onclick={() => toggleAdminRetCheck(c.key)}>{c.label}</button>
+            {/each}
+          </div>
+          <textarea class="cancel-reason-input ev-textarea" rows="3" maxlength={INSPECTION_NOTE_MAX} placeholder="반납 내역 메모 (선택, 사진이 없으면 필수)" bind:value={adminRetMemo}></textarea>
+          <div class="action-section action-section-end">
+            <button type="button" class="btn-primary" disabled={adminRetBusy || adminRetUploading > 0 || (adminRetMedia.length === 0 && !adminRetMemo.trim())} onclick={submitAdminReturn}>등록완료</button>
+          </div>
+        </div>
+      {/if}
       {#if evLoading}
         <div class="sms-empty">제출 내용을 불러오는 중…</div>
       {:else if evError}
@@ -3559,6 +3676,40 @@
         {#if evGroups.length === 0}
           <div class="sms-empty">첨부된 사진이 없습니다.</div>
         {/if}
+      {/if}
+
+      <!-- 관리자 직접 등록 목록 카드 — 등록한 관리자 이름 배지로 고객 제출과 구분, 카드를 눌러 상세를 펼친다 -->
+      {#if !evLoading && !evError}
+        {#each evAdminEntries as e (e.id)}
+          <div class="ev-block cs-card">
+            <button type="button" class="cs-card-head" aria-expanded={!!adminEntryOpen[e.id]} onclick={() => (adminEntryOpen[e.id] = !adminEntryOpen[e.id])}>
+              <span class="cs-badge cs-badge-admin">관리자{e.registered_by_name ? ` · ${e.registered_by_name}` : ''}</span>
+              <span class="cs-title">{e.memo?.trim() || (e.checklist.length > 0 ? e.checklist.join(' · ') : '사진 등록')}</span>
+              <span class="cs-date">{smsDateLabel(e.created_at)}</span>
+              <ChevronIcon direction={adminEntryOpen[e.id] ? 'up' : 'down'} size={7} />
+            </button>
+            {#if adminEntryOpen[e.id]}
+              <div class="cs-card-body">
+                {#if e.memo}<div class="ev-check">{e.memo}</div>{/if}
+                {#each e.checklist as label}<div class="ev-check">✓ {label}</div>{/each}
+                {#if e.media.length > 0}
+                  <div class="ev-thumbs">
+                    {#each e.media as m}
+                      {#if !m.url}
+                        <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                      {:else if m.kind === 'video'}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                      {:else}
+                        <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="관리자 등록 반납 사진" /></a>
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
       {/if}
 
       {#if !evLoading && !evError && evInspection}
@@ -4378,6 +4529,15 @@
     vertical-align: middle;
   }
 
+  /* 반납정보 관리자 직접 등록 [+] — 라운드 정사각(초소형 라운드 버튼형 §0-10-C 색 반전 규칙: 면 BG, 호버 시 BG↔글자색 반전, 보더·그림자 없음) */
+  .btn-add-square {
+    flex-shrink: 0; width: 30px; height: 30px; padding: 0; border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    font: var(--text-pc-title-16); line-height: 1; cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .btn-add-square:hover, .btn-add-square.is-open { background: var(--cs-text-mid); color: var(--cs-white); }
   .btn-add-unit-small {
     height: 28px;
     padding: 0 12px;
