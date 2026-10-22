@@ -5,6 +5,8 @@
 //  · 해소(resolved): 대여완료 포인트만 적립, 완료 알림은 없음 — 추가청구·협의로 마감된 건(Stephen 확정 2026-10-17)
 // 정시반납 적립은 returned 시점에 그대로 둔다(호출 시점을 반납 시점으로 보는 로직 — 승인 시점으로 옮기면 늦은 승인이 지각 처리됨).
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
+import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
+import { registerPriorIssue } from '$lib/server/priorIssue'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { CUSTOMER_LIFECYCLE_PUSH_COPY, sendPushToAdmins, sendReservationLifecyclePush } from '$lib/server/push'
 import type { InspectionIssueInput } from '$lib/utils/inspection'
@@ -79,7 +81,44 @@ export async function sendInspectionNotice(admin: AnyClient, reservationId: numb
 }
 
 /** 반납 검수 승인 — 이슈가 없는 반납완료 건을 완료로 마감한다. */
+/**
+ * 회수 확인 전(반납요청, return_requested) 건에서 검수 승인·이슈 등록을 바로 할 수 있게 한다(2026-10-21, Stephen 확정).
+ * 같은 주문의 반납요청 상태 예약을 먼저 반납완료(returned)로 전환한다 — 전환 트리거가 검수 상태(pending/issue)를 초기화하고,
+ * 정시반납 적립은 기존 returned 전환 경로와 같이 이 시점에 처리한다(fail-soft). 이미 returned 이상이면 아무것도 하지 않는다.
+ */
+export async function ensureReturnedForInspection(admin: AnyClient, reservationId: number): Promise<InspectionResult> {
+  const { data: self } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+  const selfStatus = (self as { status?: string } | null)?.status
+  if (!selfStatus) return { ok: false, error: '예약을 찾을 수 없습니다.' }
+  if (selfStatus !== 'return_requested') return { ok: true }
+
+  const ids: number[] = [reservationId]
+  const { data: oi } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle()
+  const orderId = (oi as { order_id?: number | null } | null)?.order_id
+  if (orderId != null) {
+    const { data: sibs } = await admin.from('order_items').select('reservation_id').eq('order_id', orderId)
+    const sibIds = ((sibs ?? []) as { reservation_id: number | null }[]).map((r) => r.reservation_id).filter((v): v is number => v != null && v !== reservationId)
+    if (sibIds.length > 0) {
+      const { data: pending } = await admin.from('rental_reservations').select('id').in('id', sibIds).eq('status', 'return_requested')
+      for (const r of (pending ?? []) as { id: number }[]) ids.push(r.id)
+    }
+  }
+  for (const id of ids) {
+    const { data, error } = await admin.rpc('update_reservation_status', { p_reservation_id: id, p_new_status: 'returned' })
+    const res = data as { ok?: boolean; error?: string } | null
+    if (error || !res?.ok) return { ok: false, error: res?.error ?? error?.message ?? '회수 확인 처리에 실패했습니다.' }
+    try {
+      await awardOnTimeReturnPoints(admin, id)
+    } catch {
+      /* 정시반납 적립 실패는 검수 흐름에 영향 없음 */
+    }
+  }
+  return { ok: true }
+}
+
 export async function approveInspection(admin: AnyClient, reservationId: number, adminId: string): Promise<InspectionResult> {
+  const ready = await ensureReturnedForInspection(admin, reservationId)
+  if (!ready.ok) return ready
   const { data, error } = await admin.rpc('approve_return_inspection', { p_reservation_id: reservationId, p_admin_id: adminId })
   const res = data as { ok?: boolean; completed_ids?: number[] } | null
   if (error || !res?.ok) return { ok: false, error: rpcFailMessage(error, data, '검수 승인에 실패했습니다.') }
@@ -96,6 +135,40 @@ export async function registerInspectionIssue(
   adminId: string,
   input: InspectionIssueInput,
 ): Promise<InspectionResult> {
+  // 검수 이슈는 예약 상태와 무관하게 언제든 등록할 수 있다(2026-10-22, Stephen 확정 — 검수 탭 상시 노출).
+  //  · 반납요청·반납완료 → 기존 검수 이슈 등록(반납완료로 전환 후 검수 칩)
+  //  · 계약완료~대여중(반납 전) → 사전 접수(has_prior_issue + 고객 증빙 요청) + 이슈 기록 — 반납되면 검수 칩으로 바로 간다
+  //  · 그 밖의 상태(완료·취소·신청대기 등) → 이슈 기록만 남긴다(상태·알림 변경 없음)
+  const { data: stRow } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+  const st = (stRow as { status?: string } | null)?.status
+  if (!st) return { ok: false, error: '예약을 찾을 수 없습니다.' }
+  if (st !== 'returned' && st !== 'return_requested') {
+    if (['confirmed', 'shipped', 'in_use'].includes(st)) {
+      const prior = await registerPriorIssue(admin, reservationId, adminId)
+      if (!prior.ok) return { ok: false, error: prior.error ?? '사전 접수에 실패했습니다.' }
+    }
+    const { error: insErr } = await admin.from('reservation_inspection_issues').insert({
+      reservation_id: reservationId,
+      issue_types: input.types,
+      detail: input.detail || null,
+      media: input.media,
+      assigned_admin: adminId,
+      created_by: adminId,
+    })
+    if (insErr) return { ok: false, error: '이슈 기록에 실패했습니다.' }
+    try {
+      await sendPushToAdmins('urgent_chat_message', {
+        title: '검수 이슈가 등록됐어요',
+        body: `${input.types.map(issueTypeLabel).join(', ')} — 확인해 주세요.`,
+        link: `/cms/rentals?selected=${reservationId}`,
+      })
+    } catch {
+      /* 관리자 푸시 실패는 무시 */
+    }
+    return { ok: true }
+  }
+  const ready = await ensureReturnedForInspection(admin, reservationId)
+  if (!ready.ok) return ready
   const { data, error } = await admin.rpc('register_return_inspection_issue', {
     p_reservation_id: reservationId,
     p_admin_id: adminId,
@@ -118,28 +191,6 @@ export async function registerInspectionIssue(
     /* 관리자 푸시 실패는 무시 */
   }
   return { ok: true }
-}
-
-/**
- * 이슈 담당자 지정(2026-10-19) — 방금 등록된 이슈 기록(미해소·미지정)에 담당 관리자를 기록한다.
- * 담당자는 CMS 직원(cms_role 보유)만 가능하며, 지정 실패는 이슈 등록 자체를 막지 않는다(fail-soft, 반환값 false).
- */
-export async function assignInspectionIssue(admin: AnyClient, reservationId: number, adminId: string, assigneeId: string, sinceIso: string): Promise<boolean> {
-  try {
-    const { data: staff } = await admin.from('user_profiles').select('id').eq('id', assigneeId).not('cms_role', 'is', null).maybeSingle()
-    if (!staff) return false
-    // 이슈는 같은 주문의 반납완료 형제 예약마다 기록되므로 등록자·시각으로 이번 등록분을 모두 지정한다
-    const { error } = await admin
-      .from('reservation_inspection_issues')
-      .update({ assigned_admin: assigneeId })
-      .eq('created_by', adminId)
-      .is('resolved_at', null)
-      .is('assigned_admin', null)
-      .gte('created_at', sinceIso)
-    return !error
-  } catch {
-    return false
-  }
 }
 
 /** 이슈 해소 — 추가청구·협의가 끝난 건을 완료(추가청구)로 마감한다. */

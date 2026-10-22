@@ -13,11 +13,14 @@ vi.mock('@sveltejs/kit', () => ({
   fail: vi.fn(),
 }))
 vi.mock('$lib/server/getCmsRoleForAction', () => ({ getCmsRoleForAction: vi.fn() }))
+vi.mock('$lib/server/csRegistered', () => ({ loadCsReservationIds: async () => new Set<number>(csIdList) }))
 vi.mock('$lib/server/push', () => ({ sendReservationLifecyclePush: vi.fn() }))
 vi.mock('$lib/server/clearIssuedContractHelper', () => ({ clearIssuedContractContent: vi.fn() }))
 vi.mock('$lib/server/rentalDaysLabel', () => ({ attachRentalDaysLabel: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('$lib/server/resolveOrderRepresentative', () => ({ resolveRepresentativeReservationId: async (_a: unknown, id: number) => id }))
 
+let csIdList: number[] = []
+let oneRowStatus = 'cancelled'
 let selectedStatus: string | null = 'cancelled'
 let pendingMarkIds: number[] = []
 const rpcCalls: Array<Record<string, unknown>> = []
@@ -31,8 +34,8 @@ vi.mock('@supabase/supabase-js', () => ({
     from: (table: string) => {
       const b: Record<string, unknown> = {}
       const self = () => b
-      b.select = self; b.eq = self; b.not = self; b.is = self; b.order = self; b.limit = self; b.in = self; b.neq = self
-      b.maybeSingle = async () => ({ data: selectedStatus === null ? null : { status: selectedStatus }, error: null })
+      b.select = self; b.eq = self; b.not = self; b.is = self; b.order = self; b.limit = self; b.in = self; b.neq = self; b.lte = self
+      b.maybeSingle = async () => ({ data: selectedStatus === null ? null : { status: selectedStatus, payment_confirmed_at: '2026-10-01T00:00:00Z' }, error: null })
       b.then = (resolve: (v: { data: unknown; error: unknown }) => void) => {
         if (table === 'rental_reservations') return resolve({ data: pendingMarkIds.map(id => ({ id })), error: null })
         return resolve({ data: [], error: null })
@@ -41,7 +44,7 @@ vi.mock('@supabase/supabase-js', () => ({
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, ...args })
-      if (args.p_reservation_id != null) return { data: [{ reservation_id: args.p_reservation_id, status: 'cancelled', total_count: 1 }], error: null }
+      if (args.p_reservation_id != null) return { data: [{ reservation_id: args.p_reservation_id, status: oneRowStatus, total_count: 1 }], error: null }
       return { data: listRows.map(r => ({ ...r })), error: null }
     },
   }),
@@ -56,7 +59,7 @@ async function load(url: string) {
 }
 
 describe('/cms/rentals — 취소·환불 칩', () => {
-  beforeEach(() => { selectedStatus = 'cancelled'; pendingMarkIds = []; rpcCalls.length = 0 })
+  beforeEach(() => { oneRowStatus = 'cancelled'; csIdList = []; selectedStatus = 'cancelled'; pendingMarkIds = []; rpcCalls.length = 0 })
 
   it('CV-1 칩은 취소된 예약 전부를 조회한다(p_status=cancelled, 상태 범위=cancelled) — 총 건수는 원 목록 기준', async () => {
     const r = await load('http://x/cms/rentals?status=cancelled_refunded') as { rentals: unknown[]; totalCount: number; totalPages: number }
@@ -108,5 +111,27 @@ describe('/cms/rentals — 취소·환불 칩', () => {
     const list = rpcCalls.find(c => c.p_reservation_id == null)
     expect(list?.p_status).toBe('confirmed')
     expect(list?.p_include_statuses).toEqual(['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed'])
+  })
+
+  it('CV-9 완료 상태가 된 CS 접수 건은 완료 칩에서 빠지고 총 건수도 줄어든다', async () => {
+    csIdList = [11]
+    const r = await load('http://x/cms/rentals?status=completed') as { rentals: Array<{ reservation_id: number }>; totalCount: number }
+    expect(r.rentals.map(x => x.reservation_id)).toEqual([12])
+    expect(r.totalCount).toBe(59)
+  })
+
+  it('CV-10 취소·환불·CS 칩 1페이지는 완료된 CS 접수 건을 맨 앞에 붙이고 총 건수에 더한다', async () => {
+    csIdList = [77]
+    pendingMarkIds = [77]
+    oneRowStatus = 'completed'
+    const r = await load('http://x/cms/rentals?status=cancelled_refunded') as { rentals: Array<{ reservation_id: number }>; totalCount: number }
+    expect(r.rentals[0].reservation_id).toBe(77)
+    expect(r.totalCount).toBe(61)
+  })
+
+  it('CV-11 완료 칩으로 연 CS 접수 건 링크는 취소·환불·CS 칩으로 전환한다', async () => {
+    csIdList = [88]
+    selectedStatus = 'completed'
+    await expect(load('http://x/cms/rentals?status=completed&selected=88')).rejects.toMatchObject({ status: 303, location: '/cms/rentals?status=cancelled_refunded&selected=88' })
   })
 })

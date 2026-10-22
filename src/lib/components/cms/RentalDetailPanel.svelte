@@ -14,7 +14,7 @@
   import {
     INSPECTION_ISSUE_TYPES,
     INSPECTION_STATUS_LABEL,
-    INSPECTION_DETAIL_MAX,
+    INSPECTION_ISSUE_TITLE_MAX,
     INSPECTION_NOTE_MAX,
     INSPECTION_MEDIA_MAX,
     priorKindLabel,
@@ -42,6 +42,8 @@
   import { RESERVATION_COMPOSITION_EDIT_ENABLED } from '$lib/utils/reservationCompositionPolicy'
 
   interface RentalListRow {
+    /** 반납 진행 단계(반납 안내 발송·등록) — /cms/rentals 로더가 부착 */
+    return_stage?:     'notice_due' | 'notice_sent' | 'registered'
     /** 고객 취소 후 관리자 취소확인 대기 — /cms/rentals 로더가 부착(헤더 [예약취소]=취소확인) */
     cancel_pending?:   boolean
     /** CS 사전 이슈 접수 건(3단계) — /cms/rentals 로더가 부착 */
@@ -136,6 +138,8 @@
     onclose:      () => void
     onrefresh:    () => void
     stepFilter?:  string[]
+    /** 목록 칩이 '반납중'·'검수'일 때 true — 예약변경·예약취소 버튼 숨김(/cms/rentals가 지정) */
+    hideChangeCancelButtons?: boolean
     isRentalView?: boolean   // true = /cms/rentals 컨텍스트 (예약 단계 UI 숨김)
     enableQrVerify?: boolean // true일 때만 "상품 정보"에 QR 확인 아이콘 노출 (모바일 대여목록 전용)
     cmsRole?:     string | null // 무인보관함 비밀번호 입력 UI manager 이상 게이팅용(2026-08-20)
@@ -158,7 +162,7 @@
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -433,7 +437,8 @@
   // ── 검수 탭(2026-10-17, Migration #722, 1단계 읽기 전용) ─────────────────────────────
   // 반납요청이 발행된 뒤(반납중·반납완료·완료)에만 노출한다. 고객이 반납 안내 CTA에서 등록한 체크리스트·사진(항목별 정렬)·무인함 정보를 보여준다.
   // 사진·영상은 비공개 버킷이라 조회 API가 서명 URL을 내려준다(만료 10분 — 탭을 다시 열면 새로 받는다).
-  const showInspectionTab = $derived(['return_requested', 'returned', 'completed'].includes(row.status))
+  // 검수 탭은 예약 상태와 무관하게 항상 노출한다(2026-10-22, Stephen 확정) — 이슈 등록은 언제든 가능, 승인(완료)은 반납요청·반납완료에서만
+  const showInspectionTab = $derived(true)
   interface EvidenceGroup { item_key: string; label: string; items: { id: number; kind: 'photo' | 'video'; url: string | null }[] }
   interface EvidenceSubmission {
     method: string
@@ -456,13 +461,13 @@
     inspected_at: string | null
     has_prior_issue: boolean
     prior_reports?: { id: number; status: string; types: string[]; detail: string | null; submitted_at: string | null; expires_at: string; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
-    assignees?: { id: string; name: string }[]
     issues: { id: number; assignee_name?: string | null; types: string[]; detail: string | null; created_at: string; resolved_at: string | null; resolution_note: string | null; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
   }
   let evInspection = $state<EvidenceInspection | null>(null)
 
   $effect(() => {
-    if (activeTab !== 'inspection') { evFetchedFor = null; return } // 탭을 벗어나면 다음 진입 때 다시 조회(서명 URL 만료 대비)
+    // 검수 탭이거나, 헤더 [반납 검수 승인] 활성 판정이 필요한 반납요청·반납완료 단계면 조회한다(탭을 벗어나면 다음 진입 때 다시 조회 — 서명 URL 만료 대비)
+    if (activeTab !== 'inspection' && row.status !== 'return_requested' && row.status !== 'returned' && !hideChangeCancelButtons) { evFetchedFor = null; return }
     if (evLoading) return
     if (evFetchedFor === row.reservation_id) return
 
@@ -505,11 +510,50 @@
 
   // ── 검수 처리(2단계, Migration #724): 반납 검수 승인 · 이슈 등록 · 이슈 해소 — manager 이상 ──
   const inspStatus = $derived(normalizeInspectionStatus(evInspection?.status))
-  const canInspect = $derived(canManagePaymentAndLocker && row.status === 'returned' && evInspection !== null)
+  const canInspect = $derived(canManagePaymentAndLocker && evInspection !== null)
+  const canApproveStage = $derived(row.status === 'returned' || row.status === 'return_requested') // 검수 승인(완료 처리) 가능 단계
+  // 헤더 [반납 검수 승인] 활성 조건: 반납요청·반납완료 단계 + 고객 반납 제출 정보 또는 CS 접수 정보가 등록돼 있고 이슈 검수중이 아닐 때
+  const hasInspectionInfo = $derived(evSubmission !== null || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
+  const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
+  // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
+  const hideChangeCancel = $derived(
+    hideChangeCancelButtons || row.status === 'in_use' || row.status === 'returned' || row.status === 'return_requested' || inspStatus === 'issue')
+
+  // CS 목록 카드 — 고객 제출(prior_reports)과 관리자 등록(issues)을 한 목록으로 합친다. 제목 = 유형 칩 + 내용(한 줄 말줄임), 카드를 눌러 상세 펼침
+  let csOpen = $state<Record<string, boolean>>({})
+  interface CsItem {
+    key: string; who: 'customer' | 'admin'; title: string; at: string | null; detail: string | null
+    pending: boolean; done: boolean; assignee: string | null; resolvedAt: string | null; note: string | null
+    media: { kind: 'photo' | 'video'; url: string | null }[]
+  }
+  const csItems = $derived.by((): CsItem[] => {
+    if (!evInspection) return []
+    const list: CsItem[] = []
+    for (const pr of evInspection.prior_reports ?? []) {
+      const types = pr.types.map(priorKindLabel).join(' · ')
+      const detail = (pr.detail ?? '').trim()
+      list.push({
+        key: `p${pr.id}`, who: 'customer',
+        title: pr.status === 'submitted' ? (detail ? `${types} — ${detail}` : types) : '고객 입력 대기',
+        at: pr.submitted_at, detail: detail || null, pending: pr.status !== 'submitted', done: false,
+        assignee: null, resolvedAt: null, note: null, media: pr.media,
+      })
+    }
+    for (const is of evInspection.issues) {
+      const types = is.types.map(issueTypeLabel).join(' · ')
+      const detail = (is.detail ?? '').trim()
+      list.push({
+        key: `i${is.id}`, who: 'admin', title: detail ? `${types} — ${detail}` : types,
+        at: is.created_at, detail: detail || null, pending: false, done: !!is.resolved_at,
+        assignee: is.assignee_name ?? null, resolvedAt: is.resolved_at, note: is.resolution_note, media: is.media,
+      })
+    }
+    // 입력 대기(날짜 없음)가 맨 위, 이후 최신순
+    return list.sort((x, y) => (x.at === null ? 1 : 0) === (y.at === null ? 1 : 0) ? (y.at ?? '').localeCompare(x.at ?? '') : (x.at === null ? -1 : 1))
+  })
   let inspBusy       = $state(false)
   let issueTypesSel  = $state<string[]>([])
   let issueDetail    = $state('')
-  let issueAssignee  = $state<string | null>(null) // 이슈 담당자(선택, CMS 직원 id)
   let issueMedia     = $state<{ path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }[]>([])
   let issueUploading = $state(0)
   let resolveNote    = $state('')
@@ -540,6 +584,8 @@
       priorOverride = action === 'register'
       csToast.success(action === 'register' ? '사전 접수했습니다. 고객에게 증빙 등록 링크를 보냈어요.' : '사전 접수를 해제했습니다.')
       evFetchedFor = null
+      // 사전 접수 후에는 검수 탭으로 이동해 접수 내용(고객 증빙 대기·이슈 기록)을 바로 이어서 확인·등록한다(2026-10-22, Stephen 지시)
+      if (action === 'register') activeTab = 'inspection'
       onrefresh?.()
     } catch {
       csToast.error('처리 중 오류가 발생했습니다.')
@@ -592,7 +638,6 @@
       if (action === 'issue') {
         payload.types = issueTypesSel
         payload.detail = issueDetail
-        if (issueAssignee) payload.assignee_id = issueAssignee
         payload.media = issueMedia.map((m) => ({ path: m.path, kind: m.kind }))
       }
       if (action === 'resolve') payload.note = resolveNote
@@ -603,12 +648,14 @@
       })
       const body = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) { csToast.error(body.error ?? '처리에 실패했습니다.'); return }
-      csToast.success(action === 'approve' ? '반납 검수를 승인했습니다. 고객에게 대여 완료가 안내됩니다.' : action === 'issue' ? '검수 이슈를 등록했습니다. 고객에게 안내됩니다.' : '이슈를 처리 완료했습니다.')
-      issueTypesSel = []; issueDetail = ''; issueAssignee = null; resolveNote = ''
+      csToast.success(action === 'approve' ? '반납 검수를 승인했습니다. 고객에게 대여 완료가 안내됩니다.' : action === 'issue' ? (canApproveStage ? '검수 이슈를 등록했습니다. 고객에게 안내됩니다.' : '검수 이슈를 등록했습니다.') : '이슈를 처리 완료했습니다.')
+      issueTypesSel = []; issueDetail = ''; resolveNote = ''
       for (const m of issueMedia) URL.revokeObjectURL(m.previewUrl)
       issueMedia = []
       evFetchedFor = null // 탭 effect 가 새 상태를 다시 조회한다
-      if (oninspectionchange) await oninspectionchange(row.reservation_id, action === 'issue' ? 'inspection' : 'completed')
+      // 반납요청·반납완료 건만 검수/완료 칩으로 옮겨진다. 반납 전·종료 건의 이슈 등록은 칩 이동 없이 이 패널을 새로 고친다.
+      if (action === 'issue' && !canApproveStage) onrefresh?.()
+      else if (oninspectionchange) await oninspectionchange(row.reservation_id, action === 'issue' ? 'inspection' : 'completed')
       else onrefresh?.()
     } catch {
       csToast.error('처리 중 오류가 발생했습니다.')
@@ -1679,12 +1726,13 @@
   // 서버(rentals/+page.server.ts sendChatNotify)가 같은 단계 규칙(NOTIFY_ALLOWED_STATUSES)을 다시 검사한다.
   // return_remind = 반납 요청(사진 등록 링크 카드) / return_registration = 반납 방법 선택 카드(대여중 이후엔 고객 쪽 만료 표시).
   const NOTIFY_BUTTONS: ReadonlyArray<{ type: string; label: string; statuses: readonly string[]; stageHint: string }> = [
-    { type: 'shipment_notify',     label: '반출 알림 발송 💬',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
-    { type: 'return_remind',       label: '반납 요청 💬',       statuses: ['in_use', 'return_requested'],     stageHint: '대여중·반납접수 단계에서 사용할 수 있어요' },
-    { type: 'return_registration', label: '반납 정보 요청 💬',  statuses: ['return_requested'],               stageHint: '반납접수 단계에서 사용할 수 있어요' },
-    { type: 'rental_complete',     label: '대여 종료 알림 💬',  statuses: ['returned'],                       stageHint: '반납완료 단계에서 사용할 수 있어요' },
+    { type: 'shipment_notify',     label: '반출 알림 발송',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
+    { type: 'return_remind',       label: '반납 요청',       statuses: ['in_use', 'return_requested'],     stageHint: '대여중·반납접수 단계에서 사용할 수 있어요' },
+    { type: 'return_registration', label: '반납 정보 요청',  statuses: ['return_requested'],               stageHint: '반납접수 단계에서 사용할 수 있어요' },
+    { type: 'rental_complete',     label: '대여 종료 알림',  statuses: ['return_requested', 'returned'],    stageHint: '반납접수·반납완료 단계에서 사용할 수 있어요 (검수 승인과 같이 완료 처리돼요)' },
   ]
-  const NOTIFY_VISIBLE = $derived(!['cancelled', 'damage_claimed', 'completed', 'expired', 'hold', 'draft', 'pending'].includes(row.status))
+  // 예약 단계(hold·draft·pending)는 예약승인·취소 버튼이 이 자리를 쓰므로 제외. 종료 상태(완료·취소 등)에서는 모든 알림 버튼을 비활성으로 보여준다.
+  const NOTIFY_VISIBLE = $derived(!['hold', 'draft', 'pending'].includes(row.status))
 
   // ── 운송장 정보 (lazy-fetch, rental 탭 오픈 시 조회) ──────────────────────
   let trackingFetchedForId = $state<number | null>(null)
@@ -2124,7 +2172,7 @@
           <button type="submit" class="btn-header-action btn-header-action--danger" disabled={isSubmitting}>예약취소</button>
         </form>
       {/if}
-      {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold' && row.status !== 'draft'}
+      {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold' && row.status !== 'draft' && !hideChangeCancel}
         <!-- 예약변경: hold(미결제)+계약 리셋 — 전액취소 후 재조정 가능하게 -->
         <form
           method="POST"
@@ -2213,6 +2261,16 @@
                   : undefined}
           >{isCancelling ? '처리 중...' : cancelPending ? '한번 더 누르면 취소' : '예약취소'}</button>
         </form>
+      {/if}
+      {#if canManagePaymentAndLocker && (row.status === 'return_requested' || row.status === 'returned' || hideChangeCancelButtons)}
+        <!-- 반납 검수 승인 — 예약취소 우측(헤더). 반납 제출 정보 또는 CS 접수 정보가 등록돼야 활성 -->
+        <button
+          type="button"
+          class="btn-header-action"
+          disabled={inspBusy || !approveHeaderReady}
+          title={approveHeaderReady ? undefined : !canApproveStage ? '반납요청·반납완료 단계에서 승인할 수 있어요' : inspStatus === 'issue' ? 'CS 접수 건은 검수 탭에서 CS 처리 완료 후 마감할 수 있어요' : '고객 반납 제출 정보 또는 CS 접수 정보가 등록되면 승인할 수 있어요'}
+          onclick={() => runInspection('approve')}
+        >반납 검수 승인</button>
       {/if}
       {#if row.cancel_pending && row.status === 'cancelled'}
         <!-- 고객 취소 후 관리자 확인 대기 — 이 [예약취소] 실행 = 관리자 취소확인 (예약·결제는 이미 취소·환불 처리됨) -->
@@ -3054,181 +3112,6 @@
         </div>
       {/if}
 
-      <!-- 상태 액션 버튼 -->
-      <div class="action-section" class:action-section-end={row.status === 'hold' && !isRentalView}>
-        <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
-        {#if row.status === 'hold' && !isRentalView}
-          {#if orderSiblings.length > 0}
-            <p class="order-batch-note">
-              이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 하나의 예약입니다.
-              예약승인을 누르면 주문의 모든 상품이 함께 처리되고, 계약서는 주문당 1건으로 고객에게 한 번에 발송됩니다.
-            </p>
-          {/if}
-          <form method="POST" action="/cms/reservation?/approveReservation" use:enhance={approveEnhance}>
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <button type="submit" class="btn-primary" disabled={isSubmitting || approveState !== 'ready'}>{approveLabel}</button>
-          </form>
-          <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="status" value="cancelled" />
-            <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>예약취소</button>
-          </form>
-
-        <!-- 대여 라이프사이클 — 한 주문에 상품이 여러 개(주문 1건 = 1행, Migration 618, Q1 B안):
-             상품(예약)별로 각자의 다음 단계 버튼을 따로 처리한다. 상태는 상품마다 달라질 수 있다. -->
-        {:else if isMultiOrder}
-          {#if rentalSiblingsFetchedForId !== row.reservation_id || rentalSiblingsLoading}
-            <p class="order-batch-note">주문에 묶인 상품을 불러오는 중입니다…</p>
-          {:else if rentalSiblingsError}
-            <p class="order-batch-note">{rentalSiblingsError}</p>
-          {:else if lifecycleUnits.some(u => u.next)}
-          <div class="unit-actions">
-            {#each lifecycleUnits as u (u.reservationId)}
-              <div class="unit-action-row">
-                <span class="unit-action-name">{u.name}</span>
-                <span class="unit-action-status">{STATUS_LABEL[u.status] ?? u.status}</span>
-                {#if u.next}
-                  <form
-                    method="POST"
-                    action="/cms/reservation?/updateStatus"
-                    use:enhance={() => {
-                      isSubmitting = true
-                      return async ({ result, update }) => {
-                        isSubmitting = false
-                        if (result.type === 'success') {
-                          csToast.success('상태가 변경되었습니다.')
-                          const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
-                          if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
-                          // 상품별 처리 후 형제 목록(각 상품 상태·다음 단계 버튼)을 다시 조회해 화면에 남은 이전 상태를 없앤다
-                          rentalSiblingsFetchedForId = null
-                          onrefresh()
-                        }
-                        else csToast.error(actionErrorMessage(result))
-                        await update()
-                      }
-                    }}
-                  >
-                    <input type="hidden" name="reservation_id" value={u.reservationId} />
-                    <input type="hidden" name="status" value={u.next} />
-                    <button type="submit" class="btn-action" disabled={isSubmitting}>
-                      {nextLabel(u.status, u.pickupMethod, u.returnMethod)}
-                    </button>
-                  </form>
-                {/if}
-              </div>
-            {/each}
-          </div>
-          {/if}
-
-        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 (단일 상품 주문) -->
-        {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
-          <form
-            method="POST"
-            action="/cms/reservation?/updateStatus"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') {
-                  csToast.success('상태가 변경되었습니다.')
-                  const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
-                  if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
-                  onrefresh()
-                }
-                else csToast.error(actionErrorMessage(result))
-                await update()
-              }
-            }}
-          >
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="status" value={nextStatus(row.status, row.pickup_method, row.return_method)} />
-            <button type="submit" class="btn-action" disabled={isSubmitting}>
-              {nextLabel(row.status, row.pickup_method, row.return_method)}
-            </button>
-          </form>
-        {/if}
-
-        <!-- 파손 신고 접수 처리 — 2026-09-08(Stephen 확정): 고객 채팅에서 "파손" 캔드응답
-             매칭 시 "파손신고접수" 카드가 자동 발송되지만, 예약의 실제 status는 관리자가
-             그 대화 내용을 확인한 뒤 여기서 직접 전환한다(키워드 매칭만으로 자동 종료 금지).
-             확정~반납접수(실물이 고객에게 나가있는) 단계에서만 노출 — hold는 파손이
-             성립할 수 없어 제외. reservation·rentals 두 화면 모두에서 노출(isRentalView 무관). -->
-        {#if ['confirmed', 'shipped', 'in_use', 'return_requested'].includes(row.own_status ?? row.status)}
-          <form
-            method="POST"
-            action="/cms/reservation?/updateStatus"
-            use:enhance={() => {
-              isSubmitting = true
-              return async ({ result, update }) => {
-                isSubmitting = false
-                if (result.type === 'success') {
-                  csToast.success('파손 신고 접수로 처리되었습니다.')
-                } else {
-                  csToast.error(actionErrorMessage(result))
-                }
-                // RSV-NAV-1(2026-09-08) — update() 완료 후에만 onstatuschange?.() 실행(순서
-                // 보장) + 중복이던 onrefresh() 제거. 위 승인하기/거부/예약취소 버튼과 동일 수정 사유.
-                await update()
-                if (result.type === 'success') onstatuschange?.()
-              }
-            }}
-          >
-            <input type="hidden" name="reservation_id" value={row.reservation_id} />
-            <input type="hidden" name="status" value="damage_claimed" />
-            <button type="submit" class="btn-cancel" disabled={isSubmitting}>파손 신고 접수 처리</button>
-          </form>
-        {/if}
-
-        <!-- 채팅 알림 발송 — action-section과 한 행으로 병렬 정렬(2026-09-14) -->
-        {#if NOTIFY_VISIBLE}
-          {#each NOTIFY_BUTTONS as nb (nb.type)}
-            {@const stageOk = nb.statuses.includes(row.status)}
-            <form
-              method="POST"
-              action="/cms/rentals?/sendChatNotify"
-              use:enhance={() => {
-                isSubmitting = true
-                return async ({ result, update }) => {
-                  isSubmitting = false
-                  if (result.type === 'success') {
-                    csToast.success('채팅 알림을 발송했습니다.')
-                    markNotifySent(row.reservation_id, nb.type)
-                  } else {
-                    csToast.error(actionErrorMessage(result))
-                  }
-                  await update()
-                }
-              }}
-            >
-              <input type="hidden" name="reservation_id" value={row.reservation_id} />
-              <input type="hidden" name="notify_type" value={nb.type} />
-              <button
-                type="submit"
-                class="btn-notify"
-                disabled={isSubmitting || !stageOk}
-                title={stageOk ? undefined : nb.stageHint}
-                onclick={(e) => {
-                  if (wasRecentlySent(row.reservation_id, nb.type)) {
-                    if (!window.confirm('이미 최근에 발송된 알림입니다. 다시 보내시겠습니까?')) {
-                      e.preventDefault()
-                    }
-                  }
-                }}
-              >
-                {nb.label}
-              </button>
-            </form>
-          {/each}
-        {/if}
-
-        <!-- CS 사전 이슈 접수 — 크레이지챗/전화로 장비 이상·파손·분실이 접수된 예약. 반납완료가 되면 자동으로 검수 칩(이슈)으로 간다 -->
-        {#if canPriorIssue}
-          <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('register')}>{priorOn ? '증빙 재요청 💬' : '이슈 사전 접수 💬'}</button>
-          {#if priorOn}
-            <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('cancel')}>사전접수 해제</button>
-          {/if}
-        {/if}
-      </div>
       </div>
     {/if}
 
@@ -3650,86 +3533,23 @@
 
       {#if !evLoading && !evError && evInspection}
         <div class="section-title-row ev-insp-title">
-          <div class="section-title">반납 검수 · {INSPECTION_STATUS_LABEL[inspStatus]}</div>
+          <div class="section-title">CS 접수 검수 · {INSPECTION_STATUS_LABEL[inspStatus]}</div>
         </div>
-        {#if evInspection.has_prior_issue}<div class="ev-meta">CS 사전 접수 건 — 고객 입력 자료와 실물을 비교해 검수해 주세요.</div>{/if}
-        {#each evInspection.prior_reports ?? [] as pr (pr.id)}
-          <div class="ev-block">
-            <div class="ev-block-title">고객 사전 접수 내용 · {pr.status === 'submitted' ? '제출됨' : '고객 입력 대기'}</div>
-            {#if pr.status === 'submitted'}
-              <div class="ev-meta">{pr.types.map(priorKindLabel).join(' · ')}{pr.submitted_at ? ` · 제출 ${smsDateLabel(pr.submitted_at)}` : ''}</div>
-              {#if pr.detail}<div class="ev-check">{pr.detail}</div>{/if}
-              {#if pr.media.length > 0}
-                <div class="ev-thumbs">
-                  {#each pr.media as m}
-                    {#if !m.url}
-                      <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
-                    {:else if m.kind === 'video'}
-                      <!-- svelte-ignore a11y_media_has_caption -->
-                      <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
-                    {:else}
-                      <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="고객 사전 접수 증빙" /></a>
-                    {/if}
-                  {/each}
-                </div>
-              {/if}
-            {:else}
-              <div class="ev-meta">고객이 아직 증빙을 등록하지 않았어요.</div>
-            {/if}
-          </div>
-        {/each}
 
-        {#each evInspection.issues as is (is.id)}
-          <div class="ev-block">
-            <div class="ev-block-title">{is.types.map(issueTypeLabel).join(' · ')}{is.resolved_at ? ' (처리 완료)' : ''}</div>
-            {#if is.assignee_name}<div class="ev-meta">담당 {is.assignee_name}</div>{/if}
-            <div class="ev-meta">등록 {smsDateLabel(is.created_at)}{is.resolved_at ? ` · 해소 ${smsDateLabel(is.resolved_at)}` : ''}</div>
-            {#if is.detail}<div class="ev-check">{is.detail}</div>{/if}
-            {#if is.resolution_note}<div class="ev-check">처리 메모: {is.resolution_note}</div>{/if}
-            {#if is.media.length > 0}
-              <div class="ev-thumbs">
-                {#each is.media as m}
-                  {#if !m.url}
-                    <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
-                  {:else if m.kind === 'video'}
-                    <!-- svelte-ignore a11y_media_has_caption -->
-                    <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
-                  {:else}
-                    <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="이슈 증빙" /></a>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/each}
-
-        {#if (inspStatus === 'pass' || inspStatus === 'resolved') && evInspection.issues.length === 0}
-          <!-- 검수 완료 결과 — 승인 뒤에도 처리 결과가 남아 보이도록 한 줄 요약(이슈 건은 위 이슈 블록에 처리 완료로 표시됨) -->
-          <div class="ev-block">
-            <div class="ev-block-title">{inspStatus === 'pass' ? '검수 통과 — 이상 없이 대여가 완료 처리됐어요.' : '검수 완료'}</div>
-            {#if evInspection.inspected_at}<div class="ev-meta">승인 {smsDateLabel(evInspection.inspected_at)}</div>{/if}
-          </div>
-        {/if}
-
+        <!-- CS 접수 등록 폼(목록 위, 2026-10-22 재구성): 칩 + 내용(100자, 목록 카드 제목을 겸함) -->
         {#if canInspect}
-          {#if inspStatus !== 'issue'}
-            <div class="ev-block">
-              <div class="ev-block-title">이슈 항목 (하나라도 선택하면 이슈로 등록돼요)</div>
+          {#if inspStatus !== 'issue' || row.status !== 'returned'}
+            <div class="ev-block cs-form">
               <div class="ev-chips">
                 {#each INSPECTION_ISSUE_TYPES as t (t.key)}
                   <button type="button" class="ev-chip" class:ev-chip-on={issueTypesSel.includes(t.key)} aria-pressed={issueTypesSel.includes(t.key)} onclick={() => toggleIssueType(t.key)}>{t.label}</button>
                 {/each}
               </div>
+              <div class="cs-input-row">
+                <input type="text" class="cancel-reason-input" maxlength={INSPECTION_ISSUE_TITLE_MAX} placeholder="내용을 입력하세요 (목록 카드 제목으로 표시돼요)" bind:value={issueDetail} />
+                <span class="cs-count">{issueDetail.length}/{INSPECTION_ISSUE_TITLE_MAX}</span>
+              </div>
               {#if issueTypesSel.length > 0}
-                <textarea class="cancel-reason-input ev-textarea" rows="3" maxlength={INSPECTION_DETAIL_MAX} placeholder="상세 사유를 입력하세요" bind:value={issueDetail}></textarea>
-                {#if (evInspection.assignees ?? []).length > 0}
-                  <div class="ev-block-title">담당자 지정 (선택)</div>
-                  <div class="ev-chips">
-                    {#each evInspection.assignees ?? [] as a (a.id)}
-                      <button type="button" class="ev-chip" class:ev-chip-on={issueAssignee === a.id} aria-pressed={issueAssignee === a.id} onclick={() => { issueAssignee = issueAssignee === a.id ? null : a.id }}>{a.name}</button>
-                    {/each}
-                  </div>
-                {/if}
                 <div class="ev-thumbs">
                   {#each issueMedia as m, i (m.path)}
                     <div class="ev-thumb">
@@ -3747,25 +3567,66 @@
                   {/if}
                 </div>
               {/if}
-            </div>
-            <div class="action-section action-section-end">
-              {#if issueTypesSel.length > 0}
-                <button type="button" class="btn-danger-sm" disabled={inspBusy || issueUploading > 0} onclick={() => runInspection('issue')}>이슈 등록/검수 전환</button>
-              {:else}
-                <button type="button" class="btn-primary" disabled={inspBusy} onclick={() => runInspection('approve')}>반납 검수 승인</button>
-              {/if}
+              <div class="action-section action-section-end">
+                <button type="button" class="btn-danger-sm" disabled={inspBusy || issueUploading > 0 || issueTypesSel.length === 0} onclick={() => runInspection('issue')}>CS 접수 등록</button>
+              </div>
             </div>
           {:else}
             <div class="ev-block">
-              <div class="ev-block-title">이슈 처리 완료 (추가 청구·협의 마감)</div>
+              <div class="ev-block-title">CS 처리 완료 (추가 청구·협의 마감)</div>
               <textarea class="cancel-reason-input ev-textarea" rows="2" maxlength={INSPECTION_NOTE_MAX} placeholder="처리 메모 (선택)" bind:value={resolveNote}></textarea>
-            </div>
-            <div class="action-section action-section-end">
-              <button type="button" class="btn-primary" disabled={inspBusy} onclick={() => runInspection('resolve')}>완료 처리(추가청구)</button>
+              <div class="action-section action-section-end">
+                <button type="button" class="btn-primary" disabled={inspBusy} onclick={() => runInspection('resolve')}>완료 처리(추가청구)</button>
+              </div>
             </div>
           {/if}
-        {:else if row.status === 'returned'}
-          <div class="sms-empty">검수 승인·이슈 처리는 매니저 이상만 할 수 있습니다.</div>
+        {:else}
+          <div class="sms-empty">검수 승인·CS 접수는 매니저 이상만 할 수 있습니다.</div>
+        {/if}
+
+        <!-- CS 목록 카드 — 고객 제출(고객CS)·관리자 등록(관리자CS)을 배지로 구분해 한 목록에 모으고, 카드를 눌러 상세를 펼친다 -->
+        {#if csItems.length === 0}
+          <div class="ev-meta">접수된 CS가 없습니다.</div>
+        {/if}
+        {#each csItems as c (c.key)}
+          <div class="ev-block cs-card" class:cs-card-done={c.done}>
+            <button type="button" class="cs-card-head" aria-expanded={!!csOpen[c.key]} onclick={() => (csOpen[c.key] = !csOpen[c.key])}>
+              <span class="cs-badge" class:cs-badge-customer={c.who === 'customer'} class:cs-badge-admin={c.who === 'admin'}>{c.who === 'customer' ? '고객CS' : '관리자CS'}</span>
+              <span class="cs-title">{c.title}</span>
+              <span class="cs-date">{c.at ? smsDateLabel(c.at) : ''}</span>
+              <ChevronIcon direction={csOpen[c.key] ? 'up' : 'down'} size={7} />
+            </button>
+            {#if csOpen[c.key]}
+              <div class="cs-card-body">
+                {#if c.detail}<div class="ev-check">{c.detail}</div>{/if}
+                {#if c.pending}<div class="ev-meta">고객이 아직 증빙을 등록하지 않았어요.</div>{/if}
+                {#if c.assignee}<div class="ev-meta">담당 {c.assignee}</div>{/if}
+                {#if c.resolvedAt}<div class="ev-meta">처리 완료 {smsDateLabel(c.resolvedAt)}</div>{/if}
+                {#if c.note}<div class="ev-check">처리 메모: {c.note}</div>{/if}
+                {#if c.media.length > 0}
+                  <div class="ev-thumbs">
+                    {#each c.media as m}
+                      {#if !m.url}
+                        <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                      {:else if m.kind === 'video'}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                      {:else}
+                        <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt="CS 증빙" /></a>
+                      {/if}
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/each}
+
+        {#if (inspStatus === 'pass' || inspStatus === 'resolved') && evInspection.issues.length === 0}
+          <div class="ev-block">
+            <div class="ev-block-title">{inspStatus === 'pass' ? '검수 통과 — 이상 없이 대여가 완료 처리됐어요.' : '검수 완료'}</div>
+            {#if evInspection.inspected_at}<div class="ev-meta">승인 {smsDateLabel(evInspection.inspected_at)}</div>{/if}
+          </div>
         {/if}
       {/if}
     {/if}
@@ -3804,6 +3665,165 @@
     {/if}
 
   </div>
+    <!-- 하단 공통 액션바(2026-10-22, Stephen 확정) — 패널 헤더처럼 모든 탭에서 항상 보인다.
+         상태 전환·파손 신고·채팅 알림·이슈 사전 접수 버튼을 모두 노출하고, 현재 상태칩 단계에 따라 활성/비활성만 바뀐다. -->
+    <div class="panel-action-bar">
+      <!-- 상태 액션 버튼 -->
+      <div class="action-section" class:action-section-end={row.status === 'hold' && !isRentalView}>
+        <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
+        {#if row.status === 'hold' && !isRentalView}
+          {#if orderSiblings.length > 0}
+            <p class="order-batch-note">
+              이 예약은 같은 주문의 다른 상품 {orderSiblings.length}건과 하나의 예약입니다.
+              예약승인을 누르면 주문의 모든 상품이 함께 처리되고, 계약서는 주문당 1건으로 고객에게 한 번에 발송됩니다.
+            </p>
+          {/if}
+          <form method="POST" action="/cms/reservation?/approveReservation" use:enhance={approveEnhance}>
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <button type="submit" class="btn-primary" disabled={isSubmitting || approveState !== 'ready'}>{approveLabel}</button>
+          </form>
+          <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <input type="hidden" name="status" value="cancelled" />
+            <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>예약취소</button>
+          </form>
+
+        <!-- 대여 라이프사이클 — 한 주문에 상품이 여러 개(주문 1건 = 1행, Migration 618, Q1 B안):
+             상품(예약)별로 각자의 다음 단계 버튼을 따로 처리한다. 상태는 상품마다 달라질 수 있다. -->
+        {:else if isMultiOrder}
+          {#if rentalSiblingsFetchedForId !== row.reservation_id || rentalSiblingsLoading}
+            <p class="order-batch-note">주문에 묶인 상품을 불러오는 중입니다…</p>
+          {:else if rentalSiblingsError}
+            <p class="order-batch-note">{rentalSiblingsError}</p>
+          {:else if lifecycleUnits.some(u => u.next)}
+          <div class="unit-actions">
+            {#each lifecycleUnits as u (u.reservationId)}
+              <div class="unit-action-row">
+                <span class="unit-action-name">{u.name}</span>
+                <span class="unit-action-status">{STATUS_LABEL[u.status] ?? u.status}</span>
+                {#if u.next}
+                  <form
+                    method="POST"
+                    action="/cms/reservation?/updateStatus"
+                    use:enhance={() => {
+                      isSubmitting = true
+                      return async ({ result, update }) => {
+                        isSubmitting = false
+                        if (result.type === 'success') {
+                          csToast.success('상태가 변경되었습니다.')
+                          const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
+                          if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
+                          // 상품별 처리 후 형제 목록(각 상품 상태·다음 단계 버튼)을 다시 조회해 화면에 남은 이전 상태를 없앤다
+                          rentalSiblingsFetchedForId = null
+                          onrefresh()
+                        }
+                        else csToast.error(actionErrorMessage(result))
+                        await update()
+                      }
+                    }}
+                  >
+                    <input type="hidden" name="reservation_id" value={u.reservationId} />
+                    <input type="hidden" name="status" value={u.next} />
+                    <button type="submit" class="btn-action" disabled={isSubmitting}>
+                      {nextLabel(u.status, u.pickupMethod, u.returnMethod)}
+                    </button>
+                  </form>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {/if}
+
+        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 (단일 상품 주문) -->
+        {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
+          <form
+            method="POST"
+            action="/cms/reservation?/updateStatus"
+            use:enhance={() => {
+              isSubmitting = true
+              return async ({ result, update }) => {
+                isSubmitting = false
+                if (result.type === 'success') {
+                  csToast.success('상태가 변경되었습니다.')
+                  const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
+                  if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
+                  onrefresh()
+                }
+                else csToast.error(actionErrorMessage(result))
+                await update()
+              }
+            }}
+          >
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <input type="hidden" name="status" value={nextStatus(row.status, row.pickup_method, row.return_method)} />
+            <button type="submit" class="btn-action" disabled={isSubmitting}>
+              {nextLabel(row.status, row.pickup_method, row.return_method)}
+            </button>
+          </form>
+        {/if}
+
+        <!-- 파손 신고 접수는 하단 버튼이 아니라 '검수' 탭의 이슈 등록(외관 파손 태그)으로 통합됐다(2026-10-22, Stephen 확정) — 고객 신고는 채팅으로 받아 관리자가 검수 탭에서 수동 등록한다. -->
+
+        <!-- 채팅 알림 발송 — action-section과 한 행으로 병렬 정렬(2026-09-14) -->
+        {#if NOTIFY_VISIBLE}
+          {#each NOTIFY_BUTTONS as nb (nb.type)}
+            {@const stageOk = nb.statuses.includes(row.status)}
+            <form
+              method="POST"
+              action="/cms/rentals?/sendChatNotify"
+              use:enhance={() => {
+                isSubmitting = true
+                return async ({ result, update }) => {
+                  isSubmitting = false
+                  if (result.type === 'success' && nb.type === 'rental_complete') {
+                    // 대여 종료 알림 = 검수 승인과 같은 완료 처리 — 완료 칩으로 옮겨 같은 예약 패널을 다시 연다
+                    csToast.success('대여 종료 처리했습니다. 고객에게 완료가 안내됩니다.')
+                    markNotifySent(row.reservation_id, nb.type)
+                    if (oninspectionchange) await oninspectionchange(row.reservation_id, 'completed')
+                  } else if (result.type === 'success') {
+                    csToast.success('채팅 알림을 발송했습니다.')
+                    markNotifySent(row.reservation_id, nb.type)
+                  } else {
+                    csToast.error(actionErrorMessage(result))
+                  }
+                  await update()
+                }
+              }}
+            >
+              <input type="hidden" name="reservation_id" value={row.reservation_id} />
+              <input type="hidden" name="notify_type" value={nb.type} />
+              <button
+                type="submit"
+                class="btn-notify"
+                disabled={isSubmitting || !stageOk}
+                title={stageOk ? undefined : nb.stageHint}
+                onclick={(e) => {
+                  if (wasRecentlySent(row.reservation_id, nb.type)) {
+                    if (!window.confirm('이미 최근에 발송된 알림입니다. 다시 보내시겠습니까?')) {
+                      e.preventDefault()
+                    }
+                  }
+                }}
+              >
+                {nb.label}
+              </button>
+            </form>
+          {/each}
+        {/if}
+
+        <!-- CS 사전 이슈 접수 — 크레이지챗/전화로 장비 이상·파손·분실이 접수된 예약. 반납완료가 되면 자동으로 검수 칩(이슈)으로 간다 -->
+        <button
+          type="button"
+          class="btn-notify"
+          disabled={priorBusy || !canPriorIssue}
+          title={canPriorIssue ? undefined : '계약완료~반납요청 단계에서 매니저 이상이 사용할 수 있어요'}
+          onclick={() => runPriorIssue('register')}
+        >{priorOn ? 'CS 접수 재요청' : 'CS 접수 등록'}</button>
+        {#if priorOn && canPriorIssue}
+          <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('cancel')}>CS 접수 해제</button>
+        {/if}
+      </div>
+    </div>
  </div>
 </div>
 
@@ -4040,8 +4060,23 @@
   .ev-thumb-btn { padding: 0; border: none; cursor: pointer; }
   .ev-thumb-btn img { width: 100%; height: 100%; object-fit: cover; }
   .ev-insp-title { margin-top: 20px; }
+  /* CS 접수 등록 폼 — 칩 + 내용 한 줄(100자) */
+  .cs-input-row { display: flex; align-items: center; gap: 8px; }
+  .cs-input-row .cancel-reason-input { flex: 1; min-width: 0; }
+  .cs-input-row .cancel-reason-input:focus { background: var(--cs-white); } /* 선택(포커스) 시 화이트 면 */
+  .cs-count { font: var(--text-pc-script-12); color: var(--cs-text-light); flex-shrink: 0; }
+  /* CS 목록 카드 — 배지 · 제목(말줄임) · 날짜 · 펼침 */
+  .cs-card { gap: 0; }
+  .cs-card-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 0; border: none; background: transparent; cursor: pointer; text-align: left; color: var(--cs-text); }
+  .cs-badge { flex-shrink: 0; display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700; white-space: nowrap; }
+  .cs-badge-customer { background: var(--cs-red-xlight); color: var(--cs-red); }
+  .cs-badge-admin { background: var(--cs-purple-op10); color: var(--cs-purple); }
+  .cs-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--text-pc-body-14); font-weight: 700; }
+  .cs-date { flex-shrink: 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
+  .cs-card-body { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+  .cs-card-done .cs-title { color: var(--cs-text-light); }
   .ev-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .ev-chip { height: 36px; padding: 0 14px; border: none; border-radius: var(--cms-radius-sm); background: var(--cs-white); color: var(--cs-text); font: var(--text-pc-body-14); cursor: pointer; transition: background 0.15s; }
+  .ev-chip { height: 36px; padding: 0 14px; border: none; border-radius: var(--cms-radius-sm); background: var(--cs-white); color: var(--cs-text); font: var(--text-pc-script-12); cursor: pointer; transition: background 0.15s; }
   .ev-chip:hover:not(.ev-chip-on) { background: var(--cs-lilac); }
   .ev-chip-on { background: var(--cs-purple); color: var(--cs-white); }
   .ev-textarea { resize: vertical; min-height: 64px; }
@@ -4567,6 +4602,17 @@
     border-radius: 3px;
     transition: width 0.3s ease;
   }
+
+  /* 하단 공통 액션바 — 헤더(.panel-header)와 같은 좌우 20px·구분선 구조, 본문만 스크롤되고 바는 항상 보인다 */
+  .panel-action-bar {
+    flex-shrink: 0;
+    padding: 16px 20px;
+    border-top: 1px solid var(--cs-lilac);
+    background: var(--cs-white);
+    max-height: 40%;
+    overflow-y: auto;
+  }
+  .panel-action-bar .action-section { margin-top: 0; }
 
   /* 액션 섹션 */
   .action-section {

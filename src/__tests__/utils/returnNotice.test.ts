@@ -20,8 +20,8 @@ describe('반납 방식별 단계 알림 정의 (Migration #722)', () => {
     }
   })
 
-  it('운영자 푸시는 퀵 2시간 전 단계에서만 나간다', () => {
-    expect(RETURN_NOTICE_ADMIN_PUSH_STAGES).toEqual(['quick_2h'])
+  it('운영자 푸시는 퀵 안내 단계(3시간 전)에서만 나간다', () => {
+    expect(RETURN_NOTICE_ADMIN_PUSH_STAGES).toEqual(['quick_5h'])
   })
 
   it('DB 단계 문자열만 단계로 인정한다', () => {

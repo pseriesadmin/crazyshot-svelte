@@ -77,7 +77,7 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   { notifyType: 'return_notice_quick_5h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.' },
   { notifyType: 'return_notice_quick_2h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 종료 2시간 전이에요. 반납을 준비해 주세요.' },
   { notifyType: 'return_notice_quick_1h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 종료 1시간 전이에요. 서둘러 반납을 준비해 주세요.' },
-  { notifyType: 'return_notice_locker', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!' },
+  { notifyType: 'return_notice_locker', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 3시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!' },
   // 반납 검수 결과(2026-10-17, Migration #724) — 관리자가 검수 승인 / 이슈 등록할 때 고객에게 나간다
   { notifyType: 'issue_report_request', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 장비 이상·파손·분실 접수를 위해 사진·영상 등 증빙 자료를 등록해 주세요.' },
   { notifyType: 'inspection_pass', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 검수 결과, 장비 및 구성품에 이상이 없어 대여가 완료되었습니다. 이용해 주셔서 감사합니다.' },

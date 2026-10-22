@@ -115,7 +115,7 @@ export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: str
   inspection_issue: (p) =>
     `[크레이지샷] 검수 결과 안내\n${p} 검수 결과, 장비 및 구성품에 이상이 확인되어 추가 확인 후 담당자가 연락드리겠습니다.`,
   return_notice_locker: (p) =>
-    `[크레이지샷] ${p} 반납 2시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
+    `[크레이지샷] ${p} 반납 3시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
 }
 
 export interface SendLifecycleSmsParams {

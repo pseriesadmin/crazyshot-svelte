@@ -35,11 +35,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  // 반납완료 예약에만 증빙 업로드 서명을 발급한다(임의 예약 id 로 저장소를 쓰는 것 방지)
-  const { data: res } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
-  if ((res as { status?: string } | null)?.status !== 'returned') {
-    return json({ error: '반납완료 상태의 예약에만 증빙을 첨부할 수 있습니다.' }, { status: 409 })
-  }
+  // 존재하는 예약에만 증빙 업로드 서명을 발급한다(임의 예약 id 로 저장소를 쓰는 것 방지)
+  // 검수 이슈는 예약 상태와 무관하게 등록할 수 있어(2026-10-22) 증빙 첨부도 상태 제한 없이 허용한다(예약 존재만 확인)
+  const { data: res } = await admin.from('rental_reservations').select('id').eq('id', reservationId).maybeSingle()
+  if (!res) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
   const path = buildEvidencePath(reservationId, 'issue', contentType)
   const { data, error } = await admin.storage.from(RETURN_EVIDENCE_BUCKET).createSignedUploadUrl(path)

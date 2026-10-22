@@ -1,5 +1,6 @@
 import { attachCancelPending } from '$lib/server/attachCancelPending'
 import { attachPriorIssue } from '$lib/server/attachPriorIssue'
+import { loadCsReservationIds } from '$lib/server/csRegistered'
 import { attachReturnStage, RETURN_STAGE_RANK } from '$lib/server/attachReturnStage'
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
@@ -9,6 +10,7 @@ import { redirect, fail } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { approveInspection } from '$lib/server/inspection'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { clearIssuedContractContent } from '$lib/server/clearIssuedContractHelper'
 import { attachRentalDaysLabel } from '$lib/server/rentalDaysLabel'
@@ -57,6 +59,9 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // '반납중' 칩(status=returning, 2026-10-19): 반납요청 + 반납완료(검수 대기) + 반납 예정일 도래·알림 발송된 대여중. 검수 이슈 건은 '검수' 칩으로 간다.
   const isReturningView = status === 'returning'
 
+  // CS 접수 등록 건(완료되면 '취소·환불·CS' 칩으로 분류) — 완료 칩에서는 빼고 CS 칩에는 앞에 붙인다
+  const csIds = await loadCsReservationIds(admin)
+
   // 예약을 가리키는 링크(?selected=)로 들어왔는데 그 예약이 이미 취소 상태라면 '취소·환불' 칩으로 전환해 연다
   // (취소된 예약은 다른 칩 목록에 없어 패널이 열리지 않던 문제). 칩 클릭 시에는 화면이 selected를 지우므로 칩 이동이 막히지 않는다.
   if (selectedId != null && !isCancelledView) {
@@ -80,13 +85,21 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       if (isIssue && isReturningView) throw redirect(303, `/cms/rentals?status=inspection&selected=${selectedId}`)
       if (!isIssue && isInspectionView) throw redirect(303, `/cms/rentals?status=returning&selected=${selectedId}`)
     } else if (ir?.status === 'completed' && (isReturningView || isInspectionView)) {
-      throw redirect(303, `/cms/rentals?status=completed&selected=${selectedId}`)
+      throw redirect(303, `/cms/rentals?status=${csIds.has(selectedId) ? 'cancelled_refunded' : 'completed'}&selected=${selectedId}`)
+    }
+  }
+  // 완료된 CS 접수 건은 '완료'가 아니라 '취소·환불·CS' 칩에 속한다 — 링크로 연 예약이 칩과 맞지 않으면 알맞은 칩으로 전환
+  if (selectedId != null && (status === 'completed' || isCancelledView) && csIds.has(selectedId)) {
+    const { data: stRow } = await admin.from('rental_reservations').select('status').eq('id', selectedId).maybeSingle()
+    if ((stRow as { status?: string } | null)?.status === 'completed' && status === 'completed') {
+      throw redirect(303, `/cms/rentals?status=cancelled_refunded&selected=${selectedId}`)
     }
   }
 
   const { data: rows, error } = await admin.rpc('get_rental_list', {
     p_status:           isCancelledView ? 'cancelled' : isInspectionView ? 'returned' : isReturningView ? null : (status || null),
-    p_inspection_scope: isInspectionView ? 'issue' : (isReturningView ? 'returning' : null),
+    // '대여중' 칩은 반납 일시가 지나 '반납중' 칩으로 옮겨간 예약을 뺀다(Migration #735 in_use_pending)
+    p_inspection_scope: isInspectionView ? 'issue' : (isReturningView ? 'returning' : (status === 'in_use' ? 'in_use_pending' : null)),
     p_search:           search   || null,
     p_date_from:        null,
     p_date_to:          null,
@@ -105,7 +118,32 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // 총 건수·페이지 수는 취소중 행을 앞에 붙이기 "전"의 원 목록 기준으로 확정한다 — 취소중 행은
   // get_rental_list(p_reservation_id)로 1건씩 가져와 그 행의 total_count가 항상 1이라, 붙인 뒤 계산하면
   // "총 N건"과 페이지 수가 틀어진다(QA B-1).
-  const totalCount = rentals[0]?.total_count ?? 0
+  let totalCount = rentals[0]?.total_count ?? 0
+
+  if (status === 'completed' && csIds.size > 0) {
+    // CS 접수 건은 완료 칩에서 제외 — 총 건수도 같은 만큼 뺀다(페이지 안 행 수는 30건보다 적을 수 있다)
+    const before = rentals.length
+    for (let i = rentals.length - 1; i >= 0; i--) if (csIds.has(rentals[i].reservation_id)) rentals.splice(i, 1)
+    totalCount = Math.max(0, totalCount - (before - rentals.length))
+  }
+  if (isCancelledView && page === 1 && !search && csIds.size > 0) {
+    // 완료 상태가 된 CS 접수 건 — 취소·환불 목록 맨 앞에 붙인다(주문 1건 = 1행이라 대표 행 id 기준으로 중복 제거)
+    const { data: doneRows } = await admin.from('rental_reservations').select('id').eq('status', 'completed').in('id', [...csIds]).order('id', { ascending: false }).limit(60)
+    const seen = new Set<number>(rentals.map(r => r.reservation_id))
+    const added: RentalListRow[] = []
+    for (const d of (doneRows ?? []) as { id: number }[]) {
+      const repId = await resolveRepresentativeReservationId(admin, d.id)
+      if (seen.has(repId)) continue
+      const { data: one } = await admin.rpc('get_rental_list', {
+        p_status: null, p_search: null, p_date_from: null, p_date_to: null,
+        p_page: 1, p_per_page: 1, p_include_statuses: RENTAL_STATUSES, p_reservation_id: repId, p_group_by_order: true,
+      })
+      const row = ((one ?? []) as RentalListRow[])[0]
+      if (row && row.status === 'completed') { seen.add(repId); added.push(row) }
+    }
+    rentals.unshift(...added)
+    totalCount += added.length
+  }
 
   // 링크로 연 예약이 이 페이지(1페이지 30건)에 없으면(취소 건이 많아 다음 페이지에 있는 경우) 그 행만 따로 가져와 맨 위에 붙인다 —
   // 목록에 없으면 패널이 열리자마자 닫히므로. 총 건수·페이지 수는 영향 없음(원 목록 기준으로 이미 확정).
@@ -190,7 +228,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   }
 
   // 칩별 '처리 대기' 건수(2026-10-19, Stephen 확정 — 열람 여부와 무관): 계약완료=반출 대기, 배송중=수령 확인 대기,
-  // 대여중=반납일 도래·초과, 반납중=반납요청·회수·검수 대기 전체, 검수=이슈 등록 건. 주문 1건=1행 기준(목록 총건수와 같은 방식). 실패한 칩은 배지 없이 둔다.
+  // 대여중=(배지 없음 — 반납일 도래 건은 반납중으로 이동), 반납중=반납요청·회수·검수 대기 전체, 검수=이슈 등록 건. 주문 1건=1행 기준(목록 총건수와 같은 방식). 실패한 칩은 배지 없이 둔다.
   const countOf = async (args: Record<string, unknown>): Promise<number | null> => {
     const { data, error: e } = await admin.rpc('get_rental_list', {
       p_search: null, p_date_from: null, p_date_to: null, p_page: 1, p_per_page: 1, p_group_by_order: true, ...args,
@@ -198,17 +236,14 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     if (e) { console.error('[cms/rentals] 칩 건수 조회 실패:', e.message); return null }
     return ((data ?? []) as RentalListRow[])[0]?.total_count ?? 0
   }
-  const todayKst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
-  const [cConfirmed, cShipped, cReturning, cInspection, cInUse] = await Promise.all([
+  const [cConfirmed, cShipped, cReturning, cInspection] = await Promise.all([
     countOf({ p_status: 'confirmed', p_include_statuses: RENTAL_STATUSES }),
     countOf({ p_status: 'shipped', p_include_statuses: RENTAL_STATUSES }),
     countOf({ p_status: null, p_inspection_scope: 'returning', p_include_statuses: ['in_use', 'return_requested', 'returned'] }),
     countOf({ p_status: 'returned', p_inspection_scope: 'issue', p_include_statuses: RENTAL_STATUSES }),
-    admin.from('rental_reservations').select('id', { count: 'exact', head: true }).eq('status', 'in_use').lte('end_date', todayKst)
-      .then(({ count, error: e }) => (e ? null : (count ?? 0))),
   ])
   const chipCounts: Record<string, number | null> = {
-    confirmed: cConfirmed, shipped: cShipped, in_use: cInUse, returning: cReturning, inspection: cInspection,
+    confirmed: cConfirmed, shipped: cShipped, in_use: null, returning: cReturning, inspection: cInspection,
   }
   return { rentals, chipCounts, totalCount, totalPages, status, search, page, selectedId, cmsRole, canChangeOrCancelReservation }
 }
@@ -232,13 +267,22 @@ export const actions: Actions = {
       shipment_notify:     ['confirmed'],
       return_remind:       ['in_use', 'return_requested'],
       return_registration: ['return_requested'],
-      rental_complete:     ['returned'],
+      rental_complete:     ['return_requested', 'returned'],
     }
     const allowed = NOTIFY_ALLOWED_STATUSES[notifyType]
     if (allowed) {
       const { data: stRow } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
       const st = (stRow as { status?: string } | null)?.status
       if (!st || !allowed.includes(st)) return fail(400, { message: '이 알림은 현재 예약 단계에서 보낼 수 없습니다.' })
+    }
+
+    // '대여 종료 알림'(2026-10-21, Stephen 확정) = 반납 검수 승인과 같은 동작 — 예약을 '완료'로 옮기고 대여 종료(완료) 안내를 고객에게 보낸다.
+    // 승인자·시각이 남고 포인트가 적립되며, 검수 이슈가 등록된 건은 거절된다(이슈 해소 후 완료). 완료 판정은 항상 DB 검수 규칙을 거친다.
+    if (notifyType === 'rental_complete') {
+      if (!hasSettingsAccess(cmsRole)) return fail(403, { message: '대여 종료 처리는 매니저 이상만 할 수 있습니다.' })
+      const done = await approveInspection(admin, reservationId, session.user.id)
+      if (!done.ok) return fail(409, { message: done.error ?? '대여 종료 처리에 실패했습니다.' })
+      return { ok: true, completed: true }
     }
 
     const { data: result, error } = await admin.rpc('send_rental_chat_notification', {
