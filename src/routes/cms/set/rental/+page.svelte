@@ -7,12 +7,13 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsHolidayCalendar from '$lib/components/cms/CmsHolidayCalendar.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
+  import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte'
   import DeliveryAreaMap from '$lib/components/cms/DeliveryAreaMap.svelte'
   import { areaLabel, toAreaFromRegionNames, zipRangeLabel, SIDO_LIST, type PostcodeRegionInfo } from '$lib/utils/deliveryArea'
   import type { PageData, ActionData } from './$types'
-  import type { RentalPeriodOption, RentalMethodOption, PickupPoint, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
+  import type { RentalPeriodOption, RentalMethodOption, ReturnInspectionItem, ReturnPhotoItem, PickupPoint, RentalShippingSettings, PublicHolidayRow, DeliveryFeeDiscountTier } from './+page.server'
 
   interface Props {
     data: PageData
@@ -27,6 +28,210 @@
   let periodLoading = $state(false)
 
   $effect(() => { periods = data.periods })
+
+  // ─── 반납 검수 항목(Migration #738) ───
+  // 반납 필수 체크리스트 마스터. '고객검수' = 고객 반납 등록 화면에 노출할 항목 지정(끄면 관리자 검수 탭 전용).
+  // 항목명은 cms-uiux.md §0-10-H 자동 저장(저장 버튼 없음 — 입력 멈춘 뒤 700ms / blur 즉시 저장, 상태 글자로 결과 표시).
+  const INSPECTION_MAX = 20
+  const INSPECTION_LABEL_MAX = 100
+  const INSPECTION_VISIBLE_HELP_ON = '켜짐: 이 항목이 고객 반납 등록 화면에도 노출됩니다. 끄면 관리자 검수 탭에서만 확인합니다.'
+  const INSPECTION_VISIBLE_HELP_OFF = '꺼짐: 고객 반납 등록 화면에는 노출되지 않고, 관리자 검수 탭에서만 확인합니다.'
+
+  let inspectionItems = $state<ReturnInspectionItem[]>(data.inspectionItems)
+  $effect(() => { inspectionItems = data.inspectionItems })
+
+  let inspNewLabel = $state('')
+  let inspNewVisible = $state(true)
+  let inspAdding = $state(false)
+
+  // 항목별 입력 중인 값·저장 상태 — 펼침/조회 결과를 채우는 것은 저장을 호출하지 않는다(불러오기→저장 루프 금지)
+  let inspDrafts = $state<Record<string, string>>({})
+  let inspStatus = $state<Record<string, 'saving' | 'saved' | 'error'>>({})
+  const inspTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function inspLabelOf(item: ReturnInspectionItem): string {
+    return inspDrafts[item.id] ?? item.label
+  }
+
+  // 입력값이 서버 저장값과 같고 저장 중이 아니면 '저장 완료' 상태(비활성 BG)
+  function inspIsSaved(item: ReturnInspectionItem): boolean {
+    return inspStatus[item.id] !== 'saving' && inspLabelOf(item).trim() === item.label.trim()
+  }
+
+  async function inspSaveLabel(id: string, value: string): Promise<void> {
+    const trimmed = value.trim()
+    // 호출 시점의 id·값을 붙잡아 저장 — 디바운스 중 다른 항목으로 넘어가도 원래 항목에 저장된다
+    inspStatus[id] = 'saving'
+    const fd = new FormData()
+    fd.set('id', id)
+    fd.set('label', trimmed)
+    try {
+      const res = await fetch('?/updateInspectionItem', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        inspectionItems = inspectionItems.map((it) => (it.id === id ? { ...it, label: trimmed } : it))
+        inspStatus[id] = 'saved'
+        return
+      }
+      inspStatus[id] = 'error'
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '저장에 실패했습니다.') : '저장에 실패했습니다.')
+    } catch {
+      inspStatus[id] = 'error'
+      csToast.error('저장에 실패했습니다.')
+    }
+  }
+
+  function inspOnInput(item: ReturnInspectionItem, value: string): void {
+    inspDrafts[item.id] = value
+    delete inspStatus[item.id]
+    const prev = inspTimers.get(item.id)
+    if (prev) clearTimeout(prev)
+    if (!value.trim() || value.trim() === item.label.trim()) return
+    inspTimers.set(item.id, setTimeout(() => {
+      inspTimers.delete(item.id)
+      void inspSaveLabel(item.id, value)
+    }, 700))
+  }
+
+  function inspOnBlur(item: ReturnInspectionItem): void {
+    const value = inspDrafts[item.id]
+    if (value === undefined) return
+    const pending = inspTimers.get(item.id)
+    if (pending) { clearTimeout(pending); inspTimers.delete(item.id) }
+    if (!value.trim()) {
+      // 항목명은 비울 수 없다 — 저장하지 않고 저장된 값으로 되돌린다
+      delete inspDrafts[item.id]
+      return
+    }
+    if (value.trim() !== item.label.trim()) void inspSaveLabel(item.id, value)
+  }
+
+  async function inspToggleVisible(item: ReturnInspectionItem): Promise<void> {
+    const next = !item.customer_visible
+    const before = inspectionItems
+    inspectionItems = inspectionItems.map((it) => (it.id === item.id ? { ...it, customer_visible: next } : it))
+    const fd = new FormData()
+    fd.set('id', item.id)
+    fd.set('customer_visible', String(next))
+    try {
+      const res = await fetch('?/updateInspectionItem', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') return
+      inspectionItems = before
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '저장에 실패했습니다.') : '저장에 실패했습니다.')
+    } catch {
+      inspectionItems = before
+      csToast.error('저장에 실패했습니다.')
+    }
+  }
+
+
+  // ─── 사진등록 항목(2026-10-22, Migration #739) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 ───
+  const PHOTO_MAX = 10
+  const PHOTO_LABEL_MAX = 50
+  let photoItems = $state<ReturnPhotoItem[]>(data.photoItems)
+  $effect(() => { photoItems = data.photoItems })
+  const PHOTO_VISIBLE_HELP_ON = '켜짐: 이 사진 항목이 고객 반납 등록 화면에 노출됩니다.'
+  const PHOTO_VISIBLE_HELP_OFF = '꺼짐: 고객 반납 등록 화면에는 노출되지 않습니다.'
+  let photoNewLabel = $state('')
+  let photoNewVisible = $state(true)
+  let photoAdding = $state(false)
+  let photoDrafts = $state<Record<string, string>>({})
+  let photoStatus = $state<Record<string, 'saving' | 'saved' | 'error'>>({})
+  const photoTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function photoLabelOf(item: ReturnPhotoItem): string {
+    return photoDrafts[item.id] ?? item.label
+  }
+  function photoIsSaved(item: ReturnPhotoItem): boolean {
+    return photoStatus[item.id] !== 'saving' && photoLabelOf(item).trim() === item.label.trim()
+  }
+  async function photoSaveLabel(id: string, value: string): Promise<void> {
+    const trimmed = value.trim()
+    photoStatus[id] = 'saving'
+    const fd = new FormData()
+    fd.set('id', id)
+    fd.set('label', trimmed)
+    try {
+      const res = await fetch('?/updatePhotoItem', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        photoItems = photoItems.map((it) => (it.id === id ? { ...it, label: trimmed } : it))
+        photoStatus[id] = 'saved'
+        return
+      }
+      photoStatus[id] = 'error'
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '저장에 실패했습니다.') : '저장에 실패했습니다.')
+    } catch {
+      photoStatus[id] = 'error'
+      csToast.error('저장에 실패했습니다.')
+    }
+  }
+  function photoOnInput(item: ReturnPhotoItem, value: string): void {
+    photoDrafts[item.id] = value
+    delete photoStatus[item.id]
+    const prev = photoTimers.get(item.id)
+    if (prev) clearTimeout(prev)
+    if (!value.trim() || value.trim() === item.label.trim()) return
+    photoTimers.set(item.id, setTimeout(() => {
+      photoTimers.delete(item.id)
+      void photoSaveLabel(item.id, value)
+    }, 700))
+  }
+  function photoOnBlur(item: ReturnPhotoItem): void {
+    const value = photoDrafts[item.id]
+    if (value === undefined) return
+    const pending = photoTimers.get(item.id)
+    if (pending) { clearTimeout(pending); photoTimers.delete(item.id) }
+    if (!value.trim()) { delete photoDrafts[item.id]; return }
+    if (value.trim() !== item.label.trim()) void photoSaveLabel(item.id, value)
+  }
+  async function photoToggleVisible(item: ReturnPhotoItem): Promise<void> {
+    const next = !item.customer_visible
+    const before = photoItems
+    photoItems = photoItems.map((it) => (it.id === item.id ? { ...it, customer_visible: next } : it))
+    const fd = new FormData()
+    fd.set('id', item.id)
+    fd.set('customer_visible', String(next))
+    try {
+      const res = await fetch('?/updatePhotoItem', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') return
+      photoItems = before
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '저장에 실패했습니다.') : '저장에 실패했습니다.')
+    } catch {
+      photoItems = before
+      csToast.error('저장에 실패했습니다.')
+    }
+  }
+  async function savePhotoOrder(): Promise<void> {
+    const fd = new FormData()
+    fd.set('ids', JSON.stringify(photoItems.map((i) => i.id)))
+    try {
+      const res = await fetch('?/reorderPhotoItems', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') { await invalidateAll(); return }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
+  }
+
+  async function saveInspectionOrder(): Promise<void> {
+    const fd = new FormData()
+    fd.set('ids', JSON.stringify(inspectionItems.map((i) => i.id)))
+    try {
+      const res = await fetch('?/reorderInspectionItems', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        await invalidateAll()
+        return
+      }
+      csToast.error(result.type === 'failure' ? ((result.data as { error?: string })?.error ?? '순서 저장에 실패했습니다.') : '순서 저장에 실패했습니다.')
+    } catch {
+      csToast.error('순서 저장에 실패했습니다.')
+    }
+  }
 
   // ─── 대여 방식 ───
   const METHOD_KEYS = [
@@ -1642,6 +1847,209 @@
     </section>
 
     <!-- ══════════════════════════════════════════
+         검수 항목 등록 — 반납 필수 체크리스트 (2026-10-22, Migration #738)
+         1행 항목 카드: 항목명(자동 저장 입력) ... 우측 끝에 '고객검수' 노출 콤보버튼 + 표준 삭제 버튼
+    ══════════════════════════════════════════ -->
+    {#if data.inspectionReady}
+      <section class="setting-section">
+        <div class="section-head">
+          <h2 class="section-title">검수 항목 등록</h2>
+        </div>
+
+        {#if data.photoReady}
+          <div class="insp-block">
+            <div class="insp-sub-head">
+              <h3 class="insp-sub-title">사진등록 항목</h3>
+              <span class="section-badge">{photoItems.length} / {PHOTO_MAX}</span>
+            </div>
+        <form
+          method="POST"
+          action="?/addPhotoItem"
+          class="add-form"
+          use:enhance={({ formData }) => {
+            formData.set('customer_visible', String(photoNewVisible))
+            photoAdding = true
+            return async ({ result, update }) => {
+              photoAdding = false
+              if (result.type === 'success') {
+                photoNewLabel = ''
+                photoNewVisible = true
+                csToast.success('사진등록 항목이 추가되었습니다.')
+                await update({ reset: false })
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
+              }
+            }
+          }}
+        >
+          <input
+            type="text"
+            name="label"
+            class="add-input"
+            placeholder="필수 상품사진 항목명 입력(50자 이내)"
+            maxlength={PHOTO_LABEL_MAX}
+            bind:value={photoNewLabel}
+            disabled={photoAdding}
+            aria-label="필수 상품사진 항목명"
+          />
+          <CmsHelpBubble text={photoNewVisible ? PHOTO_VISIBLE_HELP_ON : PHOTO_VISIBLE_HELP_OFF}>
+            <button
+              type="button"
+              class="mk-chip insp-visible-chip"
+              class:mk-chip--on={photoNewVisible}
+              aria-pressed={photoNewVisible}
+              onclick={() => (photoNewVisible = !photoNewVisible)}
+            >고객검수</button>
+          </CmsHelpBubble>
+          <button
+            type="submit"
+            class="btn-add"
+            disabled={photoAdding || !photoNewLabel.trim() || photoItems.length >= PHOTO_MAX}
+          >
+            {photoAdding ? '추가 중...' : '추가'}
+          </button>
+        </form>
+
+        {#if photoItems.length > 0}
+          <CmsDragList
+            bind:items={photoItems}
+            itemKey={(item) => item.id}
+            onreorder={savePhotoOrder}
+            class="drag-list-wrap"
+          >
+            {#snippet renderItem(item: ReturnPhotoItem)}
+              <div class="list-row insp-row">
+                <input
+                  type="text"
+                  class="insp-label"
+                  class:is-saved={photoIsSaved(item)}
+                  value={photoLabelOf(item)}
+                  maxlength={PHOTO_LABEL_MAX}
+                  aria-label="사진등록 항목명"
+                  oninput={(e) => photoOnInput(item, e.currentTarget.value)}
+                  onblur={() => photoOnBlur(item)}
+                  draggable="false"
+                />
+                <span class="insp-status" aria-live="polite">
+                  {#if photoStatus[item.id] === 'saving'}저장 중…{:else if photoStatus[item.id] === 'saved'}자동 저장됨{:else if photoStatus[item.id] === 'error'}저장 실패{/if}
+                </span>
+                <CmsHelpBubble text={item.customer_visible ? PHOTO_VISIBLE_HELP_ON : PHOTO_VISIBLE_HELP_OFF}>
+                  <button
+                    type="button"
+                    class="mk-chip insp-visible-chip"
+                    class:mk-chip--on={item.customer_visible}
+                    aria-pressed={item.customer_visible}
+                    onclick={() => photoToggleVisible(item)}
+                  >고객검수</button>
+                </CmsHelpBubble>
+                <CmsDeleteButton action="?/deletePhotoItem" id={item.id} />
+              </div>
+            {/snippet}
+          </CmsDragList>
+        {:else}
+          <p class="empty-hint">등록된 사진등록 항목이 없습니다.</p>
+        {/if}
+          </div>
+        {/if}
+
+        <div class="insp-block">
+          <div class="insp-sub-head">
+            <h3 class="insp-sub-title">검수 체크리스트</h3>
+            <span class="section-badge">{inspectionItems.length} / {INSPECTION_MAX}</span>
+          </div>
+
+        <form
+          method="POST"
+          action="?/addInspectionItem"
+          class="add-form"
+          use:enhance={({ formData }) => {
+            formData.set('customer_visible', String(inspNewVisible))
+            inspAdding = true
+            return async ({ result, update }) => {
+              inspAdding = false
+              if (result.type === 'success') {
+                inspNewLabel = ''
+                inspNewVisible = true
+                csToast.success('검수 항목이 추가되었습니다.')
+                await update({ reset: false })
+              } else if (result.type === 'failure') {
+                csToast.error((result.data as { error?: string })?.error ?? '추가에 실패했습니다.')
+              }
+            }
+          }}
+        >
+          <input
+            type="text"
+            name="label"
+            class="add-input"
+            placeholder="필수 검수항목 입력 (100자 이내)"
+            maxlength={INSPECTION_LABEL_MAX}
+            bind:value={inspNewLabel}
+            disabled={inspAdding}
+            aria-label="필수 검수항목"
+          />
+          <CmsHelpBubble text={inspNewVisible ? INSPECTION_VISIBLE_HELP_ON : INSPECTION_VISIBLE_HELP_OFF}>
+            <button
+              type="button"
+              class="mk-chip insp-visible-chip"
+              class:mk-chip--on={inspNewVisible}
+              aria-pressed={inspNewVisible}
+              onclick={() => (inspNewVisible = !inspNewVisible)}
+            >고객검수</button>
+          </CmsHelpBubble>
+          <button
+            type="submit"
+            class="btn-add"
+            disabled={inspAdding || !inspNewLabel.trim() || inspectionItems.length >= INSPECTION_MAX}
+          >
+            {inspAdding ? '추가 중...' : '추가'}
+          </button>
+        </form>
+
+        {#if inspectionItems.length > 0}
+          <CmsDragList
+            bind:items={inspectionItems}
+            itemKey={(item) => item.id}
+            onreorder={saveInspectionOrder}
+            class="drag-list-wrap"
+          >
+            {#snippet renderItem(item: ReturnInspectionItem)}
+              <div class="list-row insp-row">
+                <input
+                  type="text"
+                  class="insp-label"
+                  class:is-saved={inspIsSaved(item)}
+                  value={inspLabelOf(item)}
+                  maxlength={INSPECTION_LABEL_MAX}
+                  aria-label="검수항목명"
+                  oninput={(e) => inspOnInput(item, e.currentTarget.value)}
+                  onblur={() => inspOnBlur(item)}
+                  draggable="false"
+                />
+                <span class="insp-status" aria-live="polite">
+                  {#if inspStatus[item.id] === 'saving'}저장 중…{:else if inspStatus[item.id] === 'saved'}자동 저장됨{:else if inspStatus[item.id] === 'error'}저장 실패{/if}
+                </span>
+                <CmsHelpBubble text={item.customer_visible ? INSPECTION_VISIBLE_HELP_ON : INSPECTION_VISIBLE_HELP_OFF}>
+                  <button
+                    type="button"
+                    class="mk-chip insp-visible-chip"
+                    class:mk-chip--on={item.customer_visible}
+                    aria-pressed={item.customer_visible}
+                    onclick={() => inspToggleVisible(item)}
+                  >고객검수</button>
+                </CmsHelpBubble>
+                <CmsDeleteButton action="?/deleteInspectionItem" id={item.id} />
+              </div>
+            {/snippet}
+          </CmsDragList>
+        {:else}
+          <p class="empty-hint">등록된 검수 항목이 없습니다.</p>
+        {/if}
+        </div>
+      </section>
+    {/if}
+
+    <!-- ══════════════════════════════════════════
          배송지역 관리정보 — 배송 허용지역 (2026-10-12)
          허용지역이 1건 이상 등록되면 장바구니 배송형 수령·반납 주소가 그 안이어야 한다(0건이면 제한 없음)
     ══════════════════════════════════════════ -->
@@ -2507,6 +2915,57 @@
     color: var(--cs-text);
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ─── 검수 항목 등록(2026-10-22) — 1행 카드: 항목명 자동 저장 입력 + 우측 끝 '고객검수' 콤보버튼·삭제 ─── */
+  .insp-block + .insp-block {
+    margin-top: 28px;
+  }
+  .insp-sub-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .insp-sub-title {
+    margin: 0;
+    font: var(--text-pc-title-16);
+    color: var(--cs-text);
+  }
+
+  .insp-label {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-white);
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    outline: none;
+  }
+
+  /* §0-10-H: 저장 완료 = 행(카드) BG와 같은 비활성 BG, 다시 선택(포커스)하면 활성 BG(white)로 복귀 — disabled 사용 안 함 */
+  .insp-label.is-saved:not(:focus) {
+    background: var(--cs-surface-gray);
+  }
+
+  .insp-label::placeholder {
+    color: var(--cs-text-placeholder);
+  }
+
+  .insp-status {
+    flex: none;
+    min-width: 64px;
+    text-align: right;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-light);
+  }
+
+  .insp-visible-chip {
+    flex: none;
     white-space: nowrap;
   }
 

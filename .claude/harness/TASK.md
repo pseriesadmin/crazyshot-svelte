@@ -2,12 +2,70 @@
 
 > ⛔ **2026-09-24 인덱싱 분리**: 이 파일은 "진행중·상시(BLOCKED/BACKLOG/NEXT/GATE C)·최근 3일 완료" 블록만 보관한다.
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
-> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🟢 ROUTINE: 채팅 FAB 수신 알림 모션 '바운스 & 틸트' 1회 재생 (좌측 방향 확장) (2026-10-19, 이 세션'만', ✅ Stephen 지시("선택영역 화면 이용 중 or 최초 진입 시 채팅 수신 시 1회 바운스 & 틸트 모션" → "FAB가 우측 배치라 확대 방향은 좌측이어야 함") · DB·마이그레이션·`src/routes/api/**` 변경 없음 · Claude Browser: Stephen 요소 선택 세션(조건 ①)에서 로컬 동작 확인 · 모션 부드러움·좌측 확장 육안 확인 대기 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
+> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
+
+## NOW — 🔴 CRITICAL(DB 변경·`src/routes/api/**` 수정·포인트 지급): 고객 반납정보 등록 화면 5카드 개편 + 반납등록 미션 포인트 + 내정보 포인트 메뉴 (Migration #739·#740 — Stage만, 2026-10-22, 이 세션'만', ✅ Stephen 지시)
+
+### 구현 내역
+- DB(Stage ezyvffjvuwmtuhpxdjrw만 적용, Production 미적용 — Stephen 승인 후): `20261022055000_739_return_register_mission.sql`(고객 이용 평가 글 `customer_feedback`≤100자 + 포인트 규칙 `return_register_mission`(초기 0원·꺼짐) + `award_return_register_mission_points` RPC — SECURITY DEFINER·service_role 전용·예약당 1회 멱등) · `20261022065000_740_return_submission_rating.sql`(`customer_rating` 1~5). ⚠️ 번호 충돌: 다른 세션의 `739_return_photo_items`·`740_..._customer_visible`과 번호·파일 타임스탬프가 겹쳐 내 두 파일의 **파일명 타임스탬프만** 바꿨다(이름·내용·DB 등록명은 그대로).
+- 고객 반납 화면 `account/rental/[id]/return-submit`: 카드 슬롯(소개→1 사진→2 체크/확인→3 이용 평가+점수→완료), 폴라로이드 랜덤 배경(같은 주문 상품 이미지, 소개는 옅은 베일·1~3단계는 진한 베일), 손가락 이미지(`static/return-steps/finger-1~3.png`·`finger-heart.png`·`heart.png`), 사진 항목당 1장·전부 채워야 다음 단계·여러 장 선택 시 빈 칸 순서대로 자동 채움, 점수 아이콘 터치 드래그 선택, 업로드 중 `LoadingIndicator`, 완료 화면 하트 폭죽(반복). 한 번 등록하면 재진입 불가(화면 redirect + API 409).
+- 서버/API(프로즌 경로 — Stephen 지시 범위): `return-submit/+server.ts`(feedback·rating 저장, 미션 포인트 지급, 기등록 409) · `sign/+server.ts`(기등록 409) · `returnSubmission.ts`(feedback·rating 검증) · `awardReturnRegisterMissionPoints.ts`(신규) · `return-evidence` API(평가 조회) · RentalDetailPanel(검수 탭 평가 표시) · CMS 포인트 화면 라벨.
+- `/account/rental`: 반납 가능 예약 카드에 '반납정보 등록하기' 버튼(제출 완료 시 비활성) — `+page.svelte`·`+page.server.ts`.
+- `/account` 내정보: '포인트' 메뉴 + 보유 포인트·적립/사용 내역 카드(`PointTabContent.svelte`·`loadPointTransactions.ts`, PC/모바일, DB 변경 없음 — point_transactions 기존 RLS 본인 조회).
+- 기타(이 세션 앞부분): 모바일 홈 취향직격 무한 슬라이드·터치 하이라이트, ChatInput 2행·볼드, /account 대여경험 원형 숫자·단계 배지 레이아웃.
+- 테스트: `returnRegisterMissionPoints.test.ts`(Stage 라이브)·`returnSubmission.test.ts`(평가) 추가. 브라우저 실측: 소개·1~3단계·완료 화면·포인트 탭(PC/모바일) 확인. svelte-check 신규 오류 0(기존 2건: vite.config·subscribe/success).
+
+### 남음
+- [ ] sp3-qa-agent 검수(진행) · 보안은 sp3 판단 시에만 sp5
+- [ ] Production DB #739·#740 적용(Stephen 승인 후) — 코드 배포 전 DB 먼저 확인
+- [ ] 번호 충돌 정리 결정(다른 세션 739/740과 중복) · Stage 시험 데이터 정리: 시험 예약 `CSTEST-RETURN-01~07`·시험 계정 적립 포인트·'반납등록 미션' 규칙 500p 켜짐 → 0원·꺼짐으로 복구 필요
+- [x] (sp3 MAJOR 반영, 2026-10-22) 서버도 사진 항목마다 1장 이상 필수로 집행(`returnSubmission.ts`, 테스트 15건 GREEN)
+- [x] (sp3 MAJOR-1 반영) 중복 지급 방지 Migration #741 `20261022075000_741_return_mission_dedupe.sql` — 예약 단위 advisory 잠금 + 부분 유일 인덱스. Stage만 적용·권한 확인(anon/authenticated false), 라이브 테스트 11건 GREEN(동시 호출 3회→적립 1회). Production 미적용
+- [ ] 포인트 만료일(expires_at) 정책은 이번 세션에서 관여하지 않음(Stephen 지시)
+- [ ] sp3 재검수 대기
+- [ ] 커밋(Stephen)
+
+## NOW — 🟡 BOUNDARY: 대여관리 설정 '검수 항목 등록' — 반납 필수 체크리스트 추가·편집·삭제 + '고객검수' 노출 지정 (Migration #738, 2026-10-22, 이 세션'만', ✅ Stephen 지시(레이아웃 4항목) · Stage DB(#738) 적용·권한 확인, Production 미적용(Stephen 승인 대기) · 커밋·배포 전 · **1단계(편집 화면+마스터 저장) + 2단계(고객 반납 화면·검수 탭 연결) 완료**)
+
+2단계(2026-10-22): `src/lib/server/returnInspectionItems.ts`(마스터 조회, 실패·0건이면 기본 4종 fail-open) 신설 → 고객 반납 제출 검증/화면(`return-submit` API·page.server·page.svelte)은 '고객검수 ON' 항목만, 검수 탭 관리자 직접 등록 칩(`return-entries` API·`return-evidence` API·RentalDetailPanel)은 활성 항목 전체, 삭제된 항목은 과거 제출 문구 해석용으로 유지. 검증 함수 `validateReturnSubmit`/`validateAdminReturnEntry`는 3번째 인자(기본값=기존 상수)로 하위호환. 테스트 +returnInspectionItems.test.ts, vitest 26건 통과, eslint 에러 0, svelte-check 에러는 기존 2건(vite.config·subscribe/success, 이 작업과 무관).
+
+3단계(2026-10-22, Migration #739 — Stage만 적용): '사진등록 항목' 마스터(`return_photo_items`, 50자·최대 10개) + 설정 화면 섹션(검수 체크리스트 위) + 택배 반납 고객 사진 카드(`return-submit` page/sign/제출 검증)·검수 탭 사진 묶음 이름·순서 연동. 무인함 반납 사진 항목은 고정. 고객검수 토글은 사진 항목에는 없음(전부 고객 노출). 기존 규칙(사진 1장 이상) 유지. Production 미적용.
+
+4단계(2026-10-22, Migration #740 — Stage만 적용): 사진등록 항목에도 '고객검수' 콤보버튼 추가(`customer_visible`, 기존 항목은 모두 노출) — OFF면 고객 반납 화면 사진 카드·업로드 서명·제출 검증에서 제외(검수 탭 사진 묶음 이름·순서는 전체 활성 기준). 사진등록 섹션은 '검수 항목 등록' 안으로 통합(소제목 2블록).
+
+생성일: 2026-10-22 | 아젠다: `/cms/set/rental`에 '검수 항목 등록' 섹션 신설 — 1행 카드(항목명 자동 저장 입력 + 우측 끝 '고객검수' 콤보버튼 + 표준 삭제 버튼), 추가 폼(100자 이내 안내 + 고객검수 콤보버튼 + 추가), 드래그 순서
+
+### 구현 내역
+- DB: Migration #738 `return_inspection_items`(item_key·label 1~100자·customer_visible·display_order·소프트삭제) — RLS 켬·정책 0건·service_role만 권한(2026-10-30 신규 테이블 권한 규칙), 기존 코드 상수 4종(body·accessories·packed·clean) 시드(키 불변), 서버 전용 RPC 3종(upsert·delete·reorder, 활성 20개 상한 서버 집행). Stage 적용 후 권한·시드·RPC 동작 실증, 테스트 행 정리.
+- 서버: `cms/set/rental/+page.server.ts` — load(fail-soft: 조회 실패 시 섹션 숨김), 액션 4종 `addInspectionItem`·`updateInspectionItem`(항목명·고객검수 중 넘어온 값만)·`deleteInspectionItem`·`reorderInspectionItems`(manager 이상 + 서버 재검증).
+- 화면: `+page.svelte` — cms bds 표준 재사용: 자동 저장 입력(§0-10-H, 저장 버튼 없음·700ms/blur·상태 글자·저장 시 비활성 BG), 콤보버튼 `mk-chip`(§7-12-B), `CmsHelpBubble`(§7-18, '고객검수' 켜짐/꺼짐 설명), `CmsDeleteButton`(표준 삭제), `CmsDragList`.
+- 테스트: `rentalInspectionItemsActions.test.ts` 10건. 서버+utils 275파일 2823건 GREEN. svelte-check·eslint 신규 오류 0(기존 오류: `+page.svelte` RentalShippingSettings 미사용·`+page.server.ts` conditionTypes — HEAD에도 존재).
+- 화면 실확인은 Stephen(개발 서버 CMS 로그인 필요).
+
+### 남음
+- [ ] 2단계(Stephen 확인 후): 고객 반납 등록 화면(`return-submit`)·`returnSubmission.ts`·`returnAdminEntry.ts`·`return-evidence` API·RentalDetailPanel 검수 탭을 `RETURN_CHECKLIST_ITEMS` 상수 대신 이 마스터로 전환('고객검수' 켠 항목만 고객 노출, 검수 탭은 전 항목, 삭제된 항목은 옛 제출 문구 풀이용 유지)
+- [ ] Production DB #738 적용(승인 후) → 코드 배포 순서 주의(코드가 먼저 나가도 테이블 없으면 섹션만 숨김 — fail-soft)
+- [ ] sp3-qa-agent 검수 · 커밋(Stephen)
+
+## NOW — 🟢 ROUTINE: 채팅 FAB 수신 알림 모션 '바운스 & 틸트' 1회 재생 (좌측 방향 확장) (2026-10-19, 이 세션'만', ✅ Stephen 지시("선택영역 화면 이용 중 or 최초 진입 시 채팅 수신 시 1회 바운스 & 틸트 모션" → "FAB가 우측 배치라 확대 방향은 좌측이어야 함") · DB·마이그레이션·`src/routes/api/**` 변경 없음 · Claude Browser: Stephen 요소 선택 세션(조건 ①)에서 로컬 동작 확인 · 모션 부드러움·좌측 확장 육안 확인 대기 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
 
 - 변경: `src/lib/components/chat/FloatingButton.svelte` 1개 — `unreadCount`가 늘어난 순간(새 메시지 도착 / 최초 진입 시 미읽음 복원) `.chat-fab-wrap`에 `bounce-tilt` 클래스를 붙여 0.9초 모션 1회 재생(`animationend`로 해제, Svelte가 키프레임 이름에 접두어를 붙이므로 `endsWith`로 비교). 개수가 같거나 줄거나 채팅이 열려 있으면 미재생, 연속 도착은 처음부터 1회 재생, `prefers-reduced-motion` 사용자 미재생.
 - 모션: 위로 튀기며 기울기 반복(바운스 3회 감쇠). 우측 끝 배치라 `transform-origin: 100% 85%` + 반시계(음수) 기울기·왼쪽 이동만 사용해 오른쪽 밖으로 넘치지 않게 함. 채팅 FAB 크기(70px/40px)·위치 불변.
 - 확인: 가짜 미읽음 개수로 0→1 재생·종료 후 해제 / 같은 개수 미재생 / 1→2 재생 / 0 미재생 확인(브라우저 실측). svelte-check 신규 오류 0(기존 2건).
 - 알려진 한계: 모바일 FAB 바가 peek(절반 숨김) 상태이면 모션도 절반 가려짐(수신 시 바 자동 펼침은 요청 없어 미구현).
+
+
+## NOW — 🔴 CRITICAL(DB 변경·`src/routes/api/**` 신규): 검수 탭 '고객 반납정보 등록' 우측 [+] — 방문 반납 관리자 직접 등록 (Migration #737, 2026-10-22, 이 세션'만', ✅ Stephen 지시(라운드 정사각 [+] → 아코디언 등록 폼(사진·내역·등록완료) → 목록 카드 '관리자' 등록자 배지) + AskUserQuestion 확정 3건: ①저장=관리자 등록 전용 새 목록(고객 제출 불변) ②입력=사진+메모+반납 체크리스트 ③등록완료 시 대여중→반납중 자동 전환 · Stage 먼저(Production·커밋·배포는 Stephen) · sp3-qa-agent 검수 ⏳)
+
+- DB: `reservation_return_admin_entries`(예약·등록자·메모·체크리스트·사진 경로 jsonb·등록일시) — RLS 켜고 정책 0건·service_role만. **Stage(ezyvffjvuwmtuhpxdjrw) 적용·RLS/권한 확인 완료, Production 미적용.**
+- API(신규·프로즌 경로): `/api/cms/reservations/[id]/return-entries` POST(등록) · `/return-entries/sign` POST(업로드 서명, `{예약}/admin/` 폴더) — 메뉴 rental.reservation + CMS 직원, 방문 반납(return_method=visit)·상태(대여중·반납요청·반납완료)만, 본문·파일 존재 재검증, 대여중이면 update_reservation_status로 반납중 전환(실패 시 등록 롤백). `return-evidence` GET에 `admin_entries`(등록 관리자 이름·서명 URL) 추가(테이블 없는 환경은 빈 목록). menuAccessMap 2건 등록.
+- 화면: `RentalDetailPanel.svelte` 검수 탭 제목 우측 라운드 정사각 [＋](방문 반납·허용 상태에서만) → slide 아코디언 등록 폼(사진·체크리스트 칩·메모·[등록완료]) → 목록 카드(`관리자 · 이름` 배지, 카드 펼침). 헤더 [반납 검수 승인] 활성 판정에 관리자 등록도 포함.
+- 규칙 모듈: `src/lib/server/returnAdminEntry.ts`(순수 검증) + `src/__tests__/server/returnAdminEntry.test.ts`.
+- 확인: eslint 0 error(기존 warning 1)·svelte-check 신규 0·vitest 신규 5건+menuAccess·security 115건 GREEN. 실화면·실제 등록 흐름(업로드→등록→반납중 전환) 미확인.
+- 알려진 한계: 사진/메모 중 하나 이상이면 등록 가능(사진 필수 아님), 등록 후 수정·삭제 기능 없음, 고객 화면에는 노출하지 않음.
+- sp3-qa-agent: 🟡 GATE E 조건부 통과(T1, BLOCKER 0·MAJOR 0·MINOR 4·미검증 4, 보안 sp3 판단 SKIP) — MINOR: ①롤백이 직접 .delete()(return-submit 선례와 동일) ②라우트 레벨 테스트 없음 ③업로드 후 미등록 시 admin 폴더 고아 파일 ④database.ts 타입 미갱신(로컬 캐스트로 동작). 조건: Production 적용 전 Stage 드리프트 대조·실화면 확인, **DB 먼저 적용 후 코드 배포**(코드 선배포 시 GET은 fail-open이나 POST 500). (Stage RLS·권한은 작업 중 직접 조회로 확인함: RLS on·정책 0·anon/authenticated 불가·service_role 가능.)
+- 범위 확대(Stephen 지시, 같은 세션): 방문 반납 한정을 풀어 **택배·퀵·무인함·방문 등 모든 반납 방식**에서 [+] 등록 가능(상태 가드 대여중·반납요청·반납완료만 유지, API의 return_method 검사·UI 방문 조건 제거, 라우트 테스트 갱신 13건 GREEN). 폼은 방식 무관 동일(사진·체크리스트·메모) — 무인함 번호·비밀번호 입력은 미포함. 확대분은 sp3 재검수 전.
+- 조건부 통과 후속 반영(같은 세션): MINOR-2 라우트 테스트 신규 `src/__tests__/server/returnAdminEntryRoute.test.ts` 8건(권한·방문/상태 가드·본문·파일 존재·대여중 전환·전환 실패 롤백·저장 실패) GREEN, MINOR-1 롤백 직접 삭제를 H-01 예외로 코드 주석에 기록. MINOR-3(고아 파일)·MINOR-4(database.ts 타입 — 형제 테이블 reservation_return_* 도 미등재라 선례 동일)은 의도적으로 미반영.
 
 ## NOW — 🟢 ROUTINE: /cms/rentals 상태 칩 → 패널 헤더 '단계 흐름 원형 배지' 응용 대체 (2026-10-22, 이 세션'만', ✅ Stephen 직접 지시(칩을 원형 배지·화살표로 대체·건수 카운터 유지·모션 동일·크기 1.5배 → 미선택 활성 BG → 이후 단계 칩 비활성 BG·활성 글자색 → 옅은 회색 → 호 두께↑ → 화살표 지난 단계 색 → 임시예약·취소환불CS 10% 축소 → 가운데 정렬) · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · Claude Browser: Stephen이 "Claude Browser 실행 테스트해" 명시(조건 ②) — 렌더링·프레임 실측만 · 커밋·배포는 Stephen · sp3-qa-agent 검수 아래 기록)
 
@@ -300,7 +358,6 @@
 - 테스트: `rentalListHideDrafts.test.ts`(Stage 라이브 3건) + 기존 `cmsRentalsCancelledView.test.ts` 통과. svelte-check 신규 오류 0(기존 2건 그대로).
 - 남은 일: Production #712 적용(Stephen 지시 후), 화면 확인. 잔재 근본 정리(중복 임시예약 생성 억제)는 별건 — 필요 시 Stephen 판단.
 
-## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
 
 > 📌 BACKLOG 블록은 `BACKLOG.md`로 분리됐다(Default-Exclude — Stephen 명시 승인 시에만 NOW로 이동).
 
@@ -353,6 +410,20 @@
 - 검증: Stage·Production 직접 SQL — 함수 1개(오버로드 없음)·anon/authenticated 실행 불가·service_role 가능, 분리 건수 합계=필터 없음 건수(Production 3+63=66), svelte-check 신규 오류 0(기존 2건: vite.config·subscribe/success 그대로).
 - 남은 일: 서버 코드 배포(DB는 두 환경 적용 완료라 순서 문제 없음), 칩 색상 화면 확인, Migration #712·#713(다른 세션)과 함께 커밋 예정.
 
+## NOW — 🔴 CRITICAL: 포인트 '자동 소멸 기한'(적립일로부터 N일) 전역 설정 신설 — CMS 포인트 → 사용 규칙 (2026-10-22, 이 세션'만', Stephen 직접 지시로 착수 · DB 마이그레이션 #742 · Stage 먼저, Production은 sp3 통과 + Stephen 확인 후)
+
+점검 결과: 소멸 로직(expires_at·expire_due_points·크론 point-expiry)은 이미 있으나 구독 혜택 적립(points_expiry_days, 기본 365일)에만 값이 들어가고 생일·정시반납·렌탈완료·반납등록 미션·리뷰 등 일반 적립은 expires_at이 NULL=영구 유효.
+설계: point_use_settings.expiry_days(0=무기한) 컬럼 + get/upsert 함수 확장 + point_transactions BEFORE INSERT 트리거(type='earn'이고 expires_at 비어 있으면 적립일(KST)+N일 23:59:59 KST로 채움 — 적립 함수 8곳 무수정) · 신규 적립분부터만 적용(기존 적립분·관리자 직접 지급(admin_grant)은 대상 아님) · 구독 혜택 적립은 자기 expires_at 유지.
+- [x] 마이그레이션 #742 작성 → Stage 적용·롤백 DO 블록 검증(0=NULL / 30일=11/21 23:59:59 KST / KST 자정 직후 경계 / 구독 expires_at 보존 / admin_grant 제외) 완료
+- [x] +page.server.ts(load 기본값·saveUseSettings 검증 0~3650·RPC 인자) + +page.svelte(사용 규칙에 '자동 소멸 기한 — 적립일로부터 [ ]일' 행·dirty 판정) + pointEarnExpiryDays.test.ts(Stage 라이브 9건) — 관련 포인트 테스트 34건 GREEN·eslint 0·svelte-check 신규 0(기존 2건)
+- [x] sp3 1차 검수(REJECT): BLOCKER-1 `expire_due_points`(#540) 소멸 거래가 소멸된 적립분이 아니라 가장 오래된 적립분을 깎아 만료 순서가 엇갈리면 같은 적립분 이중 소멸(Stage RED 재현: 3회 소멸) → Migration #743(소멸 거래는 ref_id가 가리키는 적립분에서만 차감, 못 찾으면 기존 폴백)으로 수정·Stage 적용, `pointExpireDueFifo.test.ts` 4건 GREEN(엇갈린 만료·사용 혼합·재실행 멱등·평범 케이스·미만료 회귀). MAJOR-2·MINOR(설명문 '적립일 포함'→'다음 날부터 N일째', 742 롤백 주석, 테스트 순서 의존) 반영. 정정: 앞의 '관련 34건 GREEN'은 이 결함을 잡지 못했음(소멸 실행 조합 테스트 부재였음).
+- ⛔ 배포 순서(sp3 MAJOR-2): **Production DB(#742 → #743) 적용·검증 먼저 → 그 다음 코드 배포**(화면이 5번째 인자 p_expiry_days를 항상 보내므로 DB보다 코드가 먼저 나가면 '사용 규칙 저장' 전체가 실패). #743 Production 적용·재검수 통과 전에는 소멸 기한을 0 초과로 켜지 말 것.
+- 이월(정책 결정 대기): 환급(refund) 포인트는 소멸 추적 제외(영구) · 소멸 전 고객 사전 안내·대시보드 '30일 내 소멸 예정'(현재 0 고정) 미연결
+- [x] sp3 2차 재검수(#743): 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 3: 경계 테스트 보강 권고·과거 이중 소멸 이력 점검·크론 동시 실행 잠금 이월). Production 읽기 전용 확인(2026-10-22): expire_due_points 정의 해시가 Stage 수정 전과 동일(=#540), anon/authenticated 실행 불가·service_role만, expire 거래 0건·만료일 있는 적립 0건(과거 이중 소멸 흔적 없음), point_use_settings.expiry_days 컬럼 아직 없음(#742 미적용).
+- [x] Stephen 승인(2026-10-22): sp3 MINOR 3건 이월 승인(경계 테스트 보강 · 과거 이중 소멸 이력 점검 · 크론 동시 실행 잠금) — 이번 범위에서는 구현하지 않고 이월 부채로 둔다.
+- [x] 설정 직후 전역 반영 확인(Stage, 롤백 DO 블록): 설정 30일 상태에서 실제 함수 호출 결과 반납등록 미션·생일 적립 모두 expires_at = 2026-11-21 23:59:59 KST 부여. 정시반납·렌탈완료(본 적립)·리뷰는 Stage 데이터가 조건 미충족(late_return/no_rental_fee)이라 직접 호출은 못 했으나 라이브 함수 정의에서 point_transactions INSERT 컬럼에 expires_at이 없음을 확인(→ 트리거 대상), 구독 적립(sub_bonus)만 자기 expires_at 지정. 설정은 DB 테이블을 매 적립마다 즉시 읽어 별도 캐시·재시작 없이 저장 직후 반영. 테스트 DB 원복 확인(expiry_days 0).
+- [ ] Production 적용(#742 → #743, DB 먼저 → 검증 → 코드 배포)은 Stephen 확인 후 · 커밋은 Stephen 직접
+
 ## NOW — 🟡 BOUNDARY: 구독 공통 정책·이용안내·서비스 기본 정보를 설정 서브메뉴 '정책관리'(`/cms/set/policy`)로 이동 (2026-10-15, 이 세션'만', ✅ Stephen 지시로 GATE B 명시 승인 · DB 마이그레이션 없음 · 커밋·배포는 Stephen)
 
 Stephen 지시 3항(후속 지시로 codes 탭 → 설정 서브메뉴 독립 항목으로 재배치, 메뉴키 `settings.policy`): ① '정책관리' 화면 신설 ② `/cms/set/rental`의 '대여·예약 이용안내'·'서비스 기본 정보' + `/cms/subscriptions/new`의 '⑤ 정책설정' 3개 영역을 레이아웃 그대로 이동 ③ 구독등록(`/cms/subscriptions/new`)에서 '⑤ 정책설정' 제거.
@@ -374,6 +445,8 @@ Stephen 지시 3항(후속 지시로 codes 탭 → 설정 서브메뉴 독립 �
 - [x] GATE E: @sp3-qa-agent 검수 ✅ 통과(CRITICAL 0·HIGH 0·MEDIUM 1·LOW 5) — 10개 액션 로직·권한 원본과 동일, 진입 게이트·메뉴 오버레이·소비처 무변경·범위 외 수정 없음 확인, 지정 테스트 158건 + server/security 1849건 GREEN
   - MEDIUM(load 진입 게이트 테스트 부재) → 즉시 보강: `policyPageGuards.test.ts`에 load 케이스 추가(세션 없음→/cms/login, 권한 없음·partner→access_denied, manager·superadmin 통과) — 68건 GREEN
   - LOW(미조치, 참고): 낡은 주석 3곳이 `/cms/set/rental` 가리킴(cart/+page.server.ts 106·117행, contract-module.ts 137행 — 범위 밖이라 수정 안 함) · 액션 단 메뉴 오버레이 미집행(다른 settings.* 페이지와 동일한 기존 패턴) · 소스 문자열 스캔 테스트의 오탐 가능성 · 새 페이지 state_referenced_locally 경고(원본과 동일 패턴)
+- [x] 이 세션 후속 기록(2026-10-22, 코드 수정 없음 — 읽기 전용 점검): CMS 포인트 적립 규칙 7종 지급 로직 점검(생일·정시반납·렌탈완료·이벤트·리뷰 정상 / 추천인·피추천인 의도적 비활성) + '고객 반납정보 등록' 포인트는 다른 세션이 이미 `return_register_mission`(Migration #739, Stage만 적용·Production 미적용)으로 구현해 둔 것을 확인(중복 구현 안 함, 기존 테스트 9건 GREEN). 관찰 3건: 렌탈완료 적립률 Stage 0.03 / Production 0.003 불일치(Stephen 확인 대기) · 정시반납 판정이 UTC 기준·관리자 확인 시점 · 생일 포인트 생년월일 수정 악용 여지. 이 세션 소유 코드는 커밋 5a5701d7(정책관리)이 전부이며 재검수 대상.
+- [x] 2026-10-22 sp3 재검수(커밋 5a5701d7): 기능·권한·소비처 무변경 확인, sp5 생략(의심 신호 없음). BLOCKER 1건(`set/policy/+page.server.ts` reorderPolicyItems `no-useless-assignment` 린트) → 같은 세션 즉시 수정(초기값 `= null` 제거, 동작 무변경), eslint 0건·policy 테스트 71건 GREEN. MINOR 참고: ① 계정별로 `settings.rental`/`subscriptions.new`를 꺼 둔 관리자는 새 메뉴키 `settings.policy`를 따로 꺼야 함 ② reorderPolicyItems 순서 입력이 배열이 아니면 500(원본과 동일·manager+ 한정) ③ 위 'svelte-check 신규 경고 0'은 엄밀히는 `state_referenced_locally` 경고 7건(원본과 같은 패턴, $effect로 재동기화)과 어긋남 — 표현 정정.
 - [ ] Stephen 실화면 확인(설정 서브메뉴 '정책관리' 표시·3개 영역 저장 동작) → 확인 시 헤더를 `## DONE`으로 변경 · 커밋은 Stephen 직접 (실브라우저 확인은 CLAUDE.md 기본값에 따라 미실시)
 
 ## NOW — 🔴 CRITICAL: 문서 & 양식 통합 편집기 이식형 모듈 신설(src/lib/modules/doc-editor) — 계약서 양식(문서형) 적용, P0~P6 단계 실행 (2026-10-14, 이 세션'만', ✅ Stephen 계획 승인·하네스 플로 실행 지시 · ⏳ GATE B 확정 대기 · DB 마이그레이션 없음 · 기존 정상 로직 보호 원칙 · 기존 파일 수정은 허용된 2곳뿐(P4 ContractTemplatePanel flow 분기 플래그 교체 / P6 렌더 확장 가산 등록) · 커밋·배포는 Stephen)

@@ -32,6 +32,48 @@ function validateManualHolidayDate(date: string, checkPast = true): string | nul
   return null
 }
 
+/** 반납 검수 항목(Migration #738) — 반납 필수 체크리스트 마스터. customer_visible = '고객검수'(고객 반납 등록 화면 노출) */
+export interface ReturnInspectionItem {
+  id: string
+  item_key: string
+  label: string
+  customer_visible: boolean
+  display_order: number
+}
+
+/** 반납 사진등록 항목(Migration #739) — 택배 반납 고객 반납정보 등록 화면의 사진 카드 마스터 */
+export interface ReturnPhotoItem {
+  id: string
+  item_key: string
+  label: string
+  customer_visible: boolean
+  display_order: number
+}
+
+const MAX_INSPECTION_LABEL = 100
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_PHOTO_LABEL = 50
+
+// 검수 항목 테이블은 서버 전용(service_role만 접근)이라 load·액션 모두 서비스 키 클라이언트로 다룬다.
+function inspectionAdmin(): SupabaseClient | null {
+  const key = env.SUPABASE_SERVICE_ROLE_KEY
+  return key ? createClient(getSupabaseUrl(), key) : null
+}
+
+const INSPECTION_ERRORS: Record<string, string> = {
+  label_required: '검수항목을 입력해주세요.',
+  label_too_long: `검수항목은 ${MAX_INSPECTION_LABEL}자 이내로 입력해주세요.`,
+  limit_reached: '검수항목은 최대 20개까지 등록할 수 있습니다.',
+  not_found: '이미 삭제되었거나 존재하지 않는 항목입니다.',
+}
+
+const PHOTO_ERRORS: Record<string, string> = {
+  label_required: '사진등록 항목명을 입력해주세요.',
+  label_too_long: `사진등록 항목명은 ${MAX_PHOTO_LABEL}자 이내로 입력해주세요.`,
+  limit_reached: '사진등록 항목은 최대 10개까지 등록할 수 있습니다.',
+  not_found: '이미 삭제되었거나 존재하지 않는 항목입니다.',
+}
+
 export interface RentalPeriodOption {
   id: string
   name: string
@@ -187,6 +229,35 @@ export const load: PageServerLoad = async ({ locals }) => {
     untypedRpc(supabase, 'get_delivery_zip_ranges'),
   ])
 
+  // 반납 검수 항목 — 조회 실패(테이블 미적용 등)는 목록만 비우고 화면 전체는 계속 렌더링한다(fail-soft)
+  let inspectionItems: ReturnInspectionItem[] = []
+  let inspectionReady = false
+  const inspectionClient = inspectionAdmin()
+  if (inspectionClient) {
+    const { data: inspRows, error: inspErr } = await untypedFrom(inspectionClient, 'return_inspection_items')
+      .select('id, item_key, label, customer_visible, display_order')
+      .is('deleted_at', null)
+      .order('display_order')
+    if (!inspErr) {
+      inspectionItems = (inspRows ?? []) as unknown as ReturnInspectionItem[]
+      inspectionReady = true
+    }
+  }
+
+  // 반납 사진등록 항목 — 검수 항목과 같은 fail-soft
+  let photoItems: ReturnPhotoItem[] = []
+  let photoReady = false
+  if (inspectionClient) {
+    const { data: photoRows, error: photoErr } = await untypedFrom(inspectionClient, 'return_photo_items')
+      .select('id, item_key, label, customer_visible, display_order')
+      .is('deleted_at', null)
+      .order('display_order')
+    if (!photoErr) {
+      photoItems = (photoRows ?? []) as unknown as ReturnPhotoItem[]
+      photoReady = true
+    }
+  }
+
   type ZipRangeRow = { sido: string; sigungu: string; range_start: number; range_end: number; zip_count: number }
   const zipRows = ((zipRangeRes.data as ZipRangeRow[] | null) ?? [])
   const countByKey = new Map<string, number>()
@@ -219,10 +290,188 @@ export const load: PageServerLoad = async ({ locals }) => {
     discountTiers: ((discountTiers as { data: DeliveryFeeDiscountTier[] | null }).data ?? []),
     deliveryAreas: areasWithZips as DeliveryServiceArea[],
     catalogRegions,
+    inspectionItems,
+    inspectionReady,
+    photoItems,
+    photoReady,
   }
 }
 
 export const actions: Actions = {
+  // ─── 반납 검수 항목(Migration #738) ────────────
+  addInspectionItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const label = (data.get('label') as string | null)?.trim() ?? ''
+    if (!label) return fail(400, { error: INSPECTION_ERRORS.label_required })
+    if ([...label].length > MAX_INSPECTION_LABEL) return fail(400, { error: INSPECTION_ERRORS.label_too_long })
+    const customerVisible = data.get('customer_visible') !== 'false'
+    const { data: res, error } = await untypedRpc(admin, 'cms_upsert_return_inspection_item', {
+      p_id: null,
+      p_label: label,
+      p_customer_visible: customerVisible,
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: INSPECTION_ERRORS[r?.error ?? ''] ?? '추가에 실패했습니다.' })
+    return { success: true }
+  },
+
+  // 항목명 수정(자동 저장)·'고객검수' 노출 토글 — 넘어온 값만 바꾼다
+  updateInspectionItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const id = data.get('id') as string | null
+    if (!id) return fail(400, { error: 'id required' })
+    const rawLabel = data.get('label')
+    const label = typeof rawLabel === 'string' ? rawLabel.trim() : null
+    if (label !== null && !label) return fail(400, { error: INSPECTION_ERRORS.label_required })
+    if (label !== null && [...label].length > MAX_INSPECTION_LABEL) return fail(400, { error: INSPECTION_ERRORS.label_too_long })
+    const rawVisible = data.get('customer_visible')
+    const customerVisible = rawVisible === null ? null : rawVisible !== 'false'
+    if (label === null && customerVisible === null) return fail(400, { error: '변경할 내용이 없습니다.' })
+    const { data: res, error } = await untypedRpc(admin, 'cms_upsert_return_inspection_item', {
+      p_id: id,
+      p_label: label,
+      p_customer_visible: customerVisible,
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: INSPECTION_ERRORS[r?.error ?? ''] ?? '저장에 실패했습니다.' })
+    return { success: true }
+  },
+
+  deleteInspectionItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const id = data.get('id') as string | null
+    if (!id) return fail(400, { error: 'id required' })
+    const { data: res, error } = await untypedRpc(admin, 'cms_delete_return_inspection_item', { p_id: id })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: INSPECTION_ERRORS[r?.error ?? ''] ?? '삭제에 실패했습니다.' })
+    return { success: true }
+  },
+
+  reorderInspectionItems: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const raw = data.get('ids')
+    if (typeof raw !== 'string') return fail(400, { error: 'ids required' })
+    let ids: unknown
+    try { ids = JSON.parse(raw) } catch { return fail(400, { error: 'ids invalid' }) }
+    if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !UUID_RE.test(x))) return fail(400, { error: 'ids invalid' })
+    const { error } = await untypedRpc(admin, 'cms_reorder_return_inspection_items', { p_ids: ids })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
+  // ─── 반납 사진등록 항목(Migration #739) ────────────
+  addPhotoItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const label = (data.get('label') as string | null)?.trim() ?? ''
+    if (!label) return fail(400, { error: PHOTO_ERRORS.label_required })
+    if ([...label].length > MAX_PHOTO_LABEL) return fail(400, { error: PHOTO_ERRORS.label_too_long })
+    const { data: res, error } = await untypedRpc(admin, 'cms_upsert_return_photo_item', {
+      p_id: null,
+      p_label: label,
+      p_customer_visible: data.get('customer_visible') !== 'false',
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: PHOTO_ERRORS[r?.error ?? ''] ?? '추가에 실패했습니다.' })
+    return { success: true }
+  },
+
+  updatePhotoItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const id = data.get('id') as string | null
+    if (!id) return fail(400, { error: 'id required' })
+    const rawLabel = data.get('label')
+    const label = typeof rawLabel === 'string' ? rawLabel.trim() : null
+    if (label !== null && !label) return fail(400, { error: PHOTO_ERRORS.label_required })
+    if (label !== null && [...label].length > MAX_PHOTO_LABEL) return fail(400, { error: PHOTO_ERRORS.label_too_long })
+    const rawVisible = data.get('customer_visible')
+    const customerVisible = rawVisible === null ? null : rawVisible !== 'false'
+    if (label === null && customerVisible === null) return fail(400, { error: '변경할 내용이 없습니다.' })
+    const { data: res, error } = await untypedRpc(admin, 'cms_upsert_return_photo_item', {
+      p_id: id,
+      p_label: label,
+      p_customer_visible: customerVisible,
+    })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: PHOTO_ERRORS[r?.error ?? ''] ?? '저장에 실패했습니다.' })
+    return { success: true }
+  },
+
+  deletePhotoItem: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const id = data.get('id') as string | null
+    if (!id) return fail(400, { error: 'id required' })
+    const { data: res, error } = await untypedRpc(admin, 'cms_delete_return_photo_item', { p_id: id })
+    if (error) return fail(500, { error: error.message })
+    const r = res as { ok: boolean; error?: string } | null
+    if (!r?.ok) return fail(400, { error: PHOTO_ERRORS[r?.error ?? ''] ?? '삭제에 실패했습니다.' })
+    return { success: true }
+  },
+
+  reorderPhotoItems: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const admin = inspectionAdmin()
+    if (!admin) return fail(500, { error: '서버 설정 오류' })
+    const data = await request.formData()
+    const raw = data.get('ids')
+    if (typeof raw !== 'string') return fail(400, { error: 'ids required' })
+    let ids: unknown
+    try { ids = JSON.parse(raw) } catch { return fail(400, { error: 'ids invalid' }) }
+    if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !UUID_RE.test(x))) return fail(400, { error: 'ids invalid' })
+    const { error } = await untypedRpc(admin, 'cms_reorder_return_photo_items', { p_ids: ids })
+    if (error) return fail(500, { error: error.message })
+    return { success: true }
+  },
+
   // ─── 대여 기간 조건 ───────────────────────────
   addPeriod: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
