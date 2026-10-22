@@ -6,7 +6,6 @@
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
-  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { contractSignRemainingSeconds, formatCountdown, isContractSignUrgent } from '$lib/utils/holdContractTimer'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
@@ -17,7 +16,14 @@
   // 통합 예약·대여현황(2026-10-22, Stephen 확정 — 예약현황 + 대여현황 한 화면): 임시예약 → 신청대기 → 계약대기 → 계약완료 → … → 완료, 취소·환불·CS, 전체.
   // '계약대기'는 실제 상태가 '신청대기'와 같은 hold 이지만 전자계약이 발송된 건만 골라내는 별도 조건(contractPending)이라 value 는 같고 contractPending 만 다르다.
   // 화면 오픈 시 기본 활성 필터는 '신청대기'(+page.server.ts). '전체' 칩은 없앴다(2026-10-22) — 모든 상태가 다른 칩에 있고 파손신고 건은 '완료' 칩에 합쳤다.
-  const STATUS_FILTERS: { label: string; value: string; contractPending?: boolean; arrow?: boolean }[] = [
+  // 원형 배지 안 글자 줄바꿈 — 4글자 이상은 반으로 나눠 두 줄(패널 헤더 RentalJourneyStepper 와 동일 규칙), 3글자 이하는 한 줄
+  function badgeLines(label: string): string[] {
+    if (label.length < 4) return [label]
+    const h = Math.ceil(label.length / 2)
+    return [label.slice(0, h), label.slice(h)]
+  }
+
+  const STATUS_FILTERS: { label: string; value: string; contractPending?: boolean; arrow?: boolean; lines?: string[] }[] = [
     // 장바구니에 담기만 하고 아직 예약신청을 제출하지 않은 건(draft) — 고객 구매 패턴 파악용 조회 칩
     { label: '임시예약', value: 'draft' },
     { label: '신청대기', value: 'hold', arrow: true },
@@ -31,8 +37,11 @@
     { label: '검수',     value: 'inspection', arrow: true },
     { label: '완료',     value: 'completed' },
     // 결제 전 취소·만료 + 결제 후 취소·환불 + 완료된 CS 접수 건 — 단계 화살표 없음
-    { label: '취소·환불·CS', value: 'cancelled_refunded' },
+    { label: '취소·환불·CS', value: 'cancelled_refunded', lines: ['취소·환불', 'CS'] },
   ]
+
+  // 선택된 칩의 위치 — 이후 단계 칩은 비활성 BG(글자는 활성 BG 컬러토큰)로 표시한다(2026-10-22)
+  const activeFilterIndex = $derived(STATUS_FILTERS.findIndex((f) => (data.status ?? '') === f.value && !!data.contractPending === !!f.contractPending))
 
     const STATUS_LABEL: Record<string, string> = {
     pending:          '접수',
@@ -267,24 +276,41 @@
 
     <!-- 예약 → 대여 진행 순서를 겸하는 내비게이터형 필터 — 신청대기→...→검수는 버튼 내부 화살표로 "단계"임을 드러내고,
          '전체'는 구분선으로 분리해 취소·환불·CS 는 파이프라인 밖의 종결 상태임을 색으로 구분(CMS 콤보버튼 표준 §7-12-A pill 적용) -->
+    <!-- 2026-10-22(Stephen 지시): 칩을 패널 헤더 '단계 흐름 원형 배지'(RentalJourneyStepper slim)로 교체 — 원형 배지·화살표 크기 1.5배, 등장·팝·회전 호·글로·화살표 물결 모션 동일.
+         글자는 기존 칩 폰트 토큰(--text-pc-script-12 / 700) 그대로. 숫자 카운터 요소·로직(chipCounts)은 기존 그대로 배지 우상단에 얹는다. -->
     <div class="filter-nav" role="group" aria-label="예약·대여 상태 필터">
-      {#each STATUS_FILTERS as f}
+      {#each STATUS_FILTERS as f, i}
         {@const countKey = f.contractPending ? 'contract_pending' : f.value}
-        <button
-          class="chip"
-          class:chip-refund={f.value === 'cancelled_refunded'}
-          class:chip-active={(data.status ?? '') === f.value && !!data.contractPending === !!f.contractPending}
-          onclick={() => setStatus(f.value, f.contractPending)}
-        >
-          <span>{f.label}</span>
-          {#if data.chipCounts?.[countKey] != null}
-            <!-- 처리 대기 건수 배지 — 상품 패널 탭 수량 배지(tab-count-badge) 스타일 차용: 있음=red-5%/red, 없음=surface-gray/text-mid -->
-            <span class="chip-count" class:is-empty={data.chipCounts[countKey] === 0} aria-label="{f.value === 'completed' || f.value === 'cancelled_refunded' ? '오늘 완료' : '처리 대기'} {data.chipCounts[countKey]}건" title={f.value === 'completed' ? '오늘 완료된 건수' : f.value === 'cancelled_refunded' ? '오늘 취소·완료 처리된 건수' : undefined}>{data.chipCounts[countKey]}</span>
-          {/if}
-          {#if f.arrow}
-            <ChevronIcon direction="right" size={6} color="currentColor" />
-          {/if}
-        </button>
+        {@const isActive = (data.status ?? '') === f.value && !!data.contractPending === !!f.contractPending}
+        <div class="nav-item" class:no-arrow={!f.arrow} style="--i: {i}">
+          <button
+            class="chip"
+            class:chip-refund={f.value === 'cancelled_refunded'}
+            class:chip-active={isActive}
+            class:chip-draft={f.value === 'draft'}
+            class:chip-after={activeFilterIndex >= 0 && i > activeFilterIndex && f.value !== 'cancelled_refunded'}
+            aria-pressed={isActive}
+            onclick={() => setStatus(f.value, f.contractPending)}
+          >
+            <span class="chip-text">{#each f.lines ?? badgeLines(f.label) as line}<span>{line}</span>{/each}</span>
+            {#if data.chipCounts?.[countKey] != null}
+              <!-- 처리 대기 건수 배지 — 상품 패널 탭 수량 배지(tab-count-badge) 스타일 차용: 있음=red-5%/red, 없음=surface-gray/text-mid -->
+              <span class="chip-count" class:is-empty={data.chipCounts[countKey] === 0} aria-label="{f.value === 'completed' || f.value === 'cancelled_refunded' ? '오늘 완료' : '처리 대기'} {data.chipCounts[countKey]}건" title={f.value === 'completed' ? '오늘 완료된 건수' : f.value === 'cancelled_refunded' ? '오늘 취소·완료 처리된 건수' : undefined}>{data.chipCounts[countKey]}</span>
+            {/if}
+          </button>
+        </div>
+        {#if f.arrow}
+          <div class="nav-conn" class:done={activeFilterIndex >= 0 && i < activeFilterIndex} style="--i: {i}">
+            {#if isActive}
+              <!-- 선택된 단계 오른쪽 화살표 — 패널 헤더와 동일한 줄무늬 물결 모션 -->
+              <span class="wave-arrow" aria-hidden="true"><span class="wave-strip"></span></span>
+            {:else}
+              <svg class="nav-arrow" viewBox="0 0 15 10" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path fill="currentColor" d="M6 1.50201C6.00016 0.347444 7.25006 -0.374122 8.25 0.203186L13.5 3.23444C14.4999 3.81179 14.4999 5.25471 13.5 5.83209L8.25 8.86334C7.25003 9.44068 6.00007 8.71916 6 7.56451V6.69733L2.25 8.86334C1.25003 9.44068 7.20656e-05 8.71916 0 7.56451V1.50201C0.000159498 0.347444 1.25006 -0.374122 2.25 0.203186L6 2.36823V1.50201Z"/>
+              </svg>
+            {/if}
+          </div>
+        {/if}
       {/each}
     </div>
   </div>
@@ -511,50 +537,147 @@
     border-color: var(--cs-focus-ring);
   }
 
-  /* 대여 라이프사이클 내비게이터형 필터 — CMS 콤보버튼 표준 §7-12-A(cat-pill/filter-pill
-     툴바형: pill 30px, purple↔purple-20)을 베이스로, 미선택 상태도 버튼 UI가 뚜렷이 보이도록
-     BG를 --cs-purple-op10(purple-10%, app.css 기존 등록 토큰)로 강화 + 화살표를 버튼 내부로
-     이동 + 가로폭 확장(2026-08-20 Stephen 지시 반영) */
-  .filter-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .filter-divider {
-    width: 1px;
-    height: 18px;
-    background: var(--cs-lilac);
-    margin: 0 2px;
-    flex-shrink: 0;
+  /* 대여 라이프사이클 내비게이터형 필터 — 2026-10-22(Stephen 지시): 패널 헤더 '단계 흐름 원형 배지'(RentalJourneyStepper slim)를 응용해 칩을 대체.
+     원형 배지 48px → 72px, 화살표 14×9px → 21×13.5px (각 1.5배). 글자는 기존 칩 폰트 토큰(--text-pc-script-12 / 700) 그대로.
+     등장(step-in)·선택 팝(step-pop)·회전 호(step-orbit)·글로(step-glow)·화살표 물결(wave-flow) 모션과 색 토큰은 패널과 동일. */
+  .filter-nav { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; row-gap: 14px; padding: 10px 8px; --circle: 72px; --conn: 56px; }
+  .nav-item {
+    display: flex; align-items: center; flex-shrink: 0;
+    animation: step-in 0.5s cubic-bezier(0.34, 1.3, 0.64, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 70ms);
   }
+  .nav-item.no-arrow { margin-right: 24px; }
+  .nav-conn {
+    flex: 0 0 auto; display: grid; place-items: center;
+    width: var(--conn); height: var(--circle);
+    color: var(--cs-purple-pale);
+    animation: step-in 0.4s ease-out backwards;
+    animation-delay: calc(var(--i, 0) * 60ms + 30ms);
+  }
+  /* 지난 단계(선택 칩 앞쪽) 화살표는 퍼플 — 패널 헤더 step-connector.done 과 동일, 이후 단계는 purple-pale */
+  .nav-conn.done { color: var(--cs-purple); }
+  .nav-arrow { width: 21px; height: 13.5px; flex-shrink: 0; }
+
   .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    border-radius: var(--radius-xl);
-    padding: 5px 26px;                  /* 상하 5px 추가(기존 0) + 가로폭 확장(기존 16px) */
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: var(--circle);
+    height: var(--circle);
+    padding: 0;
+    border-radius: 50%;
+    box-sizing: border-box;
+    border: 2px solid transparent;      /* 비선택 배지는 아웃라인 없음(크기 유지용 투명 테두리) */
+    background: var(--cs-purple);        /* 2026-10-22: 미선택 배지도 활성 BG(퍼플·흰 글자) — 선택 배지는 옅은 퍼플 BG+회전 호로 구분 */
+    color: var(--cs-white);
     font: var(--text-pc-script-12);
     font-weight: 700;
+    text-align: center;
     white-space: nowrap;
     cursor: pointer;
-    border: none;
-    background: var(--cs-purple-op10);  /* purple-10% — 미선택 상태도 버튼 UI로 뚜렷이 노출 */
-    color: var(--cs-text);
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s, transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1); /* 호버 버블: 스프링 오버슈트(FloatingBar 버블 곡선 계열) */
   }
-  /* 호버 컬러토큰값 유지(기존 var(--cs-purple) 그대로) — 화살표는 currentColor라 함께 전환됨 */
-  .chip:hover:not(.chip-active) { color: var(--cs-purple); }
-  .chip-active { background: var(--cs-purple); color: var(--cs-white); }
+  .chip:hover { transform: scale(1.12); }
+  .chip:active { transform: scale(0.95); transition-duration: 0.15s, 0.15s, 0.15s; }
+  /* 글자(라벨·건수)는 버블 모션 제외(2026-10-22) — 같은 곡선으로 역배율을 걸어 글자 크기는 그대로 둔다 */
+  .chip-text, .chip-count { transition: transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .chip:hover .chip-text, .chip:hover .chip-count { transform: scale(0.8929); }
+  .chip:active .chip-text, .chip:active .chip-count { transform: scale(1.0526); transition-duration: 0.15s; }
+  .chip-text {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column; align-items: center;
+    line-height: 1.15; letter-spacing: -0.3px;
+  }
+  /* 호버는 BG 색상 변경만(아웃라인·그림자 추가 없음) */
+  .chip:hover:not(.chip-active) { background: var(--cs-purple-hover); color: var(--cs-white); }
+  /* 선택된 칩 이후 단계 — 비활성 BG(lilac)만 적용하고 글자는 활성 BG 컬러토큰(purple) */
+  /* 파이프라인 밖 두 배지('임시예약'·'취소·환불·CS')는 크기 10% 축소(72px → 64.8px, 2026-10-22) — 글자 토큰은 그대로 */
+  .chip-draft, .chip-refund { width: calc(var(--circle) * 0.9); height: calc(var(--circle) * 0.9); }
+  /* '임시예약'(예약 신청 전 장바구니 건)은 파이프라인 밖 — 미선택 시 항상 옅은 회색 BG(2026-10-22) */
+  .chip-draft:not(.chip-active) { background: var(--cs-purple-op10); color: var(--cs-purple); }
+  .chip-draft:hover:not(.chip-active) { background: var(--cs-purple-hover); color: var(--cs-white); }
+  .chip-after:not(.chip-active) { background: var(--cs-surface-gray); color: var(--cs-purple); } /* 바탕(lilac)과 같아 안 보여 옅은 회색 토큰으로 변경 */
+  /* 선택 — 패널 현재 단계와 동일: 흰 배경 + 회전 호 + 숨 쉬는 글로 */
+  .chip-active { background: var(--cs-white); color: var(--cs-purple-dark); animation: step-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s backwards; }
+  .chip-active::before {
+    content: '';
+    position: absolute;
+    inset: -9px; /* 호 두께 3px→6px에 맞춰 바깥으로 확장 */
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0 35%, var(--cs-purple-pale) 60%, var(--cs-purple-light) 100%);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+    animation: step-orbit 2.2s linear infinite;
+    will-change: transform;
+    pointer-events: none;
+  }
+  .chip-active::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--cs-purple) 14%, transparent);
+    animation: step-glow 3s ease-in-out 0.8s infinite backwards;
+    will-change: transform, opacity;
+    pointer-events: none;
+  }
+  /* 건수 배지 — 원형 배지 우상단에 얹는다(호·글로보다 위) */
   .chip-count {
+    position: absolute; top: -4px; right: -6px; z-index: 2;
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 18px; height: 18px; margin-left: -3px; padding: 0 5px;
+    min-width: 18px; height: 18px; padding: 0 5px;
     border-radius: var(--radius-full, 99px);
     font: var(--text-pc-descript-10); line-height: 18px;
     background: var(--cs-red-xlight); color: var(--cs-red);
   }
   .chip-count.is-empty { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
-  /* '전체'는 파이프라인 밖의 리셋 액션 — 미선택 시 기본 BG토큰(purple-10) 제거해 다른
-     순차 상태 버튼들과 시각적으로 구분(선택되면 다른 칩과 동일하게 chip-active 배경 적용) */
-  .chip-all:not(.chip-active) { background: transparent; }
-  /* '취소·환불'은 일반 진행 단계와 구분되는 종료 상태 — 미선택 시 극연한 레드(red-5%), 선택 시 레드(red-100, 흰 글자 대비 확보) */
-  .chip-refund:not(.chip-active) { background: var(--cs-red-xlight); }
-  .chip-refund.chip-active { background: var(--cs-red); }
+  /* '취소·환불·CS'는 일반 진행 단계와 구분되는 종료 상태 — 미선택 시 레드(--cs-red) 채움·흰 글자, 선택 시 흰 BG+레드 호·글로 */
+  .chip-refund:not(.chip-active) { background: var(--cs-red); color: var(--cs-white); }
+  .chip-refund:hover:not(.chip-active) { background: var(--cs-red-badge); }
+  .chip-refund.chip-active { color: var(--cs-red); }
+  .chip-refund.chip-active::before { background: conic-gradient(from 0deg, transparent 0 35%, var(--cs-red-xlight) 60%, var(--cs-red) 100%); }
+  .chip-refund.chip-active::after { box-shadow: 0 0 0 5px color-mix(in srgb, var(--cs-red) 14%, transparent); }
+
+  /* 선택 단계 오른쪽 화살표 물결 — 마스크(화살표 모양) 안의 줄무늬를 translateX 로만 이동(합성기 처리) */
+  .wave-arrow {
+    display: block;
+    width: 21px;
+    height: 13.5px;
+    overflow: hidden;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 10'%3E%3Cpath d='M6 1.50201C6.00016 0.347444 7.25006 -0.374122 8.25 0.203186L13.5 3.23444C14.4999 3.81179 14.4999 5.25471 13.5 5.83209L8.25 8.86334C7.25003 9.44068 6.00007 8.71916 6 7.56451V6.69733L2.25 8.86334C1.25003 9.44068 7.20656e-05 8.71916 0 7.56451V1.50201C0.000159498 0.347444 1.25006 -0.374122 2.25 0.203186L6 2.36823V1.50201Z'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 10'%3E%3Cpath d='M6 1.50201C6.00016 0.347444 7.25006 -0.374122 8.25 0.203186L13.5 3.23444C14.4999 3.81179 14.4999 5.25471 13.5 5.83209L8.25 8.86334C7.25003 9.44068 6.00007 8.71916 6 7.56451V6.69733L2.25 8.86334C1.25003 9.44068 7.20656e-05 8.71916 0 7.56451V1.50201C0.000159498 0.347444 1.25006 -0.374122 2.25 0.203186L6 2.36823V1.50201Z'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  }
+  .wave-strip {
+    display: block;
+    width: 200%;
+    height: 100%;
+    background: linear-gradient(90deg, var(--cs-purple-pale) 0%, var(--cs-purple-light) 25%, var(--cs-purple-pale) 50%, var(--cs-purple-light) 75%, var(--cs-purple-pale) 100%);
+    transform: translateX(-50%);
+    animation: wave-flow 1.3s linear infinite;
+    will-change: transform;
+  }
+  @keyframes wave-flow { to { transform: translateX(0); } }
+  @keyframes step-in {
+    0%   { opacity: 0; transform: translateY(22px) scale(0.8); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes step-pop {
+    0%   { transform: scale(0.7); }
+    100% { transform: scale(1); }
+  }
+  @keyframes step-glow {
+    0%, 100% { opacity: 0.9; transform: scale(1); }
+    50%      { opacity: 0.25; transform: scale(1.14); }
+  }
+  @keyframes step-orbit { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .nav-item, .nav-conn, .chip-active, .chip-active::before { animation: none; }
+    .chip { transition: background 0.15s, color 0.15s; }
+    .chip:hover, .chip:active { transform: none; }
+    .chip:hover .chip-text, .chip:hover .chip-count, .chip:active .chip-text, .chip:active .chip-count { transform: none; }
+    .chip-active::before, .chip-active::after { display: none; }
+    .wave-strip { animation: none; transform: translateX(-25%); }
+  }
 
   .count-badge {
     font: var(--text-pc-script-12);
