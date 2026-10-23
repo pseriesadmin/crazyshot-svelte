@@ -8,7 +8,8 @@
   let { form, data }: Props = $props()
 
   let isLoading = $state(false)
-  let rememberMe = $state(false)
+  let rememberMe = $state(true)      // 기본 체크 — 사용자 로그인 화면과 동일(2026-10-24)
+  let showPassword = $state(false)     // 로그인 비밀번호 표시/숨기기(2026-10-23, 사용자 로그인 화면과 동일 기능)
   let toastShown = false
   let emailKoreanWarned = false        // 이메일 한글 경고 중복 방지
   let passwordKoreanWarned = false     // 비밀번호(로그인) 한글 경고 중복 방지
@@ -477,11 +478,12 @@
 
           <div class="field-group">
             <label class="field-label" for="password">비밀번호</label>
+            <div class="pw-field">
             <input
               id="password"
               name="password"
-              type="password"
-              class="f-input"
+              type={showPassword ? 'text' : 'password'}
+              class="f-input pw-input"
               maxlength={72}
               placeholder="비밀번호 입력"
               autocomplete="current-password"
@@ -499,24 +501,50 @@
               }}
               required
             />
+              <button
+                type="button"
+                class="pw-eye-btn"
+                onclick={() => (showPassword = !showPassword)}
+                aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
+                aria-pressed={showPassword}
+              >
+                {#if showPassword}
+                  <!-- eye open: 비밀번호가 보이는 상태 -->
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M2.75 12C2.75 12 5.75 6 12 6C18.25 6 21.25 12 21.25 12C21.25 12 18.25 18 12 18C5.75 18 2.75 12 2.75 12Z" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+                  </svg>
+                {:else}
+                  <!-- eye slash: 비밀번호가 가려진 상태 -->
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M21.27 9.18C20.98 8.72 20.67 8.29 20.35 7.89C19.98 7.42 19.28 7.38 18.86 7.8L15.86 10.8C16.08 11.46 16.12 12.22 15.92 13.01C15.57 14.42 14.43 15.56 13.02 15.91C12.23 16.11 11.47 16.07 10.81 15.85L8.35 18.31C7.85 18.81 8.01 19.69 8.68 19.95C9.75 20.36 10.86 20.57 12 20.57C13.78 20.57 15.51 20.05 17.09 19.08C18.7 18.08 20.15 16.61 21.32 14.74C22.27 13.23 22.22 10.69 21.27 9.18Z" fill="currentColor"/>
+                    <path d="M14.02 9.98L9.98 14.02C9.47 13.5 9.14 12.78 9.14 12C9.14 10.43 10.42 9.14 12 9.14C12.78 9.14 13.5 9.47 14.02 9.98Z" fill="currentColor"/>
+                    <path d="M18.25 5.75L14.86 9.14C14.13 8.4 13.12 7.96 12 7.96C9.76 7.96 7.96 9.77 7.96 12C7.96 13.12 8.41 14.13 9.14 14.86L5.76 18.25C4.64 17.35 3.62 16.2 2.75 14.84C1.75 13.27 1.75 10.72 2.75 9.15C3.91 7.33 5.33 5.9 6.91 4.92C8.49 3.96 10.22 3.43 12 3.43C14.23 3.43 16.39 4.25 18.25 5.75Z" fill="currentColor"/>
+                    <path d="M21.77 2.23C21.47 1.93 20.98 1.93 20.68 2.23L2.23 20.69C1.93 20.99 1.93 21.48 2.23 21.78C2.38 21.92 2.57 22 2.77 22C2.97 22 3.16 21.92 3.31 21.77L21.77 3.31C22.08 3.01 22.08 2.53 21.77 2.23Z" fill="currentColor"/>
+                  </svg>
+                {/if}
+              </button>
+            </div>
           </div>
         </div>
 
         <div class="remember-row">
+          <!-- front-uiux §17 체크 확인 버튼 표준(인라인 SVG + .checkbox-btn) — <input type="checkbox"> 금지.
+               버튼은 폼 값을 보내지 않으므로 숨김 입력으로 rememberMe('on')를 전달한다(서버: form.get('rememberMe') === 'on') -->
           <label class="remember-label">
-            <input
-              type="checkbox"
-              name="rememberMe"
-              class="remember-checkbox-input"
-              bind:checked={rememberMe}
-            />
-            <span class="remember-checkbox-box" aria-hidden="true">
-              {#if rememberMe}
-                <svg width="12" height="9" viewBox="0 0 14 10" fill="none" aria-hidden="true">
-                  <path d="M1 5L5 9L13 1" stroke="var(--cs-purple)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              {/if}
-            </span>
+            <input type="hidden" name="rememberMe" value={rememberMe ? 'on' : ''} />
+            <button
+              type="button"
+              class="checkbox-btn checkbox-btn-terms"
+              class:checked={rememberMe}
+              onclick={() => (rememberMe = !rememberMe)}
+              aria-label="로그인 상태 유지"
+              aria-pressed={rememberMe}
+            >
+              <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
+              </svg>
+            </button>
             <span class="remember-text">로그인 상태 유지</span>
           </label>
         </div>
@@ -608,6 +636,28 @@
   .f-input::placeholder { color: var(--cs-text-placeholder); }
   .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
+  /* 로그인 비밀번호 표시/숨기기 버튼(2026-10-23) — 입력칸 오른쪽 안에 겹쳐 둔다. 터치 타겟 44px, 호버는 BG 색만 바뀐다(outline·box-shadow 금지, cms bds §0-10) */
+  .pw-field { position: relative; }
+  .pw-input { padding-right: 58px; }
+  .pw-eye-btn {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .pw-eye-btn:hover { background: var(--cs-lilac); }
+
   .remember-row {
     display: flex;
     align-items: center;
@@ -621,27 +671,16 @@
     cursor: pointer;
     user-select: none;
   }
-  .remember-checkbox-input {
-    position: absolute;
-    opacity: 0;
-    width: 0;
-    height: 0;
+  /* front-uiux §17 체크 확인 버튼 표준 — 기본(OFF) purple-op10 / 체크(ON) purple, Mobile 22×15 → PC(≥768px) 18×12 */
+  .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
+  .checkbox-btn-terms { color: var(--cs-purple-op10); }
+  .checkbox-btn-terms.checked { color: var(--cs-purple); }
+  .checkbox-btn-terms svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) {
+    .checkbox-btn-terms svg { width: 18px; height: 12px; }
   }
-  .remember-checkbox-box {
-    width: 20px;
-    height: 20px;
-    background: var(--cs-surface-gray);
-    border-radius: 5px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1.5px solid var(--cs-lilac);
-    transition: border-color 0.15s;
-  }
-  .remember-label:hover .remember-checkbox-box {
-    border-color: var(--cs-purple);
-  }
+  /* §17 수직정렬 광학보정 — 텍스트 옆 단독 배치라 이 화면 라벨 범위로만 스코프(전역 .checkbox-btn-terms 불변) */
+  .remember-label .checkbox-btn-terms { transform: translateY(2px); }
   .remember-text {
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
