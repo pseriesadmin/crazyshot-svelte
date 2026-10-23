@@ -19,6 +19,7 @@ import {
   validateReturnSubmit,
 } from '$lib/server/returnSubmission'
 import { sendPushToAdmins } from '$lib/server/push'
+import { registerDheroReturn } from '$lib/server/registerDheroReturn'
 import { loadReturnInspectionItems, loadReturnPhotoItems, customerChecklistOf, customerPhotoOf } from '$lib/server/returnInspectionItems'
 import type { RequestHandler } from './$types'
 
@@ -129,6 +130,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   const oldIds = prevMediaRows.map((m) => m.id)
   if (oldIds.length > 0) await admin.from('reservation_return_media').delete().in('id', oldIds)
 
+  let dheroReturn: Awaited<ReturnType<typeof registerDheroReturn>> = { outcome: 'skipped' }
   // 대여중이면 반납요청으로 전환(이미 반납요청이면 재제출이므로 그대로).
   // 전환이 실패했는데 제출만 남으면 "제출 있음"으로 오인돼 안내가 끊기므로, 첫 제출이면 제출을 되돌려 처음부터 다시 하게 한다.
   if (row.status === 'in_use') {
@@ -141,6 +143,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
       if (!prevId) await admin.from('reservation_return_submissions').delete().eq('id', submissionId)
       return json({ error: res?.error ?? rpcErr?.message ?? '반납 요청 처리에 실패했어요. 다시 제출해 주세요.' }, { status: 500 })
     }
+    // 두발히어로 반품 접수(배송대여 방식·운송장 있을 때만) — updateStatus 를 거치지 않는 경로라 여기서 직접 호출한다(2026-10-23).
+    // 실패해도 제출은 성공(fail-soft) — 관리자 알림에 수동 등록 필요를 덧붙인다.
+    dheroReturn = await registerDheroReturn(admin, reservationId)
   }
 
   // 대여 액션 로그 기록(플랜: customer_return_submit) — action_type 이 알려진 전환 값이 아니라 상태는 바꾸지 않고 rental_action_logs 에만 남는다.
@@ -177,7 +182,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
     const name = (profile as { full_name?: string | null } | null)?.full_name ?? '고객'
     await sendPushToAdmins('new_session', {
       title: '반납 정보가 등록됐어요',
-      body: `${name}님이 반납 이력정보를 등록했어요.${code ? ` (${code})` : ''} 검수를 진행해 주세요.`,
+      body: `${name}님이 반납 이력정보를 등록했어요.${code ? ` (${code})` : ''} 검수를 진행해 주세요.${dheroReturn.outcome === 'failed' ? ' ⚠ 두발히어로 반품 접수에 실패했어요 — 예약 상세에서 수동으로 등록해 주세요.' : ''}`,
       link: `/cms/rentals?status=returning&selected=${reservationId}`,
     })
   } catch {

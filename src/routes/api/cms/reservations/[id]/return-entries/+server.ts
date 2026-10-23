@@ -8,6 +8,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { RETURN_EVIDENCE_BUCKET } from '$lib/server/returnSubmission'
 import { loadReturnInspectionItems } from '$lib/server/returnInspectionItems'
 import { ADMIN_RETURN_STATUSES, validateAdminReturnEntry } from '$lib/server/returnAdminEntry'
+import { registerDheroReturn } from '$lib/server/registerDheroReturn'
 
 // 반납정보 관리자 직접 등록 (Migration #737, 2026-10-22, Stephen 지시)
 // 반납정보(사진·체크리스트·메모)를 관리자 계정이 직접 등록한다(방문·택배·퀵·무인함 등 반납 방식 무관, 2026-10-22 확대). 목록 조회는 return-evidence GET 이 함께 내려준다.
@@ -68,6 +69,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   // 대여중이면 반납중으로 전환 — 실패하면 방금 만든 등록을 되돌려 "등록됐는데 상태는 그대로"가 남지 않게 한다
   let nextStatus = r.status
+  let dheroReturn: Awaited<ReturnType<typeof registerDheroReturn>> = { outcome: 'skipped' }
   if (r.status === 'in_use') {
     const { data: result, error: rpcErr } = await admin.rpc('update_reservation_status', {
       p_reservation_id: reservationId,
@@ -80,6 +82,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
       return json({ error: out?.error ?? rpcErr?.message ?? '반납 요청 처리에 실패했어요. 다시 등록해 주세요.' }, { status: 500 })
     }
     nextStatus = 'return_requested'
+    // 두발히어로 반품 접수(배송대여 방식·운송장 있을 때만) — updateStatus 를 거치지 않는 경로라 직접 호출(2026-10-23, fail-soft)
+    dheroReturn = await registerDheroReturn(admin, reservationId)
   }
 
   // 대여 액션 로그(fail-soft) — 관리자 직접 등록임을 note 로 구분
@@ -94,5 +98,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     // 로그 실패는 무시
   }
 
-  return json({ ok: true, id: entryId, status: nextStatus })
+  return json({
+    ok: true,
+    id: entryId,
+    status: nextStatus,
+    ...(dheroReturn.outcome === 'failed' ? { dhero_return_failed: dheroReturn.message ?? '두발히어로 반품 접수에 실패했습니다.' } : {}),
+  })
 }
