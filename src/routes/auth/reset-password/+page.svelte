@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
+  import { PASSWORD_MAX, sanitizePasswordInput, validateNewPasswordInput } from '$lib/utils/passwordPolicy'
 
   let newPassword = $state('')
   let confirmPassword = $state('')
@@ -10,6 +11,17 @@
   let isLoading = $state(false)
   let errorMsg = $state<string | null>(null)
   let done = $state(false)
+  // 한글 등 허용되지 않는 문자 경고 — 필드별 독립, 3초 내 재경고 안 함(front-uiux.md §21)
+  let pwWarned = false
+  let pw2Warned = false
+
+  function warnOnce(field: 'pw' | 'pw2'): void {
+    if (field === 'pw' ? pwWarned : pw2Warned) return
+    if (field === 'pw') pwWarned = true
+    else pw2Warned = true
+    csToast.warning('영문(숫자)으로 입력하세요.')
+    setTimeout(() => { if (field === 'pw') pwWarned = false; else pw2Warned = false }, 3000)
+  }
 
   // 메일 링크 처리 — 두 가지 형태를 모두 받는다.
   //  ① ?code=…        : 요청한 브라우저에 PKCE 확인값이 남아 있을 때만 supabase-js가 자동으로 세션 교환(같은 브라우저에서 열어야 함)
@@ -24,18 +36,15 @@
     }
   })
 
-  const SESSION_HELP = '링크가 만료됐거나 다른 기기·브라우저에서 열려 확인할 수 없습니다. 비밀번호를 요청한 같은 브라우저에서 메일 링크를 열거나, 로그인 화면에서 재설정 링크를 다시 요청해주세요.'
+  const SESSION_HELP = '링크가 만료됐거나 이미 사용됐어요. 운영자에게 새 링크를 요청하거나, 로그인 화면의 "비밀번호 찾기"(문자 인증)를 이용해주세요.'
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
     errorMsg = null
 
-    if (newPassword.length < 8) {
-      errorMsg = '비밀번호는 8자 이상이어야 합니다.'
-      return
-    }
-    if (newPassword !== confirmPassword) {
-      errorMsg = '비밀번호가 일치하지 않습니다.'
+    const invalid = validateNewPasswordInput(newPassword, confirmPassword)
+    if (invalid) {
+      errorMsg = invalid
       return
     }
 
@@ -82,9 +91,19 @@
               id="rp-new"
               class="rp-input"
               type={showPassword ? 'text' : 'password'}
-              placeholder="8자 이상 입력"
+              placeholder="6자 이상 입력"
               bind:value={newPassword}
               autocomplete="new-password"
+              maxlength={PASSWORD_MAX}
+              oninput={(e) => {
+                const el = e.currentTarget as HTMLInputElement
+                const { value, removed } = sanitizePasswordInput(el.value)
+                if (removed) {
+                  el.value = value
+                  warnOnce('pw')
+                }
+                newPassword = value
+              }}
             />
             <button
               type="button"
@@ -110,6 +129,16 @@
             placeholder="비밀번호를 한 번 더 입력"
             bind:value={confirmPassword}
             autocomplete="new-password"
+            maxlength={PASSWORD_MAX}
+            oninput={(e) => {
+              const el = e.currentTarget as HTMLInputElement
+              const { value, removed } = sanitizePasswordInput(el.value)
+              if (removed) {
+                el.value = value
+                warnOnce('pw2')
+              }
+              confirmPassword = value
+            }}
           />
         </div>
 
