@@ -827,6 +827,11 @@ export interface VerifyAndUpdatePhoneArgs {
   p_code: string;
 }
 
+// 가입 화면 휴대폰 번호 중복 확인 (Migration 748) — true/false만 반환, 하이픈 무시
+export interface CheckPhoneRegisteredArgs {
+  p_phone: string;
+}
+
 // ── 탈회(Withdrawal) RPC (Migration 365~370) ──
 export interface RequestAccountWithdrawalArgs {
   p_reasons: string[];
@@ -957,6 +962,7 @@ export type Database = {
       set_default_shipping_address: { Args: SetDefaultShippingAddressArgs; Returns: AccountRpcResult };
       update_user_profile: { Args: UpdateUserProfileArgs; Returns: AccountRpcResult };
       verify_and_update_phone: { Args: VerifyAndUpdatePhoneArgs; Returns: AccountRpcResult };
+      check_phone_registered: { Args: CheckPhoneRegisteredArgs; Returns: boolean };
       update_user_doc_url: { Args: UpdateUserDocUrlArgs; Returns: AccountRpcResult };
       delete_user_doc: { Args: DeleteUserDocArgs; Returns: AccountRpcResult };
       toggle_product_wishlist: { Args: ToggleProductWishlistArgs; Returns: ToggleProductWishlistResult };
