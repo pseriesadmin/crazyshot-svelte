@@ -4,6 +4,90 @@
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
 > 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
 
+## NOW — 🔴 CRITICAL(인증·계정 경로 `src/routes/api/**` 수정·DB 함수 변경·Production 적용): 회원가입 번호 중복 확인·회원 삭제·비밀번호 찾기 보완 (Migration #748·#749·#750 — Stage·Production 적용 완료, 2026-10-23, 이 세션'만', ✅ Stephen 지시)
+
+### 발단·원인 (최근 수정분부터)
+- 신고: ① 가입 시 이름·전화번호 미저장 ② 비밀번호 찾기에서 '일치 계정 없음' ③ CMS 회원삭제 `column "name" of relation "user_profiles" does not exist`.
+- 원인 ①②: 로그인된 일반 계정 세션에서 가입하면 휴대폰 인증·이름이 로그인된 기존 계정(mublues)에 기록되고 새 계정(mublue@kakao.com)은 빈 프로필로 생성 → 번호 없는 계정은 비밀번호 찾기 조회(이메일+번호 일치)에서 못 찾음. 가입 중 일반 로그인 세션 차단 코드는 이미 미커밋으로 존재(타 흐름). 번호 중복 확인은 브라우저 세션이 남의 프로필을 못 읽어 항상 '없음' + 서버 중복검사는 하이픈 없는 문자열만 비교.
+- 원인 ③: `soft_delete_customer`(Migration #131 원본)가 없는 칼럼 `name`에 쓰려 함(실제는 `full_name`) — Stage·Production 동일, 항상 실패.
+
+### 구현 내역 (최근순)
+1. 비밀번호 찾기 화면 이메일 단계(`SignUpModal.svelte`): 이메일 입력 0.6초 후 `check_email_registered`로 가입 여부 확인 → 가입됨이면 경고 토스트 '기존 계정정보가 확인되었습니다.' + 휴대폰·인증번호 영역 활성화, 미가입이면 '가입된 이메일이 아닙니다.'. 이메일 변경 시 확인 상태·인증 단계 초기화, 오래된 응답 무시.
+2. 관리자 계정 안내: `passwordResetOtp.ts` 조회를 `lookupResetAccount`로 분리(`findResetTarget`은 관리자 제외 유지) + 신규 `isAdminResetMatch`; `send-otp`가 이메일+번호 둘 다 일치하는 관리자면 문자 미발송·403 `code:'admin_account'`·'관리자계정은 CMS를 통해 수정하세요.', 화면은 경고 토스트. 테스트 `passwordResetSms.test.ts` 19건(관리자 404→403 분리·번호 불일치 시 404 유지).
+3. Migration #750 `verify_and_update_phone`: 중복(`phone_duplicate`)·탈퇴 유예(`withdrawal_conflict`) 비교를 하이픈 무시(숫자만)로. 시그니처·권한(authenticated·service_role, anon 불가) 불변. Stage 롤백 시험(하이픈 형식 중복 거절·다른 번호 통과) + Production 적용·권한·본문 해시 Stage 동일 확인.
+4. Migration #749 `soft_delete_customer`: `name`→`full_name`(그 외 동작·service_role 전용 권한 불변). Stage 롤백 시험(삭제 성공·재호출 '이미 삭제된 계정'·권한) + Production 적용(존재하지 않는 UUID 호출로 칼럼 오류 해소 확인, 실제 삭제는 Production 미시험).
+5. Migration #748 `check_phone_registered`(SECURITY DEFINER, anon·authenticated, true/false만 반환, 하이픈 무시): 가입 화면 인증번호 발송 단계가 이 RPC로 번호 중복 확인(기존 `user_profiles` 직접 조회 대체, 조회 실패 시 진행 차단). Stage·Production 적용·권한 확인.
+
+### 남음
+- [x] sp3 1차(2026-10-23): HOLD — BLOCKER 0·MAJOR 2·MINOR 7. DB 대조 불가로 보류 → 직접 대조 완료(Stage·Production 세 함수 오버로드 1개씩·본문 해시 동일·권한 기대값 일치, 번호 남은 삭제 계정 0건)
+- [x] sp5 A-Lite: 조건부 통과 — CRITICAL 0·HIGH 0·MEDIUM 2(M-1 비로그인 RPC 호출 제한 없음+`regexp_replace` 전체 스캔 DoS, M-2 번호 열거=M-1 범위)·LOW 3(send-otp 404/403 IP 제한 없음, 이메일+번호 아는 제3자의 시간당 5건 문자, 이메일 케이스 폴딩). 관리자 비밀번호 변경 우회 없음(3중 방어)
+- [x] (2026-10-23 후속) MAJOR-1 해소: `src/__tests__/services/signupPhoneAndDeleteRpc.test.ts` 신규 Stage 라이브 9건(#748 하이픈·삭제 제외·빈 입력·권한 / #749 삭제 성공·재호출·없는 계정·서버 전용 / #750 하이픈 중복·탈퇴 유예·정상) GREEN. MINOR 4건 해소: passwordResetSms.test.ts prefer-const · database.ts `check_phone_registered` 타입 등록(화면 호출은 이메일 확인과 같은 `as never` 패턴 — 타입 추론 이슈로 직접 호출 불가, 프로즌 `services/supabase.ts` 미수정) · 재설정 이메일 입력 `no-control-regex` 제거 · 이메일 타이머 unmount 정리. 방화벽(M-1)은 Stephen이 직접 설정
+- [ ] (원 기록) MAJOR-1: #748·#749·#750 라이브 테스트 부재(특히 #749 회귀) · MAJOR-2/M-1: Stephen 결정 — Vercel 방화벽 IP 레이트리밋(`/rest/v1/rpc/check_*_registered`·`/api/auth/password-reset/*`) 또는 `regexp_replace(phone)` 표현식 인덱스(신규 마이그레이션) · 관리자 안내 403 문구 통일 여부
+- [ ] MINOR: 테스트 `prefer-const`(passwordResetSms.test.ts:27)·`SignUpModal.svelte` 신규 `no-control-regex` 1건·`database.ts` 신규 RPC 타입 미등록·#750 헤더 '권한 그대로' 서술 부정확(service_role 추가됨, 적용된 파일은 수정 금지)·이메일 타이머 unmount 정리·soft_delete_customer `search_path` 부재(이월)
+- [ ] 커밋·배포(Stephen): #748·#749·#750 마이그레이션 + `SignUpModal.svelte`(타 세션 미커밋 변경과 혼재) + `passwordResetOtp.ts`·`send-otp/+server.ts`·`passwordResetSms.test.ts`
+- [ ] 이미 깨진 계정 복구(Production: 이메일 빈 3·이름 없음 4·번호 없음 1 — 원인이 전부 이번 건이라고 단정 못 함) — 별도 결정, Stage `mublue@kakao.com` 시험 계정 존치
+- [ ] 이월: 고유 인덱스 `uniq_user_profiles_phone`은 문자열 정확 일치만, 삭제 계정 이메일 잔존(재가입·재설정 영향), 이메일만으로 관리자 안내(정보 노출 trade-off — Stephen 판단 시), 가입 완료 직후 서버의 이름·번호 저장 보장 미구현, 화면 실측 미실시
+
+## NOW — 🔴 CRITICAL(인증·계정 탈취 위험·`src/routes/api/**` 신규): CMS 고객 패널 '비밀번호 설정 링크' 발행 (2026-10-23, 이 세션'만', ✅ Stephen 지시("cms 고객 패널 내 비번셋팅 링크 발행 기능 구현해") · DB·마이그레이션 변경 없음 · 커밋·배포는 Stephen · sp3-qa-agent 검수 ⏳ · 보안(sp5)은 sp3 판단 시에만)
+
+> 이 블록은 **링크 발행 기능만** 다룬다. 같은 세션에서 한 문자 인증번호 방식 비밀번호 찾기·가입 화면 UI·가입 시 로그인 세션 차단 등은 별건(이 기록·검수 범위 밖).
+
+### 발단
+- 메일 방식 비밀번호 재설정이 운영에서 불안정(Supabase 내장 메일 발송 제한·링크 1회용 소진·브라우저 불일치). 인증 후 비밀번호를 정하지 못한 기존 회원(문소윤 등)을 운영자가 직접 도울 수단 필요.
+- 기존 방식은 운영 DB 서비스 키로 스크립트를 직접 돌려야 했음 → CMS 화면에서 발행하도록 이관.
+
+### 구현 내역 (범위 = 아래 4개 파일)
+- `src/routes/api/cms/customers/[id]/recovery-link/+server.ts`(신규): POST. 세션 + CMS 역할 **manager 이상**(`hasSettingsAccess`) + 고객목록 메뉴 권한 오버레이(`requireMenuAccessApi('customers.list')`). 대상: 일반 고객만 — **관리자(CMS) 계정 403**(계정 탈취 방지), 삭제·탈회 완전삭제·익명화 이메일 409. 링크는 auth 계정 이메일로 `generateLink({type:'recovery'})`(메일 미발송), `/auth/reset-password?token_hash=…&type=recovery`로 반환. 응답 `Cache-Control: no-store`. 감사로그 `password_recovery_issued`(**fail-closed** — 기록 실패 시 링크 미반환, 링크·토큰 미기록). 오류 상세·링크는 서버 로그에 남기지 않음.
+- `src/lib/components/cms/CustomerDetailPanel.svelte`: 기본정보 탭에 '비밀번호 설정 링크' 영역(안내문·결과 입력창·[복사]) + 하단 줄에서 [링크 발행]을 [회원 삭제] 왼쪽에 배치(정식 회원·탈회 완전삭제 제외). 링크는 화면 상태로만 보관(고객 바꾸면 폐기·응답 대기 중 고객 전환 시 미표시).
+- `src/lib/server/menuAccessMap.ts`: `customers.list`에 새 엔드포인트 등록(menuAccessMap 정방향·역방향 테스트 통과).
+- `src/__tests__/server/cmsCustomerRecoveryLink.test.ts`(신규 10건): 401/403(partner)·메뉴 권한 OFF·UUID 400·프로필 404/500·관리자 계정 3종 403·삭제/탈회/익명화 409·auth 계정 없음 404·정상(링크 형식·no-store·메일 미발송)·감사로그(링크 미기록)·생성 실패 500·token_hash 없음 500.
+
+### 검증 (이 세션)
+- 신규 10건 GREEN, `src/__tests__/server`·`security` 전체 GREEN(2237건), svelte-check 변경 파일 신규 오류 0.
+- **실브라우저·실링크 클릭 확인은 미실시**(Stephen 로컬 화면에서 버튼 배치만 확인 요청 받음). 유효시간(약 1시간)은 Supabase 인증 설정 의존이라 이 프로젝트 값 미확인.
+
+### 알려진 한계·이월 후보
+- 같은 계정에 링크를 다시 발행했을 때 이전 링크가 무효가 되는지 미검증(화면 문구에 적지 않음).
+- 발행 빈도 제한 없음(감사로그로만 추적).
+- `docs`: security-auth.md 접근 매트릭스·service-operations 반영은 다른 세션이 수정 중인 파일이라 미반영(정리 시 추가).
+
+### 검수 결과 (2026-10-23)
+- **sp3 1차: 코드 기준 통과**(BLOCKER 0·MAJOR 0·MINOR 4·미검증 3, T1). 기계 게이트: vitest 37/37, harness-scan security 0건, svelte-check 0. MINOR: ① stage 스키마 호환(user_id — 이 세션이 Stage SQL로 컬럼 존재 확인) ② 테스트 공백 3건(탈회 유예·이메일 없음·감사 실패) ③ 감사 fail-soft ④ 발행 빈도 제한 없음.
+- **sp5 A-Lite(sp3 판단으로 연결): PASS-CONDITIONS**(CRITICAL 0·HIGH 1·MEDIUM 3·LOW 3·미검증 3). HIGH SEC-001 본인확인·빈도 제한·고객/관리자 통지 없음(탈취된 manager 계정으로 대량 계정 인수 가능), SEC-002 감사 실패 시에도 링크 발급(fail-soft), SEC-003 탈회 유예(requested) 계정에도 발급(링크 로그인 시 자동 복구), SEC-004 링크 쿼리 문자열이 요청 로그에 남을 수 있음, SEC-005 url.origin 신뢰(LOW), SEC-006 대상 조회 user_id 단일 키(LOW).
+- **배포 전 조건(sp5)**: ① 발급자별 빈도 제한+발행 알림(최소 관리자 푸시, 고객 SMS는 같은 배포 또는 BACKLOG) ② 감사 실패 시 링크 미반환(fail-closed) ③ requested 계정 발급 차단 ④ Stage에서 재발행 무효화·1회성·만료시간 실측 + 대시보드 OTP 만료값 확인.
+- **조건 1~3 반영(Stephen 지시 "조건 1~3 바로 수정하고 재검수 실행", 2026-10-23)**: ① 발급자별 시간당 10건·하루 30건·같은 고객 5분 쿨다운(감사로그 집계, 조회 실패 시 500 fail-closed) + 발행 시 관리자 푸시(`sendPushToAdmins('identity_review')` — DB·push.ts 무변경이라 본인증명 승인 알림 수신 설정 관리자에게 감, 이메일 마스킹·링크 미포함) ② `insertCmsAdminAuditLogStrict` 신설(기존 fail-soft 함수 무수정) — 기록 실패 시 링크 미반환·알림 없음 ③ `withdrawal_status='requested'` 409. 테스트 18건 GREEN(신규 8건: 시간당·일일 한도·한도 이내·쿨다운·조회 실패·감사 실패·알림 내용·탈회 신청).
+- **재검수 결과(2026-10-23)**: sp3 2차 = 코드 기준 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 5 — 반영: 알림 구간 try/catch·테스트 22건·본 블록 fail-closed 서술 정정). sp5 재확인 = **PASS-CONDITIONS**(CRITICAL 0·HIGH 0·MEDIUM 1·LOW 2): 조건 1~3 해소, 조건 4 미해소. 신규 SEC-007(알림 수신자 0명이면 탐지 무음 — `identity_review` 수신 superadmin 1명 이상 보장 필요)·SEC-008(쿨다운 발급자 비구분, 수용)·SEC-009(고객 본인 통지 없음, 이월).
+- **남는 조건(배포 전)**: ① Stage 실측(재발행 무효화·1회성·OTP 만료값 — Stephen 승인 필요) ② `identity_review` 알림 수신 관리자(superadmin) 1명 이상 지정 ③ 고객 본인확인 후 발행 운영 절차 문서화(고객 통지 SMS는 BACKLOG 이월).
+- **미반영(미결정)**: 고객 통지 SMS, 운영자 본인확인 절차 의무화, 조건 4(Stage 재발행 무효화·1회성·대시보드 OTP 만료값 실측), 권고 SEC-004~006. **알림 수신자 한계**: 본인증명 승인 알림을 켜 둔 관리자만 받는다(없으면 알림 없음).
+
+### 체크
+- [x] 구현·테스트  [x] sp3-qa-agent 검수(코드 통과)  [x] sp5 A-Lite(PASS-CONDITIONS)  [x] sp5 조건 1~3 반영·재검수 완료(PASS-CONDITIONS, 조건 4 미해소)  [ ] Stephen 실화면·실링크 확인  [ ] 커밋(Stephen)
+
+## NOW — 🔴 CRITICAL(인증·계정 생성 경로 `src/routes/api/**` 수정·DB 함수 변경): 기존 회원(레거시) 인증 로직 점검·수정 — 로그인 키 결함·비밀번호 설정 단계·사유별 안내 (Migration #746 — Stage만, 2026-10-23, 이 세션'만', ✅ Stephen 지시)
+
+### 발단·원인
+- 신고: ① 회원가입 시 중복 이메일·전화번호 경고로 가입 불가 ② 기존 고객 정보 입력 시 '찾을 수 없음'. 사례: 문소윤(dinochan1013@gmail.com) — Production에서 2026-10-23 09:40(KST) 인증 완료 상태(계정·프로필·claimed 정상, 대기 행 삭제됨).
+- **진짜 원인(수정함)**: `complete/+server.ts`가 `$env/dynamic/private`에서 `env.PUBLIC_SUPABASE_ANON_KEY`를 읽었는데 동적 비공개 env엔 PUBLIC_ 접두사 변수가 없어 항상 빈 값 → 계정 생성·프로필 갱신·스테이징 삭제까지 끝낸 뒤 `signInWithPassword`가 매번 실패. 고객은 계정은 있는데 세션·비밀번호(무작위 임시값)가 없고, 대기 행이 지워져 재인증은 '찾을 수 없음', 신규 가입은 '이미 가입'. Production 인증 완료 2명 모두 해당 가능성 → '비밀번호 찾기'로 복구 안내.
+- 부수 결함: 못 찾은 사유 미구분, 이름 가운데 공백 불일치, 이메일 중복 확인이 `user_profiles`만 봄(`auth.users` 미확인), 인증 후 비밀번호 설정 단계 없음, 계정 충돌 시 막연한 500.
+
+### 구현 내역
+- `src/lib/server/legacyClaim.ts`(신규): `lookupLegacyForClaim`(found/already_claimed/already_registered/not_found — 가입 여부는 이름까지 일치할 때만 노출), `normalizeLegacyName`, `validateNewPassword`(6~72자 ASCII).
+- `send-otp`: 사유(`reason`) 응답 추가(타이밍 하한 유지). `complete`: 공개 키 헬퍼(`getSupabaseAnonKey`) 사용 + **로그인 실패 시 방금 만든 계정 롤백·스테이징/토큰 보존**(스테이징 삭제·claimed 기록은 로그인 성공 후) + 이메일/전화 충돌 409 안내 + `needsPassword`. 신규 `set-password`(인증 후 30분 이내 claimed 계정만, 세션 필수).
+- `LegacyMemberVerifyModal.svelte`: 사유별 안내 문구, 인증 직후 '비밀번호 설정' 단계(영문·숫자·특수문자만, 건너뛰기 가능).
+- DB(**Stage만 적용**): `20261023020000_746_legacy_lookup_name_and_email_check.sql` — `find_legacy_member` 이름 모든 공백 무시, `check_email_registered`가 `auth.users`까지 확인(대소문자 무시). 권한 유지.
+- 테스트: `src/__tests__/services/legacyClaimLookup.test.ts`(신규 10건, Stage 라이브) + 기존 `legacyMemberClaim.test.ts` 21건 중 회귀 GREEN. 브라우저 실측: 인증→비밀번호 설정→로그인 성공까지(시험 데이터 정리 완료).
+
+### 보안 보완·검수 결과 (2026-10-23)
+- sp5 A-Lite: CRITICAL 0·HIGH 0, MEDIUM 2·LOW 3 → 조건부 통과. 반영: ① `set-password` **1회만 설정**(계정 app_metadata `legacy_password_set_at` 표식, 재요청 403) + 설정 성공 시 `signOut(access_token,'others')`로 다른 기기 세션 종료(예외도 성공 처리) + 계정 조회 실패 시 500(fail-closed) ② `complete` 인증 토큰 `verified_at` 15분 만료(계정 생성 전 검사, `token_expired`).
+- 테스트: `legacyClaimRoutes.test.ts` 14건(1회성·signOut·만료·조회 실패·signOut 예외 추가) + 기존 회귀 GREEN, eslint 깨끗.
+- sp3 1차 조건부 통과(MAJOR 시험 추가로 해소) → 재검수 조건부 통과(BLOCKER 0·MAJOR 0, MINOR 3 중 2건 수정, 1건 이월).
+- **Production DB #746 적용·대조 완료(2026-10-23, Stephen 승인)**: `find_legacy_member` 공백 무시 비교·service_role만 실행, `check_email_registered` auth.users 포함·anon/authenticated 실행 가능, 문소윤 이메일 '등록됨'/무작위 '미등록' 확인.
+
+### 남음
+- [ ] 커밋·배포(Stephen) — 코드 미배포라 Production 인증은 여전히 실패 상태. `send-otp/+server.ts`는 다른 세션 변경(OTP CSPRNG)과 혼재
+- [ ] 이미 인증한 Production 고객 2명(문소윤 포함) '비밀번호 찾기' 안내 또는 운영자 처리(30분 설정 창 경과)
+- [ ] 이월(BACKLOG 등록): 가입 여부 조회·인증번호 발송 횟수 제한, 동시 요청 경합(1회성 우회), 비밀번호 강도 규칙
+
 ## NOW — 🔴 CRITICAL(DB 변경·`src/routes/api/**` 수정·포인트 지급): 고객 반납정보 등록 화면 5카드 개편 + 반납등록 미션 포인트 + 내정보 포인트 메뉴 (Migration #739·#740 — Stage만, 2026-10-22, 이 세션'만', ✅ Stephen 지시)
 
 ### 구현 내역
@@ -61,6 +145,15 @@
 - 확인: 가짜 미읽음 개수로 0→1 재생·종료 후 해제 / 같은 개수 미재생 / 1→2 재생 / 0 미재생 확인(브라우저 실측). svelte-check 신규 오류 0(기존 2건).
 - 알려진 한계: 모바일 FAB 바가 peek(절반 숨김) 상태이면 모션도 절반 가려짐(수신 시 바 자동 펼침은 요청 없어 미구현).
 
+
+## NOW — 🟢 ROUTINE: 검수 탭 제목 문구 + 무인보관함 '배정 확정' 저장 오류 안내 원인별 구분 (2026-10-22~23, 이 세션'만', ✅ Stephen 지시(제목 '고객 반납정보 등록' → 저장 오류 원인 확인 → "네트워크 오류로 확인" → 네트워크 단락='네트워크 장애 확인 요청'·서버/DB 오류='서버 또는 DB 장애 확인 요청") · DB·마이그레이션 없음 · `src/routes/api/**` 변경 없음 · Claude Browser: Stephen 요소 선택 세션(조건 ①) — Production 탭에서 예약 303 `배정 확정` 1회 재저장(동일 값, 값 불변·수정 시각만 갱신)으로 재현 시도 · 커밋·배포는 Stephen · sp3-qa-agent 검수 ⏳)
+
+- 변경: `RentalDetailPanel.svelte` — ① 검수 탭 섹션 제목 '고객 반납 제출 내용' → '고객 반납정보 등록' ② `saveLockerPassword`: 네트워크 단락(fetch 예외)=`네트워크 장애 확인 요청`(경고 토스트+버튼 옆 문구), 500번대 응답=`서버 또는 DB 장애 확인 요청`(오류 토스트), 400번대는 서버 사유 그대로.
+- 원인 조사 결과: 오류 문구는 클라이언트 catch(응답 전 끊김) 전용 문구였고, 사용자가 네트워크 오류로 확인. Stage·Production의 저장 RPC `update_reservation_locker_password`·rental_reservations 트리거 7개 해시 동일, Production 재저장 200 성공 — 서버·DB 결함 아님.
+- 같은 세션 추가 변경(앞선 방문 반납 관리자 등록 블록, sp3 조건부 통과 이후): ①등록을 방문 한정에서 **모든 반납 방식**으로 확대(API return_method 검사·UI 방문 조건 제거) ②라우트 테스트 `returnAdminEntryRoute.test.ts` 8건 ③롤백 직접 삭제 H-01 예외 주석 ④상태 칩 호버 버블(글자·건수 역배율로 크기 고정) — 위 ①·②·④는 sp3 재검수 대상.
+- 확인: eslint 0·테스트 13건 GREEN(관리자 등록 계열), 장애 문구 분기는 실제 네트워크 단절·500 응답을 만들어 보지 않음(코드 정독만).
+- 알려진 한계: 같은 패널 운송장 저장(trackingError)은 기존 문구 유지.
+- sp3-qa-agent: ✅ GATE E 통과(T2, BLOCKER 0·MAJOR 0·MINOR 3, 보안 sp3 판단 SKIP) — MINOR: ①장애 문구가 status>=500 하나에만 의존(locker-password 서버는 RPC 실패를 error(500)으로 반환하고 4xx는 검증·409 상태 사유뿐임을 작성 시 정독으로 확인) ②'반납 방식 비의존' 명시 단언 없음(회귀 위험 낮음) ③타 세션 registerDheroReturn 단언 없음(해당 세션 책임). 미검증: 실제 브라우저 토스트·칩 호버 시각, G4·G5·build·전체 vitest. ⚠️ 커밋 시 같은 두 파일(RentalDetailPanel.svelte·return-entries/+server.ts)에 타 세션분(QR 저장 버튼·두발히어로 반품 접수 registerDheroReturn)이 섞여 있어 커밋 범위 분리 필요.
 
 ## NOW — 🔴 CRITICAL(DB 변경·`src/routes/api/**` 신규): 검수 탭 '고객 반납정보 등록' 우측 [+] — 방문 반납 관리자 직접 등록 (Migration #737, 2026-10-22, 이 세션'만', ✅ Stephen 지시(라운드 정사각 [+] → 아코디언 등록 폼(사진·내역·등록완료) → 목록 카드 '관리자' 등록자 배지) + AskUserQuestion 확정 3건: ①저장=관리자 등록 전용 새 목록(고객 제출 불변) ②입력=사진+메모+반납 체크리스트 ③등록완료 시 대여중→반납중 자동 전환 · Stage 먼저(Production·커밋·배포는 Stephen) · sp3-qa-agent 검수 ⏳)
 
@@ -417,6 +510,20 @@
 - 검증: Stage·Production 직접 SQL — 함수 1개(오버로드 없음)·anon/authenticated 실행 불가·service_role 가능, 분리 건수 합계=필터 없음 건수(Production 3+63=66), svelte-check 신규 오류 0(기존 2건: vite.config·subscribe/success 그대로).
 - 남은 일: 서버 코드 배포(DB는 두 환경 적용 완료라 순서 문제 없음), 칩 색상 화면 확인, Migration #712·#713(다른 세션)과 함께 커밋 예정.
 
+## NOW — 🔴 CRITICAL: 반납 접수(대여중→반납중) 경로의 두발히어로 반품 접수 연동 구멍 수정 (2026-10-23, 이 세션'만', ✅ Stephen 직접 지시로 착수 · DB 변경 없음 · 외부 API 연동 · 커밋·배포는 Stephen)
+
+점검 결과: 두발히어로 반품 접수(registerReturn)는 관리자 상태변경 액션 `updateStatus`가 return_requested로 전환할 때만 호출된다. 그런데 고객 반납정보 제출(`/api/account/rental/[id]/return-submit`)과 관리자 대리 등록(`/api/cms/reservations/[id]/return-entries`)이 in_use→return_requested를 `update_reservation_status` RPC로 직접 호출해 이 트리거를 우회 → 배송대여(is_bulk_delivery) 방식 예약에서 반품 접수가 자동 생성되지 않고, 반납 leg 배송완료 자동 전환(dheroAutoAdvance)도 일어나지 않는다.
+설계: 공용 fail-soft 헬퍼 `src/lib/server/registerDheroReturn.ts`(updateStatus의 return_requested 분기와 같은 규칙 — 반납방식이 is_bulk_delivery이고 운송장(tracking_number)이 있을 때만 registerReturn + update_reservation_dhero_shipment, 이미 dhero_return_book_id가 있으면 중복 접수 방지로 건너뜀, 실패는 throw하지 않고 결과로 반환)를 만들어 위 두 경로가 전환 성공 직후 호출. 실패해도 제출·등록은 성공 처리하고 관리자에게는 알림 문구·응답 필드로 수동 등록 필요를 알린다. `updateStatus` 기존 분기는 범위 밖이라 그대로 둔다.
+- [x] RED(확인: 헬퍼 모듈 없음으로 실패): 헬퍼 단위 테스트(bulk+운송장→호출/비bulk·운송장 없음·이미 접수→건너뜀/API 실패→throw 없음·실패 결과) + 두 경로가 헬퍼를 전환 직후 호출하는지 소스 가드 테스트
+- [x] GREEN: `registerDheroReturn.ts` 구현 + return-submit(성공 시 관리자 푸시에 실패 문구)·return-entries(응답 `dhero_return_failed`) 연결 — 신규 테스트 10건 GREEN
+- [x] 회귀: server+security 207파일 2209건 GREEN, eslint 0·svelte-check 신규 0(기존 2건)
+- [x] sp3 검수 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 3, sp5 생략 — 고객이 조작 가능한 외부 호출 인자 없음): MINOR-1 두발히어로 응답 지연 대비 → 헬퍼에 8초 상한(실패 처리) + 테스트 추가로 즉시 반영(11건 GREEN). 이월(Stephen 승인 2026-10-23): MINOR-2 동시 이중 접수 이론상 틈 · MINOR-3 관리자 대리 등록 화면(RentalDetailPanel submitAdminReturn)이 응답의 `dhero_return_failed`를 표시하지 않음(범위 밖 파일)
+- [~] 두발히어로 테스트 서버 실연동 확인(2026-10-23, Stephen 지시): 로컬(.env.local=dev 서버)·Stage DB로 1회성 확인 후 임시 테스트 파일 삭제·DB 원복(return_method·주소·dhero 컬럼·crazydelivery 플래그)·두발히어로 테스트 주문 취소 완료. 결과: 인증·배송 접수는 정상(서울 2개 주소 모두 동그룹 배정, addressNotSupported=false) / 반품 접수는 접수 직후(status 0 배송접수) 상태에서 두발히어로가 412 "반품이 가능한 수거지가 아닙니다"로 거절 → 헬퍼는 설계대로 fail-soft(throw 없음·DB 미저장·관리자용 실패 메시지)로 동작함을 실서버로 확인. 성공 경로(실제 반품 번호 발급·저장)는 미확인 — 배송이 진행(수거배차~배송완료)된 건이어야 허용되는지, 수령 위치 등록이 필요한지는 두발히어로 API 안내서(PDF)로 확인 필요. 운영 흐름(대여중=배송완료 이후 반납 제출)에서는 가능성이 높으나 증명하지 못함.
+  ↳ 안내서 PDF(2026.06.22, 28쪽) 검토(2026-10-23): ① 반품 접수 불가 사유는 취소·사고·분실(400)뿐이고 "반품이 가능한 수거지가 아닙니다"(412)는 안내서에 없는 메시지 — 안내서에서 '수거지'는 spotCode(수거지코드)를 뜻함. 안내서 샘플 주소 2곳 + 반품지 명시까지 4회 모두 같은 412 → 주소가 원인이 아님, 테스트 계정 spotCode의 반품 허용 설정 또는 상태 조건 가능성 → 두발히어로(체인로지스) 담당자 확인 필요(테스트·운영 spotCode 모두). ② 반품 응답 규격 `{bookId(R…), orderIdFromCorp, reason, success}` — success=false 처리 누락을 헬퍼에 보강(테스트 12건 GREEN). ③ 참고(범위 밖·미조치): memoFromCustomer 100자·orderIdFromCorp 50자 등 글자수 제한이 있어 긴 요청사항은 접수 실패 가능 / 반품 접수 후 상태 라벨이 '배송접수'로 저장됨 / 반품 접수건은 '수거지정'까지만 취소 가능 / 취소 요청 본문 reason(선택) 미전송 / 안내서의 '이미 반품 등록' 412는 정상 처리로 변경됨.
+- [x] 두발히어로 안내서 지침화(2026-10-23, Stephen 지시): 신규 `.claude/rules-ref/dhero-delivery-api.md`(안내서 핵심·연동 지도·안내서↔코드 차이 8건·dev 검증 기록·GATE C 7항목) + `service-operations.md` §33 포인터·GATE C 1항목 + `CLAUDE.md` 도메인 규칙 표 1행. 문서만(코드 영향은 위 헬퍼 success=false 보강 1곳).
+- [x] sp3 검수(이 세션 미커밋 전체, 2026-10-23): 재작업 판정(MAJOR 1·MINOR 5, sp5 생략) → 즉시 반영: MAJOR-1 스테퍼 자동 스크롤이 jsdom 컴포넌트 테스트에서 `el.scrollTo is not a function`으로 Errors 1을 내던 문제 → `el.scrollTo?.()` 가드(컴포넌트 테스트 19파일 199건 Errors 0) · 문서 MINOR 정정(관리자 알림 서술 정확화, §7 #9~#11 추가, spotCodeFromCorp·validateAddress 호출처 보강). 이월 승인 대기: 관리자 대리 등록 화면 `dhero_return_failed` 토스트(RentalDetailPanel, 타 세션 혼재) · 간트 높이 재측정(ResizeObserver) · 문서에서 확인 못 한 §7 #7(RPC 본문)
+- [ ] 두발히어로 담당자 확인(테스트·운영 spotCode 반품 허용 여부·반품 가능 상태) 후 성공 경로 재확인 — Stephen 판단
+
 ## NOW — 🔴 CRITICAL: 포인트 '자동 소멸 기한'(적립일로부터 N일) 전역 설정 신설 — CMS 포인트 → 사용 규칙 (2026-10-22, 이 세션'만', Stephen 직접 지시로 착수 · DB 마이그레이션 #742 · Stage 먼저, Production은 sp3 통과 + Stephen 확인 후)
 
 점검 결과: 소멸 로직(expires_at·expire_due_points·크론 point-expiry)은 이미 있으나 구독 혜택 적립(points_expiry_days, 기본 365일)에만 값이 들어가고 생일·정시반납·렌탈완료·반납등록 미션·리뷰 등 일반 적립은 expires_at이 NULL=영구 유효.
@@ -431,7 +538,8 @@
 - [x] 설정 직후 전역 반영 확인(Stage, 롤백 DO 블록): 설정 30일 상태에서 실제 함수 호출 결과 반납등록 미션·생일 적립 모두 expires_at = 2026-11-21 23:59:59 KST 부여. 정시반납·렌탈완료(본 적립)·리뷰는 Stage 데이터가 조건 미충족(late_return/no_rental_fee)이라 직접 호출은 못 했으나 라이브 함수 정의에서 point_transactions INSERT 컬럼에 expires_at이 없음을 확인(→ 트리거 대상), 구독 적립(sub_bonus)만 자기 expires_at 지정. 설정은 DB 테이블을 매 적립마다 즉시 읽어 별도 캐시·재시작 없이 저장 직후 반영. 테스트 DB 원복 확인(expiry_days 0).
 - [x] 소급 미적용 확인(2026-10-23, Stephen 지시): 트리거는 INSERT 전용·설정 테이블 트리거 없음·point_transactions 만료일을 고치는 코드/마이그레이션 0건. Stage 실측 0→30→90→0 변경 후에도 기존 적립 만료일 불변, 회귀 테스트 추가(pointEarnExpiryDays 10건 GREEN).
 - [x] sp3 3차 검수: 조건부 통과(BLOCKER 0·MAJOR 0·신규 MINOR 3 — Stephen 승인 2026-10-23). N1 GSD_LOG 테스트 개수 정정 완료 · N3 빈 입력 거절 즉시 수정(saveUseSettings: expiry_days 빈 값·공백·누락 거절, 0은 직접 입력해야 함, `pointUseSettingsExpiryInput.test.ts` 4건 GREEN·eslint 0) · N2 '소멸 후 설정 변경해도 재소멸 없음' 테스트 보강은 이월 경계 테스트 항목에 합침.
-- [ ] Production 적용(#742 → #743, DB 먼저 → 검증 → 코드 배포)은 Stephen 확인 후 · 커밋은 Stephen 직접
+- [x] Production DB 적용 완료(2026-10-23, Stephen 직접 지시): #742 → #743 순서로 vnbpmvxruyciuuaermyh에 적용. 적용 전 읽기 전용 확인(컬럼·트리거 없음, upsert 4인자, 소멸 함수=#540 해시) → 적용 후 검증: 함수 4종 정의 해시가 Stage와 전부 동일, upsert·소멸·트리거 함수 anon/authenticated 실행 불가·service_role만(get_point_use_settings는 기존대로 읽기 공개), 트리거 trg_point_earn_expiry(BEFORE INSERT) 존재, 설정 expiry_days=0(동작 변화 없음), CHECK 제약 존재.
+- [ ] 코드 배포(커밋·push는 Stephen 직접, DB는 이미 선행 적용됨) → 배포 후 소멸 기한을 0 초과로 켤지 Stephen 결정 · 켠 뒤 첫 크론(KST 10:00) 소멸 결과 확인
 
 ## NOW — 🟡 BOUNDARY: 구독 공통 정책·이용안내·서비스 기본 정보를 설정 서브메뉴 '정책관리'(`/cms/set/policy`)로 이동 (2026-10-15, 이 세션'만', ✅ Stephen 지시로 GATE B 명시 승인 · DB 마이그레이션 없음 · 커밋·배포는 Stephen)
 
