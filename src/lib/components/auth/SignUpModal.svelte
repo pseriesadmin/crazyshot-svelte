@@ -115,6 +115,34 @@
   let isSendingOtp = $state(false)
   let errorMsg = $state<string | null>(null)
   let otpSent = $state(false)
+  let otpVerified = $state(false)   // [인증 확인]으로 인증번호 확인을 마친 상태(가입 완료 때 재확인하지 않음)
+  // 인증번호 유효시간 3분 타이머 — 인증번호 발송이 성공한 직후부터 시작(서버 유효시간 3분과 같음)
+  const OTP_TTL_SEC = 180
+  let otpRemain = $state(0)
+  let otpTimer: ReturnType<typeof setInterval> | null = null
+  let codeFocused = $state(false)
+  function stopOtpTimer() {
+    if (otpTimer) { clearInterval(otpTimer); otpTimer = null }
+  }
+  function startOtpTimer() {
+    stopOtpTimer()
+    otpRemain = OTP_TTL_SEC
+    otpTimer = setInterval(() => {
+      otpRemain -= 1
+      if (otpRemain <= 0) { otpRemain = 0; stopOtpTimer() }
+    }, 1000)
+  }
+  $effect(() => () => stopOtpTimer())
+  let isVerifyingOtp = $state(false)
+  const otpExpired = $derived(otpSent && !otpVerified && otpRemain <= 0)
+  // 입력칸을 아직 선택(커서·터치)하지 않았고 비어 있을 때만 남은 시간을 안내 문구 자리에 보여준다
+  const codeGuide = $derived.by(() => {
+    if (!otpSent || otpVerified || codeFocused || verifyCode !== '') return '인증번호 입력'
+    if (otpRemain <= 0) return '인증 시간 만료'
+    const mm = String(Math.floor(otpRemain / 60)).padStart(2, '0')
+    const ss = String(otpRemain % 60).padStart(2, '0')
+    return `남은 시간 ${mm}:${ss}`
+  })
 
   // ── 아이디 찾기 상태 ──
   let findPhone = $state('')
@@ -125,9 +153,19 @@
   let foundEmail = $state<string | null>(null)
 
   // ── 비밀번호 재설정 상태 ──
+  // 문자 인증번호 방식(2026-10-23): info(이메일+휴대폰) → code(인증번호) → newpw(새 비밀번호) → done
   let resetEmail = $state('')
+  let resetPhone = $state('010-')
+  let resetCode = $state('')
+  let resetNewPw = $state('')
+  let resetNewPw2 = $state('')
+  let resetToken = $state<string | null>(null)
+  let resetStep = $state<'info' | 'code' | 'newpw' | 'done'>('info')
   let isResetting = $state(false)
-  let resetSent = $state(false)
+  let resetVerifying = $state(false)
+  // 입력한 이메일이 가입된 계정인지(null=미확인) — 확인되면 휴대폰·인증번호 입력이 활성화된다
+  let resetEmailRegistered = $state<boolean | null>(null)
+  let resetEmailTimer: ReturnType<typeof setTimeout> | null = null
 
   // ── 초기화 (모달 닫힐 때) ──
   function reset() {
@@ -141,11 +179,16 @@
     passwordConfirm = ''
     fullName = ''
     nameRevealed = false
-    phone = ''
+    phone = '010-'   // 초기값과 동일 — 초기화 후에도 '010-' 기본값 유지(전화번호 입력폼 표준)
     verifyCode = ''
     step = 'form'
     errorMsg = null
     otpSent = false
+    otpVerified = false
+    isVerifyingOtp = false
+    stopOtpTimer()
+    otpRemain = 0
+    codeFocused = false
     isLoading = false
     isSendingOtp = false
     findPhone = ''
@@ -155,8 +198,16 @@
     isFinding = false
     foundEmail = null
     resetEmail = ''
+    resetEmailRegistered = null
+    if (resetEmailTimer) { clearTimeout(resetEmailTimer); resetEmailTimer = null }
+    resetPhone = '010-'
+    resetCode = ''
+    resetNewPw = ''
+    resetNewPw2 = ''
+    resetToken = null
+    resetStep = 'info'
     isResetting = false
-    resetSent = false
+    resetVerifying = false
     emailAvailable = false
     emailDuplicate = false
   }
@@ -219,19 +270,27 @@
   // 항상 "익명→영구 전환"(updateUser) 경로를 타게 되어 세션이 끊기지 않는다.
   // user_profiles 행도 미리 만들어둬야 휴대폰 인증 시 verify_and_update_phone의
   // UPDATE가 대상 행을 찾아 실제로 저장된다(행이 없으면 조용히 0건 업데이트로 유실됨).
-  async function ensureSignupSession(): Promise<boolean> {
+  // 반환: 'ok' 진행 가능 / 'logged_in' 이미 일반 계정으로 로그인돼 있음(가입 중이면 차단) / 'error' 세션 생성 실패
+  // ⛔ 2026-10-23: 가입 중에 일반(비익명) 로그인 세션이 있으면 이름·휴대폰 인증이 "로그인된 그 계정"의 프로필에 저장되고
+  //    새 계정은 빈 프로필로 만들어지는 결함이 확인됐다(관리자로 로그인한 채 가입 테스트 → 관리자 계정의 이름·번호가 덮어써짐).
+  //    가입에서는 익명 세션만 허용한다.
+  async function ensureSignupSession(forSignup = false): Promise<'ok' | 'logged_in' | 'error'> {
     const { data: { session: current } } = await supabase.auth.getSession()
+    if (forSignup && current && !current.user.is_anonymous) return 'logged_in'
     if (!current) {
       const { error } = await supabase.auth.signInAnonymously()
-      if (error) return false
+      if (error) return 'error'
     }
     try {
       await rpc.ensureUserProfile()
     } catch {
       // user_profiles 보정 실패해도 가입 자체는 막지 않음 — performSignUp()에서도 재시도됨
     }
-    return true
+    return 'ok'
   }
+
+  const LOGGED_IN_SIGNUP_MSG = '이미 로그인된 상태예요. 로그아웃한 뒤 회원가입을 진행해주세요.'
+
 
   // ── 전화 인증번호 발송 (Solapi SMS 실연동 — /account/profile 휴대폰 인증과 동일 API 재사용) ──
   async function handleSendOtp() {
@@ -244,18 +303,23 @@
     isSendingOtp = true
     try {
       // 휴대폰 번호 중복 조회
-      const { data: existing } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .eq('phone', cleaned)
-        .maybeSingle()
+      // 서버 함수로 판정 — 브라우저 세션은 남의 프로필을 읽을 수 없어 직접 조회로는 중복을 찾지 못한다(하이픈 저장 번호도 함께 비교)
+      const { data: existing, error: dupErr } = await supabase.rpc('check_phone_registered', { p_phone: cleaned } as never) // 이메일 확인(check_email_registered)과 같은 호출 방식
+      if (dupErr) {
+        errorMsg = '휴대폰 번호 확인에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        return
+      }
       if (existing) {
         csToast.warning('이미 가입된 휴대폰 번호입니다.')
         return
       }
 
-      const ready = await ensureSignupSession()
-      if (!ready) {
+      const ready = await ensureSignupSession(true)
+      if (ready === 'logged_in') {
+        errorMsg = LOGGED_IN_SIGNUP_MSG
+        return
+      }
+      if (ready !== 'ok') {
         errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
         return
       }
@@ -273,6 +337,7 @@
         return
       }
       otpSent = true
+      startOtpTimer()
       csToast.success('인증번호가 발송됐습니다.')
       // 개발 환경 바이패스: 서버가 devCode를 내려주면 자동 입력
       if (data.devCode) verifyCode = data.devCode
@@ -280,6 +345,37 @@
       errorMsg = '네트워크 오류가 발생했습니다.'
     } finally {
       isSendingOtp = false
+    }
+  }
+
+  // ── 인증번호 확인 ([인증 확인] 버튼 — 기존회원 인증과 같은 구성) ──
+  // 같은 RPC(verify_and_update_phone)를 가입 완료 전에 미리 호출한다. 성공하면 otpVerified로 기억해 가입 완료 때 다시 확인하지 않는다
+  // ([인증 확인]을 누르지 않고 가입 완료를 눌러도 기존처럼 그때 확인한다).
+  async function handleVerifyOtp() {
+    errorMsg = null
+    if (!otpSent) { errorMsg = '인증번호를 먼저 발송해주세요.'; return }
+    if (!/^\d{6}$/.test(verifyCode.trim())) { errorMsg = '인증번호 6자리를 입력해주세요.'; return }
+    isVerifyingOtp = true
+    try {
+      const cleaned = phone.replace(/\D/g, '')
+      const { data, error } = await (supabase.rpc as unknown as (
+        fn: string,
+        args: Record<string, unknown>,
+      ) => Promise<{ data: { ok: boolean; error?: string } | null; error: { message: string } | null }>)(
+        'verify_and_update_phone',
+        { p_phone: cleaned, p_code: verifyCode.trim() },
+      )
+      if (error || !data?.ok) {
+        errorMsg = data?.error ?? '인증번호가 올바르지 않거나 만료되었습니다.'
+        return
+      }
+      otpVerified = true
+      stopOtpTimer()
+      csToast.success('휴대폰 인증이 완료됐습니다.')
+    } catch {
+      errorMsg = '네트워크 오류가 발생했습니다.'
+    } finally {
+      isVerifyingOtp = false
     }
   }
 
@@ -304,6 +400,13 @@
     isLoading = true
     try {
       const cleaned = phone.replace(/\D/g, '')
+
+      // 가입 확정 직전에도 일반 로그인 세션이 아닌지 확인 — 이름·인증이 엉뚱한 계정에 저장되는 것을 막는다
+      const { data: { session: nowSession } } = await supabase.auth.getSession()
+      if (nowSession && !nowSession.user.is_anonymous) {
+        errorMsg = LOGGED_IN_SIGNUP_MSG
+        return
+      }
 
       // 성함 저장 — 이름 없는 가입을 막기 위해 가입 확정(인증번호 소진·계정 전환)보다 "먼저" 저장하고,
       // 실패하면 여기서 중단한다(인증번호는 아직 쓰이지 않아 같은 화면에서 다시 시도할 수 있다).
@@ -332,16 +435,19 @@
 
       // supabase-js rpc() 제네릭 오버로드 추론 이슈로 로컬 캐스트 필요(기존 관례,
       // ProductHeroModal.svelte 등과 동일 패턴) — database.ts에 타입 자체는 등록돼 있음
-      const { data: verifyData, error: verifyErr } = await (supabase.rpc as unknown as (
-        fn: string,
-        args: Record<string, unknown>,
-      ) => Promise<{ data: { ok: boolean; error?: string } | null; error: { message: string } | null }>)(
-        'verify_and_update_phone',
-        { p_phone: cleaned, p_code: verifyCode },
-      )
-      if (verifyErr || !verifyData?.ok) {
-        errorMsg = verifyData?.error ?? '인증번호가 올바르지 않거나 만료되었습니다.'
-        return
+      // [인증 확인]으로 이미 확인했다면 같은 인증번호를 다시 쓰지 않는다(otpVerified)
+      if (!otpVerified) {
+        const { data: verifyData, error: verifyErr } = await (supabase.rpc as unknown as (
+          fn: string,
+          args: Record<string, unknown>,
+        ) => Promise<{ data: { ok: boolean; error?: string } | null; error: { message: string } | null }>)(
+          'verify_and_update_phone',
+          { p_phone: cleaned, p_code: verifyCode },
+        )
+        if (verifyErr || !verifyData?.ok) {
+          errorMsg = verifyData?.error ?? '인증번호가 올바르지 않거나 만료되었습니다.'
+          return
+        }
       }
 
       await performSignUp(email, password)
@@ -382,7 +488,7 @@
     isSendingFindOtp = true
     try {
       const ready = await ensureSignupSession()
-      if (!ready) {
+      if (ready !== 'ok') {
         errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
         return
       }
@@ -432,29 +538,113 @@
     }
   }
 
-  // ── 비밀번호 재설정 링크 발송 ──
-  async function handleResetPw() {
-    errorMsg = null
-    if (!resetEmail) {
-      errorMsg = '이메일 주소를 입력해주세요.'
-      return
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail)) {
-      errorMsg = '올바른 이메일 형식이 아닙니다.'
-      return
-    }
-    isResetting = true
+  // ── 비밀번호 재설정 입력 — 한글(비ASCII) 차단 + 경고 토스트 (front-uiux.md §21 로그인 입력폼 표준, 2026-10-23) ──
+  // 필드별 독립 debounce 플래그(3초 내 재경고 안 함) — 다른 필드 경고와 섞이지 않게 분리
+  const resetKoreanWarned: Record<'email' | 'pw' | 'pw2', boolean> = { email: false, pw: false, pw2: false }
+  function warnResetKorean(field: 'email' | 'pw' | 'pw2', message: string) {
+    if (resetKoreanWarned[field]) return
+    resetKoreanWarned[field] = true
+    csToast.warning(message)
+    setTimeout(() => { resetKoreanWarned[field] = false }, 3000)
+  }
+
+  // ── 비밀번호 재설정(문자 인증번호) ──
+  async function resetRequest<T>(url: string, payload: Record<string, unknown>): Promise<T | null> {
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-        redirectTo: `${window.location.origin}/auth/reset-password`,
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       })
-      if (error) {
-        errorMsg = '재설정 링크 발송에 실패했습니다. 잠시 후 다시 시도해주세요.'
-        return
-      }
-      resetSent = true
+      return (await res.json()) as T
     } catch {
       errorMsg = '네트워크 오류가 발생했습니다.'
+      return null
+    }
+  }
+
+  // 모달이 사라질 때 대기 중인 이메일 확인 타이머 정리
+  $effect(() => () => { if (resetEmailTimer) { clearTimeout(resetEmailTimer); resetEmailTimer = null } })
+
+  // 이메일 입력 즉시(0.6초 입력 멈춤 후) 가입 여부 확인 — 가입된 이메일이면 휴대폰·인증번호 영역을 활성화한다
+  function handleResetEmailInput() {
+    resetEmailRegistered = null
+    if (resetStep !== 'info') { resetStep = 'info'; resetCode = '' }
+    if (resetEmailTimer) { clearTimeout(resetEmailTimer); resetEmailTimer = null }
+    const val = resetEmail.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return
+    resetEmailTimer = setTimeout(async () => {
+      const { data, error } = await supabase.rpc('check_email_registered', { p_email: val } as never)
+      if (resetEmail.trim() !== val) return // 그 사이 이메일이 바뀜 — 오래된 응답 무시
+      if (error) { resetEmailRegistered = null; csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.'); return }
+      if (data) {
+        resetEmailRegistered = true
+        csToast.warning('기존 계정정보가 확인되었습니다.')
+      } else {
+        resetEmailRegistered = false
+        csToast.warning('가입된 이메일이 아닙니다.')
+      }
+    }, 600)
+  }
+
+  // 1단계: 이메일 + 휴대폰 번호가 같은 계정이면 인증번호 문자 발송
+  async function handleResetSendOtp() {
+    errorMsg = null
+    const email = resetEmail.trim()
+    const cleaned = resetPhone.replace(/\D/g, '')
+    if (!email) { errorMsg = '이메일 주소를 입력해주세요.'; return }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errorMsg = '올바른 이메일 형식이 아닙니다.'; return }
+    if (!/^010\d{8}$/.test(cleaned)) { errorMsg = '올바른 휴대폰 번호를 입력해주세요. (예: 01012345678)'; return }
+    isResetting = true
+    try {
+      const data = await resetRequest<{ ok: boolean; error?: string; devCode?: string; code?: string }>('/api/auth/password-reset/send-otp', { email, phone: cleaned })
+      if (!data) return
+      if (!data.ok && data.code === 'admin_account') { csToast.warning('관리자계정은 CMS를 통해 수정하세요.'); return }
+      if (!data.ok) { errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'; return }
+      resetStep = 'code'
+      resetCode = data.devCode ?? ''
+    } finally {
+      isResetting = false
+    }
+  }
+
+  // 2단계: 인증번호 확인
+  async function handleResetVerify() {
+    errorMsg = null
+    if (!/^\d{6}$/.test(resetCode.trim())) { errorMsg = '인증번호 6자리를 입력해주세요.'; return }
+    isResetting = true
+    resetVerifying = true
+    try {
+      const data = await resetRequest<{ ok: boolean; error?: string; token?: string }>('/api/auth/password-reset/verify-otp', {
+        email: resetEmail.trim(),
+        phone: resetPhone.replace(/\D/g, ''),
+        code: resetCode.trim(),
+      })
+      if (!data) return
+      if (!data.ok || !data.token) { errorMsg = data.error ?? '인증번호가 올바르지 않습니다.'; return }
+      resetToken = data.token
+      resetStep = 'newpw'
+    } finally {
+      isResetting = false
+      resetVerifying = false
+    }
+  }
+
+  // 3단계: 새 비밀번호 설정
+  async function handleResetComplete() {
+    errorMsg = null
+    if (resetNewPw.length < 6) { errorMsg = '비밀번호는 6자 이상 입력해주세요.'; return }
+    if (resetNewPw !== resetNewPw2) { errorMsg = '비밀번호가 일치하지 않습니다.'; return }
+    if (!resetToken) { errorMsg = '인증 정보가 없습니다. 처음부터 다시 진행해주세요.'; return }
+    isResetting = true
+    try {
+      const data = await resetRequest<{ ok: boolean; error?: string }>('/api/auth/password-reset/complete', { token: resetToken, password: resetNewPw })
+      if (!data) return
+      if (!data.ok) { errorMsg = data.error ?? '비밀번호를 바꾸지 못했습니다.'; return }
+      resetNewPw = ''
+      resetNewPw2 = ''
+      resetToken = null
+      resetStep = 'done'
     } finally {
       isResetting = false
     }
@@ -705,50 +895,65 @@
         <div class="su-group">
           <p class="su-group-label">휴대폰 인증</p>
 
-          <!-- 전화번호 + 발송 -->
+          <!-- 기존회원 인증(LegacyMemberVerifyModal)과 같은 구성: 라벨 없이 placeholder, 휴대폰 행 [인증번호 받기], 인증번호 행 [인증 확인] (2026-10-23) -->
           <div class="su-field">
-            <label class="su-field-label" for="su-phone">휴대폰 번호</label>
             <div class="su-phone-row">
               <input
                 id="su-phone"
                 class="su-input su-phone-input"
                 type="tel"
                 placeholder="010-0000-0000"
+                aria-label="휴대폰 번호"
                 value={phone}
+                disabled={otpVerified}
                 oninput={(e) => { phone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = phone }}
               />
               <button
                 class="su-otp-btn"
                 type="button"
                 onclick={handleSendOtp}
-                disabled={isSendingOtp || otpSent}
+                disabled={isSendingOtp || otpVerified}
               >
-                {#if isSendingOtp}
-                  발송 중...
-                {:else if otpSent}
-                  발송됨 ✓
+                {isSendingOtp ? '발송 중...' : '인증번호 받기'}
+              </button>
+            </div>
+          </div>
+
+          <div class="su-field">
+            <div class="su-phone-row">
+              <input
+                id="su-code"
+                class="su-input su-phone-input"
+                type="tel"
+                inputmode="numeric"
+                placeholder={codeGuide}
+                aria-label="인증번호"
+                value={verifyCode}
+                maxlength={6}
+                disabled={!otpSent || otpVerified}
+                onfocus={() => { codeFocused = true }}
+                onblur={() => { codeFocused = false }}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  el.value = el.value.replace(/[^0-9]/g, '').slice(0, 6)
+                  verifyCode = el.value
+                }}
+              />
+              <button
+                class="su-otp-btn"
+                type="button"
+                onclick={handleVerifyOtp}
+                disabled={isVerifyingOtp || otpVerified || !otpSent || otpExpired || verifyCode.length !== 6}
+              >
+                {#if isVerifyingOtp}
+                  확인 중...
+                {:else if otpVerified}
+                  인증 완료 ✓
                 {:else}
-                  인증 발송
+                  인증 확인
                 {/if}
               </button>
             </div>
-            {#if otpSent}
-              <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (3분 이내 입력)</p>
-            {/if}
-          </div>
-
-          <!-- 인증번호 입력 -->
-          <div class="su-field">
-            <label class="su-field-label" for="su-code">인증번호</label>
-            <input
-              id="su-code"
-              class="su-input"
-              type="text"
-              placeholder="인증번호 6자리"
-              bind:value={verifyCode}
-              maxlength={6}
-              disabled={!otpSent}
-            />
           </div>
         </div>
 
@@ -849,24 +1054,126 @@
         </button>
 
       {:else if mode === 'reset-pw'}
-        <!-- ── 비밀번호 재설정 ── -->
-        {#if !resetSent}
+        <!-- ── 비밀번호 재설정(문자 인증번호) ── -->
+        {#if resetStep === 'info' || resetStep === 'code'}
+          <!-- 기존회원 인증(LegacyMemberVerifyModal) 입력 배치와 동일: 라벨 없이 placeholder, 휴대폰 행 [인증번호 받기], 인증번호 행 [인증 확인]을 한 화면에 항상 노출(2026-10-23) -->
           <div class="su-group">
-            <p class="su-group-label">가입 시 사용한 이메일로 비밀번호 재설정 링크를 발송합니다.</p>
+            <p class="su-group-label">가입한 이메일과 휴대폰 번호가 일치하면 인증번호를 문자로 보내드립니다.</p>
             <div class="su-field">
-              <label class="su-field-label" for="su-reset-email">이메일 주소</label>
               <input
                 id="su-reset-email"
                 class="su-input"
                 type="email"
-                placeholder="example@email.com"
+                placeholder="이메일(아이디)을 입력해주세요"
+                aria-label="이메일"
                 bind:value={resetEmail}
                 autocomplete="email"
                 inputmode="email"
+                disabled={isResetting}
+                maxlength={254}
                 oninput={(e) => {
                   const el = e.currentTarget as HTMLInputElement
-                  el.value = el.value.replace(/[^\x20-\x7E]/g, '')
+                  const filtered = el.value.replace(/[^\u0020-\u007E]/g, '')
+                  if (el.value !== filtered) {
+                    el.value = filtered
+                    warnResetKorean('email', '영문(숫자) 메일 형식으로 입력하세요.')
+                  }
                   resetEmail = el.value
+                  handleResetEmailInput()
+                }}
+              />
+            </div>
+            <div class="su-field">
+              <div class="su-phone-row">
+                <input
+                  id="su-reset-phone"
+                  class="su-input su-phone-input"
+                  type="tel"
+                  placeholder="01012345678"
+                  aria-label="휴대폰 번호"
+                  value={resetPhone}
+                  oninput={(e) => { resetPhone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = resetPhone }}
+                  disabled={isResetting || !resetEmailRegistered}
+                />
+                <button class="su-otp-btn" type="button" onclick={handleResetSendOtp} disabled={isResetting || !resetEmailRegistered}>
+                  {isResetting && !resetVerifying ? '발송 중...' : '인증번호 받기'}
+                </button>
+              </div>
+              {#if resetStep === 'code'}
+                <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (3분 이내 입력)</p>
+              {/if}
+            </div>
+            <div class="su-field">
+              <div class="su-phone-row">
+                <input
+                  id="su-reset-code"
+                  class="su-input su-phone-input"
+                  type="tel"
+                  inputmode="numeric"
+                  placeholder="인증번호 입력"
+                  aria-label="인증번호"
+                  bind:value={resetCode}
+                  maxlength={6}
+                  disabled={isResetting || !resetEmailRegistered}
+                  oninput={(e) => {
+                    const el = e.currentTarget as HTMLInputElement
+                    el.value = el.value.replace(/[^0-9]/g, '').slice(0, 6)
+                    resetCode = el.value
+                  }}
+                />
+                <button
+                  class="su-otp-btn"
+                  type="button"
+                  onclick={handleResetVerify}
+                  disabled={isResetting || resetStep !== 'code' || resetCode.length !== 6}
+                >
+                  {isResetting && resetVerifying ? '확인 중...' : '인증 확인'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {#if errorMsg}
+            <p class="su-error" role="alert">{errorMsg}</p>
+          {/if}
+        {:else if resetStep === 'newpw'}
+          <div class="su-group">
+            <p class="su-group-label">새로 사용할 비밀번호를 입력해주세요.</p>
+            <div class="su-field">
+              <label class="su-field-label" for="su-reset-newpw">새 비밀번호</label>
+              <input
+                id="su-reset-newpw"
+                class="su-input"
+                type="password"
+                placeholder="6자 이상 입력"
+                bind:value={resetNewPw}
+                autocomplete="new-password"
+                maxlength={72}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  const hadNonAscii = /[^\x00-\x7F]/.test(el.value)
+                  el.value = el.value.replace(/[^\x21-\x7E]/g, '')
+                  if (hadNonAscii) warnResetKorean('pw', '영문(숫자)으로 입력하세요.')
+                  resetNewPw = el.value
+                }}
+              />
+            </div>
+            <div class="su-field">
+              <label class="su-field-label" for="su-reset-newpw2">새 비밀번호 확인</label>
+              <input
+                id="su-reset-newpw2"
+                class="su-input"
+                type="password"
+                placeholder="비밀번호를 한 번 더 입력"
+                bind:value={resetNewPw2}
+                autocomplete="new-password"
+                maxlength={72}
+                oninput={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  const hadNonAscii = /[^\x00-\x7F]/.test(el.value)
+                  el.value = el.value.replace(/[^\x21-\x7E]/g, '')
+                  if (hadNonAscii) warnResetKorean('pw2', '영문(숫자)으로 입력하세요.')
+                  resetNewPw2 = el.value
                 }}
               />
             </div>
@@ -876,19 +1183,22 @@
             <p class="su-error" role="alert">{errorMsg}</p>
           {/if}
 
-          <button class="su-cta" type="button" onclick={handleResetPw} disabled={isResetting} aria-busy={isResetting}>
-            {isResetting ? '발송 중...' : '재설정 링크 발송'}
+          <button class="su-cta" type="button" onclick={handleResetComplete} disabled={isResetting} aria-busy={isResetting}>
+            {isResetting ? '변경 중...' : '비밀번호 변경'}
           </button>
         {:else}
           <div class="su-result-box">
-            <p class="su-result-label">📧 이메일을 확인해주세요</p>
-            <p class="su-result-desc">{resetEmail}으로<br>비밀번호 재설정 링크가 발송되었습니다.</p>
+            <p class="su-result-label">✅ 비밀번호가 변경되었습니다</p>
+            <p class="su-result-desc">새 비밀번호로 로그인해주세요.</p>
           </div>
+          <button class="su-cta" type="button" onclick={() => { reset(); mode = 'login' }}>로그인하기</button>
         {/if}
 
-        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null; resetEmail = ''; resetSent = false }}>
-          <span>← 로그인으로 돌아가기</span>
-        </button>
+        {#if resetStep !== 'done'}
+          <button class="su-switch-mode" type="button" onclick={() => { reset(); mode = 'login' }}>
+            <span>← 로그인으로 돌아가기</span>
+          </button>
+        {/if}
 
       {/if}
 
@@ -991,8 +1301,8 @@
   .su-input {
     background: var(--cs-surface-gray);
     border: none;
-    border-radius: var(--radius-sm);
-    padding: 13px 16px;
+    border-radius: var(--radius-xl); /* 입력폼 30px — 인증 버튼(30px)과 같은 알약 모양(2026-10-23, Stephen 확정) */
+    padding: 13px 16px 13px var(--spacing-6); /* 좌측 24px — 30px 알약 곡선에서 글자가 떨어지도록(2026-10-23) */
     font: var(--text-pc-body-14);
     color: var(--cs-text);
     width: 100%;
@@ -1030,29 +1340,37 @@
   /* 전화번호 행 */
   .su-phone-row {
     display: flex;
+    align-items: center;
     gap: 8px;
   }
   .su-phone-input {
     flex: 1;
   }
+  /* 인증 버튼 — front-uiux.md §5 보조 버튼(.cs-btn-secondary) 규격(2026-10-23): 30px 반경·16px Bold·--cs-purple,
+     PC 높이 50px/패딩 0 30px, 모바일(≤640px) 44px/0 20px. 인증번호 받기·인증 확인 두 버튼은 같은 최소 가로폭으로 통일 */
   .su-otp-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    padding: 0 30px;
+    min-width: 164px;
+    box-sizing: border-box;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-sm);
-    padding: 0 16px;
-    font-family: var(--font-kr);
-    font-size: 13px;
-    font-weight: 700;
+    border-radius: var(--radius-xl);
+    font: var(--text-pc-title-16);
     cursor: pointer;
-    min-height: 48px;
-    min-width: 90px;
     white-space: nowrap;
-    transition: opacity 0.15s;
+    transition: background 0.15s, opacity 0.15s;
     flex-shrink: 0;
   }
-  .su-otp-btn:disabled { opacity: 0.55; cursor: default; }
-  .su-otp-btn:not(:disabled):hover { opacity: 0.85; }
+  .su-otp-btn:disabled { background: var(--cs-text-light); cursor: default; } /* 비활성: 반투명 보라 → 그레이 토큰(2026-10-23) */
+  .su-otp-btn:not(:disabled):hover { background: var(--cs-purple-hover); }
+  @media (max-width: 640px) {
+    .su-otp-btn { height: 44px; padding: 0 16px; min-width: 120px; font: var(--text-m-script-14B); } /* 모바일 축소(2026-10-23): 글자 16→14px 한 단계·가로 축소, 높이는 터치 타겟 44px 유지 */
+  }
 
   /* OTP 힌트 */
   .su-otp-hint {
