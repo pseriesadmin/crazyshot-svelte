@@ -22,13 +22,14 @@
   // ─── 상태 ─────────────────────────────────────────────────
   // Step 3(OTP 입력)을 Step 2에 병합(Stephen 지시, 2026-09-10 — SignUpModal.svelte처럼
   // 전화번호 발송+인증번호 확인을 한 화면에서 완결) — 3은 더 이상 별도 화면으로 쓰지 않음
-  let step        = $state<1 | 2 | 4>(1)
+  let step        = $state<1 | 2 | 'pw' | 4>(1)
   let isLoading   = $state(false)
   // SignUpModal.svelte .su-header와 동일하게 헤더에 단계별 타이틀을 표시(Stephen 지시,
   // 2026-09-10 — 4번째 선택영역 스타일을 1~3번째 SignUpModal 참조요소와 동일하게 반영)
   let stepTitle = $derived(
     step === 1 ? '기존 회원이신가요?'
     : step === 2 ? '기존 고객정보 입력'
+    : step === 'pw' ? '비밀번호 설정'
     : '인증 완료!'
   )
 
@@ -59,6 +60,53 @@
   let otpInput   = $state('')
   let verifyToken = $state('')  // verify-otp 성공 후 반환된 token
 
+  // 비밀번호 설정 단계(인증 직후) — 계정은 무작위 임시 비밀번호로 만들어지므로 본인이 쓸 비밀번호를 정한다
+  let pwInput    = $state('')
+  let pwConfirm  = $state('')
+  let pwShow     = $state(false)
+  let pwAsciiWarned = false
+  const PW_MAX_LENGTH = 72
+  const pwValid = $derived(pwInput.length >= 6 && pwInput === pwConfirm)
+
+  // 비밀번호는 영문·숫자·특수문자만(로그인 화면 입력 표준) — 한글 등 비ASCII는 즉시 제거하고 3초에 한 번만 안내
+  function filterPw(e: Event, set: (v: string) => void) {
+    const el = e.target as HTMLInputElement
+    const filtered = el.value.replace(/[^\x21-\x7E]/g, '')
+    if (filtered !== el.value) {
+      el.value = filtered
+      if (!pwAsciiWarned) {
+        pwAsciiWarned = true
+        csToast.warning('비밀번호는 영문·숫자·특수문자만 입력할 수 있어요.')
+        setTimeout(() => { pwAsciiWarned = false }, 3000)
+      }
+    }
+    set(filtered)
+  }
+
+  async function handleSetPassword() {
+    if (!pwValid) { csToast.error('비밀번호를 6자 이상 입력하고 같은 값을 한 번 더 입력해 주세요.'); return }
+    isLoading = true
+    try {
+      const res = await fetch('/api/auth/legacy-claim/set-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwInput }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (data.ok) {
+        csToast.success('비밀번호를 설정했어요. 다음부터 이 비밀번호로 로그인하세요.')
+        pwInput = pwConfirm = ''
+        step = 4
+      } else {
+        csToast.error(data.error ?? '비밀번호를 설정하지 못했어요.')
+      }
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      isLoading = false
+    }
+  }
+
   // Step 4 확인용 회원 정보 (complete 후 채움)
   let memberInfo = $state<{
     name: string
@@ -84,6 +132,7 @@
     }
     step = 1
     nameInput = otpInput = verifyToken = ''
+    pwInput = pwConfirm = ''
     phoneInput = '010-'
     memberInfo = null
     open = false
@@ -127,7 +176,14 @@
       } else if (data.ok && !data.found) {
         // 2026-09-11 Stephen 지시 — send-otp/+server.ts의 열거공격 방지("응답을 항상
         // 동일하게") 원칙을 이 화면에 한해 의도적으로 해제, 매칭 실패를 명시적으로 안내
-        csToast.error('확인 가능한 회원 정보가 없습니다.')
+        // 못 찾은 사유별 안내(2026-10-23) — 이미 인증을 끝냈거나 가입한 고객이 "없다"는 말만 듣고 막히지 않게 한다
+        if (data.reason === 'already_claimed') {
+          csToast.warning('이미 기존 회원 인증을 마친 계정이에요. 로그인해 주세요. 비밀번호가 기억나지 않으면 로그인 화면의 "비밀번호 찾기"를 이용해 주세요.')
+        } else if (data.reason === 'already_registered') {
+          csToast.warning('이미 같은 정보로 가입된 계정이 있어요. 로그인해 주세요. 비밀번호가 기억나지 않으면 "비밀번호 찾기"를 이용해 주세요.')
+        } else {
+          csToast.error('확인 가능한 회원 정보가 없습니다. 이름과 가입 당시 휴대폰 번호를 다시 확인해 주세요.')
+        }
       } else {
         csToast.error('네트워크 오류가 발생했습니다.')
       }
@@ -183,7 +239,7 @@
         // 수정. 이전엔 체크박스 미선택 시 인증을 완료해도 로그아웃 후 재방문마다 이 모달이
         // 반복 재노출되는 결함이었음).
         try { localStorage.setItem('cs-legacy-verify-dismissed-v2', '1') } catch { /* noop */ }
-        step = 4
+        step = data.needsPassword ? 'pw' : 4
         memberInfo = {
           name: data.user?.name ?? nameInput,
           email: data.user?.email ?? '',
@@ -192,7 +248,7 @@
           purchaseCount: data.user?.purchaseCount ?? 0,
           points: data.user?.points ?? 0,
         }
-        csToast.success('기존 회원 인증이 완료됐습니다.')
+        csToast.success('기존 회원 인증이 완료됐습니다.' + (data.needsPassword ? ' 이어서 비밀번호를 설정해 주세요.' : ''))
       } else {
         csToast.error(data.error ?? '인증 처리 중 오류가 발생했습니다.')
       }
@@ -354,6 +410,50 @@
         </div>
       </div>
 
+    <!-- Step pw: 비밀번호 설정(인증 직후) -->
+    {:else if step === 'pw'}
+      <div class="lm-step">
+        <p class="lm-desc">다음 로그인부터 사용할 비밀번호를 정해 주세요.</p>
+        <div class="lm-field">
+          <input
+            class="lm-input"
+            type={pwShow ? 'text' : 'password'}
+            placeholder="비밀번호 (6자 이상)"
+            aria-label="새 비밀번호"
+            autocomplete="new-password"
+            oninput={(e) => filterPw(e, (v) => (pwInput = v))}
+            value={pwInput}
+            disabled={isLoading}
+            maxlength={PW_MAX_LENGTH}
+          />
+        </div>
+        <div class="lm-field">
+          <input
+            class="lm-input"
+            type={pwShow ? 'text' : 'password'}
+            placeholder="비밀번호 확인"
+            aria-label="새 비밀번호 확인"
+            autocomplete="new-password"
+            oninput={(e) => filterPw(e, (v) => (pwConfirm = v))}
+            value={pwConfirm}
+            disabled={isLoading}
+            maxlength={PW_MAX_LENGTH}
+          />
+        </div>
+        <label class="lm-pw-show">
+          <input type="checkbox" bind:checked={pwShow} /> 비밀번호 보기
+        </label>
+        <div class="lm-actions">
+          <button class="lm-btn-primary" onclick={handleSetPassword} disabled={isLoading || !pwValid}>
+            {isLoading ? '설정 중...' : '비밀번호 설정하기'}
+          </button>
+          <button class="lm-btn-ghost" onclick={() => (step = 4)} disabled={isLoading}>
+            나중에 할게요
+          </button>
+        </div>
+        <p class="lm-pw-hint">나중에 설정하려면 로그인 화면의 "비밀번호 찾기"를 이용하세요.</p>
+      </div>
+
     <!-- Step 4: 완료 + 정보 확인 -->
     {:else if step === 4}
       <div class="lm-step">
@@ -499,6 +599,8 @@
     box-sizing: border-box;
     min-height: 48px;
   }
+  .lm-pw-show { display: flex; align-items: center; gap: 8px; font: var(--text-pc-body-14); color: var(--cs-text-mid, #666); margin-top: -4px; }
+  .lm-pw-hint { font: var(--text-pc-script-12); color: var(--cs-text-mid, #666); text-align: center; margin: 0; }
   .lm-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   /* SignUpModal.svelte .su-phone-row/.su-otp-btn과 동일 구조 — 전화번호 입력 + 인증발송
      버튼을 한 줄에 배치(Stephen 지시, 2026-09-10) */
