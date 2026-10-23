@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit'
+import { CMS_REMEMBER_COOKIE, cmsRememberCookieOptions } from '$lib/server/cmsRememberCookie'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
@@ -227,17 +228,8 @@ export const actions: Actions = {
       }
     } catch { /* 로그 저장 실패는 무시 */ }
 
-    // 로그인 상태 유지 쿠키 설정
-    // rememberMe=true  → maxAge 30일 (브라우저 종료 후에도 유지)
-    // rememberMe=false → 세션 쿠키 (브라우저 종료 시 삭제)
-    const cookieOpts = {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax' as const,
-      secure: true,
-      ...(rememberMe ? { maxAge: 60 * 60 * 24 * 30 } : {}),
-    }
-    cookies.set('cms-remember', '1', cookieOpts)
+    // 로그인 상태 유지 표식 — rememberMe=true는 400일(실제 로그인 쿠키와 같은 수명), false는 세션 쿠키(브라우저 종료 시 삭제)
+    cookies.set(CMS_REMEMBER_COOKIE, '1', cmsRememberCookieOptions(rememberMe))
 
     // 로그인 후 원래 경로(/cms/mobile/*)로 복귀 — 그 외 경로는 /cms로
     const redirectTo = (form.get('redirectTo') as string | null)?.trim() ?? ''

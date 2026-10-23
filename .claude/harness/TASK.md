@@ -2,10 +2,34 @@
 
 > ⛔ **2026-09-24 인덱싱 분리**: 이 파일은 "진행중·상시(BLOCKED/BACKLOG/NEXT/GATE C)·최근 3일 완료" 블록만 보관한다.
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
-> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🔴 CRITICAL(쿠폰 사용 판정·DB 함수 변경·Production 적용): "첫 렌탈 전용" 쿠폰 판정에 레거시 구매 이력 포함 + CMS 고객 포인트이력 탭 쿠폰 누적 표시 (Migration #751, 2026-10-23)
+> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🔴 CRITICAL(인증·세션 쿠키 경로 `src/routes/cms/**` 레이아웃·로그인 액션): CMS 로그인 상태 유지 보완 + 체크아이콘 표준 적용 + 고객 패널 삭제 안전장치 복구 (2026-10-24)
 
 ### 발단·원인 (최근 수정분부터)
-- (최근) 요청: CMS 고객 상세 '포인트이력' 탭 목록에 쿠폰 발급·사용 이력도 누적 표시.
+- (최근) 요청: 사용자 사이트에서 관리자 계정으로 로그인한 뒤 /cms로 들어오는 경로도 CMS 접속 로그(`cms_login_logs`)에 남길 것 → 표식 발급 최초 1회에 기록(`src/lib/server/cmsLoginLog.ts` `recordCmsLogin`, fail-soft).
+- 요청: "로그인 상태가 지속되지 않는 증상" 원인 파악·보완 1~3 승인 → 원인 후보 A~E(코드 분석, 실제 재현·로그 확인은 못 함):
+  A 체크박스 기본값 꺼짐(CMS만) → **기본 체크로 변경** / B `cms-remember` 30일 vs 로그인 쿠키 400일 → **수명 400일 일치**(`src/lib/server/cmsRememberCookie.ts`) / D 표식 없을 때 무조건 signOut(사용자 사이트 로그인↔/cms 교차) → **관리자(cms_role)면 로그아웃 없이 표식 재발급**(cs-remember '0'이면 세션 쿠키), 비관리자만 기존대로 signOut /
+  C(secure 쿠키·로컬 HTTP/Safari)·E(토큰 갱신 경합·Supabase 세션 정책)는 미수정(원인 후보로만 기록, E는 대시보드 확인 필요).
+- 요청: CMS 로그인 "로그인 상태 유지" 체크를 front-uiux §17 체크 확인 버튼 표준으로(`<input type="checkbox">` 제거 → 인라인 SVG `.checkbox-btn-terms` + 숨김 입력 `rememberMe`='on').
+- (소급 기록) 고객 패널 삭제 안전장치 복구('회원 삭제'·'관리대상 삭제' 첫 클릭에 바로 삭제 — 버튼 type 클릭 중 변경 방식 → 버튼 submit 고정 + use:enhance 1차 cancel) + 상단 탭 라벨 '포인트·쿠폰': sp3 4차 PASS(BLOCKER 0·MAJOR 0·MINOR 3, 미커밋).
+- 참고: 신고된 "500 Failed to fetch" 로그인 화면은 개발 서버 미실행으로 추정(재현 못 함, 접속 주소 미확인).
+
+### 구현 내역
+- `src/routes/cms/login/+page.svelte`(기본 체크·체크아이콘·숨김 입력) · `+page.server.ts`(표식 쿠키 옵션 공용화) · `src/routes/cms/+layout.server.ts`(표식 없음 처리·접속 로그) · 신규 `cmsRememberCookie.ts`·`cmsLoginLog.ts`
+- 테스트: `src/__tests__/server/cmsRememberMarker.test.ts`(8건) — 수명·관리자 자동 발급·유지 안 함·비관리자 로그아웃·접속 로그 기록·fail-soft.
+- `CustomerDetailPanel.svelte` 삭제 안전장치·탭 라벨, `managedPersonPanelMode.test.ts` TAB_LABELS.
+
+### 남음
+- [x] sp3 5차(2026-10-24): PASS(BLOCKER 0·MAJOR 0·MINOR 3: 접속 로그 동시 요청 중복 가능·ip가 x-forwarded-for 원문[기존 로그인 액션과 동일]·표식 발급 후 재진입 2회 호출 테스트 없음[표식 있음 케이스가 간접 커버]) · vitest 14건·eslint/svelte-check 변경 행 오류 0·harness-scan MEDIUM 2건 예외/오탐 판정 · sp5 SKIP(권한 상승 경로 없음, 표식 발급은 cms_role 가드 뒤, 위조 표식 무이득). MINOR 3건 미수정 이월. 미검증: 실제 로그인·쿠키 동작(브라우저 미사용), 원인 후보 C(로컬 HTTP secure 쿠키)·E(토큰 갱신 경합·Supabase 세션 정책) 범위 밖
+- [ ] 커밋·배포(Stephen)
+- [ ] 미확인: 실제 화면 동작(브라우저 미사용), 접속 로그에서 '사용자 사이트 경유 자동 진입'과 '표식 만료 재발급' 구분 불가(컬럼 추가 필요 시 별도 마이그레이션), 로컬 HTTP 환경 secure 쿠키(C)·토큰 갱신 경합(E)
+
+## NOW — 🔴 CRITICAL(쿠폰 사용 판정·DB 함수 변경·Production 적용): "첫 렌탈 전용" 쿠폰 판정에 레거시 구매 이력 포함 + CMS 고객 포인트이력 탭 쿠폰 누적 표시 (Migration #751, 2026-10-23)
+
+### 발단·원인 (최근 수정분부터)
+- (최근) 신고: CMS 고객 패널 '회원 삭제'가 한 번 눌러서 바로 삭제됨(삭제 안전장치 무력화). 원인: 버튼 `type`을 첫 클릭 도중 button→submit으로 바꾸는 방식이라 같은 클릭이 곧바로 제출될 수 있음(이 세션이 만든 코드 아님 — 이전 커밋에도 동일 패턴, 정확한 재현·과거 정상 여부는 브라우저 미확인). 수정: 버튼을 항상 submit으로 두고 `use:enhance`의 제출 단계에서 1차 제출은 경고 토스트+무장 후 `cancel()`, 4초 안 2차 제출만 실제 삭제(정본 `createDeleteSafetyToast`는 서버 실패 사유가 고정 문구로 바뀌어 미사용, 로컬 적용). 같은 패턴의 '관리대상 삭제'도 같이 수정. `CustomerDetailPanel.svelte`.
+- (최근) 요청: 상단 탭 이름 '포인트이력' → '포인트·쿠폰'(`CustomerDetailPanel.svelte` 라벨 + `managedPersonPanelMode.test.ts` TAB_LABELS 동기화). sp3 4차 검수 대기.
+- 요청: 포인트이력 탭 목록 상단에 하위탭 추가 — '적립'(포인트 적립+쿠폰 발급) / '소진'(포인트 사용·차감+쿠폰 사용). 1차 알약 버튼 → 지시로 밑줄 탭 메뉴·중앙 정렬로 재구현(`CustomerDetailPanel.svelte`: `pointSubTab`·`visiblePointHistory`·`.points-subtab`, 상단 `.panel-tab` 스타일 재사용). sp3 3차 검수 대기.
+- 요청: CMS 고객 상세 '포인트이력' 탭 목록에 쿠폰 발급·사용 이력도 누적 표시(커밋 99299967에 반영·Production 배포 중 확인).
 - 사고: 기존 회원(레거시) 인증 계정(문소윤 등 2건)이 크레이지샷 예약 0건이라 "첫 렌탈 미친 할인 30%" 쿠폰 대상으로 잡혀 노출·사용 가능했음 — 쿠폰 2건 회수(백업 후 삭제)·해당 쿠폰 자동배포 일시정지(Production `auto_distribute_enabled=false`) 후 근본 수정.
 - 원인: 첫 렌탈 판정이 예약 이력만 보고 `user_profiles.legacy_purchase_count`(원 서비스 구매 횟수)를 무시.
 
@@ -18,18 +42,57 @@
 ### 남음
 - [x] sp3 1차(첫 렌탈 판정 부분): PASS-CONDITIONAL(BLOCKER 0·MAJOR 0·MINOR 3 → 전부 해소: Production 정의 매칭·인라인 사본 없음 확인, Stage 라이브 테스트·eslint·문서 반영), sp5 SKIP
 - [x] sp3 2차(2026-10-23): PASS-CONDITIONAL(BLOCKER 0·MAJOR 1·MINOR 1) → **전부 반영** — MAJOR: 쿠폰 발급 시각을 마이그레이션이 보장하는 `created_at`으로 교체(points/+server.ts 조회·정렬, 패널 타입·표시) / MINOR: 쿠폰 조회 실패 시 경고 토스트 + 예외 시 목록 초기화 / 권고: firstRentalLegacyDb.test.ts Stage URL 가드. 관련 vitest 7건 GREEN·svelte-check 변경 파일 오류 0, sp5 SKIP(신규 입력 경로·권한 변경 없음). 이월(비블로킹): CustomerDetailPanel.svelte 751·766행 기존 no-useless-escape 2건(이번 수정분 아님), 쿠폰 100건 초과 절단, sp3 재검수는 생략(수정이 지적 항목에 국한)
+- [x] sp3 3차(2026-10-23): PASS(BLOCKER 0·MAJOR 0·MINOR 3: aria-controls/화살표키 없음[기존 .panel-tab과 동일 수준]·클래스명 points-pills 잔재·#ECEBF4 하드코딩 1건[기존 관행]) · vitest 34건·eslint 신규 0·sp5 SKIP · Stephen 실화면 확인(동작·정렬 이상 없음). MINOR 3건은 미수정 이월
+- [ ] sp3 4차(진행): 삭제 안전장치 수정 2건(회원·관리대상) + 탭 이름 변경 · 보안은 sp3 판단 시에만 sp5
 - [ ] 커밋·배포(Stephen) — 코드 배포 후에만 첫 렌탈 쿠폰(`a02279e4-7498-4e60-aa6a-c01bf6e29267`) 자동배포 재개(Stephen 지시 대기)
 - [ ] 미확인: 포인트이력 탭 화면 실확인(소스 검토·svelte-check만 수행), 쿠폰 100건 초과 고객의 목록 절단(조회 상한 100)
 
+## NOW — 🟡 BOUNDARY(가입 화면 UI·가입 직후 로그인 랜딩·로그인 복귀 경로, DB 변경 없음, 2026-10-24, 이 세션'만', ✅ Stephen 지시 · 커밋·배포 전)
+
+### 발단·요청 (최근 수정분부터)
+- (최근) 로그인 링크 복귀: GNB 'Sign In'(+모바일 계정 아이콘 링크)·MobileMoreMenu 'Sign in'·ChatHeader '로그인'이 `redirect` 없이 `/auth/login`만 가리켜 직접 로그인하면 직전 화면이 아니라 홈으로 가던 점 → 현재 경로(+쿼리)를 `redirect`로 붙임. 서버 가드 화면(장바구니·내 계정 등)은 원래 redirect가 붙어 있었음.
+- 가입 직후 로그인 랜딩: 가입 완료 후 브라우저 토큰이 가입 전 내용(익명·이메일 없음)이라 GNB가 게스트(`is_anonymous || !email`)로 보던 문제(코드 기준 추정) → 토큰 갱신, 그래도 익명이면 방금 만든 이메일·비밀번호로 로그인, 홈으로 이동.
+- 가입 1단계 Enter/키보드 '다음'으로 입력란 순차 이동, '인증 확인' 버튼 활성 색, PC 반응형 폰트 토큰 조정(입력 14→18px·안내 14px 유지·CTA 16→18px·인증번호 버튼 14px) — 모두 사용자 지시.
+
+### 구현 내역 (최근순)
+1. `src/lib/utils/loginRedirect.ts`(신규) `loginHref(pathname, search)` — 홈·`/auth/*`·500자 초과는 붙이지 않음(루프·과대 URL 방지). 적용: `GNB.svelte`(Sign In·계정 아이콘, `$page` 기반 `$derived`), `MobileMoreMenu.svelte`(Sign in), `ChatHeader.svelte`(클릭 시점 `window.location`). 로그인 화면은 기존대로 `safeReturnPath`로 내부 경로만 허용. 테스트 `src/__tests__/utils/loginRedirect.test.ts` 4건(붙이기·제외·길이·`safeReturnPath` 왕복).
+2. `src/routes/auth/login/+page.svelte` 가입 성공 처리: `goto(redirect ?? '/')` → `goto('/', { invalidateAll: true })`(가입 직후는 항상 홈, Stephen 지시 — 이전엔 redirect 값을 따랐음).
+3. `SignUpModal.svelte` 가입 완료: `confirm-verified-signup` 호출 뒤 `supabase.auth.refreshSession()` → 결과가 익명이거나 이메일 없으면 `performSignIn(email, password)` 폴백(실패해도 가입은 완료 상태). 같은 모달을 쓰는 상품 상세 화면에도 적용됨.
+4. `SignUpModal.svelte` Enter 순차 이동: 이메일→비밀번호→확인→성함→(`canProceed`면 다음 단계). `e.isComposing` 무시(IME-SAFE-INPUT), 비활성 입력란에는 포커스 안 함, 이메일 가입 확인(0.6초) 전 Enter는 확인 완료 즉시 비밀번호로(`pendingFocusPw`·`$effect`), `enterkeyhint="next"`.
+5. `SignUpModal.svelte` 스타일(PC ≥641px): 가입 폼 그룹(`.su-group-signup` — 1단계 폼 + 휴대폰 인증 단계) 입력 글자 `--text-pc-title-18`·placeholder `--text-pc-body-14` 유지 / `.su-cta` `--text-pc-title-18` / `.su-otp-btn` `--text-pc-body-14` / `.su-otp-btn-confirm`('인증 확인' 2곳: 가입·비밀번호 찾기) 활성 배경 `--cs-text-dark`·호버 `--cs-dark`(배경색만).
+
+### 검증 (이 세션)
+- vitest `loginRedirect.test.ts` 4/4, svelte-check 신규 오류 0(기존 2건), eslint 신규 오류 0(기존: GNB `handleSignOut` 미사용·SignUpModal/login `no-control-regex`).
+- **실브라우저 시험 미실시**: 가입 직후 로그인 랜딩(토큰 갱신 가설)·로그인 복귀·Enter 이동·폰트 모두 Stephen 화면 확인 필요.
+
+### 남음
+- [ ] sp3-qa-agent 검수(진행) · 보안은 sp3 판단 시에만 sp5
+- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타), 비로그인 상세 화면→Sign In→원래 화면, 가입 1단계 Enter 이동
+- [ ] 커밋(Stephen): `SignUpModal.svelte`·`auth/login/+page.svelte`·`GNB`·`MobileMoreMenu`·`ChatHeader`·`loginRedirect.ts`·테스트 (모두 이 세션 변경, 다른 세션 변경 미혼재 확인 — git diff 기준 SignUpModal 78줄·login 4줄)
+- [ ] 이월 후보: 가입 직후에도 직전 화면 복귀로 할지(현재 홈 고정), 로그인 성공 처리에 `invalidateAll` 추가 여부(현재 가입에만 적용), 아이디 찾기·휴대폰 인증 단계 Enter 이동 확대
+
 ## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
+
+## NOW — 🔴 CRITICAL(DB 신규 테이블·RPC + CMS 설정 화면 + 고객 공통 푸터): '팀 정책' 콘텐츠 편집 + 푸터 '팀' 모달 (Migration #753 — Stage 먼저, 2026-10-24, 이 세션'만', ✅ Stephen 지시)
+- 요구: ① `/cms/set/policy` '서비스 기본 정보' 영역 바로 위에 '팀 정책' 영역 추가 — 콘텐츠 문서 편집기(RichContentEditor, variant=cms) ② 고객 공통 푸터 '소개 > 팀' 클릭 시 공통 정책 모달(기존 `policyModal`)에 입력 내용 노출 ③ 단순한 팀 소개·정책 안내 화면.
+- 설계(기본값 — 이견 있으면 조정): 저장 = 싱글톤 `team_policy_settings.content_blocks`(ContentBlock[]) + `get_team_policy_settings`(공개 읽기)·`upsert_team_policy_settings`(CMS 전용, WHERE id 사용 — #567 교훈) · 고객 읽기 = `GET /api/team-policy`(서버에서 sanitizeCrazylogBlocks 정화 후 반환 — 저장형 XSS 방지) · 모달 렌더 = 신규 `ContentBlocksView.svelte`(text·image·youtube·divider·link-entry) · 저장 액션 `saveTeamPolicy`(manager 이상, 블록 수·크기 상한) · 이미지 업로드는 `UPLOAD_MENU_KEYS`에 `settings.policy` 추가.
+- 범위 밖: 푸터 연락처·FAQ 링크, 정책 3종(개인정보·이용정책·환불) 편집기 전환, 모바일 멤버십 푸터.
+- **구현 완료(2026-10-24, TDD RED→GREEN)**: Migration #753(Stage 적용, Production 미적용) · `src/lib/server/teamPolicy.ts`(저장 검증·고객용 정화) · `GET /api/team-policy`(공개) · `/cms/set/policy` load(`teamBlocks`)+`saveTeamPolicy` 액션(manager 이상) · 정책관리 '팀 정책' 영역(서비스 기본 정보 바로 위, RichContentEditor cms·저장 시 flush·빈 문단 정리 `teamPolicyBlocks.ts`) · `ContentBlocksView.svelte`(읽기 전용 렌더러) · 공통 푸터 '팀'을 버튼으로 바꿔 기존 정책 모달 재사용(요청 번호로 늦은 응답 무시) · `UPLOAD_MENU_KEYS`에 `settings.policy` 추가. 기존 `policyPageGuards.test.ts` load 키 기대값만 6종으로 갱신.
+- **sp3 1차: REJECT(소규모 — BLOCKER 0·MAJOR 1·MINOR 8·NIT 4)** → 같은 날 반영: MAJOR 편집기 입력 손실(같은 화면 다른 저장의 재조회가 편집기를 다시 만들어 미저장 입력을 지움 → `nextTeamEditorSync`로 서버 값 불변·미저장 입력 시 유지 + 저장 중 추가 입력 보존) / 구분선 0px(→1px) / 업로드 경로 `team-policy/content` / 크기 검증 바이트 기준(900KB)+`BLOCKS_TOO_LARGE`·`INVALID_BLOCKS` 안내 / `as unknown as` 제거 / 주석 정리. 시험 RED→GREEN(6파일 102건+렌더 5건), eslint 0, svelte-check 신규 0.
+- **결정 반영(2026-10-24, Stephen "A. 막기")**: upsert RPC를 `is_cms_manager_or_above()`(#647)로 교체 — **Migration #754**(Stage 적용·Production 미적용). partner 직접 호출 시 ACCESS_DENIED·기존 값 불변·superadmin 저장 가능을 Stage 라이브 시험으로 확인(RED→GREEN 7건). Stage 실제 상태 실측: 저장 함수 anon 불가·authenticated/service_role 가능·매니저 확인 포함·SECURITY DEFINER, 테이블 anon/authenticated 직접 접근 불가·RLS 켜짐·정책 0건·1행. 같은 구조의 서비스 기본 정보 RPC(#566·#567)는 이번 범위 밖(별건 결정 대기). ⚠️ 배포 순서: Production은 #753 → #754 순서로 DB 적용 후 코드.
+- 이월: `UPLOAD_MENU_KEYS` any-of 확대(manager 이상 한정이라 영향 작음), 규칙 문서(security-auth 매트릭스·service-operations 푸터 '팀') 미반영, 모달 경합 실행 시험·XSS 사례 시험 보강, Production 전 Stage 함수 정의 DRIFT 대조 필수, 실브라우저 확인 미실시.
+- ⚠️ 배포 순서: Production DB #753 먼저 → 코드 배포.
+- sp3 재검수 ⏳
 
 ## NOW — 🔴 CRITICAL(인증 경로 `src/routes/cms/login/**` 수정·DB 컬럼 추가): 관리자 비밀번호 복구 링크 — 인증번호 해시 저장 + 재발송 제한 (Migration #752 — Stage만 적용, 2026-10-23, 이 세션'만', ✅ Stephen 지시("1, 2번 개선 진행, 테스트 먼저"))
 - 배경: 복구 링크 정밀검증(라이브 19건 통과)에서 발견된 개선 1·2번 — ① 인증번호가 DB에 원문 저장·단순 비교 ② 재발송 간격·횟수 제한 없음(문자 비용·스팸).
 - 변경: `recoveryOtp.ts` 신설(서버 비밀키 HMAC 해시 저장·상수시간 비교, 예전 원문 저장값은 항상 불일치) / `sendRecoveryPhoneOtp` — 최소 간격 60초·링크당 최대 5회·동시 요청은 1건만(조건부 갱신으로 선점)·문자 실패 시 횟수·간격 복구 / Migration #752 `otp_sent_at`·`otp_send_count` 추가 + 남은 원문 값 비움.
 - 시험: RED(5건 실패) → GREEN. `recoveryOtp.test.ts`(해시 단위·소스 점검) + `cmsAdminRecoveryFlowLive.test.ts`(Stage 라이브 25건) + `accountsListSuperadminGuard` = 49/49. eslint 오류 0(경고 1: 테스트 파일 object-injection).
 - ⚠️ 배포 순서: **Production DB #752 먼저 → 코드 배포**(코드가 새 컬럼을 조회하므로 DB가 늦으면 복구 링크 전 단계가 "유효하지 않은 링크"로 실패). Production 적용은 Stephen 명시 지시 시에만.
-- 미해결(이번 범위 밖): 개선 3~5번(사용 완료 표시 원자화·복구 자동 로그인 접속 로그·비밀번호 최대 길이 서버 검증).
-- sp3 검수 ⏳
+- sp3 1차: PASS-CONDITIONAL(BLOCKER 0·MAJOR 0·MINOR 5) → Stephen 승인("옵션 A")으로 후속 반영: ① 오입력(`otp_attempts`)·불일치(`match_attempts`) 카운터 원자화 — 조건부 갱신+재시도, 끝내 기록 못 하면 링크 잠금(동시 12건 시험 RED→GREEN, 4번까지는 잠기지 않는 과잉 잠금 방지 시험 포함. 이메일 불일치 카운터는 같은 결함이라 함께 수정) ② 토큰 조회 DB 오류를 "유효하지 않은 링크"로 뭉개지 않고 서버 로그 + "일시적인 오류" 안내.
+- 시험(후속 반영 후): recoveryOtp + 라이브 복구 흐름 33건 GREEN, eslint 0, svelte-check 신규 0.
+- 미해결(이번 범위 밖): 개선 4·5번(복구 자동 로그인 접속 로그·비밀번호 최대 길이 서버 검증), sp3 MINOR 3(전용 비밀키 분리)·4(성공 후 해시 비움)·5(테스트 보강).
+- sp3 재검수 ⏳
 
 ## NOW — 🔴 CRITICAL(인증·계정 삭제 경로 `src/routes/cms/**` 서버 액션·계정 익명화): CMS 관리자 계정 삭제 — 업무 이력이 있으면 퇴직 처리(이력 보존) (DB 변경 없음, 2026-10-23, 이 세션'만', ✅ Stephen 지시("이력을 보존하되 관리자 계정 삭제는 가능하게") · 커밋·배포 전)
 
@@ -105,6 +168,8 @@
 - **조건 1~3 반영(Stephen 지시 "조건 1~3 바로 수정하고 재검수 실행", 2026-10-23)**: ① 발급자별 시간당 10건·하루 30건·같은 고객 5분 쿨다운(감사로그 집계, 조회 실패 시 500 fail-closed) + 발행 시 관리자 푸시(`sendPushToAdmins('identity_review')` — DB·push.ts 무변경이라 본인증명 승인 알림 수신 설정 관리자에게 감, 이메일 마스킹·링크 미포함) ② `insertCmsAdminAuditLogStrict` 신설(기존 fail-soft 함수 무수정) — 기록 실패 시 링크 미반환·알림 없음 ③ `withdrawal_status='requested'` 409. 테스트 18건 GREEN(신규 8건: 시간당·일일 한도·한도 이내·쿨다운·조회 실패·감사 실패·알림 내용·탈회 신청).
 - **재검수 결과(2026-10-23)**: sp3 2차 = 코드 기준 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 5 — 반영: 알림 구간 try/catch·테스트 22건·본 블록 fail-closed 서술 정정). sp5 재확인 = **PASS-CONDITIONS**(CRITICAL 0·HIGH 0·MEDIUM 1·LOW 2): 조건 1~3 해소, 조건 4 미해소. 신규 SEC-007(알림 수신자 0명이면 탐지 무음 — `identity_review` 수신 superadmin 1명 이상 보장 필요)·SEC-008(쿨다운 발급자 비구분, 수용)·SEC-009(고객 본인 통지 없음, 이월).
 - **Stage 실측(2026-10-23, Stephen 지시) — 조건 4 부분 해소**: Stage 테스트 계정(`legacy-e2e-test@example.com`)에 `generateLink({type:'recovery'})`를 2회 발급 → 링크1 `verifyOtp` **403 otp_expired(재발행이 이전 링크 무효화 확인)**, 링크2 1회차 성공, 링크2 재사용 **403 otp_expired(1회성 확인)**. 비밀번호는 변경하지 않음(세션만 생성). **미측정: 링크 유효시간**(Supabase 대시보드 Email OTP Expiration 값을 Stephen이 확인해야 함 — 화면 문구 '약 1시간'은 그 값과 대조 필요). 실 CMS 라우트·버튼 클릭 경유 실측은 아님(GoTrue 동작만 확인).
+- **발행→랜딩 라이브 시험(2026-10-23, 이 세션 추가)**: `cmsCustomerRecoveryLinkLive.test.ts` 4건 GREEN(Stage, 임시 계정·알림 가짜 처리·정리 완료) — 실제 발행 핸들러 → 링크 형식(`/auth/reset-password?token_hash=…&type=recovery`)·발행 기록에 링크 미포함·관리자 알림에 이메일 마스킹 → 랜딩 화면과 같은 호출(verifyOtp → updateUser)로 세션·새 비밀번호 로그인·옛 비밀번호 거부·같은 링크 재사용 거부·5분 쿨다운·재발행 시 이전 링크 무효. 브라우저 화면 클릭은 미실시. 발견: 랜딩 화면 오류 문구(SESSION_HELP)가 "로그인 화면에서 재설정 링크를 다시 요청" 안내로 옛 메일 방식 기준(현재 비밀번호 찾기는 문자 인증) — 미수정(승인 대기). 링크 유효시간 미측정.
+- **랜딩 화면 규칙 정합(2026-10-23, Stephen 승인 "제안 진행해")**: `/auth/reset-password`를 메인 비밀번호 찾기(문자 인증)와 같은 규칙으로 — 6~72자·한글/공백 입력 즉시 제거+경고(3초 1회)·72자 제한·확인 불일치 검증(공용 `src/lib/utils/passwordPolicy.ts` 신설, 서버 `validateNewPassword`와 일치 시험 포함) + 만료 안내 문구를 "운영자에게 새 링크 요청 또는 로그인 화면 비밀번호 찾기(문자 인증)"로 교체. 발견 근거: Stage에서 링크 경로로 한글 비밀번호가 실제 저장됨(로그인 화면은 한글을 지워 로그인 불가). 시험: passwordPolicy 8건 + 실제 렌더(mount) 3건 GREEN. 변경 파일: passwordPolicy.ts(신규)·reset-password/+page.svelte·시험 2개. 기존 최소 8자 → 6자로 낮아짐(메인과 동일). 브라우저 육안 확인 미실시. sp3 검수 ⏳
 - **남는 조건(배포 전)**: ① ~~Stage 실측~~ 무효화·1회성 해소 / **유효시간 대시보드 확인만 남음** ② `identity_review` 알림 수신 관리자(superadmin) 1명 이상 지정 ③ 고객 본인확인 후 발행 운영 절차 문서화(고객 통지 SMS는 BACKLOG 이월).
 - **미반영(미결정)**: 고객 통지 SMS, 운영자 본인확인 절차 의무화, 조건 4(Stage 재발행 무효화·1회성·대시보드 OTP 만료값 실측), 권고 SEC-004~006. **알림 수신자 한계**: 본인증명 승인 알림을 켜 둔 관리자만 받는다(없으면 알림 없음).
 
