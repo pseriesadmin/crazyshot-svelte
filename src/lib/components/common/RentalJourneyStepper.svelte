@@ -59,7 +59,7 @@
     void steps
     if (!stepperEl) return
     const el = stepperEl
-    if (!fluid) { el.scrollLeft = 0; return }
+    if (!fluid && !slim) { el.scrollLeft = 0; return } // slim(CMS 헤더)도 좁은 패널에서 현재 단계를 가운데로 맞춘다(2026-10-23)
     // 배지 줄의 실제 폭(레이아웃 값 — 진입 모션의 scale·이동 영향 없음)이 박스보다 넓으면 밀어 보는 띠(fade)로 전환하고,
     // 현재 단계 배지를 가운데로 맞춘다. 스크롤로 가려지지 않는 처음·끝 단계는 억지로 가운데에 두지 않는다(여백 없음 — 스크롤 한계에서 멈춤, 2026-10-22 Stephen 지시).
     const sync = async () => {
@@ -74,7 +74,7 @@
       await tick()
       if (!over || !active) { el.scrollLeft = 0; return }
       const x = active.offsetLeft - el.offsetLeft
-      el.scrollTo({ left: x + active.offsetWidth / 2 - el.clientWidth / 2, behavior: 'instant' })
+      el.scrollTo?.({ left: x + active.offsetWidth / 2 - el.clientWidth / 2, behavior: 'instant' }) // ?. — jsdom(컴포넌트 테스트)에는 scrollTo 가 없다
     }
     sync()
     document.fonts?.ready.then(sync)
@@ -259,6 +259,14 @@
   .journey-stepper.slim .step-item { flex-direction: row; gap: 0; animation: step-in 0.5s cubic-bezier(0.34, 1.3, 0.64, 1) backwards; animation-delay: calc(var(--i, 0) * 70ms); }
   .journey-stepper.slim .step-connector { width: var(--conn, 46px); height: var(--circle, 48px); animation: step-in 0.4s ease-out backwards; animation-delay: calc(var(--i, 0) * 60ms + 30ms); }
   .journey-stepper.slim .step-connector-icon { width: 14px; height: 9px; }
+  /* CMS 헤더(slim, fluid 아님) 좁은 패널 대응(2026-10-23, Stephen 지시): 간트 상세처럼 패널이 좁으면 배지(48px)·간격(46px) 원래 크기를 유지한 채 회색 박스 안에서
+     가로 띠로 두고(박스 밖으로 삐져나오지 않게 가로 overflow 를 막음), 현재 단계 배지가 가운데 오도록 스크립트가 자동 스크롤한다. 한눈에 다 보이지 않아도 된다.
+     회전 호·글로가 잘리지 않게 사방 12px 여백 + 같은 만큼 음수 마진(fluid 와 동일 방식). 넓은 패널(예약목록 730px)은 다 들어가므로 기존과 동일 */
+  .journey-stepper.slim:not(.fluid) .stepper-scroll { overflow-x: auto; overflow-y: hidden; padding: 12px; margin: -12px; justify-content: safe center; }
+  .journey-stepper.slim:not(.fluid) .stepper-scroll.fade {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  }
 
   /* 고객 화면용 fluid(2026-10-22, Stephen 지시 — CMS 헤더와 같은 원형 배지·모션을 고객 화면에도): 컨테이너 폭(cqw)에 맞춰 배지 크기를 34~46px 로 줄인다.
      배지 수는 --n(스텝 수). 아주 좁으면 가로 스크롤(회전 호가 잘리지 않게 위아래 여백을 둔다). */

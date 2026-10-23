@@ -38,6 +38,9 @@
   let anchorRect    = $state<{ top: number; bottom: number; left: number; right: number } | null>(null)
   let isLoadingMore = $state(false)
   let ganttEl: HTMLDivElement | null = null
+  // 브라우저 창 높이에 맞춘 간트 영역 높이(px) — 0이면 아직 측정 전(SSR·첫 렌더)이라 예약 건수 기준 높이를 쓴다.
+  // 창을 키우면 빈 그리드 줄이 더 채워지고, 줄이면 영역 안 세로 스크롤로 전환된다.
+  let availH = $state(0)
   let rafPending    = false
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -70,8 +73,29 @@
   // 예약이 15건보다 적어도 항상 15개 라인 셀(그리드 행)을 기본으로 채워서 보여준다 —
   // 실제 예약이 있으면 그 행에 막대가 그려지고, 없는 나머지 행은 빈 그리드 라인만 표시(흰
   // 빈 화면 방지). 15건을 넘으면 실제 건수만큼 전부 표시(자르지 않음).
-  let visibleRowSlots = $derived(Math.max(sortedRows.length, DEFAULT_ROWS))
-  let scrollAreaHeight = $derived(HEADER_H + visibleRowSlots * ROW_H)
+  // 창 높이가 크면 그 높이를 채울 만큼 빈 줄을 더 둔다(availH 측정 전에는 0 → 기존과 동일)
+  let viewportRowSlots = $derived(availH > HEADER_H ? Math.ceil((availH - HEADER_H) / ROW_H) : 0)
+  let visibleRowSlots = $derived(Math.max(sortedRows.length, DEFAULT_ROWS, viewportRowSlots))
+  let scrollAreaHeight = $derived(availH > 0 ? availH : HEADER_H + visibleRowSlots * ROW_H)
+
+  // 간트 영역 상단 위치 ~ 창 하단(대시보드 하단 여백 32px 제외)까지를 영역 높이로 삼는다
+  const BOTTOM_GAP = 32
+  const MIN_AVAIL_H = 320
+  function measureAvailHeight(): void {
+    if (!ganttEl) return
+    const top = ganttEl.getBoundingClientRect().top
+    availH = Math.max(Math.floor(window.innerHeight - top - BOTTOM_GAP), MIN_AVAIL_H)
+  }
+
+  $effect(() => {
+    measureAvailHeight()
+    const raf = requestAnimationFrame(measureAvailHeight)
+    window.addEventListener('resize', measureAvailHeight)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', measureAvailHeight)
+    }
+  })
   // {#each}는 배열/이터러블이 필요 — {length:N} 같은 평범한 객체는 런타임에 순회 불가하므로
   // Array.from으로 실제 배열을 만들어 전달
   let emptyRowIndexes = $derived(
@@ -475,12 +499,12 @@
 
   /* ── 스크롤 컨테이너 ────────────────────────────────────────────────── */
   /* overflow: auto → 세로/가로 모두 스크롤 허용 (CMS 관례: 스크롤바 숨기지 않음) */
-  /* 실제 높이(height)는 inline style로 예약 건수에 맞춰 계산해서 지정(스크립트의
-     scrollAreaHeight 참고 — 데이터가 적을 때 아래쪽에 큰 흰 여백이 남지 않도록 함).
-     max-height는 뷰포트가 작을 때를 대비한 안전 상한만 담당 */
+  /* 실제 높이(height)는 inline style로 지정 — 스크립트의 availH(브라우저 창 높이에서 영역 상단 위치·하단 여백을 뺀 값)로
+     창 크기에 맞춰 늘어나고 줄어든다(예약이 적으면 빈 그리드 줄로 채움, 많으면 영역 안 세로 스크롤).
+     측정 전(SSR)에만 예약 건수 기준 높이를 쓰며, 그때는 이 안전 상한이 넘침을 막는다 */
   .gantt-scroll {
     overflow: auto;
-    max-height: calc(100vh - 220px);
+    max-height: 100vh;
   }
 
   /* ── 헤더 (2단: 월 그룹 행 + 일자 행) — 전체 sticky top ─────────────── */
