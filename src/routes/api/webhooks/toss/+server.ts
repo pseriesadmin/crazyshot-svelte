@@ -6,6 +6,7 @@
 //   4. pg_cron이 백그라운드에서 processed=false 항목 처리 (다음 사이클)
 
 import { createHmac } from 'crypto'
+import { safeEqualString } from '$lib/server/timingSafeEqual'
 import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -21,7 +22,7 @@ function verifyTossSignature(
     const computed = createHmac('sha256', secretKey)
       .update(rawBody)
       .digest('base64')
-    return computed === signature
+    return safeEqualString(computed, signature) // 상수시간 비교(타이밍 공격 방지, 보안 베이스라인 B-3)
   } catch {
     return false
   }

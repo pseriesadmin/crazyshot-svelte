@@ -7,6 +7,7 @@
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte'
   import LoginBannerModal from '$lib/components/auth/LoginBannerModal.svelte'
   import { safeBannerHref } from '$lib/utils/loginBanner'
+  import { safeReturnPath } from '$lib/utils/safeReturnPath'
   import LegacyMemberVerifyModal from '$lib/components/auth/LegacyMemberVerifyModal.svelte'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
@@ -93,7 +94,7 @@
       // Supabase가 계정을 못 찾아 "Invalid login credentials"로 오인되는 문제 방지
       // (비밀번호는 트림하지 않음 — 공백이 실제 비밀번호의 일부일 수 있음)
       await performSignIn(email.trim(), password, rememberMe)
-      const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
+      const redirectTo = safeReturnPath($page.url.searchParams.get('redirect')) ?? '/'
       goto(redirectTo)
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : '로그인에 실패했습니다.'
@@ -363,7 +364,7 @@
   onclose={() => { showSignUpModal = false; modalInitialMode = 'login' }}
   onsuccess={() => {
     showSignUpModal = false
-    const redirectTo = $page.url.searchParams.get('redirect') ?? '/'
+    const redirectTo = safeReturnPath($page.url.searchParams.get('redirect')) ?? '/'
     goto(redirectTo)
   }}
 />

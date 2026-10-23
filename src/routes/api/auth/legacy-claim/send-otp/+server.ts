@@ -27,6 +27,7 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { sendSms } from '$lib/server/sms'
+import { generateOtpCode } from '$lib/server/otpCode'
 import type { RequestHandler } from './$types'
 
 // 매칭 성공 경로(RPC 1회 + DB write 2회 + SMS API 호출)의 통상 소요시간보다 넉넉히 높게 잡은
@@ -69,7 +70,7 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   // OTP 생성 (매칭 성공 여부와 무관하게 항상 생성 → 타이밍 동일화)
-  const code = Math.floor(100000 + Math.random() * 900000).toString()
+  const code = generateOtpCode()
   const expiresAt = new Date(Date.now() + 3 * 60 * 1000).toISOString()
 
   if (member) {
