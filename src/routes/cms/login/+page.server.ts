@@ -7,6 +7,7 @@ import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { sendSms } from '$lib/server/sms'
 import { generateOtpCode } from '$lib/server/otpCode'
+import { hashRecoveryOtp, recoveryOtpMatches } from '$lib/server/recoveryOtp'
 import { REMEMBER_COOKIE } from '$lib/utils/authCookies'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -15,6 +16,11 @@ import type { Actions, PageServerLoad } from './$types'
 // 완전히 분리된 흐름이다(Migration #504, 2026-09-15).
 const RECOVERY_MAX_MATCH_ATTEMPTS = 5
 const RECOVERY_MAX_OTP_ATTEMPTS = 5
+// 동시 요청으로 카운터 갱신이 밀릴 때 다시 시도하는 최대 횟수(넘으면 링크를 잠근다)
+const RECOVERY_COUNTER_RETRIES = 30
+// 인증번호 발송 제한(문자 비용·스팸 방지, 2026-10-23): 재발송 최소 간격 + 링크 1건당 최대 발송 횟수
+const RECOVERY_OTP_RESEND_COOLDOWN_MS = 60 * 1000
+const RECOVERY_MAX_OTP_SENDS = 5
 
 interface RecoveryTokenRow {
   id: string
@@ -28,19 +34,27 @@ interface RecoveryTokenRow {
   otp_expires_at: string | null
   otp_attempts: number
   match_attempts: number
+  otp_sent_at: string | null
+  otp_send_count: number
 }
 
 async function loadValidRecoveryToken(
   admin: SupabaseClient,
   token: string
 ): Promise<{ row: RecoveryTokenRow } | { error: string }> {
-  const { data } = await admin
+  const { data, error: queryError } = await admin
     .from('admin_password_recovery_tokens')
     .select(
-      'id, target_user_id, used_at, locked_at, expires_at, email_verified_at, phone_verified_at, otp_code, otp_expires_at, otp_attempts, match_attempts'
+      'id, target_user_id, used_at, locked_at, expires_at, email_verified_at, phone_verified_at, otp_code, otp_expires_at, otp_attempts, match_attempts, otp_sent_at, otp_send_count'
     )
     .eq('token', token)
     .maybeSingle()
+
+  // 조회 자체가 실패한 경우(DB 오류·마이그레이션 누락 등)를 "없는 링크"로 뭉개면 원인이 가려진다
+  if (queryError) {
+    console.error('[cms-recovery] 토큰 조회 실패:', queryError.message)
+    return { error: '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }
+  }
 
   const row = data as RecoveryTokenRow | null
   if (!row) return { error: '유효하지 않은 링크입니다.' }
@@ -50,11 +64,47 @@ async function loadValidRecoveryToken(
   return { row }
 }
 
+/**
+ * 오입력·불일치 카운터를 1 올리고, 상한(max)에 닿으면 링크를 잠근다.
+ * 읽은 값 + 1 로 덮어쓰면 동시 요청이 서로의 증가를 지워 "5회 잠금"이 약해지므로,
+ * 읽은 값이 그대로일 때만 갱신(조건부 update)하고 실패하면 다시 읽어 재시도한다.
+ * 끝내 기록하지 못하면(과도한 동시 시도) 안전한 쪽으로 링크를 잠근다.
+ */
+async function bumpRecoveryCounter(
+  admin: SupabaseClient,
+  id: string,
+  column: 'match_attempts' | 'otp_attempts',
+  max: number
+): Promise<void> {
+  for (let i = 0; i < RECOVERY_COUNTER_RETRIES; i++) {
+    const { data: cur, error: readError } = await admin
+      .from('admin_password_recovery_tokens')
+      .select('match_attempts, otp_attempts')
+      .eq('id', id)
+      .maybeSingle<{ match_attempts: number | null; otp_attempts: number | null }>()
+    if (readError || !cur) break
+    const current = Number((column === 'otp_attempts' ? cur.otp_attempts : cur.match_attempts) ?? 0)
+    const next = current + 1
+    const patch: Record<string, unknown> = { [column]: next }
+    if (next >= max) patch.locked_at = new Date().toISOString()
+    const { data: updated, error: updateError } = await admin
+      .from('admin_password_recovery_tokens')
+      .update(patch)
+      .eq('id', id)
+      .eq(column, current)
+      .select('id')
+    if (updateError) break
+    if (updated && updated.length > 0) return
+  }
+  const { error: lockError } = await admin
+    .from('admin_password_recovery_tokens')
+    .update({ locked_at: new Date().toISOString() })
+    .eq('id', id)
+  if (lockError) console.error('[cms-recovery] 링크 잠금 실패:', lockError.message)
+}
+
 async function registerRecoveryMismatch(admin: SupabaseClient, row: RecoveryTokenRow): Promise<void> {
-  const next = row.match_attempts + 1
-  const patch: Record<string, unknown> = { match_attempts: next }
-  if (next >= RECOVERY_MAX_MATCH_ATTEMPTS) patch.locked_at = new Date().toISOString()
-  await admin.from('admin_password_recovery_tokens').update(patch).eq('id', row.id)
+  await bumpRecoveryCounter(admin, row.id, 'match_attempts', RECOVERY_MAX_MATCH_ATTEMPTS)
 }
 
 export const load: PageServerLoad = async ({ locals, url, getClientAddress }) => {
@@ -324,18 +374,47 @@ export const actions: Actions = {
       return fail(400, { error: '보안을 위해 이 링크는 차단되었습니다. 관리자에게 새 링크를 요청해주세요.' })
     }
 
+    // 재발송 제한 — 최소 간격·링크당 횟수 (문자 비용·스팸 방지)
+    if (row.otp_send_count >= RECOVERY_MAX_OTP_SENDS) {
+      return fail(429, { error: '인증번호 요청 횟수를 초과했습니다. 관리자에게 새 링크를 요청해주세요.' })
+    }
+    if (row.otp_sent_at) {
+      const waitMs = RECOVERY_OTP_RESEND_COOLDOWN_MS - (Date.now() - new Date(row.otp_sent_at).getTime())
+      if (waitMs > 0) {
+        return fail(429, { error: `인증번호는 ${Math.ceil(waitMs / 1000)}초 후에 다시 요청할 수 있습니다.` })
+      }
+    }
+
+    // 발송 권리 선점 — 읽은 시점의 횟수·발송시각이 그대로일 때만 갱신(동시 요청 중 하나만 통과)
     const code = generateOtpCode()
-    const otpExpiresAt = new Date(Date.now() + 3 * 60 * 1000).toISOString()
-    await admin
+    const nowIso = new Date().toISOString()
+    let claim = admin
       .from('admin_password_recovery_tokens')
-      .update({ otp_code: code, otp_expires_at: otpExpiresAt })
+      .update({
+        otp_code: hashRecoveryOtp(row.id, code, serviceRoleKey),
+        otp_expires_at: new Date(Date.now() + 3 * 60 * 1000).toISOString(),
+        otp_sent_at: nowIso,
+        otp_send_count: row.otp_send_count + 1,
+      })
       .eq('id', row.id)
+      .eq('otp_send_count', row.otp_send_count)
+    claim = row.otp_sent_at ? claim.eq('otp_sent_at', row.otp_sent_at) : claim.is('otp_sent_at', null)
+    const { data: claimed } = await claim.select('id')
+    if (!claimed || claimed.length === 0) {
+      return fail(429, { error: '인증번호 요청이 처리 중입니다. 잠시 후 다시 시도해주세요.' })
+    }
 
     // ⛔ dev 우회 없음 — 관리자 계정 탈취 방지용 본인확인 OTP이므로 로컬 환경에서도
     // 항상 실제 SMS를 발송한다(회원가입·내정보 OTP와 동일 원칙, Stephen 2026-09-11 확정).
     try {
       await sendSms(phone, `[CRAZYSHOT.KR CMS] 계정 복구 인증번호 [${code}]를 화면에 입력해주세요. (유효시간 3분)`)
     } catch {
+      // 문자가 나가지 않았으면 횟수·간격을 되돌려 바로 다시 시도할 수 있게 한다
+      await admin
+        .from('admin_password_recovery_tokens')
+        .update({ otp_code: row.otp_code, otp_expires_at: row.otp_expires_at, otp_sent_at: row.otp_sent_at, otp_send_count: row.otp_send_count })
+        .eq('id', row.id)
+        .eq('otp_sent_at', nowIso)
       return fail(500, { error: 'SMS 발송에 실패했습니다. 잠시 후 다시 시도해주세요.' })
     }
     return { success: true }
@@ -362,11 +441,8 @@ export const actions: Actions = {
       return fail(400, { error: '인증번호가 만료되었습니다. 다시 요청해주세요.' })
     }
 
-    if (row.otp_code !== code) {
-      const nextAttempts = row.otp_attempts + 1
-      const patch: Record<string, unknown> = { otp_attempts: nextAttempts }
-      if (nextAttempts >= RECOVERY_MAX_OTP_ATTEMPTS) patch.locked_at = new Date().toISOString()
-      await admin.from('admin_password_recovery_tokens').update(patch).eq('id', row.id)
+    if (!recoveryOtpMatches(row.id, code, row.otp_code, serviceRoleKey)) {
+      await bumpRecoveryCounter(admin, row.id, 'otp_attempts', RECOVERY_MAX_OTP_ATTEMPTS)
       return fail(400, { error: '인증번호가 올바르지 않습니다.' })
     }
 
