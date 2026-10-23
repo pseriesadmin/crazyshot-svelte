@@ -54,6 +54,7 @@ function makeChainable(result: QueryResult) {
   chain.maybeSingle = vi.fn().mockResolvedValue(result);
   chain.single = vi.fn().mockResolvedValue(result);
   chain.delete = vi.fn(() => chain);
+  chain.update = vi.fn(() => chain); // 퇴직 처리(프로필 갱신) 대응
   // Stage 7: cms_admin_audit_log INSERT — 감사로그(fire-and-forget) 대응
   chain.insert = vi.fn(() => chain);
   chain.then = (resolve: (v: QueryResult) => unknown, reject?: (e: unknown) => unknown) =>
@@ -210,6 +211,105 @@ describe('/cms/accounts/list — 대상(target)이 superadmin일 때만 발동�
       });
       expect(result).toMatchObject({ success: true });
       expect(mockAdminStub.auth.admin.deleteUser).toHaveBeenCalledWith(TARGET_PARTNER_ID);
+    });
+
+    it('업무 이력 때문에 계정 삭제가 DB에서 거절되면 이력은 두고 퇴직 처리(역할 제거·로그인 차단)로 성공한다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        [TARGET_PARTNER_ID]: { cms_role: 'partner' },
+      });
+      mockAdminStub.auth.admin.deleteUser.mockResolvedValue({ data: null, error: { message: '{}', status: 500 } });
+      // 퇴직 처리의 프로필 조회·갱신(관리자 대상 확인 → update().eq().not().select())을 흉내낸다
+      const baseFrom = mockAdminStub.from;
+      mockAdminStub.from = vi.fn((table: string) =>
+        table === 'user_profiles'
+          ? ({
+              select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { id: TARGET_PARTNER_ID, cms_role: 'partner' }, error: null }) }) }),
+              update: () => ({ eq: () => ({ not: () => ({ select: async () => ({ data: [{ id: TARGET_PARTNER_ID }], error: null }) }) }) }),
+            } as never)
+          : baseFrom(table)
+      );
+      const result = await (actions as ActionMap).delete({
+        request: makeRequest({ user_id: TARGET_PARTNER_ID }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ success: true, retired: true });
+      expect(mockAdminStub.auth.admin.updateUserById).toHaveBeenCalledWith(
+        TARGET_PARTNER_ID,
+        expect.objectContaining({ ban_duration: '876000h' })
+      );
+    });
+
+    it('관리자가 아닌 계정(고객 uuid)을 직접 보내면 삭제·퇴직 처리 모두 하지 않고 400으로 거절한다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        'customer-uid': { cms_role: null },
+      });
+      const result = await (actions as ActionMap).delete({
+        request: makeRequest({ user_id: 'customer-uid' }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ status: 400 });
+      expect(mockAdminStub.auth.admin.deleteUser).not.toHaveBeenCalled();
+      expect(mockAdminStub.auth.admin.updateUserById).not.toHaveBeenCalled();
+    });
+
+    it('문구 없는 500이 한 번만 나고 재시도에서 성공하면(일시 장애) 퇴직 처리 없이 그대로 완전 삭제한다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        [TARGET_PARTNER_ID]: { cms_role: 'partner' },
+      });
+      mockAdminStub.auth.admin.deleteUser
+        .mockResolvedValueOnce({ data: null, error: { message: '{}', status: 500 } })
+        .mockResolvedValueOnce({ data: null, error: null });
+      const result = await (actions as ActionMap).delete({
+        request: makeRequest({ user_id: TARGET_PARTNER_ID }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ success: true });
+      expect((result as { retired?: boolean }).retired).toBeUndefined();
+      expect(mockAdminStub.auth.admin.deleteUser).toHaveBeenCalledTimes(2);
+      expect(mockAdminStub.auth.admin.updateUserById).not.toHaveBeenCalled();
+    });
+
+    it('계정을 찾을 수 없음(404) 같은 오류는 퇴직 처리하지 않고 그대로 실패를 알린다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        [TARGET_PARTNER_ID]: { cms_role: 'partner' },
+      });
+      mockAdminStub.auth.admin.deleteUser.mockResolvedValue({ data: null, error: { message: 'User not found', status: 404 } });
+      const result = await (actions as ActionMap).delete({
+        request: makeRequest({ user_id: TARGET_PARTNER_ID }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ status: 500 });
+      expect(mockAdminStub.auth.admin.updateUserById).not.toHaveBeenCalled();
+    });
+
+    it('관리자가 아닌 계정에는 비밀번호 설정 링크도 발급하지 않는다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        'customer-uid': { cms_role: null },
+      });
+      const result = await (actions as ActionMap).issueRecoveryLink({
+        request: makeRequest({ user_id: 'customer-uid' }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ status: 400 });
+    });
+
+    it('네트워크 같은 다른 오류로 삭제가 실패하면 퇴직 처리하지 않고 그대로 실패를 알린다', async () => {
+      wireProfiles({
+        [CALLER_ID]: { cms_role: 'manager' },
+        [TARGET_PARTNER_ID]: { cms_role: 'partner' },
+      });
+      mockAdminStub.auth.admin.deleteUser.mockResolvedValue({ data: null, error: { message: 'fetch failed', status: 0 } });
+      const result = await (actions as ActionMap).delete({
+        request: makeRequest({ user_id: TARGET_PARTNER_ID }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ status: 500 });
+      expect(mockAdminStub.auth.admin.updateUserById).not.toHaveBeenCalled();
     });
 
     it('회귀 방지: manager가 partner 대상을 사용중지하는 기존 정상 흐름은 그대로 성공한다', async () => {

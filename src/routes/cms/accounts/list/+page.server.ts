@@ -5,6 +5,8 @@ import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { requireAccountMutationAccess, requireNotLastSuperadmin } from '$lib/server/requireTrueSuperadmin'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
+import { hasDbErrorMessage, isAuthDbDeleteError, retireAdminAccount } from '$lib/server/retireAdminAccount'
+import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import type { Actions, PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -70,6 +72,12 @@ export interface AccountRow {
   cms_allow_concurrent_login: boolean
   cms_session_timeout_hours: number | null
   is_suspended: boolean
+}
+
+/** 계정 삭제·복구 링크는 관리자(cms_role 보유) 계정에만 — 고객 uuid를 직접 보내 고객을 익명화·차단하는 것을 막는다(보안 검수 SEC-A2) */
+async function requireAdminTarget(admin: SupabaseClient, userId: string): Promise<string | null> {
+  const target = await fetchCmsProfileByAuthId(admin, userId)
+  return target?.cms_role ? null : '관리자 계정만 처리할 수 있습니다.'
 }
 
 function makeAdmin(): SupabaseClient | null {
@@ -284,6 +292,9 @@ export const actions: Actions = {
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
 
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     // 이 계정에 남아있는 미사용 링크는 신규 발급과 동시에 무효화(동시에 여러 유효
     // 링크가 떠도는 것 방지 — 유출 경로를 하나로 줄임)
     await admin
@@ -334,9 +345,29 @@ export const actions: Actions = {
     const lastMasterErr = await requireNotLastSuperadmin(admin, userId)
     if (lastMasterErr) return fail(403, { error: lastMasterErr })
 
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     // auth.users 먼저 삭제 (실패 시 user_profiles 상태 변경 없이 롤백)
-    const { error: deleteErr } = await admin.auth.admin.deleteUser(userId)
-    if (deleteErr) return fail(500, { error: deleteErr.message || 'auth 삭제 실패' })
+    let { error: deleteErr } = await admin.auth.admin.deleteUser(userId)
+    // 문구 없는 500은 일시 장애일 수 있다 — 한 번 더 시도해서 성공하면 이력이 없던 계정이므로 그대로 완전 삭제로 진행한다
+    if (deleteErr && !hasDbErrorMessage(deleteErr) && deleteErr.status === 500) {
+      ;({ error: deleteErr } = await admin.auth.admin.deleteUser(userId))
+    }
+    if (deleteErr) {
+      // 업무 이력(계약서 양식·대여 처리·쿠폰 배포·상담 답변 등)이 이 계정을 참조하면 DB가 삭제를 막는다 —
+      // 이력은 그대로 보존하고 계정만 퇴직 처리(로그인 차단·역할 제거·익명화)한다. 그 밖의 오류(네트워크 등)는 기존처럼 실패.
+      if (!isAuthDbDeleteError(deleteErr)) return fail(500, { error: deleteErr.message || 'auth 삭제 실패' })
+      const retired = await retireAdminAccount(admin, userId)
+      if (!retired.ok) return fail(500, { error: retired.error })
+      await insertCmsAdminAuditLog(admin, {
+        actorId: session.user.id,
+        actionType: 'delete',
+        targetUserId: userId,
+        afterValue: { mode: 'retired', reason: 'history_preserved' },
+      })
+      return { success: true, retired: true }
+    }
 
     // auth 삭제 성공 후 user_profiles 정리 (FK ON DELETE SET NULL이므로 admin_invite_tokens는 자동 처리)
     await admin.from('user_profiles').delete().eq('id', userId)
