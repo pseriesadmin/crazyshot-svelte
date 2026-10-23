@@ -219,7 +219,8 @@ CMS 화면     → cms-uiux.md 참조
 | `card` 중 PC | **30px** | `--radius-xl` | 중간 카드(총금액 박스 등) — PC |
 | `card` 중 Mobile | **20px** | (하드코딩) | 중간 카드(총금액 박스 등) — Mobile |
 | `badge` | **99px** | `--radius-full` | 배지, 태그, 원형 요소 |
-| `input` | **8px** | `--radius-sm` | 폼 입력 필드 |
+| `input` | **8px** | `--radius-sm` | 일반 폼 입력 필드 (기본값 — 아래 인증·로그인류 모달 입력칸 제외) |
+| `input` 인증·로그인류 모달 | **30px** | `--radius-xl` | 회원가입·로그인·아이디/비밀번호 찾기 모달(`SignUpModal.svelte`)의 입력칸 전부 — 인증 버튼(30px)과 같은 알약 모양 (2026-10-23 Stephen 확정, §6 "인증·로그인류 모달 입력칸" 참고) |
 | `image` | **10px** | `--cms-radius-sm` (10px) | 상품 이미지 |
 | `avatar` | **50px** | — | 프로필 아바타 |
 
@@ -353,6 +354,34 @@ CMS 화면     → cms-uiux.md 참조
 .cs-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 ```
 
+### 인증·로그인류 모달 입력칸 — 반경 30px (2026-10-23 Stephen 확정)
+
+> 대상: 회원가입·로그인·아이디 찾기·비밀번호 찾기(문자 인증) 모달 `SignUpModal.svelte`의 `.su-input`(이메일·비밀번호·휴대폰·인증번호·이름 입력칸 전부).
+> 인증 버튼(`.su-otp-btn`, §5 보조 버튼 규격 30px)과 입력칸이 같은 행에 놓이므로 둘 다 30px 알약으로 통일한다.
+> 위 "폼 입력"(8px)은 이 모달 밖의 일반 폼 입력 기본값으로 그대로 유지한다.
+
+```css
+.su-input {
+  background: var(--cs-surface-gray);
+  border: none;
+  border-radius: var(--radius-xl);    /* input(인증·로그인류 모달): 30px */
+  padding: 13px 16px 13px var(--spacing-6);  /* 좌측 24px, 우측 16px (비밀번호 눈 버튼 칸은 우측 52px) */
+  font: var(--text-pc-body-14);
+  color: var(--cs-text);
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 48px;
+}
+.su-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+```
+
+```
+⚠️ 미결정(2026-10-23 기준): 기존회원 인증 모달(LegacyMemberVerifyModal.svelte)의 입력칸(.lm-input)은 8px 그대로다.
+   같은 인증 흐름이므로 30px로 맞출지는 Stephen 확인 후 반영한다.
+⚠️ 문서 정합: 30px는 위 §4 표의 `button` 값(--radius-xl)과 같은 토큰이다 — 모서리가 커서 글자가 곡선에 붙어 보이면
+   패딩을 늘리는 방향으로 조정하고(2026-10-23 좌측 패딩 16→24px 반영), 반경 값은 임의로 줄이지 않는다.
+```
+
 ### 그라데이션 (7종)
 
 ```css
@@ -447,6 +476,10 @@ CTA 강조  (2px solid #FF3535)          : CTA 버튼 포커스·활성 아웃�
 [타이포]
 [ ] CSS 변수 --text-pc-* / --text-m-* 사용?
 [ ] 하드코딩 font-size / font-weight 없음?
+
+[입력폼]
+[ ] 일반 폼 입력 필드: radius --radius-sm (8px)?
+[ ] 회원가입·로그인·찾기 모달(SignUpModal) 입력칸: radius --radius-xl (30px)? (인증 버튼과 같은 알약)
 
 [공통]
 [ ] 터치 타겟 최소 44×44px?

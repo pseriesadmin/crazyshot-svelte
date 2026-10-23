@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { userCouponUsedCount } from '$lib/utils/couponUsage'
 import { resolveParentProductFields } from '$lib/server/products/resolveParentProductFields'
+import { isFirstRentalUser } from './firstRental'
 
 // ── 7개 자격조건 필드 (coupons 테이블 컬럼과 1:1 대응) ──────────────────────
 export interface CouponEligibilityFields {
@@ -276,8 +277,8 @@ export async function buildCouponEligibilityContext(
 
   const [profileResult, firstRentalResult, subResult] = await Promise.all([
     (client as unknown as {
-      from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { maybeSingle: () => Promise<{ data: { is_student: boolean | null } | null }> } } }
-    }).from('user_profiles').select('is_student').eq('id', userId).maybeSingle(),
+      from: (t: string) => { select: (c: string) => { eq: (k: string, v: string) => { maybeSingle: () => Promise<{ data: { is_student: boolean | null; legacy_purchase_count: number | null } | null }> } } }
+    }).from('user_profiles').select('is_student, legacy_purchase_count').eq('id', userId).maybeSingle(),
 
     // ⚠️ rental_reservations에는 deleted_at 컬럼이 없음(Migration 348 적용 전 재검증으로
     // 발견 — use_coupon RPC와 동일 실수, 여기서도 제거)
@@ -301,7 +302,7 @@ export async function buildCouponEligibilityContext(
   ])
 
   const isStudent            = profileResult.data?.is_student === true
-  const isFirstRental        = (firstRentalResult.data?.length ?? 0) === 0
+  const isFirstRental        = isFirstRentalUser(firstRentalResult.data?.length ?? 0, profileResult.data?.legacy_purchase_count)
   const hasActiveSubscription = (subResult.data?.length ?? 0) > 0
 
   return {

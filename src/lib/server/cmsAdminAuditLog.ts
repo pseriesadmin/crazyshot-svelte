@@ -49,3 +49,30 @@ export async function insertCmsAdminAuditLog(
     // 감사로그 실패는 무시 — 관리 액션 자체는 이미 성공한 상태를 되돌리지 않는다.
   }
 }
+
+/**
+ * cms_admin_audit_log INSERT — 성공 여부를 돌려주는 엄격 변형(2026-10-23).
+ * 기록이 반드시 따라야 하는 위험 작업(예: 고객 계정 인수가 가능한 비밀번호 설정 링크 발급)에서 쓴다 —
+ * false면 호출부가 그 작업의 결과(링크 등)를 돌려주지 않아야 한다(fail-closed). 예외를 던지지 않는다.
+ */
+export async function insertCmsAdminAuditLogStrict(
+  admin: SupabaseClient,
+  entry: CmsAdminAuditLogEntry
+): Promise<boolean> {
+  try {
+    const { error } = await admin.from('cms_admin_audit_log').insert({
+      user_id: entry.actorId,
+      action_type: entry.actionType,
+      target_user_id: entry.targetUserId,
+      before_value: entry.beforeValue ?? null,
+      after_value: entry.afterValue ?? null,
+    })
+    if (error) {
+      console.error(`[cmsAdminAuditLog] ${entry.actionType} 기록 실패:`, error.message)
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}

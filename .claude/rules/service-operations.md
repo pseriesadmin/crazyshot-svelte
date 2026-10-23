@@ -170,9 +170,11 @@ confirmed로 전환된다. 결제·서명 중 어느 쪽이 먼저 끝나든 순
 contract_signings.signed_at 둘 다 충족된 시점 — try_confirm_reservation RPC가 매번
 AND 조건을 재검증하는 멱등 함수).
 
-예외: cms 관리자의 수동 "승인하기" 버튼(RentalDetailPanel `approveReservation` 액션)은
-계약 여부와 무관하게 언제든 즉시 승인 가능한 재량 우회 경로로 그대로 유지한다(Stephen
-2026-08-17 확정) — 이 버튼에 계약 체크를 추가하는 것은 금지.
+⛔ 2026-10-15 정책 반전(Stephen 확정): 서명·결제 없이 신청대기를 계약완료로 올리는 **수동 경로는 존재하지 않는다**.
+   과거 서술(2026-08-17: 관리자 수동 "승인하기"가 계약 여부와 무관하게 즉시 승인하는 재량 우회 경로 유지, 이 버튼에 계약 체크 추가 금지)은 폐기됐다.
+   · '예약승인' 버튼(`approveReservation`)은 예약을 확정하지 않는다 — 서류 상태에 따라 고객에게 본인증명 등록요청을 보내거나 전자계약을 자동 발행·발송할 뿐이며(§31) 예약은 신청대기로 유지된다. 버튼 이름은 '승인하기'에서 '예약승인'으로 바뀌었다.
+   · 서버 방어: `updateStatus` 액션은 `status='confirmed'` 요청을 400으로 거절하고, `approveReservation`에는 확정 RPC 호출이 없다. 계약완료로의 전환은 고객의 서명 + 결제 후 `try_confirm_reservation`(서명·결제 AND 재검증)만 한다.
+   · 남는 한계: DB 함수 `update_reservation_status`(hold→confirmed 허용)는 서비스 롤로 호출 가능하다 — `try_confirm_reservation` 내부가 이 함수를 호출하므로 DB에서 막지 못한다. 새 서버 코드에서 이 RPC로 'confirmed'를 직접 요청하는 경로를 추가하지 않는다(GATE C).
 ```
 → 상세: `.claude/harness/TASK.md` "계약서 서명 완료를 예약승인(confirmed) 필수조건으로
 게이팅"(2026-08-17 NOW 항목, Migration 284) · `rental-lifecycle.md` "예약 단계 정합 검증"
@@ -517,6 +519,9 @@ withdrawal_status 3단계:
   ⑤ 휴대폰 재사용 차단(별개 시나리오, ③④와 무관): 탈회 유예기간 중인 **다른 계정**이 쓰던
      휴대폰번호로 **제3의 계정**이 새로 인증(verify_and_update_phone)을 시도하면, 병합하지
      않고 안내만 표시하며 차단한다(withdrawal_conflict) — 번호 소유권 혼선 방지 목적.
+  ⑦ (2026-10-23) 관리자 계정 삭제의 "퇴직 처리"는 탈회 완전삭제와 같은 익명 이메일 도메인(`@purged.crazyshot.kr`, 접두사만 `deleted-`)을 쓴다 —
+     비밀번호 찾기(`findResetTarget`)는 deleted_at·이 도메인으로 두 경우를 함께 제외한다. 퇴직 처리는 withdrawal_status를 건드리지 않고 deleted_at으로 표시하며
+     CMS 고객 목록(`deleted_at IS NULL` 조건)에는 나오지 않는다. 정본: security-auth.md "관리자 계정 삭제 = 이력이 있으면 퇴직 처리".
   ⑥ CMS 고객 목록 배지: withdrawal_status별 "탈회" 배지(레드 계열, `--cs-red-badge` —
      블랙리스트 배지와 동일 색상 언어, 우선순위 탈회>블랙리스트>정상) + CustomerDetailPanel에
      탈회 정보(신청일·삭제예정일) 블록 표시. 관리자가 별도로 취소/복구하는 액션은 없다.
@@ -721,6 +726,17 @@ create_reservation_order·sync_order_after_composition_change가 같은 함수�
    CMS 쿠폰 생성·상세 패널에 "할인 적용 범위(주문 전체 / 대여 1일차만)" 칩(정률 쿠폰에만 노출) 추가.
 ```
 
+### "첫 렌탈 전용" 쿠폰의 첫 렌탈 정의 — 레거시 구매 이력 포함 (2026-10-23, Migration 751, Stage·Production 적용)
+
+```
+첫 렌탈 = 크레이지샷 예약(hold·draft·cancelled·expired 제외)이 0건 AND 레거시(원 서비스) 구매 이력(user_profiles.legacy_purchase_count)이 0건(NULL 포함).
+기존 회원(레거시) 인증 계정은 크레이지샷 예약이 0건이라 예전엔 첫 렌탈로 잡혀 "첫 렌탈 미친 할인" 쿠폰이 노출·사용됐다(2026-10-23 사고, 해당 쿠폰 회수·자동배포 일시정지 후 근본 수정).
+판정 지점 4곳을 항상 함께 바꾼다: ① DB private._validate_and_consume_coupon(use_coupon·use_coupons 경유, 인라인 판정 사본은 없음) ② 공용 규칙 src/lib/server/coupons/firstRental.ts(isFirstRentalUser)
+  ③ 장바구니 cart/+page.server.ts ④ 계약서 contract/[token]/+page.server.ts · couponEligibility.ts(isCouponUserEligible).
+배포는 DB(751) 먼저, 코드 나중(DB가 먼저면 더 엄격해지기만 해 안전). 자동배포(auto_distribute_eligible_coupons)는 첫 렌탈 여부를 보지 않고 전 회원에게 발급하며 노출·사용 단계에서 걸러진다 — 발급 단계에 조건을 넣지 않는다.
+테스트: firstRental.test.ts(공용 규칙·소스 점검) · firstRentalLegacyDb.test.ts(Stage 라이브 3건)
+```
+
 ### 총 발행 개수 · 1인당 사용 횟수 (2026-10-02, Migration 623·624, Stephen 확정)
 
 ```
@@ -829,7 +845,16 @@ order_items.reservation_id가 NULL인 행(예약 물리삭제 후 SET NULL)은 S
 · 서류 1건 등록(upload-doc)이 성공할 때마다 서버가 DB 반영 결과로 필수 조합을 다시 계산해 응답에 `missing`(빠진 서류 이름)을 싣는다
   (docApproval.ts missingIdentityDocs/missingForeignDocs — 예약 차단 판정 identityRequiredMet/foreignRequiredMet와 같은 기준). 화면은 이 값을 그대로 토스트로
   안내한다("OOO를 추가 등록해주세요."). 비어 있으면 필수 조합 완비 → "정보등록이 완료되어 관리자 승인을 요청했어요." + [문의].
-· 예약 차단은 none/pending 두 단계만(partial 없음). pending 문구 "본인증명정보를 승인 중입니다. 조금만 기다려 주세요." + [문의], none은 [확인]→서류 탭
+⛔ 2026-10-15 정책 변경(Stephen 확정, Migration #716): 본인증명 미등록·승인 대기는 더 이상 예약 "신청"을 막지 않는다. 상품상세 장바구니 담기·예약신청,
+  장바구니 예약신청 모두 서류 없이 진행되고(DB 트리거 trg_require_approved_identity_doc는 통과형으로 교체 — 되돌릴 때는 #632 본문 복원), 차단 토스트는 숨겼다.
+  대신 서류가 미등록(none)이면 화면이 POST /api/profile/doc-request를 호출(docRequestClient.ts, 응답 대기·토스트 없음)하고, 서버
+  (src/lib/server/identityDocRequest.ts)가 기존 'identity_request' 대화카드 + 푸시 + SMS로 등록을 요청한다 — 서류 상태는 서버가 다시 판정(none만),
+  같은 카드가 24시간 안에 있으면 재발송하지 않고, 세션은 find_or_create_general_chat_session 경유(§11), 푸시·SMS는 fail-soft(SMS는 개발환경·전화번호 없음 제외,
+  문자 발송은 2026-10-17부터 sms_notification_logs에 notify_type='identity_request'로 기록한다 — 예약 번호가 필수라 지정 예약(예약승인·예약 패널 [재요청]) 또는 고객의 가장 최근 진행 예약에 연결하고, 예약이 없으면 기록만 생략한다. 같은 날 재요청이 고유 인덱스에 막히지 않도록 Migration #721이 이 유형을 인덱스에서 제외. 예약 상세 '알림발송' 탭에 '본인증명 등록요청'으로 나온다). 카드 CTA는 개인정보 > 본인증명 영역(/account/profile?tab=profile&doc=identity, 외국인은 doc=foreign) —
+  관리자 수동 요청(/api/cms/chat/identity-request/direct-send)도 같은 카드 정의(buildIdentityRequestPayload)를 쓴다.
+  서류 확인은 이 요청과 관리자 예약 승인 단계에서 이뤄진다(CMS 예약목록 승인 게이트는 별도 세션 — 이 변경은 승인 로직을 건드리지 않는다).
+  아래 "예약 차단" 서술은 이전 정책(2026-10-05~10-14)이며 showDocGateToast는 정책을 되돌릴 때 쓰도록 코드에 남겨 두었다.
+· (이전 정책, 2026-10-14까지) 예약 차단은 none/pending 두 단계만(partial 없음). pending 문구 "본인증명정보를 승인 중입니다. 조금만 기다려 주세요." + [문의], none은 [확인]→서류 탭
   (외국인증명만 등록한 고객은 doc=foreign). 상품상세·장바구니는 공용 헬퍼 docGateToast.ts(showDocGateToast)를 쓴다 — 문구·버튼을 한 곳에서만 고친다.
 · [문의]: POST /api/profile/doc-inquiry(pending일 때만) — 상담 세션은 find_or_create_general_chat_session 경유(§11), 고객 문의 메시지 + 승인 대기 자동 안내
   (docInquiryChat.ts, 같은 문구 60분 중복 차단) + 관리자 푸시(identity_review 플래그 재사용). 필수 서류 완비 직후(upload-doc)에도 자동 안내가 같은 헬퍼로 1회 남는다.
@@ -927,9 +952,80 @@ CMS /cms/set/rental "배송지역 관리정보"에 등록한 시/도·시군구�
 
 ---
 
+## 31. 전자계약 자동발행 표준양식 — 예약승인 시 계약서 자동 발행·발송 (2026-10-15, Stephen 확정, Migration #717)
+
+```
+계약서 양식 화면(/cms/reservation/contracts)에서 양식 1개를 '자동발행 표준양식'(토글 ON)으로 지정하면 — 단독 1개, 다른 양식을 켜면 이전 지정 자동 해제 —
+예약목록의 '예약승인' 때(고객 본인증명 서류가 승인돼 있을 때) 그 양식으로 전자계약이 자동 발행·발송된다. 지정 양식이 없으면(OFF) 자동 발행·발송은 일어나지 않는다 — '예약승인'은 승인완료로 기록되고(`rental_reservations.approved_at`, Migration #719) 예약은 '계약대기' 칩으로 옮겨지며, 예약의 계약서 탭에서 관리자가 전자계약을 수동 발행·발송한다. 예약승인 전(신청대기)에는 계약서 탭의 발행·발송 버튼이 잠기고, 서버도 같은 규칙을 집행한다 — `init-contract`·`send-chat`이 `contractApprovalGuard.ts`로 "신청대기 + 승인 시각 없음 + 발송된 계약서 없음"이면 409로 거절한다(자동발행 경로는 승인 시각을 먼저 기록한 뒤 호출하므로 영향 없음). 승인 시각 컬럼이 없는 환경(마이그레이션 미적용)에서는 화면 잠금·서버 거절 모두 풀려(fail-open) 계약서를 못 보내는 배포 순서 사고를 막는다. 계약대기 칩에서 아직 발송되지 않은 행은 '승인완료 · 계약 미발송' 배지로 표시한다. 어느 경우에도 예약승인은 예약을 확정하지 않는다 — 확정은 서명+결제 후 자동이고, 그 즉시 예약은 대여현황의 '계약완료'로 이동한다.
+  · 서류 상태 분기: 본인증명 미등록·필수 서류 미비 → 등록요청(채팅 카드·푸시·SMS, CMS '본인증명 등록요청' 안내문장 반영) + 승인 요청 표식(`rental_reservations.approve_requested_at`, Migration #718), 버튼 '승인대기' / 서류 승인 대기 → 안내만 + 표식 / 서류 승인 완료 → 자동 발행·발송, 버튼 '승인완료', 예약은 '계약대기' 칩으로 이동.
+  · 서류 승인(/api/cms/approve-doc) 직후, 표식이 남은(예약승인을 눌렀던) 신청대기 예약에 한해 자동 발행·발송 후 표식을 비운다(`autoIssueAfterDocApproval`, 표식 선점 방식으로 동시 중복 방지).
+  · 자동발행에 성공하면 예약을 확정하지 않는다 — 확정(계약완료)은 고객의 서명·결제 후(§9). 승인 알림 카드는 보내지 않고 계약서 카드가 간다(§10의 1시간 타이머 시작).
+  · 자동발행을 못 하면(이미 계약서 있음·발행자 서명 필수 충족 불가·권한 없음·잔존 변수·발송 실패·일시 오류) 예약을 확정하지 않는다 — 예약승인은 완료(approved_at)로 기록하고 사유를 안내하며, 관리자가 계약서 탭에서 직접 발행·발송한다(2026-10-15 개정 — 과거 "승인은 기존대로 진행(확정)"은 폐기).
+  · 주문당 1건(수동 발행과 같은 규칙), 양식 종류(문서형·HTML·캔버스·스프레드시트) 모두 지원.
+  · 구현 정본: src/lib/server/contractAutoIssue.ts — 수동 발행 모달(ContractTemplatePreviewModal.applySelectedTemplate)과 치환 규칙이 같아야 한다(한쪽 변경 시 다른 쪽 확인).
+  · 지정은 contract_templates.auto_issue_default(부분 유일 인덱스) + cms_set_auto_issue_template RPC(service_role 전용).
+  · 예약별 특약 사전 등록(2026-10-15, Migration #720): 계약서 탭의 '계약 특약 등록'(계약서 생성 전·manager 이상)에 이 예약 건만의 특약을 미리 저장하면(`rental_reservations.contract_specifications`) 전자계약 발행(자동·수동) 때 양식 '특약사항'에 양식 특약 뒤로 이어 붙는다. 정본 규칙: `src/lib/utils/contractSpecs.ts`, API `/api/cms/reservations/[id]/contract-specs`. 이미 생성된 계약서에는 반영되지 않는다.
+⛔ 토글 ON·OFF와 무관하게 '예약승인'은 계약서·서명·결제 없이 예약을 확정하지 않는다(§9 개정). 이 주문에 이미 계약서가 있으면(contract_exists) 새로 만들지 않고 안내만 한다.
+```
+→ 상세: `.claude/harness/TASK.md` "전자계약 자동발행 표준양식 + 토글" · `src/__tests__/server/contractAutoIssue.test.ts`·`approveReservationAutoIssue.test.ts`
+
+---
+
+## 32. 반납 방식별 안내 알림 · 고객 반납 제출 · 검수 탭 (1단계, 2026-10-17, Migration #722 — Stage만 적용)
+
+```
+요구서(대여중 → 반납/회수 → 반납완료 → 검수 → 완료) 중 1단계. 검수 승인·이슈·완료 알림/적립 이동(2단계)과 CS 사전 접수(3단계)는 미구현.
+
+알림 크론 /api/cron/return-notice(10분): DB 함수 claim_return_notice_targets 가 (예약, 단계)당 1회만 원자 선점한다.
+  택배류(epost·delivery·crazydelivery·airport): 반납일 당일 09:00 KST(Migration #736, 구 마지막 날 18:00) / 퀵: 반납 일시 3시간 전 1회(+운영자 푸시, 제출 없을 때만, 단계 키 quick_5h 재사용) / 무인함: 반납 일시 3시간 전 1회(제출 없을 때만, 키 locker_2h 재사용) / 방문·미지정: 기존 09시 return_remind.
+  방문·방식 미지정은 기존 매일 09시 return-remind 만(get_return_remind_targets 가 방문·미지정으로 한정). 반납시각 = end_date + return_time(KST), 형식 오류·없음은 18:00.
+  채팅카드는 send_return_notice_card(서버 전용 래퍼, RESERVATION_STATUS_CARD 재사용), 푸시·문자는 sendReservationLifecyclePush 허브(알림 유형 return_notice_*).
+  새 알림 유형 추가는 §15 원칙대로 push.ts · sms.ts · notifyTemplate.ts · push_notification_config 를 세트로 확인한다(이번에는 채팅 RPC 본문을 건드리지 않았다).
+고객 반납 제출 /account/rental/[id]/return-submit: 택배=사진+체크리스트(전 항목) / 무인함=사진+무인함 번호·비밀번호(lockerFields 규칙) / 퀵=진행 확인만.
+  저장은 예약당 최신 1건(reservation_return_submissions) + 항목별 사진·영상(reservation_return_media, 비공개 버킷 return-evidence, 서명 업로드).
+  무인함 값은 CMS 안내용 locker_* 와 별도 저장(덮어쓰기 금지). 제출 성공 시 in_use→return_requested 를 RPC 로 직접 전환(AUTO_NOTIFY 미경유 — return_registration 카드 중복 방지).
+  서버가 소유권·상태(in_use/return_requested)·방식·항목·형식·용량·경로(본인 예약 폴더)를 다시 검증한다(returnSubmission.ts).
+CMS '검수' 탭: 계약서 탭 우측, (2026-10-22부터) 예약 상태와 무관하게 항상 노출 — 이슈 등록은 상태 무관(반납 전=사전 접수+기록, 종료·예약 단계=기록만), 승인은 반납요청·반납완료만. 1단계는 읽기 전용(체크리스트·무인함 정보·항목별 사진). 조회 API 는 서명 URL(10분)만 내려준다.
+운영자 확인 버튼 문구만 방식별로 바뀌었다(전환 규칙 불변): 택배류 '집하지 회수 확인' · 무인함 '무인함 회수 확인'.
+
+[2단계, 2026-10-17, Migration #724 — Stage 적용] 반납 검수 승인
+  상태는 예약 status 가 아니라 별도 컬럼 inspection_status(NULL·pending=검수 대기 / issue=이슈 검수중 / pass=통과 / resolved=완료-추가청구)로 표현한다. returned 진입 시 DB 트리거가 pending(사전 접수 건은 issue)으로 초기화한다.
+  완료(completed)는 검수 탭의 [반납 검수 승인](approve_return_inspection)으로만 간다 — updateStatus·QR·모바일 전환은 completed 를 거절하고, DB 트리거도 검수 없는 returned→completed 를 막는다(INSPECTION_REQUIRED).
+  승인(pass) 시: 대여완료 포인트 적립(finalizeRentalCompletion, 같은 주문의 완료된 모든 예약) + 고객 "대여 완료 안내"(inspection_pass 카드·푸시·문자). returned 시점의 대여완료 적립·rental_complete 알림은 제거됐다.
+  정시반납 적립(award_on_time_return_points)은 호출 시점을 반납 시점으로 보는 로직이라 returned 시점에 그대로 둔다.
+  이슈 등록(register_return_inspection_issue): 이슈 항목 5종(구성품 누락·불일치·외관 파손·작동 이상·소모품 분실)+상세+증빙(비공개 버킷 return-evidence 의 {예약}/issue/ 경로)을 기록, '검수' 칩으로 이동, 처음 이슈가 될 때만 고객에게 inspection_issue 안내 + 관리자 푸시.
+  이슈 해소(resolve_return_inspection_issue, #727): 추가청구·협의 마감 → resolved + completed. 대여완료 포인트는 적립하고(완료된 모든 예약, 멱등) 고객 알림은 보내지 않는다(Stephen 확정 2026-10-17).
+  검수 처리는 manager 이상 + 메뉴 rental.reservation. 같은 주문의 returned 형제 예약은 함께 처리된다. /cms/rentals 칩(2026-10-19 통합, Migration #731): 반납중=반납요청+반납완료(검수 대기)+반납일 도래·알림 발송된 대여중(택배·퀵·무인함), 검수=이슈 건, 완료=pass·resolved. 옛 '반납요청'·'반납완료' 칩 링크는 반납중으로 이동. 칩별 처리 대기 건수 배지(대여현황·예약현황).
+  이전에 이미 반납완료된 건은 inspection_status 가 비어 '검수 대기'로 취급되며, 승인 시 적립은 멱등 키로 중복 지급되지 않고 완료 안내는 새로 발송된다.
+
+[3단계, 2026-10-18, Migration #728 — Stage 적용] CS 사전 이슈 접수
+  크레이지챗/전화로 장비 이상·파손·분실이 접수되면 운영자(manager 이상)가 예약 패널의 [이슈 사전 접수]를 누른다 → has_prior_issue 켜짐 + 증빙 폼 토큰(14일) 발급 + 고객에게 증빙 요청(채팅카드 버튼=폼 링크 · 푸시 · 문자, 알림 유형 issue_report_request).
+  대상 예약은 계약완료~반납요청 단계만(이미 반납완료면 검수 탭에서 이슈 직접 등록). 이미 접수돼 있으면 같은 토큰으로 증빙 재요청, [사전접수 해제]는 반납 전까지(제출 내용은 기록으로 남음).
+  고객 폼 /issue-report/[token](로그인 없는 토큰 링크): 유형 3종(장비 이상·파손·분실, 복수) + 상세 + 사진·영상(10MB/100MB, 비공개 버킷 return-evidence 의 {예약}/prior/ 경로, 서명 업로드). 기한 안에는 다시 제출해 교체할 수 있다. 제출하면 상담채팅 고객 세션에 'CS 등록완료' 대화카드(접수 유형·첨부 수·내용 요약, 2026-10-22)가 남고 관리자 푸시에도 고객·상품·유형·첨부·내용 요약이 실린다.
+  보호 장치(#729): 토큰당 업로드 서명 30회·제출 5회 상한, 사전 접수 해제 시 제출된 요청까지 닫힘(재접수는 새 토큰), 반납완료 이후에는 제출·서명 불가(검수 중 증빙이 바뀌지 않음), 닫힌 링크는 상품명·예약코드·이전 내용을 내려주지 않는다.
+  해당 예약이 반납완료(returned)가 되면 #724 트리거가 inspection_status='issue' 로 시작해 반납완료 탭을 거치지 않고 '검수' 칩으로 가며, 목록 행에 [사전접수건] 배지가 붙고 검수 칩에서 상단에 모인다. 검수 탭에 고객 제출 내용(유형·상세·사진)이 보여 실물과 비교한다.
+  이슈 건은 [반납 검수 승인]으로 완료할 수 없고 이슈 등록/해소 흐름(위 2단계)을 따른다.
+```
+
+---
+
+## 33. 두발히어로 배송 API 연동 — 지침 문서 포인터 (2026-10-23)
+
+```
+두발히어로(배송대여) 연동의 정본 지침은 rules-ref/dhero-delivery-api.md 다(안내서 PDF 2026.06.22 핵심·엔드포인트 표·글자수 제한·상태 코드·취소/반품 조건·실패 응답·
+우리 시스템 연동 지도·안내서와 코드의 차이·dev 서버 검증 기록). 두발히어로 호출을 고치거나 오류를 조사할 때 가장 먼저 그 문서를 연다.
+핵심 원칙 3가지(상세는 그 문서): ① 연동 대상은 DB 플래그 is_bulk_delivery(리터럴 비교 금지, 현재 Stage·Production 모두 꺼짐) ② 모든 호출은 fail-soft(상태 전이·제출 성공을 막지 않고 실패는 관리자에게 알림)
+③ 반납 접수(in_use→return_requested)로 가는 새 경로는 반품 접수(registerDheroReturn)를 반드시 호출한다(updateStatus 우회 방지).
+⚠ 미해결: dev 서버에서 반품 접수가 412 '반품이 가능한 수거지가 아닙니다'로 거절됨(안내서에 없는 메시지, 원인 미확정) — 두발히어로 담당자 확인 전에는 운영에서 연동 방식을 켜지 않는다.
+```
+→ 상세: `rules-ref/dhero-delivery-api.md`
+
+---
+
 ## GATE C 확인 항목 (front-cms 연동 변경 시)
 
 ```
+[ ] 두발히어로 연동을 바꾸거나 새 반납 접수 경로를 만들었다면 — dhero-delivery-api.md의 GATE C 7항목을 확인했는가? (§33)
 [ ] 화면·알림·계약·외부연동에서 예약 상품의 이름·분류·이미지를 새로 읽는 코드가 부모 우선 헬퍼를 쓰는가? (products.md §2-16, productChildReadGuard.test.ts)
 [ ] 이 변경이 front에서 발생한 이벤트를 cms에 반영하는가, 반대인가 — 방향을 명확히 인지했는가?
 [ ] 주문 연결(order_id) 생성 지점을 장바구니 체크아웃 제출 외의 곳에 추가하지 않았는가? (§4)
@@ -939,8 +1035,8 @@ CMS /cms/set/rental "배송지역 관리정보"에 등록한 시/도·시군구�
 [ ] 상태전이 시 자동발송해야 할 채팅알림 타입을 rental-lifecycle.md 매핑표와 대조했는가? (§3)
 [ ] cms_role 권한 검사와 front 고객 세션 검사를 혼동하지 않았는가? (§5)
 [ ] 요구사항이 불명확한데 추측으로 구현하지 않았는가? (§6 Class C)
-[ ] confirmed 전환 게이팅(§9) 관련 변경 시 — 관리자 수동 "승인하기" 우회 경로에 실수로
-    계약 체크를 추가하지 않았는가?
+[ ] confirmed 전환 게이팅(§9) 관련 변경 시 — 서명·결제 없이 신청대기를 계약완료로 올리는 경로(예약승인·updateStatus·새 서버 코드의
+    update_reservation_status 'confirmed' 직접 호출)를 새로 만들지 않았는가? 계약완료는 try_confirm_reservation(서명 AND 결제)로만 전환되는가?
 [ ] HOLD 만료(§10) 관련 변경 시 — release_reservation_hold의 1시간 임계값(구 30분, Migration 676)·hold_expiration_
     cleanup pg_cron 잡이 여전히 존재·활성 상태인가? (`SELECT * FROM cron.job WHERE
     jobname='hold_expiration_cleanup'`로 정기 확인 권장)
@@ -984,6 +1080,7 @@ CMS /cms/set/rental "배송지역 관리정보"에 등록한 시/도·시군구�
 [ ] 예약 구성(상품·재고·옵션) 편집 기능을 새로 만들거나 다시 켤 때(§27) — 금액(order_items·쿠폰·포인트 재계산)·결합 구성품 배정·계약서 처리를 모두 맞췄는가?
     화면 버튼만 숨기지 않고 서버 API에도 같은 제한이 걸려 있는가? (정책 상수 reservationCompositionPolicy.ts)
 [ ] 재고 재배정(§27·products.md §2-14-1)을 바꿀 때 — 후보 조회와 교체가 같은 점유 판정을 쓰는가? 본체 재배정 시 결합상품 자동 재배정이 유지되는가?
+[ ] 예약승인·계약서 발행 로직을 바꿀 때(§31) — 자동발행(contractAutoIssue.ts)과 수동 발행 모달의 치환 규칙이 계속 같은가? 자동발행 성공 시 예약을 확정하지 않는 규칙이 유지되는가?
 [ ] Solapi API Key를 신규·재발급했다면(§19) — CIDR을 0.0.0.0/0(모든 IP 허용)으로
     설정했는가? (기본값인 "현재 접속 IP만 등록"을 그대로 두면 Vercel에서 인증 실패 재발)
 [ ] SOLAPI_API_KEY/SOLAPI_API_SECRET 실값을 어떤 문서(.md)에도 기록하지 않았는가?

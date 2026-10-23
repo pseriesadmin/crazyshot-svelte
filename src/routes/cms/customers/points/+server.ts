@@ -9,6 +9,7 @@ import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 
 // GET /cms/customers/points?userId=<user_profiles.id>
 // CMS 관리자 전용(manager 이상): 고객 포인트 이력 조회 (service_role, RLS 우회)
+// GET /cms/customers/points?userId=…&kind=coupons — 같은 탭(포인트이력)에 누적 표시할 쿠폰 발급·사용 이력(2026-10-23)
 export const GET: RequestHandler = async ({ locals, url }) => {
   const denied = await requireMenuAccessApi(locals, 'customers.list')
   if (denied) return denied
@@ -38,6 +39,17 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   if (profErr || !profileRow) return json({ error: 'profile_not_found' }, { status: 404 })
 
   const authUserId = profileRow.user_id as string
+
+  if (url.searchParams.get('kind') === 'coupons') {
+    const { data: ucs, error: ucErr } = await admin
+      .from('user_coupons')
+      .select('id, created_at, used_at, used_count, coupons(display_name, discount_type, discount_value)')
+      .eq('user_id', authUserId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+    if (ucErr) return json({ error: ucErr.message }, { status: 500 })
+    return json(ucs ?? [])
+  }
 
   const { data, error } = await admin
     .from('point_transactions')
