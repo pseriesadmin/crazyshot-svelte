@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit'
+import { isFirstRentalUser } from '$lib/server/coupons/firstRental'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -233,7 +234,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
     supabase
       .from('user_profiles')
-      .select('is_student')
+      .select('is_student, legacy_purchase_count')
       .eq('id', session.user.id)
       .maybeSingle(),
 
@@ -595,7 +596,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   // ── 쿠폰 2차 필터: 7개 자격조건 (Migration 348 서버사이드 방어, isCouponEligible 순수함수) ──
   // 사용자 컨텍스트 — 위 Promise.all에서 확보한 쿼리 결과 사용(추가 DB 쿼리 없음)
-  const isFirstRental         = (firstRentalResult.data?.length   ?? 0) === 0
+  const isFirstRental         = isFirstRentalUser(firstRentalResult.data?.length ?? 0, (studentResult.data as { legacy_purchase_count?: number | null } | null)?.legacy_purchase_count)
   const isStudent             = (studentResult.data as { is_student?: boolean | null } | null)?.is_student === true
   const hasActiveSubscription = (subscriptionResult.data?.length  ?? 0) > 0
 

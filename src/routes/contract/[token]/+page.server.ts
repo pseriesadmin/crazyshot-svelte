@@ -3,6 +3,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
+import { isFirstRentalUser } from '$lib/server/coupons/firstRental'
 import { isCouponEligible, matchesUserGradeRequired } from '$lib/server/coupons/couponEligibility'
 import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsage'
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
@@ -321,12 +322,12 @@ export const load: PageServerLoad = async ({ params }) => {
           .eq('user_id', reservation.user_id)
           .not('status', 'in', '("hold","draft","cancelled","expired")')
           .limit(1),
-        admin.from('user_profiles').select('is_student')
+        admin.from('user_profiles').select('is_student, legacy_purchase_count')
           .eq('id', reservation.user_id).maybeSingle(),
         admin.from('user_subscriptions').select('id')
           .eq('user_id', reservation.user_id).eq('status', 'active').limit(1),
       ])
-      contractIsFirstRental   = (firstRentalRes.data?.length ?? 0) === 0
+      contractIsFirstRental   = isFirstRentalUser(firstRentalRes.data?.length ?? 0, (studentRes.data as { legacy_purchase_count?: number | null } | null)?.legacy_purchase_count)
       contractIsStudent       = (studentRes.data as { is_student?: boolean | null } | null)?.is_student === true
       contractHasSubscription = (subRes.data?.length ?? 0) > 0
     }

@@ -2,7 +2,53 @@
 
 > ⛔ **2026-09-24 인덱싱 분리**: 이 파일은 "진행중·상시(BLOCKED/BACKLOG/NEXT/GATE C)·최근 3일 완료" 블록만 보관한다.
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
-> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
+> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🔴 CRITICAL(쿠폰 사용 판정·DB 함수 변경·Production 적용): "첫 렌탈 전용" 쿠폰 판정에 레거시 구매 이력 포함 + CMS 고객 포인트이력 탭 쿠폰 누적 표시 (Migration #751, 2026-10-23)
+
+### 발단·원인 (최근 수정분부터)
+- (최근) 요청: CMS 고객 상세 '포인트이력' 탭 목록에 쿠폰 발급·사용 이력도 누적 표시.
+- 사고: 기존 회원(레거시) 인증 계정(문소윤 등 2건)이 크레이지샷 예약 0건이라 "첫 렌탈 미친 할인 30%" 쿠폰 대상으로 잡혀 노출·사용 가능했음 — 쿠폰 2건 회수(백업 후 삭제)·해당 쿠폰 자동배포 일시정지(Production `auto_distribute_enabled=false`) 후 근본 수정.
+- 원인: 첫 렌탈 판정이 예약 이력만 보고 `user_profiles.legacy_purchase_count`(원 서비스 구매 횟수)를 무시.
+
+### 구현 내역
+- DB: `supabase/migrations/20261023140000_751_first_rental_includes_legacy_purchase.sql` — `private._validate_and_consume_coupon` 라이브 정의에서 정확히 1곳 치환(불일치 시 예외·멱등). **Stage·Production 적용 완료**(Production 정의 매칭 1회·ACL 불변·오류 분기 유지 확인).
+- 코드: 공용 규칙 `src/lib/server/coupons/firstRental.ts`(`isFirstRentalUser`) + `couponEligibility.ts`·`cart/+page.server.ts`·`contract/[token]/+page.server.ts`가 프로필 `legacy_purchase_count`를 읽어 적용.
+- 포인트이력 탭: `src/routes/cms/customers/points/+server.ts`(`?kind=coupons` — user_coupons 발급·사용 이력) + `CustomerDetailPanel.svelte`(포인트 거래·쿠폰 발급/사용을 시간 역순 한 목록, 쿠폰 줄은 '쿠폰 발급'(badge-info)/'쿠폰 사용'(badge-error), 쿠폰 조회 실패해도 포인트는 표시, 빈 문구 '포인트·쿠폰 이력이 없습니다.').
+- 테스트: `src/__tests__/server/firstRental.test.ts`(4건) · `src/__tests__/services/firstRentalLegacyDb.test.ts`(Stage 라이브 3건 — 레거시 1 거절/0·NULL 통과). 문서: `service-operations.md` §21 "첫 렌탈 전용 쿠폰의 첫 렌탈 정의" 절 추가.
+
+### 남음
+- [x] sp3 1차(첫 렌탈 판정 부분): PASS-CONDITIONAL(BLOCKER 0·MAJOR 0·MINOR 3 → 전부 해소: Production 정의 매칭·인라인 사본 없음 확인, Stage 라이브 테스트·eslint·문서 반영), sp5 SKIP
+- [x] sp3 2차(2026-10-23): PASS-CONDITIONAL(BLOCKER 0·MAJOR 1·MINOR 1) → **전부 반영** — MAJOR: 쿠폰 발급 시각을 마이그레이션이 보장하는 `created_at`으로 교체(points/+server.ts 조회·정렬, 패널 타입·표시) / MINOR: 쿠폰 조회 실패 시 경고 토스트 + 예외 시 목록 초기화 / 권고: firstRentalLegacyDb.test.ts Stage URL 가드. 관련 vitest 7건 GREEN·svelte-check 변경 파일 오류 0, sp5 SKIP(신규 입력 경로·권한 변경 없음). 이월(비블로킹): CustomerDetailPanel.svelte 751·766행 기존 no-useless-escape 2건(이번 수정분 아님), 쿠폰 100건 초과 절단, sp3 재검수는 생략(수정이 지적 항목에 국한)
+- [ ] 커밋·배포(Stephen) — 코드 배포 후에만 첫 렌탈 쿠폰(`a02279e4-7498-4e60-aa6a-c01bf6e29267`) 자동배포 재개(Stephen 지시 대기)
+- [ ] 미확인: 포인트이력 탭 화면 실확인(소스 검토·svelte-check만 수행), 쿠폰 100건 초과 고객의 목록 절단(조회 상한 100)
+
+## NOW` / `## DONE`)만이 유일한 기준. 새 태스크는 이 파일 최상단에 추가하고, 완료 즉시 `## DONE`으로 바꿔 쓴 뒤 정리 시점에 아카이브로 이동한다.
+
+## NOW — 🔴 CRITICAL(인증 경로 `src/routes/cms/login/**` 수정·DB 컬럼 추가): 관리자 비밀번호 복구 링크 — 인증번호 해시 저장 + 재발송 제한 (Migration #752 — Stage만 적용, 2026-10-23, 이 세션'만', ✅ Stephen 지시("1, 2번 개선 진행, 테스트 먼저"))
+- 배경: 복구 링크 정밀검증(라이브 19건 통과)에서 발견된 개선 1·2번 — ① 인증번호가 DB에 원문 저장·단순 비교 ② 재발송 간격·횟수 제한 없음(문자 비용·스팸).
+- 변경: `recoveryOtp.ts` 신설(서버 비밀키 HMAC 해시 저장·상수시간 비교, 예전 원문 저장값은 항상 불일치) / `sendRecoveryPhoneOtp` — 최소 간격 60초·링크당 최대 5회·동시 요청은 1건만(조건부 갱신으로 선점)·문자 실패 시 횟수·간격 복구 / Migration #752 `otp_sent_at`·`otp_send_count` 추가 + 남은 원문 값 비움.
+- 시험: RED(5건 실패) → GREEN. `recoveryOtp.test.ts`(해시 단위·소스 점검) + `cmsAdminRecoveryFlowLive.test.ts`(Stage 라이브 25건) + `accountsListSuperadminGuard` = 49/49. eslint 오류 0(경고 1: 테스트 파일 object-injection).
+- ⚠️ 배포 순서: **Production DB #752 먼저 → 코드 배포**(코드가 새 컬럼을 조회하므로 DB가 늦으면 복구 링크 전 단계가 "유효하지 않은 링크"로 실패). Production 적용은 Stephen 명시 지시 시에만.
+- 미해결(이번 범위 밖): 개선 3~5번(사용 완료 표시 원자화·복구 자동 로그인 접속 로그·비밀번호 최대 길이 서버 검증).
+- sp3 검수 ⏳
+
+## NOW — 🔴 CRITICAL(인증·계정 삭제 경로 `src/routes/cms/**` 서버 액션·계정 익명화): CMS 관리자 계정 삭제 — 업무 이력이 있으면 퇴직 처리(이력 보존) (DB 변경 없음, 2026-10-23, 이 세션'만', ✅ Stephen 지시("이력을 보존하되 관리자 계정 삭제는 가능하게") · 커밋·배포 전)
+
+### 발단·원인
+- 신고: CMS 계정 목록에서 `mublues@gmail.com`(manager) 삭제 시 'Database error deleting user'.
+- 원인: `delete` 액션이 `auth.admin.deleteUser`로 로그인 계정을 완전 삭제하는데, 이 계정을 참조하는 업무 이력 행이 12개 외래키(삭제 차단: RESTRICT/NO ACTION) 중 7곳에 있음 — Stage 조회: contracts 19·rental_action_logs 20·contract_templates 12·coupon_distributions 7·cs_inquiries 3·product_history_records 1·auto_reply_settings 1. (지난 #749 회원 삭제 수정과 별개 경로.) Production 동일 구조 여부는 미확인.
+
+### 구현 내역
+- `src/lib/server/retireAdminAccount.ts`(신규): `retireAdminAccount`(프로필 먼저 — cms_role 제거·이름 '[삭제된 계정]'·이메일 `deleted-{id}@purged.crazyshot.kr`·번호 NULL·blacklisted false·deleted_at → 로그인 계정 이메일 익명화+무작위 비밀번호+ban 876000h → `cms_menu_permissions` 행 삭제(fail-soft), 멱등) + `isAuthDbDeleteError`(메시지에 'database error' 또는 status 500 — 실측: 인증 서버가 같은 제약 위반을 문구 없는 `{}`+500으로도 돌려줌. 네트워크(status 없음/0)·404는 폴백 제외).
+- `src/routes/cms/accounts/list/+page.server.ts` `delete`: 기존 완전 삭제 먼저 시도 → DB 거절이면 퇴직 처리 후 `{success:true, retired:true}` + 감사로그 `delete`(after_value `{mode:'retired', reason:'history_preserved'}`). 기존 보호(본인·superadmin 대상·마지막 마스터) 불변. 이력 없는 계정은 이전처럼 완전 삭제.
+- 테스트: `src/__tests__/services/retireAdminAccount.test.ts`(신규 6건 — 판별 함수·처리 순서·실패 보고·**Stage 라이브**: `auto_reply_settings.updated_by` 참조 계정으로 deleteUser 거절 실증→퇴직 처리→이력 보존·목록 제외·원이메일 로그인 불가·재실행 멱등, 시험 후 설정 행 원복·잔존 계정 0 확인) + `accountsListSuperadminGuard.test.ts` +2건(DB 거절 시 폴백 성공·네트워크 오류는 폴백 안 함, 스텁에 update 추가). 3파일 34건 GREEN, eslint 오류 0, svelte-check 신규 오류 0(기존 2건).
+
+### 남음
+- [x] sp3 1차: PASS-CONDITIONAL(BLOCKER 0·MAJOR 1[룰 문서 미갱신]·MINOR 3) → sp5 A-Lite: PASS-CONDITIONS(CRITICAL 0·HIGH 0·MEDIUM 2·LOW 3)
+- [x] **sp5 조건 1~3 반영(2026-10-23, Stephen 지시)**: ① SEC-A2 삭제 대상이 관리자(cms_role 보유)인지 검증 — `delete`·`issueRecoveryLink` 모두 `requireAdminTarget`(없으면 400), `retireAdminAccount`도 첫 단계에서 한 번 더 확인(고객 계정 익명화·차단 방지) ② SEC-A1 문구 없는 500은 `deleteUser` 1회 재시도 후 성공하면 완전 삭제·실패하면 퇴직 처리, 문구 'database error'만 즉시 폴백(`hasDbErrorMessage` 신설) ③ 프로필 갱신 영향 행 수 확인(0이면 실패) + **처리 순서 변경: 로그인 계정(이메일 익명화·무작위 비밀번호·ban) 먼저 → 프로필(cms_role 제거·익명화) → 메뉴 권한** — 로그인 계정 실패 시 아무것도 안 바뀌어 목록에 남고, 프로필 실패 시 로그인은 이미 차단·목록에 남아 재시도 가능("역할만 사라지고 로그인 살아 있는 보이지 않는 상태" 제거). 운영 `user_profiles` 기본키 `id`·56행 모두 `id=user_id` 확인(호출자 읽기 전용 조회 — sp5 미검증 해소). 룰 문서 반영(sp3 MAJOR): security-auth.md '관리자 계정 삭제 = 퇴직 처리' 단락·service-operations.md §16 ⑦(타 세션 변경과 혼재). 테스트 41건 GREEN(단위 순서·고객 거절·영향 행 0·500 재시도 성공·404·고객 uuid 400·복구 링크 고객 400·Stage 라이브), eslint 오류 0, svelte-check 신규 0, Stage 잔존 계정 0·설정 행 원복 확인
+- [ ] sp3 재검수(진행) · 보안은 sp3 판단 시에만 sp5 · LOW 이월(BACKLOG): 퇴직 계정 복구 링크 잔여 토큰(조건 1로 차단됨), 라이브 테스트 Production URL 가드·원복 결과 검사, 폴백 실패 시 감사로그·삭제 이벤트 fail-soft, 완전 삭제 감사로그 mode 미기록
+- [ ] 커밋·배포(Stephen) — 코드·룰 문서(DB 변경 없음)
+- [ ] 미확인: Production 외래키 구조 동일 여부, 퇴직 처리 계정의 기존 세션(액세스 토큰) 만료 전 동작(역할 제거로 CMS 접근은 즉시 종료 — 코드 기준), 같은 계정의 고객 쪽 이력(contracts)도 '[삭제된 계정]'으로 보임
+- [ ] 이월 후보: 퇴직 처리 계정의 `cms_login_logs` 등 개인정보성 행 정리 여부, 목록 화면에 퇴직 처리 안내 문구(현재는 일반 성공 처리)
 
 ## NOW — 🔴 CRITICAL(인증·계정 경로 `src/routes/api/**` 수정·DB 함수 변경·Production 적용): 회원가입 번호 중복 확인·회원 삭제·비밀번호 찾기 보완 (Migration #748·#749·#750 — Stage·Production 적용 완료, 2026-10-23, 이 세션'만', ✅ Stephen 지시)
 
@@ -58,7 +104,8 @@
 - **배포 전 조건(sp5)**: ① 발급자별 빈도 제한+발행 알림(최소 관리자 푸시, 고객 SMS는 같은 배포 또는 BACKLOG) ② 감사 실패 시 링크 미반환(fail-closed) ③ requested 계정 발급 차단 ④ Stage에서 재발행 무효화·1회성·만료시간 실측 + 대시보드 OTP 만료값 확인.
 - **조건 1~3 반영(Stephen 지시 "조건 1~3 바로 수정하고 재검수 실행", 2026-10-23)**: ① 발급자별 시간당 10건·하루 30건·같은 고객 5분 쿨다운(감사로그 집계, 조회 실패 시 500 fail-closed) + 발행 시 관리자 푸시(`sendPushToAdmins('identity_review')` — DB·push.ts 무변경이라 본인증명 승인 알림 수신 설정 관리자에게 감, 이메일 마스킹·링크 미포함) ② `insertCmsAdminAuditLogStrict` 신설(기존 fail-soft 함수 무수정) — 기록 실패 시 링크 미반환·알림 없음 ③ `withdrawal_status='requested'` 409. 테스트 18건 GREEN(신규 8건: 시간당·일일 한도·한도 이내·쿨다운·조회 실패·감사 실패·알림 내용·탈회 신청).
 - **재검수 결과(2026-10-23)**: sp3 2차 = 코드 기준 조건부 통과(BLOCKER 0·MAJOR 0·MINOR 5 — 반영: 알림 구간 try/catch·테스트 22건·본 블록 fail-closed 서술 정정). sp5 재확인 = **PASS-CONDITIONS**(CRITICAL 0·HIGH 0·MEDIUM 1·LOW 2): 조건 1~3 해소, 조건 4 미해소. 신규 SEC-007(알림 수신자 0명이면 탐지 무음 — `identity_review` 수신 superadmin 1명 이상 보장 필요)·SEC-008(쿨다운 발급자 비구분, 수용)·SEC-009(고객 본인 통지 없음, 이월).
-- **남는 조건(배포 전)**: ① Stage 실측(재발행 무효화·1회성·OTP 만료값 — Stephen 승인 필요) ② `identity_review` 알림 수신 관리자(superadmin) 1명 이상 지정 ③ 고객 본인확인 후 발행 운영 절차 문서화(고객 통지 SMS는 BACKLOG 이월).
+- **Stage 실측(2026-10-23, Stephen 지시) — 조건 4 부분 해소**: Stage 테스트 계정(`legacy-e2e-test@example.com`)에 `generateLink({type:'recovery'})`를 2회 발급 → 링크1 `verifyOtp` **403 otp_expired(재발행이 이전 링크 무효화 확인)**, 링크2 1회차 성공, 링크2 재사용 **403 otp_expired(1회성 확인)**. 비밀번호는 변경하지 않음(세션만 생성). **미측정: 링크 유효시간**(Supabase 대시보드 Email OTP Expiration 값을 Stephen이 확인해야 함 — 화면 문구 '약 1시간'은 그 값과 대조 필요). 실 CMS 라우트·버튼 클릭 경유 실측은 아님(GoTrue 동작만 확인).
+- **남는 조건(배포 전)**: ① ~~Stage 실측~~ 무효화·1회성 해소 / **유효시간 대시보드 확인만 남음** ② `identity_review` 알림 수신 관리자(superadmin) 1명 이상 지정 ③ 고객 본인확인 후 발행 운영 절차 문서화(고객 통지 SMS는 BACKLOG 이월).
 - **미반영(미결정)**: 고객 통지 SMS, 운영자 본인확인 절차 의무화, 조건 4(Stage 재발행 무효화·1회성·대시보드 OTP 만료값 실측), 권고 SEC-004~006. **알림 수신자 한계**: 본인증명 승인 알림을 켜 둔 관리자만 받는다(없으면 알림 없음).
 
 ### 체크

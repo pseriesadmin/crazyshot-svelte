@@ -372,6 +372,7 @@
             <input
               id="lm-phone"
               class="lm-input lm-phone-input"
+              class:lm-input-guide={phoneInput === '010-'}
               type="tel"
               placeholder="01012345678"
               aria-label="휴대폰 번호"
@@ -605,32 +606,42 @@
   }
   .lm-pw-show { display: flex; align-items: center; gap: 8px; font: var(--text-pc-body-14); color: var(--cs-text-mid, #666); margin-top: -4px; }
   .lm-pw-hint { font: var(--text-pc-script-12); color: var(--cs-text-mid, #666); text-align: center; margin: 0; }
+  .lm-input::placeholder { color: var(--cs-text-placeholder); }
+  /* 기본값 '010-'은 입력 전까지 가이드 문구처럼 옅게 보이고, 입력칸을 선택(포커스)하면 본문 색으로 바뀐다(2026-10-23) */
+  .lm-input.lm-input-guide:not(:focus) { color: var(--cs-text-placeholder); } /* 가이드 문구 더 옅게(2026-10-23) — 기존엔 브라우저 기본 회색 */
   .lm-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
   /* SignUpModal.svelte .su-phone-row/.su-otp-btn과 동일 구조 — 전화번호 입력 + 인증발송
      버튼을 한 줄에 배치(Stephen 지시, 2026-09-10) */
-  .lm-phone-row { display: flex; gap: 8px; }
+  .lm-phone-row { display: flex; align-items: center; gap: 8px; }
   .lm-phone-input { flex: 1; }
   /* "인증번호 받기"/"인증 확인" 두 버튼의 가로폭을 고정값으로 통일(Stephen 지시,
      2026-09-10) — 텍스트 길이가 달라 min-width만으로는 "인증 확인"이 더 좁게 렌더링됐음
      (실측: 인증번호 받기 103px / 인증 확인 90px) — 더 넓은 쪽 기준 고정폭으로 맞춤. */
   .lm-otp-btn {
+    /* front-uiux.md §5 보조 버튼(.cs-btn-secondary) 규격(2026-10-23): 30px 반경·16px Bold·--cs-purple,
+       PC 높이 50px/패딩 0 30px, 모바일(≤640px) 44px/0 20px. 두 버튼은 같은 최소 가로폭으로 통일(이전 고정 104px 대체) */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    padding: 0 30px;
+    min-width: 164px;
+    box-sizing: border-box;
     background: var(--cs-purple);
     color: var(--cs-white);
     border: none;
-    border-radius: var(--radius-sm);
-    padding: 0 16px;
-    box-sizing: border-box;
-    font-size: 13px;
-    font-weight: 700;
+    border-radius: var(--radius-xl);
+    font: var(--text-pc-title-16);
     cursor: pointer;
-    min-height: 48px;
-    width: 104px;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: opacity 0.15s;
+    transition: background 0.15s, opacity 0.15s;
   }
-  .lm-otp-btn:disabled { opacity: 0.55; cursor: default; }
-  .lm-otp-btn:not(:disabled):hover { opacity: 0.85; }
+  .lm-otp-btn:disabled { background: var(--cs-text-light); cursor: default; } /* 비활성: 반투명 보라 → 그레이 토큰(2026-10-23) */
+  .lm-otp-btn:not(:disabled):hover { background: var(--cs-purple-hover); }
+  @media (max-width: 640px) {
+    .lm-otp-btn { height: 44px; padding: 0 16px; min-width: 120px; font: var(--text-m-script-14B); } /* 모바일 축소(2026-10-23): 글자 16→14px 한 단계·가로 축소, 높이는 터치 타겟 44px 유지 */
+  }
 
   /* 버튼 간 여백 확대(Stephen 지시, 2026-09-10) — 10px(spacing sm) → 15px(spacing md) */
   .lm-actions { display: flex; flex-direction: column; gap: 15px; margin-top: 4px; }

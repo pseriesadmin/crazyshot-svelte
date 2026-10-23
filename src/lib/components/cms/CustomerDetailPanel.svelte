@@ -90,6 +90,18 @@
     created_at: string
   }
 
+  interface UserCouponTx {
+    id: string
+    created_at: string
+    used_at: string | null
+    used_count: number | null
+    coupons: { display_name: string | null; discount_type: string; discount_value: number | string } | null
+  }
+  /** 포인트이력 탭에 누적 표시하는 한 줄 — 포인트 거래 또는 쿠폰 발급·사용 */
+  type PointHistoryItem =
+    | { kind: 'point'; key: string; at: string; tx: PointTx }
+    | { kind: 'coupon'; key: string; at: string; event: 'issued' | 'used'; name: string; discount: string }
+
   interface AuditEntry {
     id: string
     old_score: number
@@ -203,6 +215,7 @@
   let points = $state<PointTx[]>([])
   let loadingPoints = $state(false)
   let pointsLoaded = $state(false)
+  let userCoupons = $state<UserCouponTx[]>([])
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -215,6 +228,47 @@
 
   // 회원 삭제 2단계 경고 상태
   let deleteWarnPending = $state(false)
+
+  // ─── 비밀번호 설정 링크 발행 (2026-10-23) ─────────────────────────────────
+  // 링크는 화면에 보이는 동안에만 들고 있고(저장·로그 없음), 다른 고객을 열면 즉시 지운다.
+  let recoveryLink = $state<string | null>(null)
+  let recoveryBusy = $state(false)
+
+  $effect(() => {
+    void row.user_id
+    recoveryLink = null
+  })
+
+  async function issueRecoveryLink() {
+    if (recoveryBusy) return
+    const targetId = row.user_id
+    recoveryBusy = true
+    try {
+      const res = await fetch(`/api/cms/customers/${encodeURIComponent(targetId)}/recovery-link`, { method: 'POST' })
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; link?: string; error?: string } | null
+      if (targetId !== row.user_id) return // 응답을 기다리는 사이 다른 고객으로 바뀌면 링크를 보여주지 않는다
+      if (res.ok && data?.ok && typeof data.link === 'string') {
+        recoveryLink = data.link
+        csToast.success('비밀번호 설정 링크를 만들었습니다. 바로 고객에게 전달해 주세요.')
+      } else {
+        csToast.error(data?.error ?? '링크 발행에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('링크 발행 중 오류가 발생했습니다.')
+    } finally {
+      recoveryBusy = false
+    }
+  }
+
+  async function copyRecoveryLink() {
+    if (!recoveryLink) return
+    try {
+      await navigator.clipboard.writeText(recoveryLink)
+      csToast.success('링크를 복사했습니다.')
+    } catch {
+      csToast.warning('자동 복사에 실패했습니다. 링크를 직접 선택해 복사해 주세요.')
+    }
+  }
 
   // 구독 취소 모달 상태
   let showCancelModal = $state(false)
@@ -280,6 +334,13 @@
     try {
       const res = await fetch(`/cms/customers/points?userId=${encodeURIComponent(row.user_id)}`)
       if (res.ok) points = await res.json() as PointTx[]
+      // 쿠폰 발급·사용 이력도 같은 목록에 누적 — 실패해도 포인트 이력은 그대로 보여준다
+      const cres = await fetch(`/cms/customers/points?userId=${encodeURIComponent(row.user_id)}&kind=coupons`)
+      userCoupons = cres.ok ? (await cres.json() as UserCouponTx[]) : []
+      if (!cres.ok) csToast.warning('쿠폰 이력을 불러오지 못했어요.')
+    } catch {
+      userCoupons = []
+      csToast.warning('쿠폰 이력을 불러오지 못했어요.')
     } finally {
       pointsLoaded = true
       loadingPoints = false
@@ -296,6 +357,26 @@
     if (!digits) return ''
     return parseInt(digits, 10).toLocaleString('ko-KR')
   }
+
+  function couponDiscountText(c: UserCouponTx['coupons']): string {
+    if (!c) return '-'
+    const v = Number(c.discount_value)
+    if (c.discount_type === 'fixed') return `${v.toLocaleString('ko-KR')}원 할인`
+    if (c.discount_type === 'free_shipping') return '무료배송'
+    return `${v}% 할인`
+  }
+
+  // 포인트 거래 + 쿠폰 발급·사용을 시간 역순으로 합친 목록
+  const pointHistory = $derived.by<PointHistoryItem[]>(() => {
+    const items: PointHistoryItem[] = points.map((tx) => ({ kind: 'point', key: `p-${tx.id}`, at: tx.created_at, tx }))
+    for (const uc of userCoupons) {
+      const name = uc.coupons?.display_name ?? '쿠폰'
+      const discount = couponDiscountText(uc.coupons)
+      items.push({ kind: 'coupon', key: `ci-${uc.id}`, at: uc.created_at, event: 'issued', name, discount })
+      if (uc.used_at) items.push({ kind: 'coupon', key: `cu-${uc.id}`, at: uc.used_at, event: 'used', name, discount })
+    }
+    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+  })
 
   function pointSourceLabel(tx: PointTx): string {
     if (tx.description) return tx.description
@@ -1189,8 +1270,47 @@
         </div>
       {/if}
 
-      <!-- 회원 삭제 -->
+      <!-- 비밀번호 설정 링크 — 정식 회원 계정만(관리대상 모드·탈회 완전삭제 제외). 서버가 manager 이상·관리자 계정 제외를 다시 검증한다 -->
+      {#if mode === 'member' && row.withdrawal_status !== 'purged'}
+        <div class="recovery-link-section">
+          <div class="recovery-link-head">
+            <div class="recovery-link-text">
+              <span class="section-title">비밀번호 설정 링크</span>
+              <p class="recovery-link-desc">
+                비밀번호를 정하지 못했거나 잊은 고객에게 직접 전달하는 1회용 링크입니다. 메일·문자는 발송되지 않습니다.
+                링크를 연 사람은 누구나 비밀번호를 정할 수 있으니 고객 본인에게만 전달해 주세요.
+              </p>
+            </div>
+          </div>
+          {#if recoveryLink}
+            <div class="recovery-link-result">
+              <div class="recovery-link-row">
+                <input
+                  type="text"
+                  class="info-input"
+                  readonly
+                  value={recoveryLink}
+                  aria-label="비밀번호 설정 링크"
+                  onfocus={(e) => e.currentTarget.select()}
+                />
+                <button type="button" class="btn-recovery-copy" onclick={copyRecoveryLink}>복사</button>
+              </div>
+              <p class="recovery-link-note">
+                1회용이며 유효시간은 약 1시간입니다. 만든 직후에 전달해 주세요.
+                재설정 화면의 비밀번호는 8자 이상이어야 합니다.
+              </p>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- 회원 삭제 — 왼쪽에 [링크 발행](정식 회원 계정만) -->
       <div class="delete-account-section">
+        {#if mode === 'member' && row.withdrawal_status !== 'purged'}
+          <button type="button" class="btn-primary" disabled={recoveryBusy} onclick={issueRecoveryLink}>
+            {recoveryBusy ? '발행 중…' : recoveryLink ? '링크 다시 발행' : '링크 발행'}
+          </button>
+        {/if}
         <form
           method="POST"
           action="/cms/customers?/deleteCustomer"
@@ -1498,23 +1618,33 @@
 
       {#if loadingPoints}
         <div class="loading-text">로딩 중...</div>
-      {:else if points.length === 0}
-        <div class="no-data">포인트 이력이 없습니다.</div>
+      {:else if pointHistory.length === 0}
+        <div class="no-data">포인트·쿠폰 이력이 없습니다.</div>
       {:else}
         <div class="audit-list points-audit-list">
-          {#each points as tx (tx.id)}
-            {@const isEarn = tx.amount > 0}
-            <div class="audit-row">
-              <span class="badge {isEarn ? 'badge-active' : 'badge-error'}">{isEarn ? '적립' : '사용'}</span>
-              <span class="audit-scores">{isEarn ? '+' : ''}{tx.amount.toLocaleString('ko-KR')}P</span>
-              <span class="audit-reason">{pointSourceLabel(tx)}</span>
-              <span class="audit-date">{formatDateTime(tx.created_at)}</span>
-              {#if !isEarn}
-                <button type="button" class="sub-payment-toggle" onclick={() => (activeTab = 'rental')}>
-                  대여목록 보기 →
-                </button>
-              {/if}
-            </div>
+          {#each pointHistory as item (item.key)}
+            {#if item.kind === 'point'}
+              {@const tx = item.tx}
+              {@const isEarn = tx.amount > 0}
+              <div class="audit-row">
+                <span class="badge {isEarn ? 'badge-active' : 'badge-error'}">{isEarn ? '적립' : '사용'}</span>
+                <span class="audit-scores">{isEarn ? '+' : ''}{tx.amount.toLocaleString('ko-KR')}P</span>
+                <span class="audit-reason">{pointSourceLabel(tx)}</span>
+                <span class="audit-date">{formatDateTime(tx.created_at)}</span>
+                {#if !isEarn}
+                  <button type="button" class="sub-payment-toggle" onclick={() => (activeTab = 'rental')}>
+                    대여목록 보기 →
+                  </button>
+                {/if}
+              </div>
+            {:else}
+              <div class="audit-row">
+                <span class="badge {item.event === 'issued' ? 'badge-info' : 'badge-error'}">{item.event === 'issued' ? '쿠폰 발급' : '쿠폰 사용'}</span>
+                <span class="audit-scores">{item.discount}</span>
+                <span class="audit-reason">{item.name}</span>
+                <span class="audit-date">{formatDateTime(item.at)}</span>
+              </div>
+            {/if}
           {/each}
         </div>
       {/if}
@@ -1965,6 +2095,7 @@
   }
   .badge-active { background: rgba(16,185,129,0.12); color: var(--cs-success-light); }
   .badge-error  { background: rgba(255,53,53,0.10);  color: var(--cs-red-badge); }
+  .badge-info   { background: rgba(59,47,138,0.08);  color: var(--cs-purple); }
   /* 인증분류(일반/학생/구독) — 위 grade-none/easy/pop/crazy(구독 탭 플랜 티어)와는 별개 */
   .grade-general    { background: var(--cs-surface-gray); color: var(--cs-text-mid); }
   .grade-student    { background: rgba(14,165,233,0.12);  color: var(--cs-info); }
@@ -2135,6 +2266,30 @@
     font: var(--text-pc-body-14); cursor: pointer; transition: background 0.12s;
   }
   .btn-secondary:hover { background: rgba(59,47,138,0.06); }
+
+  /* 비밀번호 설정 링크 섹션 */
+  .recovery-link-section {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .recovery-link-head { display: flex; align-items: flex-start; }
+  .recovery-link-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .recovery-link-desc,
+  .recovery-link-note { margin: 0; font: var(--text-pc-script-12); color: var(--cs-text-mid); line-height: 1.5; }
+  .recovery-link-result { display: flex; flex-direction: column; gap: 8px; }
+  .recovery-link-row { display: flex; align-items: center; gap: 8px; }
+  /* cms-uiux.md §0-10-F DetailPanel 소형 실행 버튼 규격(행 안에서 우측 끝 고정 없이 입력창 옆에 배치) */
+  .btn-recovery-copy {
+    min-width: 78px; text-align: center; flex-shrink: 0;
+    font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
+    border: 1px solid var(--cs-text-mid); border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray); color: var(--cs-text-mid);
+    cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
+  }
+  .btn-recovery-copy:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .btn-recovery-copy:disabled { opacity: 0.5; cursor: default; }
 
   /* 회원 삭제 섹션 */
   .delete-account-section {
