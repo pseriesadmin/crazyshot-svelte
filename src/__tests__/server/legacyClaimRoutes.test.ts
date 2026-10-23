@@ -6,13 +6,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  */
 const h = vi.hoisted(() => ({
   admin: null as unknown,
+  signInArgs: [] as unknown[],
   signIn: null as unknown as () => Promise<{ data: { session: unknown } | null; error: { message: string } | null }>,
 }))
 
 vi.mock('$env/dynamic/private', () => ({ env: { SUPABASE_SERVICE_ROLE_KEY: 'svc-key' } }))
 vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'http://localhost', getSupabaseAnonKey: () => 'anon-key' }))
 vi.mock('@supabase/supabase-js', () => ({ createClient: () => h.admin }))
-vi.mock('@supabase/ssr', () => ({ createServerClient: () => ({ auth: { signInWithPassword: () => h.signIn() } }) }))
+vi.mock('@supabase/ssr', () => ({ createServerClient: () => ({ auth: { signInWithPassword: (a: unknown) => { h.signInArgs.push(a); return h.signIn() } } }) }))
 
 import { POST as completePost } from '../../routes/api/auth/legacy-claim/complete/+server'
 import { POST as setPasswordPost } from '../../routes/api/auth/legacy-claim/set-password/+server'
@@ -25,7 +26,7 @@ interface FakeCfg {
   member?: Record<string, unknown> | null
   appMeta?: Record<string, unknown>
   getUserFails?: boolean
-  signOutThrows?: boolean
+  noEmail?: boolean
 }
 
 function makeAdmin(cfg: FakeCfg) {
@@ -55,8 +56,8 @@ function makeAdmin(cfg: FakeCfg) {
         createUser: async () => { calls.push('auth.createUser'); return cfg.createUser ? cfg.createUser() : { data: { user: { id: 'u-1' } }, error: null } },
         deleteUser: async () => { calls.push('auth.deleteUser'); return { error: null } },
         updateUserById: async (id: string, attrs: { password?: string }) => { calls.push(`auth.updateUserById:${id}:${attrs.password}`); return { error: null } },
-        getUserById: async () => (cfg.getUserFails ? { data: { user: null }, error: { message: 'down' } } : { data: { user: { app_metadata: cfg.appMeta ?? {} } }, error: null }),
-        signOut: async (jwt: string, scope: string) => { if (cfg.signOutThrows) throw new Error('network'); calls.push(`auth.signOut:${jwt}:${scope}`); return { error: null } },
+        getUserById: async () => (cfg.getUserFails ? { data: { user: null }, error: { message: 'down' } } : { data: { user: { email: cfg.noEmail ? undefined : 'a@example.com', app_metadata: cfg.appMeta ?? {} } }, error: null }),
+        
       },
     },
   }
@@ -168,10 +169,12 @@ describe('[TDD] complete — 부분 실패 처리', () => {
 })
 
 describe('[TDD] set-password — 세션·30분 창·비밀번호 규칙', () => {
+  beforeEach(() => { h.signInArgs = []; h.signIn = async () => ({ data: { session: {} }, error: null }) })
   const call = (password: unknown, session: unknown) =>
     setPasswordPost({
       request: new Request('http://x/api', { method: 'POST', body: JSON.stringify({ password }) }),
       locals: { safeGetSession: async () => ({ session }) },
+      cookies,
     } as never)
   const session = { user: { id: 'user-1' }, access_token: 'jwt-1' }
   const claimedAgo = (min: number) => ({ data: { legacy_claimed_at: new Date(Date.now() - min * 60_000).toISOString() }, error: null })
@@ -201,7 +204,9 @@ describe('[TDD] set-password — 세션·30분 창·비밀번호 규칙', () => 
     const res = await call('abc123!', session)
     expect(res.status).toBe(200)
     expect(admin.calls).toContain('auth.updateUserById:user-1:abc123!')
-    expect(admin.calls).toContain('auth.signOut:jwt-1:others')
+    // 비밀번호를 바꾸면 모든 세션이 끝나므로 같은 계정·새 비밀번호로 다시 로그인해 이 브라우저 세션을 되살린다
+    expect(h.signInArgs).toEqual([{ email: 'a@example.com', password: 'abc123!' }])
+    expect((await res.json()).relogin).toBe(true)
   })
 
   it('이미 한 번 설정한 계정은 30분 안이어도 403 — 다시 바꿀 수 없고 다른 기기도 건드리지 않는다', async () => {
@@ -209,7 +214,6 @@ describe('[TDD] set-password — 세션·30분 창·비밀번호 규칙', () => 
     h.admin = admin
     expect((await call('abc123!', session)).status).toBe(403)
     expect(admin.calls.some((c) => c.startsWith('auth.updateUserById'))).toBe(false)
-    expect(admin.calls.some((c) => c.startsWith('auth.signOut'))).toBe(false)
   })
 
   it('계정 조회가 실패하면 500으로 막고 비밀번호를 바꾸지 않는다(fail-closed)', async () => {
@@ -219,10 +223,22 @@ describe('[TDD] set-password — 세션·30분 창·비밀번호 규칙', () => 
     expect(admin.calls.some((c) => c.startsWith('auth.updateUserById'))).toBe(false)
   })
 
-  it('다른 기기 로그아웃이 예외를 던져도 비밀번호 설정은 성공으로 응답한다', async () => {
-    const admin = makeAdmin({ from: () => claimedAgo(5), signOutThrows: true })
+  it('다시 로그인에 실패해도 비밀번호 설정은 성공으로 응답하되 relogin=false로 알린다', async () => {
+    h.signIn = async () => ({ data: null, error: { message: 'x' } })
+    const admin = makeAdmin({ from: () => claimedAgo(5) })
     h.admin = admin
-    expect((await call('abc123!', session)).status).toBe(200)
+    const res = await call('abc123!', session)
+    expect(res.status).toBe(200)
+    expect((await res.json()).relogin).toBe(false)
+  })
+
+  it('계정에 이메일이 없어 다시 로그인할 수 없으면 relogin=false로 알린다', async () => {
+    const admin = makeAdmin({ from: () => claimedAgo(5), noEmail: true })
+    h.admin = admin
+    const res = await call('abc123!', session)
+    expect(res.status).toBe(200)
+    expect((await res.json()).relogin).toBe(false)
+    expect(h.signInArgs).toEqual([])
   })
 
   it('너무 짧거나 한글이 섞인 비밀번호는 400', async () => {

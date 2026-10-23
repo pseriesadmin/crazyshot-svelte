@@ -9,20 +9,21 @@
  *  - 로그인 세션 필수(complete 가 발급한 세션).
  *  - 기존 회원 인증으로 만들어진 계정(legacy_claimed_at)이고 **인증 후 30분 이내**일 때만 허용 — 일반 계정의 비밀번호를
  *    현재 비밀번호 확인 없이 바꾸는 용도로 쓰지 못하게 한다.
- *  - **1회만 설정 가능**(2026-10-23, sp5 SEC-1): 설정이 끝나면 계정 app_metadata 에 표식을 남기고 이후 호출은 403. 설정 성공 시 다른 기기의 로그인 세션은 모두 끊는다
+ *  - **1회만 설정 가능**(2026-10-23, sp5 SEC-1): 설정이 끝나면 계정 app_metadata 에 표식을 남기고 이후 호출은 403. 설정 성공 시 이 계정의 모든 세션이 끝나므로(다른 기기 로그아웃 효과) 이 브라우저는 새 비밀번호로 다시 로그인해 세션을 되살린다
  *    (인증 직후 30분 안에 세션을 훔친 사람이 비밀번호를 바꿔 계정을 가져가는 것을 막는다).
  *  - 비밀번호 형식: 6~72자, 영문·숫자·특수문자(ASCII)만 — 로그인 화면 입력 표준과 같은 규칙.
  */
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { getSupabaseUrl, getSupabaseAnonKey } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { createServerClient } from '@supabase/ssr'
 import { validateNewPassword } from '$lib/server/legacyClaim'
 import type { RequestHandler } from './$types'
 
 const WINDOW_MS = 30 * 60 * 1000
 
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async ({ request, locals, cookies }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ ok: false, error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -62,12 +63,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     console.error('[legacy-claim/set-password] updateUserById error:', error.message)
     return json({ ok: false, error: '비밀번호를 설정하지 못했어요. 잠시 후 다시 시도해 주세요.' }, { status: 500 })
   }
-  // 지금 세션만 남기고 다른 기기·브라우저의 로그인은 끊는다 — 실패해도 비밀번호 설정 자체는 성공으로 본다(로그만 남김)
-  try {
-    const { error: signOutErr } = await admin.auth.admin.signOut(session.access_token, 'others')
-    if (signOutErr) console.error('[legacy-claim/set-password] 다른 세션 종료 실패:', signOutErr.message)
-  } catch (e) {
-    console.error('[legacy-claim/set-password] 다른 세션 종료 예외:', e instanceof Error ? e.message : e)
+  // 관리자 API로 비밀번호를 바꾸면 이 계정의 모든 로그인 세션(지금 쓰는 것 포함)이 끝난다(Stage 실측 2026-10-23) —
+  // 그래서 다른 기기는 이미 로그아웃된 상태이고, 이 브라우저만 새 비밀번호로 다시 로그인해 세션을 되살린다.
+  const email = userData.user.email
+  if (email) {
+    const supabaseServer = createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+      cookies: {
+        getAll: () => cookies.getAll(),
+        setAll: (cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) => {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookies.set(name, value, { ...(options ?? {}), path: '/' } as Parameters<typeof cookies.set>[2])
+          })
+        },
+      },
+    })
+    const { error: reLoginErr } = await supabaseServer.auth.signInWithPassword({ email, password: parsed.value })
+    if (reLoginErr) console.error('[legacy-claim/set-password] 재로그인 실패:', reLoginErr.message)
+    return json({ ok: true, relogin: !reLoginErr })
   }
-  return json({ ok: true })
+  // 이메일이 없어 다시 로그인하지 못한 경우
+  return json({ ok: true, relogin: false })
 }

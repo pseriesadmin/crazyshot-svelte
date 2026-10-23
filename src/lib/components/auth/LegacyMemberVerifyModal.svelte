@@ -93,7 +93,11 @@
         body: JSON.stringify({ password: pwInput }),
       })
       const data = await res.json().catch(() => ({}))
-      if (data.ok) {
+      if (data.ok && data.relogin === false) {
+        // 비밀번호는 바뀌었지만 이 브라우저의 로그인만 되살리지 못한 경우 — 로그인된 것처럼 보이는 완료 화면을 보이지 않는다
+        csToast.warning('비밀번호는 설정됐어요. 방금 정한 비밀번호로 다시 로그인해 주세요.')
+        handleClose()
+      } else if (data.ok) {
         csToast.success('비밀번호를 설정했어요. 다음부터 이 비밀번호로 로그인하세요.')
         pwInput = pwConfirm = ''
         step = 4
