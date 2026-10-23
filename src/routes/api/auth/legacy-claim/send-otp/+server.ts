@@ -28,6 +28,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import { sendSms } from '$lib/server/sms'
 import { generateOtpCode } from '$lib/server/otpCode'
+import { lookupLegacyForClaim, type LegacyLookup } from '$lib/server/legacyClaim'
 import type { RequestHandler } from './$types'
 
 // 매칭 성공 경로(RPC 1회 + DB write 2회 + SMS API 호출)의 통상 소요시간보다 넉넉히 높게 잡은
@@ -40,12 +41,13 @@ export const POST: RequestHandler = async ({ request }) => {
   const name  = typeof body?.name  === 'string' ? body.name.trim()  : ''
   const phone = typeof body?.phone === 'string' ? body.phone.trim() : ''
 
-  const respond = async (found: boolean) => {
+  const respond = async (found: boolean, reason?: Exclude<LegacyLookup['status'], 'found'>) => {
     const elapsed = Date.now() - startedAt
     if (elapsed < MIN_RESPONSE_MS) {
       await new Promise((resolve) => setTimeout(resolve, MIN_RESPONSE_MS - elapsed))
     }
-    return json({ ok: true, found })
+    // reason(2026-10-23): 못 찾은 사유를 나눠 안내 — 'not_found' 대기 목록에 없음 / 'already_claimed' 이미 인증 완료 / 'already_registered' 이미 가입됨
+    return json({ ok: true, found, ...(reason ? { reason } : {}) })
   }
 
   // 기본 입력 검증 실패 → 매칭 실패와 동일하게 처리(found: false)
@@ -58,16 +60,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const admin = createClient(getSupabaseUrl(), serviceRoleKey)
 
-  // find_legacy_member RPC — SECURITY DEFINER, service_role 전용
-  const { data: member, error: rpcError } = await admin.rpc('find_legacy_member', {
-    p_name: name,
-    p_phone: phone,
-  })
-  if (rpcError) {
-    // RPC 자체 실패(권한 문제·함수 미존재 등)는 서버 로그로만 남기고, 응답은 매칭 실패와
-    // 동일하게 처리한다 — 에러 유무를 클라이언트에 노출하면 열거공격 방지 원칙이 깨진다.
-    console.error('[legacy-claim/send-otp] find_legacy_member RPC error:', rpcError.message)
-  }
+  // 조회: 대기 목록(find_legacy_member) → 없으면 같은 이름·번호의 가입 계정 여부(사유 구분용)
+  const lookup = await lookupLegacyForClaim(admin, name, phone)
+  const member = lookup.status === 'found' ? lookup.member : null
 
   // OTP 생성 (매칭 성공 여부와 무관하게 항상 생성 → 타이밍 동일화)
   const code = generateOtpCode()
@@ -95,5 +90,5 @@ export const POST: RequestHandler = async ({ request }) => {
   // 매칭 실패 시: OTP를 저장하지 않는다 (SMS 스팸 방지 목적은 유지, 응답 내용만 명시적으로 안내)
 
   // 응답 구조는 동일 + found로 매칭 여부만 명시 + 동일한 최소 응답시간 반환
-  return respond(Boolean(member))
+  return member ? respond(true) : respond(false, lookup.status === 'found' ? undefined : lookup.status)
 }

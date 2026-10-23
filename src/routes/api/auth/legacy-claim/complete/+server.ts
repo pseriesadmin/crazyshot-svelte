@@ -30,11 +30,20 @@
 
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
-import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseUrl, getSupabaseAnonKey } from '$lib/env/supabasePublic'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { randomBytes } from 'crypto'
 import type { RequestHandler } from './$types'
+
+// 인증번호 확인(verified_at) 후 이 시간 안에 완료해야 한다 — 유출된 token 의 재사용 방지 (2026-10-23, sp5 SEC-4)
+const TOKEN_TTL_MS = 15 * 60 * 1000
+
+// 롤백용 계정 삭제 — 실패하면 고아 계정이 남으므로 반드시 로그를 남긴다(수동 정리 대상)
+async function rollbackUser(admin: SupabaseClient, userId: string): Promise<void> {
+  const { error } = await admin.auth.admin.deleteUser(userId)
+  if (error) console.error('[legacy-claim/complete] 롤백 계정 삭제 실패(수동 정리 필요):', userId, error.message)
+}
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
   const body = await request.json().catch(() => null)
@@ -47,7 +56,9 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   }
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  const anonKey        = env.PUBLIC_SUPABASE_ANON_KEY ?? ''
+  // ⛔ 2026-10-23: $env/dynamic/private 에는 PUBLIC_ 접두사 변수가 들어 있지 않다 — 예전에 env.PUBLIC_SUPABASE_ANON_KEY 를 읽어 항상 빈 값이 됐고,
+  // 그래서 계정 생성·스테이징 삭제까지 끝낸 뒤 로그인 단계가 매번 실패했다(고객은 계정은 있는데 로그인도 재인증도 못 하는 상태).
+  const anonKey        = getSupabaseAnonKey()
   const supabaseUrl    = getSupabaseUrl()
 
   if (!serviceRoleKey) {
@@ -67,6 +78,11 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
   if (!otpRow) {
     return json({ ok: false, error: '인증 정보가 유효하지 않습니다. 다시 시도해주세요.' }, { status: 400 })
+  }
+
+  const verifiedAtMs = new Date(otpRow.verified_at as string).getTime()
+  if (!Number.isFinite(verifiedAtMs) || Date.now() - verifiedAtMs > TOKEN_TTL_MS) {
+    return json({ ok: false, error: '인증 시간이 지났어요. 인증번호를 다시 받아 진행해주세요.', code: 'token_expired' }, { status: 400 })
   }
 
   // OTP에 기록된 전화번호와 요청 전화번호 일치 확인
@@ -111,8 +127,9 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
       await admin.from('legacy_member_staging').delete().eq('id', member.staging_id as string)
       return json({ ok: false, error: '이미 인증이 완료된 계정입니다. 로그인해주세요.' }, { status: 409 })
     }
+    // 같은 이메일로 이미 일반 가입한 계정이 있는 경우 — 계정을 새로 만들 수 없다(2026-10-23: 막연한 서버 오류 대신 안내)
     console.error('[legacy-claim/complete] createUser 충돌(비-클레임 계정):', member.email)
-    return json({ ok: false, error: '계정 생성 중 오류가 발생했습니다.' }, { status: 500 })
+    return json({ ok: false, error: '같은 이메일로 이미 가입된 계정이 있어요. 로그인하거나, 비밀번호가 기억나지 않으면 "비밀번호 찾기"를 이용해 주세요.', code: 'email_registered' }, { status: 409 })
   }
 
   if (createErr || !authData?.user) {
@@ -140,18 +157,12 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
   if (updateErr) {
     // 방금 생성한 auth 계정은 롤백, 스테이징 행은 보존(재시도 가능하도록)
-    await admin.auth.admin.deleteUser(userId)
+    await rollbackUser(admin, userId)
+    // 전화번호는 한 계정에만 쓸 수 있다 — 이미 다른 계정이 쓰고 있으면(예: 일반 가입 후 인증을 시도) 구체적으로 안내
+    if ((updateErr as { code?: string }).code === '23505') {
+      return json({ ok: false, error: '이 휴대폰 번호로 이미 가입된 계정이 있어요. 로그인하거나 "비밀번호 찾기"를 이용해 주세요.', code: 'phone_registered' }, { status: 409 })
+    }
     return json({ ok: false, error: '계정 설정 중 오류가 발생했습니다.' }, { status: 500 })
-  }
-
-  // 5. 스테이징 원본 행 삭제 (개인정보 최소보유 — 실 계정에 이미 반영됐으므로 완전 삭제)
-  const { error: deleteStagingErr } = await admin
-    .from('legacy_member_staging')
-    .delete()
-    .eq('id', member.staging_id as string)
-  if (deleteStagingErr) {
-    // 계정은 이미 정상 생성됨 — 로그만 남기고 진행(수동 정리 대상으로 추적)
-    console.error('[legacy-claim/complete] staging 행 삭제 실패(수동 정리 필요):', member.staging_id, deleteStagingErr.message)
   }
 
   // 6. signInWithPassword로 세션 발급
@@ -174,19 +185,37 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   })
 
   if (signInErr || !signInData.session) {
+    // 로그인에 실패하면 방금 만든 계정을 되돌리고 스테이징 행·인증 토큰은 그대로 둔다 — 고객이 같은 화면에서 다시 시도할 수 있다
+    // (이전에는 스테이징을 먼저 지워서, 로그인만 실패해도 계정은 있는데 재인증이 "찾을 수 없음"이 되는 상태로 남았다)
+    console.error('[legacy-claim/complete] signInWithPassword 실패:', signInErr?.message)
+    await rollbackUser(admin, userId)
     return json({ ok: false, error: '로그인 처리 중 오류가 발생했습니다. 다시 시도해주세요.' }, { status: 500 })
   }
 
+
+  // 5. 스테이징 원본 행 삭제 — 로그인(6)까지 성공한 뒤에만 지운다 (개인정보 최소보유 — 실 계정에 이미 반영됐으므로 완전 삭제)
+  const { error: deleteStagingErr } = await admin
+    .from('legacy_member_staging')
+    .delete()
+    .eq('id', member.staging_id as string)
+  if (deleteStagingErr) {
+    // 계정은 이미 정상 생성됨 — 로그만 남기고 진행(수동 정리 대상으로 추적)
+    console.error('[legacy-claim/complete] staging 행 삭제 실패(수동 정리 필요):', member.staging_id, deleteStagingErr.message)
+  }
+
   // 7. claimed_at 기록 (토큰 재사용 차단)
-  await admin.from('legacy_claim_otps')
+  const { error: claimMarkErr } = await admin.from('legacy_claim_otps')
     .update({ claimed_at: claimedAt })
     .eq('id', token)
+  if (claimMarkErr) console.error('[legacy-claim/complete] OTP claimed 기록 실패:', claimMarkErr.message)
 
   // 반환: 세션 쿠키는 이미 설정됨 — 리다이렉트 대상만 전달
   // grade/points는 스테이징 테이블에 없는 필드(계정이 방금 막 생성됐으므로) — CSV 등록 시
   // "회원등급 전원 NONE 고정" 불변 원칙 + handle_new_user 기본값과 일치하는 값으로 고정
   return json({
     ok: true,
+    // 계정은 무작위 임시 비밀번호로 만들어졌다 — 화면이 이어서 본인이 쓸 비밀번호를 정하게 한다(set-password)
+    needsPassword: true,
     redirectTo: '/',
     user: {
       email: member.email,
