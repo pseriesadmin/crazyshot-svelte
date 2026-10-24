@@ -117,6 +117,22 @@ CRITICAL 마이그레이션을 동반한 기능이 git 커밋·merge로 Producti
 
 ---
 
+## 절차 6 — 계정·프로필 이메일 정합 점검 (2026-10-24 신설)
+
+배경: 회원가입 중 이메일이 '확인 대기'에만 걸려 계정(auth.users)·프로필(user_profiles) 이메일이 비는 사고(Stage 2026-10-23). 가입·비밀번호 찾기 변경,
+Auth 설정(Confirm email·메일 서버) 변경, auth 트리거 변경 때마다 stage·production 양쪽에서 읽기 전용으로 실행한다. 정상 기준은 아래 모든 항목 0건.
+
+```sql
+select
+  count(*) filter (where coalesce(up.email,'')='' and au.email is not null)                                   as profile_empty_auth_has_email,   -- 0이어야 함(트리거 #755가 막는다)
+  count(*) filter (where up.email<>'' and au.email is not null and lower(up.email)<>lower(au.email))         as email_mismatch,                 -- 0이어야 함
+  count(*) filter (where au.is_anonymous and coalesce(au.email_change,'')<>'')                                as anon_pending_email_change       -- 0이어야 함(가입 마무리 실패 흔적)
+from user_profiles up join auth.users au on au.id=up.id;
+```
+- `anon_pending_email_change`가 0이 아니면 가입 화면의 "가입 마무리" 실패 흔적이다 — `confirm-verified-signup` 로그와 Auth 설정(이메일 확인 사용 여부)을 확인한다.
+- 트리거 존재 확인: `select tgname from pg_trigger where tgrelid='auth.users'::regclass and tgname='on_auth_user_email_changed'` (양쪽 1건).
+- 라이브 테스트: `profileEmailSyncDb.test.ts`(트리거·비밀번호 찾기 계정 이메일 보완, Stage) · 단위: `confirmVerifiedSignup.test.ts`.
+
 ## 체크리스트 (복붙용)
 
 ```
@@ -125,6 +141,7 @@ CRITICAL 마이그레이션을 동반한 기능이 git 커밋·merge로 Producti
 [ ] 절차3: CHECK/EXCLUDE 제약 변경이 있었다면 양쪽 정의 일치?
 [ ] 절차4: list_migrations 최근 10~15건 육안 대조 — 한쪽에만 있는 항목 없는가?
 [ ] 절차5: 코드가 이미 배포됐다면 배포 SHA 시점 마이그레이션 파일 = production 적용 이력?
+[ ] 절차6: 가입·Auth 설정·auth 트리거 변경이 있었다면 계정·프로필 이메일 정합 점검 쿼리 3항목 0건 + 트리거 on_auth_user_email_changed 존재?
 ```
 
 ---

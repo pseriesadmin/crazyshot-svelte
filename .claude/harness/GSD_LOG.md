@@ -1,6 +1,9 @@
 # GSD_LOG.md — 크레이지샷 실행 이력
 # 형식: [YYYY-MM-DD HH:MM] 타입 | 타스크명 | 파일 | 소요 | 결과
 
+[2026-10-24(이 세션'만')] 🔴CRITICAL | Migration #755 Production 적용 완료(적용 전 정합 0건 확인 → 적용 후 권한·트리거·정합 재확인) | Stage→Production 순서 준수
+[2026-10-24(이 세션'만')] 🟢ROUTINE | 고객 패널 헤더 QR — '↓ QR 저장' 글자 버튼 제거, QR 이미지 자체가 저장 버튼(예약 패널과 동일 구조) | CustomerDetailPanel.svelte | sp3 6차 PASS-CONDITIONAL(M1·M2 이행, M3~M5·MINOR 3 이월), sp5 SKIP
+[2026-10-24(이 세션'만')] 🔴CRITICAL | 신규 가입 이메일 누락 재발 방지 — 가입 마무리 서버 보완(대기 이메일 계정 확정+결과 검증, confirmVerifiedSignup.ts), 가입 화면 마무리 실패 안내·재시도, Migration #755(계정→프로필 이메일 동기화 트리거, Stage 적용·Production 대기), 비밀번호 찾기 계정 이메일 보완, 테스트 10건(Stage 라이브 3건)+DRIFT 절차 6 | sp3 6차 PASS-CONDITIONAL(M1·M2 이행, M3~M5·MINOR 3 이월), sp5 SKIP
 [2026-10-24(이 세션'만')] 🔴CRITICAL | CMS 로그인 상태 유지 보완 — 기본 체크(CMS만 꺼져 있었음)·표식 쿠키 cms-remember 수명 400일(로그인 쿠키와 일치)·표식 없을 때 관리자 세션은 로그아웃 대신 재발급(+ CMS 접속 로그 기록, 최초 1회·fail-soft)·비관리자만 기존대로 로그아웃 + 로그인 화면 체크 확인을 front-uiux §17 체크아이콘 표준으로 교체(숨김 입력 rememberMe) | cms/+layout.server.ts, cms/login/+page.{svelte,server.ts}, cmsRememberCookie.ts, cmsLoginLog.ts, cmsRememberMarker.test.ts | sp3 5차 PASS(MINOR 3 이월), sp5 SKIP
 [2026-10-24(이 세션'만')] 🟡BOUNDARY | 고객 패널 삭제 안전장치 복구('회원 삭제'·'관리대상 삭제' 첫 클릭 즉시 삭제 → 버튼 submit 고정 + 제출 단계 1차 cancel) + 탭 라벨 '포인트·쿠폰' | sp3 4차 PASS(MINOR 3)
 [2026-10-23(이 세션'만')] 🟡BOUNDARY | CMS 고객 패널 삭제 안전장치 복구 — '회원 삭제'·'관리대상 삭제'가 첫 클릭에 바로 삭제되던 문제(버튼 type을 클릭 도중 button→submit 변경하는 구조) → 버튼 항상 submit + use:enhance 제출 단계에서 1차 cancel/경고 토스트·무장, 4초 내 2차만 삭제 + 상단 탭 라벨 '포인트·쿠폰' 변경(테스트 동기화) | CustomerDetailPanel.svelte, managedPersonPanelMode.test.ts | sp3 4차 검수 대기

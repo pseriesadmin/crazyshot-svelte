@@ -903,8 +903,10 @@
     </div>
     {#if row.member_code}
       <div class="member-qr-wrap member-qr-wrap--header">
-        <canvas bind:this={qrCanvasEl} width="300" height="300" aria-label="회원 QR 코드"></canvas>
-        <button class="qr-dl-btn" onclick={downloadMemberQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+        <!-- QR 이미지 자체가 저장 버튼 — 별도 '↓ QR 저장' 문구 제거, 마우스 오버 시 손가락 커서 + 배경색 변화(예약 패널 헤더 QR과 동일 구조) -->
+        <button class="qr-dl-btn" onclick={downloadMemberQR} title="클릭하면 QR PNG로 저장" aria-label="회원 QR 코드 PNG 저장" type="button">
+          <canvas bind:this={qrCanvasEl} width="300" height="300" aria-hidden="true"></canvas>
+        </button>
       </div>
     {/if}
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
@@ -1986,16 +1988,15 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
   }
   .member-qr-wrap canvas { display: block; width: 44px; height: 44px; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  /* QR 이미지가 곧 저장 버튼 — 버튼 BG 는 평소 투명, 호버 시 BG 색만 바뀐다(outline·box-shadow 금지, cms bds §0-10). 터치 타겟 52px(QR 44px + 패딩 4px×2) */
   .member-qr-wrap .qr-dl-btn {
-    background: transparent; border: none;
-    color: var(--cs-text-light); font: var(--text-pc-script-12);
-    cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); min-height: 24px;
-    transition: color 0.12s, background 0.12s;
+    display: block; background: transparent; border: none;
+    cursor: pointer; padding: 4px; border-radius: var(--cms-radius-sm);
+    transition: background 0.12s;
   }
-  .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
+  .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); }
   .member-qr-wrap--header { margin-left: auto; margin-right: 12px; }
   .close-btn {
     flex-shrink: 0;

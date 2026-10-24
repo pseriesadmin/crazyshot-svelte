@@ -2,7 +2,30 @@
 
 > ⛔ **2026-09-24 인덱싱 분리**: 이 파일은 "진행중·상시(BLOCKED/BACKLOG/NEXT/GATE C)·최근 3일 완료" 블록만 보관한다.
 > 전체 블록 목록·검색은 **`TASK_INDEX.md`** → 월별 `archive/TASK_ARCHIVE_*.index.md` → 본문 `archive/TASK_ARCHIVE_*.md` 순으로 찾는다.
-> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🔴 CRITICAL(인증·세션 쿠키 경로 `src/routes/cms/**` 레이아웃·로그인 액션): CMS 로그인 상태 유지 보완 + 체크아이콘 표준 적용 + 고객 패널 삭제 안전장치 복구 (2026-10-24)
+> 완료 판정 기준은 기존과 동일 — 헤더 접두사(`## NOW — 🔴 CRITICAL(가입·인증·DB 트리거 Migration #755·`src/routes/api/auth/**`): 신규 가입 고객 이메일 누락 재발 방지 + 고객 패널 헤더 QR 버튼 통합 (2026-10-24)
+
+### 발단·원인 (최근 수정분부터)
+- (최근) 요청: 고객 패널 헤더 QR을 예약 패널과 같은 구조로 — '↓ QR 저장' 글자 버튼 제거, QR 이미지 자체가 저장 버튼(호버 시 BG만, 터치 52px, aria-label) — `CustomerDetailPanel.svelte`.
+- 신고: 신규 가입 고객(Stage `c1de8fd1…`, 이기성)의 이메일이 계정·프로필에 없음 → 가입·비밀번호 찾기 전역 영향 우려.
+- 원인(Stage DB·코드 분석, Auth 설정은 대시보드 미확인): 가입은 임시(익명) 계정에 `updateUser({email,password})`를 호출 → Auth가 '이메일 확인' 방식이면 이메일이 `new_email`(확인 대기)에만 걸림. 서버 `/api/auth/confirm-verified-signup`은 `email_confirm:true`(확인 완료 표시)만 보내 대기 이메일이 계정에 반영되지 않았고(가입 2초 뒤 확인 표시만 찍힌 흔적), 가입 화면은 이 결과를 확인하지 않고 실패를 조용히 넘김 → 계정 이메일 빈 값·이메일 로그인 불가·프로필 이메일 빈 값(#702는 계정 이메일을 읽어 채우므로 무력)·비밀번호 찾기(프로필 이메일+번호) 불일치. Production은 최근 가입자 이메일 정상·대기 0건(Auth 설정 차이로 추정, 미확인).
+- 재현 시도: Stage에서 '이메일 발송 한도 초과(429)'로 확인 대기 상태 재현 불가 — 대기 이메일 확정은 단위 테스트(모의)로만 검증됨. 관리자 API로 이메일+확인을 한 번에 주면 임시 계정이 정식 계정(identity 생성·이메일 로그인 가능)으로 전환됨은 Stage 실측.
+
+### 구현 내역(재발 방지 1~5)
+1. `src/lib/server/confirmVerifiedSignup.ts`(신규 `finalizeVerifiedSignup`): 휴대폰 인증 기록 재확인(30분) → 대기 이메일을 계정에 직접 확정(`email`+`email_confirm`) → 처리 후 계정 이메일을 다시 읽어 검증, 실패 시 오류 응답. 엔드포인트는 이 함수 호출 껍데기로 단순화.
+2. `SignUpModal.svelte`: 마무리 실패 시(2회 재시도) 가입 완료로 넘기지 않고 안내, [가입 완료] 재클릭은 마무리만 재시도(`signupFinalizePending`, 메일 한도 소모 없음). 다른 세션 변경이 섞인 파일 — 해당 부분만 수정.
+3. DB `supabase/migrations/20261024030000_755_sync_profile_email_from_auth.sql`: `auth.users` 이메일 변경 시 프로필 이메일 자동 동기화 트리거 `on_auth_user_email_changed`(실패해도 인증을 막지 않음, 실행 권한 서버 전용) + 어긋난 계정 1회 보정(Stage·Production 0건). **Stage 적용 완료, Production 미적용(승인 대기).**
+4. `passwordResetOtp.ts`: 프로필 이메일이 비어도 번호 일치 + 계정(auth) 이메일 일치면 같은 계정으로 찾음(후보 둘 이상이면 진행 안 함).
+5. 테스트·점검: `confirmVerifiedSignup.test.ts`(7건) · `profileEmailSyncDb.test.ts`(Stage 라이브 3건) · `DRIFT_CHECK_PROCEDURE.md` 절차 6(계정·프로필 이메일 정합 점검, Stage 실행: 불일치 0·마무리 실패 흔적 1건=`c1de8fd1`).
+
+### 남음
+- [x] sp3 6차(2026-10-24): PASS-CONDITIONAL(BLOCKER 0·MAJOR 0·MINOR 3·미검증 5) · sp5 SKIP(신호 S2·S5 검토 결과 신규 위험 없음: 이메일은 서버가 읽은 new_email만 사용·세션 본인만·휴대폰 인증 기록 없으면 403·이미 있는 이메일은 변경 안 함·트리거는 예외 흡수+서버 전용 권한).
+  조건 이행: M1 Stage 라이브 테스트 포함 3개 파일 29건 통과 / M2 Stage `has_function_privilege`(anon·authenticated=false, service_role=true)·SECURITY DEFINER·트리거 `on_auth_user_email_changed` 존재 확인. 미이행: M3 Production 적용 순서(755 적용 전 절차 6 쿼리·권한·트리거 양쪽 확인), M4 가입 마무리 실패 후 모달 닫고 재가입 동작(브라우저 미확인), M5 '확인 대기' 이메일 실제 재현·Auth 설정.
+  MINOR(미수정 이월): ① confirm-verified-signup을 임시(익명)·계정 이메일 빈 계정으로 한정(30분 내 다른 흐름의 휴대폰 인증 기록도 증명으로 인정되나 이메일이 있는 계정은 안 바뀌어 실해 없음) ② 마무리 실패 후 모달을 닫으면 정식 전환+확인 대기 상태로 남음 ③ 보정 UPDATE가 삭제·퇴직·탈회 계정을 구분하지 않음(Stage·Production 0건).
+  정책 확인 사항(새 취약점 아님): 이메일 소유 증명 없이 휴대폰 인증만으로 그 이메일로 계정이 생기는 기존 설계가 이번 수정으로 실제로 작동하게 됨(이메일 선점·사칭 위험, 기존 계정 접근으로는 이어지지 않음 — 이미 쓰는 이메일은 Auth가 거절, 비밀번호 찾기는 휴대폰 일치도 요구).
+- [x] Production 마이그레이션 755 적용 완료(2026-10-24, Stephen 승인): 적용 전 점검 0건/0건/0건·트리거·함수 없음 → 적용 후 함수 anon·authenticated 실행 불가·service_role만, SECURITY DEFINER, 트리거 `on_auth_user_email_changed` 활성(enabled=O), 프로필 빈 이메일 0·불일치 0, 이력 `755_sync_profile_email_from_auth` 등록. **코드(가입 마무리·가입 화면·비밀번호 찾기 보완)는 커밋·배포(Stephen) 대기**
+- [ ] 미확인: Stage·Production Auth 설정(이메일 확인 사용 여부·메일 서버, 대시보드 확인 필요), 실제 가입 화면 동작, `c1de8fd1…` 수동 보정 여부(데이터 미변경)
+
+## NOW — 🔴 CRITICAL(인증·세션 쿠키 경로 `src/routes/cms/**` 레이아웃·로그인 액션): CMS 로그인 상태 유지 보완 + 체크아이콘 표준 적용 + 고객 패널 삭제 안전장치 복구 (2026-10-24)
 
 ### 발단·원인 (최근 수정분부터)
 - (최근) 요청: 사용자 사이트에서 관리자 계정으로 로그인한 뒤 /cms로 들어오는 경로도 CMS 접속 로그(`cms_login_logs`)에 남길 것 → 표식 발급 최초 1회에 기록(`src/lib/server/cmsLoginLog.ts` `recordCmsLogin`, fail-soft).
@@ -54,6 +77,12 @@
 - 가입 직후 로그인 랜딩: 가입 완료 후 브라우저 토큰이 가입 전 내용(익명·이메일 없음)이라 GNB가 게스트(`is_anonymous || !email`)로 보던 문제(코드 기준 추정) → 토큰 갱신, 그래도 익명이면 방금 만든 이메일·비밀번호로 로그인, 홈으로 이동.
 - 가입 1단계 Enter/키보드 '다음'으로 입력란 순차 이동, '인증 확인' 버튼 활성 색, PC 반응형 폰트 토큰 조정(입력 14→18px·안내 14px 유지·CTA 16→18px·인증번호 버튼 14px) — 모두 사용자 지시.
 
+### 후속 수정 — sp3 1차(PASS, BLOCKER 0·MAJOR 0·MINOR 4) 이후 (2026-10-24, 최근순, 전부 `SignUpModal.svelte`)
+- (최근) **Tab 순차 이동**: Enter와 같은 순서로 Tab도 다음 '입력란'으로(`isPlainTab`·`onTabTo` — Shift/Ctrl/Alt/Meta·조합 중은 기본 동작, 사이의 눈 아이콘·발송 버튼은 건너뜀). 이메일 입력란(가입 1단계·비밀번호 찾기)은 가입 확인 중이거나 완료일 때만 Tab을 가로채고(`pendingFocus*`) 중복·미가입·형식 오류면 기본 Tab. 적용: 가입 1단계(이메일→비밀번호→확인→성함), 가입 휴대폰 인증(번호→인증번호), 비밀번호 찾기(이메일→휴대폰→인증번호)·새 비밀번호(→확인), 아이디 찾기(번호→인증번호).
+- **Enter 순차 이동·실행(OTP 흐름)**: `onEnterRun`·`focusById`·`onResetEmailEnter` — 비밀번호 찾기: 이메일→(가입 확인 후) 휴대폰, 휴대폰 Enter=인증번호 받기→발송 성공 시 인증번호 입력란 포커스, 인증번호 Enter=인증 확인, 새 비밀번호→확인→변경 실행. 가입 휴대폰 인증·아이디 찾기도 동일 패턴(발송 성공 후 `focusById('su-code'|'su-find-code')`). 로그인 화면은 미적용.
+- **비밀번호 찾기 안내 문구**: '가입된 아이디, 휴대폰 정보가 동일해야 인증번호가 발송됩니다.' + '아이디, 휴대폰 정보'만 `.su-emph`(레드 `--cs-red-badge`·900) + 이 문구만 가운데 정렬(`.su-group-label-center`). PC(≥641px) 안내 문구(`.su-group-label`) 13→14px(`--text-pc-body-14`) — 모달 안 모든 안내 문구 공통.
+- **입력 그룹 스타일 확대**: `su-group-signup`을 로그인·아이디 찾기·비밀번호 찾기(첫 화면·새 비밀번호)까지 확대 → 모달 안 입력 화면 전체가 PC 입력 18px·placeholder 14px 공유.
+
 ### 구현 내역 (최근순)
 1. `src/lib/utils/loginRedirect.ts`(신규) `loginHref(pathname, search)` — 홈·`/auth/*`·500자 초과는 붙이지 않음(루프·과대 URL 방지). 적용: `GNB.svelte`(Sign In·계정 아이콘, `$page` 기반 `$derived`), `MobileMoreMenu.svelte`(Sign in), `ChatHeader.svelte`(클릭 시점 `window.location`). 로그인 화면은 기존대로 `safeReturnPath`로 내부 경로만 허용. 테스트 `src/__tests__/utils/loginRedirect.test.ts` 4건(붙이기·제외·길이·`safeReturnPath` 왕복).
 2. `src/routes/auth/login/+page.svelte` 가입 성공 처리: `goto(redirect ?? '/')` → `goto('/', { invalidateAll: true })`(가입 직후는 항상 홈, Stephen 지시 — 이전엔 redirect 값을 따랐음).
@@ -66,8 +95,9 @@
 - **실브라우저 시험 미실시**: 가입 직후 로그인 랜딩(토큰 갱신 가설)·로그인 복귀·Enter 이동·폰트 모두 Stephen 화면 확인 필요.
 
 ### 남음
-- [ ] sp3-qa-agent 검수(진행) · 보안은 sp3 판단 시에만 sp5
-- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타), 비로그인 상세 화면→Sign In→원래 화면, 가입 1단계 Enter 이동
+- [x] sp3 1차(2026-10-24): PASS — BLOCKER 0·MAJOR 0·MINOR 4(① ChatHeader 로그인 링크가 결제·구독 결과 화면 쿼리(paymentKey 등)를 redirect에 실을 수 있음 → `loginHref` 제외 규칙 권고 ② 폴백 로그인 실패 시 authState 어긋남·토스트 ③ 상품 상세 가입 직후 서버 session 낡음 ④ 컴포넌트 테스트 공백), sp5 SKIP(open redirect는 safeReturnPath로 서버·클라이언트 양쪽 방어 확인)
+- [ ] sp3-qa-agent 후속 검수(Enter/Tab 순차 이동·안내 문구·입력 그룹 스타일 확대) 진행 · 보안은 sp3 판단 시에만 sp5
+- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타)- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타), 비로그인 상세 화면→Sign In→원래 화면, 가입 1단계 Enter 이동
 - [ ] 커밋(Stephen): `SignUpModal.svelte`·`auth/login/+page.svelte`·`GNB`·`MobileMoreMenu`·`ChatHeader`·`loginRedirect.ts`·테스트 (모두 이 세션 변경, 다른 세션 변경 미혼재 확인 — git diff 기준 SignUpModal 78줄·login 4줄)
 - [ ] 이월 후보: 가입 직후에도 직전 화면 복귀로 할지(현재 홈 고정), 로그인 성공 처리에 `invalidateAll` 추가 여부(현재 가입에만 적용), 아이디 찾기·휴대폰 인증 단계 Enter 이동 확대
 
