@@ -364,8 +364,8 @@
   onclose={() => { showSignUpModal = false; modalInitialMode = 'login' }}
   onsuccess={() => {
     showSignUpModal = false
-    const redirectTo = safeReturnPath($page.url.searchParams.get('redirect')) ?? '/'
-    goto(redirectTo)
+    // 가입 직후에는 항상 홈으로(로그인 상태로 랜딩) — 서버 데이터(세션)도 새로 읽도록 전체 재로드
+    goto('/', { invalidateAll: true })
   }}
 />
 

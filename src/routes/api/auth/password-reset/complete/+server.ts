@@ -8,6 +8,7 @@ import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { validateNewPassword } from '$lib/server/legacyClaim'
+import { resetPasswordViolation } from '$lib/utils/passwordPolicy'
 import { VERIFIED_WINDOW_MS } from '$lib/server/passwordResetOtp'
 import type { RequestHandler } from './$types'
 
@@ -21,6 +22,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const parsed = validateNewPassword(body?.password)
   if (!parsed.ok) return json({ ok: false, error: parsed.error }, { status: 400 })
+  // 재설정 전용 강화 규칙(8~16자·영문+숫자+특수문자) — 화면 검사를 우회해도 서버가 막는다
+  const violation = resetPasswordViolation(parsed.value)
+  if (violation) return json({ ok: false, error: violation }, { status: 400 })
 
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceRoleKey) return json({ ok: false, error: '서버 설정 오류입니다.' }, { status: 500 })

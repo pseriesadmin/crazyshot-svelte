@@ -57,3 +57,20 @@ describe('/auth/reset-password 랜딩 화면 소스 점검', () => {
     expect(src).toContain('비밀번호 찾기')
   })
 })
+
+import { resetPasswordViolation } from '../../lib/utils/passwordPolicy'
+describe('resetPasswordViolation — 비밀번호 재설정 강화 규칙(8~16자·영문+숫자+특수문자)', () => {
+  it('규칙을 지키면 통과', () => {
+    expect(resetPasswordViolation('Abcd123@')).toBeNull()
+    expect(resetPasswordViolation('abcdefg1#abcdefg')).toBeNull() // 16자
+  })
+  it('길이가 8자 미만·16자 초과면 위반', () => {
+    expect(resetPasswordViolation('Ab1@xyz')).not.toBeNull()
+    expect(resetPasswordViolation('abcdefgh1#abcdefg')).not.toBeNull() // 17자
+  })
+  it('영문·숫자·특수문자 중 하나라도 빠지면 위반', () => {
+    for (const pw of ['abcdefg1', 'abcdefg@', '12345678@', 'ABCDEFGH', '!!!!!!!!']) {
+      expect(resetPasswordViolation(pw), pw).not.toBeNull()
+    }
+  })
+})
