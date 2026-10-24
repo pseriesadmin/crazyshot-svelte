@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
+import { parseTeamPolicyBlocks } from '$lib/server/teamPolicy'
 import type { SubscriptionPolicyItem } from '$lib/types/database'
 import type { PageServerLoad, Actions } from './$types'
 
@@ -53,6 +54,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
     { data: serviceInfoRow },
     { data: consentRows },
     { data: policyItemRows },
+    { data: teamRow },
   ] = await Promise.all([
     untypedFrom(admin, 'rental_guide_settings')
       .select('guide_text')
@@ -74,6 +76,12 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
       .select('id, content, sort_order, created_at, updated_at')
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true }),
+    // '팀 정책' 콘텐츠(Migration #753) — 공통 푸터 '소개 > 팀' 모달에 노출되는 문서 편집기 저장값
+    untypedFrom(admin, 'team_policy_settings')
+      .select('content_blocks')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .single(),
   ])
 
   return {
@@ -82,6 +90,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
     serviceInfo: ((serviceInfoRow as ServiceInfoSettings | null) ?? EMPTY_SERVICE_INFO) as ServiceInfoSettings,
     consents: (consentRows ?? []) as unknown as RentalConsentItem[],
     policyItems: (policyItemRows ?? []) as unknown as SubscriptionPolicyItem[],
+    teamBlocks: ((teamRow as { content_blocks: unknown[] } | null)?.content_blocks ?? []) as unknown[],
   }
 }
 
@@ -175,6 +184,28 @@ export const actions: Actions = {
     })
     if (error) return fail(500, { action: 'saveServiceInfo', error: error.message })
     return { action: 'saveServiceInfo', success: true }
+  },
+
+  // ─── 팀 정책(Migration #753) — 공통 푸터 '소개 > 팀' 모달 콘텐츠(문서 편집기 저장 형식) ───
+  saveTeamPolicy: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'saveTeamPolicy', error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { action: 'saveTeamPolicy', error: '권한 없음' })
+    const data = await request.formData()
+
+    const parsed = parseTeamPolicyBlocks(data.get('blocks'))
+    if (!parsed.ok) return fail(400, { action: 'saveTeamPolicy', error: parsed.error })
+
+    const { error } = await untypedRpc(locals.supabase, 'upsert_team_policy_settings', { p_blocks: parsed.blocks })
+    if (error) {
+      if (error.message.includes('ACCESS_DENIED')) return fail(403, { action: 'saveTeamPolicy', error: '권한 없음' })
+      if (error.message.includes('BLOCKS_TOO_LARGE')) return fail(400, { action: 'saveTeamPolicy', error: '내용이 너무 깁니다. 이미지 수나 본문을 줄여주세요.' })
+      if (error.message.includes('INVALID_BLOCKS')) return fail(400, { action: 'saveTeamPolicy', error: '내용 형식이 올바르지 않습니다.' })
+      console.error('[cms/set/policy] 팀 정책 저장 실패:', error.message)
+      return fail(500, { action: 'saveTeamPolicy', error: '저장에 실패했습니다. 잠시 후 다시 시도해 주세요.' })
+    }
+    return { action: 'saveTeamPolicy', success: true }
   },
 
   // ─── 필수 동의문 ───

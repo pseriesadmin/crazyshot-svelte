@@ -3,11 +3,16 @@
   //   ① 대여·예약 이용안내 (구 /cms/set/rental)
   //   ② 정기구독 이용안내 — 정기구독 공통 정책항목 (구 /cms/subscriptions/new ⑤ 정책설정)
   //   ③ 서비스 기본 정보 (구 /cms/set/rental)
+  //   + 팀 정책 (2026-10-24 — 공통 푸터 '소개 > 팀' 모달 콘텐츠, 문서 편집기 / '서비스 기본 정보' 바로 위)
+  import { untrack } from 'svelte'
   import { enhance, deserialize } from '$app/forms'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
+  import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
+  import type { ContentBlock } from '$lib/types/content-editor'
+  import { trimEmptyBlocks, nextTeamEditorSync } from '$lib/utils/teamPolicyBlocks'
   import type { ServiceInfoSettings } from '$lib/services/serviceInfoSettings'
   import type { PageData } from './$types'
   import type { RentalConsentItem } from './+page.server'
@@ -128,6 +133,65 @@
   async function persistPolicyOrder(): Promise<void> {
     const orderedIds = policyItems.map((item) => item.id)
     await submitPolicyAction('reorderPolicyItems', { ordered_ids: JSON.stringify(orderedIds) })
+  }
+
+  // ─── 팀 정책(Migration #753) — 공통 푸터 '소개 > 팀' 모달에 노출되는 문서 ───
+  let localTeamBlocks = $state<ContentBlock[]>([])
+  let teamEditorRef = $state<RichContentEditor | undefined>()
+  let teamKeywords = $state<string[]>([]) // 편집기가 요구하는 바인딩(showKeywords=false라 쓰지 않음)
+  let teamEditorKey = $state(0)
+  let teamDirty = $state(false)
+  let teamSaving = $state(false)
+
+  // 서버 값이 바뀌면 편집기를 새로 만들어 저장된 내용으로 되돌린다($state(prop) 초기화 금지 규칙).
+  // 단, 같은 화면의 다른 저장으로 서버 값이 그대로 다시 오거나 쓰던 내용(미저장)이 있으면 건드리지 않는다.
+  let teamAppliedJson = ''
+  let teamEditVersion = 0 // 편집기 변경 횟수 — 저장하는 동안 더 입력했는지 구분
+  $effect(() => {
+    const src = data.teamBlocks as ContentBlock[]
+    const incoming = JSON.stringify(src)
+    untrack(() => {
+      const next = nextTeamEditorSync(teamAppliedJson, incoming, teamDirty)
+      teamAppliedJson = next.applied
+      if (next.action === 'reset') {
+        localTeamBlocks = src.map((b) => ({ ...b }))
+        teamEditorKey += 1
+        teamDirty = false
+      }
+    })
+  })
+
+  async function saveTeamPolicy(): Promise<void> {
+    if (teamSaving || !teamDirty) return
+    // 편집기의 디바운스 대기 중인 마지막 입력을 저장 전에 확정하고 직렬화 누락 여부를 점검한다
+    const flushed = teamEditorRef?.flush()
+    if (flushed && !flushed.ok) {
+      csToast.error('내용을 저장 형식으로 변환하는 중 달라져 저장을 멈췄어요. 새로고침 후 다시 시도해주세요.')
+      return
+    }
+    const blocks = trimEmptyBlocks(flushed?.blocks ?? localTeamBlocks)
+    const versionAtSave = teamEditVersion
+    teamSaving = true
+    try {
+      const fd = new FormData()
+      fd.set('blocks', JSON.stringify(blocks))
+      const res = await fetch('?/saveTeamPolicy', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        csToast.success('팀 정책이 저장되었습니다.')
+        // 저장하는 동안 더 입력한 내용이 있으면 미저장 상태를 유지한다(재조회가 그 입력을 지우지 않게)
+        teamDirty = teamEditVersion !== versionAtSave
+        await invalidateAll()
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { error?: string } | undefined)?.error ?? '저장에 실패했습니다.')
+      } else {
+        csToast.error('저장에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      teamSaving = false
+    }
   }
 
   // ─── 서비스 기본 정보(사업자 정보, Migration #566) ───
@@ -413,7 +477,46 @@
   </section>
 
   <!-- ══════════════════════════════════════════
-       ③ 서비스 기본 정보 (Migration #566)
+       팀 정책 — 공통 푸터 '소개 > 팀' 모달에 노출(문서 편집기, 서비스 기본 정보 바로 위)
+  ══════════════════════════════════════════ -->
+  <section class="setting-section">
+    <div class="section-head">
+      <h2 class="section-title">팀 정책</h2>
+    </div>
+
+    <div class="subsection">
+      <div class="subsection-head subsection-head--between">
+        <h3 class="subsection-title">팀 소개·정책 안내</h3>
+        <button
+          type="button"
+          class="btn-save-inline"
+          class:dirty={teamDirty}
+          disabled={teamSaving || !teamDirty}
+          onclick={saveTeamPolicy}
+        >
+          {teamSaving ? '저장 중...' : '저장'}
+        </button>
+      </div>
+      <p class="team-hint">고객 화면 공통 푸터의 '소개 &gt; 팀'을 누르면 여기에 입력한 내용이 안내창으로 표시됩니다.</p>
+      {#key teamEditorKey}
+        <div class="content-editor-box">
+          <RichContentEditor
+            bind:this={teamEditorRef}
+            bind:blocks={localTeamBlocks}
+            bind:keywords={teamKeywords}
+            variant="cms"
+            showKeywords={false}
+            uploadPrefix="team-policy/content"
+            placeholder="팀 소개와 정책 안내를 입력하세요"
+            onchange={() => { teamEditVersion += 1; teamDirty = true }}
+          />
+        </div>
+      {/key}
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════
+       서비스 기본 정보 (Migration #566) — 팀 정책 영역 바로 아래
   ══════════════════════════════════════════ -->
   <section class="setting-section">
     <div class="section-head">
@@ -660,6 +763,18 @@
   }
   .btn-save-inline.dirty:hover {
     opacity: 0.85;
+  }
+
+  /* 팀 정책 — 안내 문구·문서 편집기 래퍼(ProductDetailPanel .content-editor-box와 동일) */
+  .team-hint {
+    margin: 0 0 14px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+  .content-editor-box {
+    border: 1px solid var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    overflow: clip;
   }
 
   /* ─── 필수 동의문 ─── */
