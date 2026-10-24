@@ -251,12 +251,11 @@
 						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('terms_text', '서비스이용정책')}>서비스이용정책</button>
 						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('refund_text', '환불규정')}>환불규정</button>
 					</div>
-					<!-- 소개: 팀은 공통 모달로 열린다(연락처·FAQ는 준비중) -->
+					<!-- 소개: 팀은 공통 모달로 열리고 FAQ는 /help로 이동한다 -->
 					<div class="footer-link-col">
 						<p class="footer-link-heading">소개</p>
 						<button class="footer-link footer-link-btn" onclick={openTeamModal}>팀</button>
-						<a href="/" class="footer-link">연락처</a>
-						<a href="/" class="footer-link">FAQ</a>
+						<a href="/help" class="footer-link">FAQ</a>
 					</div>
 				</div>
 			</div>

@@ -19,3 +19,20 @@ export function validateNewPasswordInput(password: string, confirm: string): str
   if (password !== confirm) return '비밀번호가 일치하지 않습니다.'
   return null
 }
+
+// ── 비밀번호 재설정(문자 인증) 전용 강화 규칙 (2026-10-24) ──
+// 영문·숫자·특수문자를 모두 포함해 8~16자. 위 공용 규칙(6~72자, 로그인·레거시 인증·이메일 재설정 링크가 공유)은 그대로 두고,
+// 비밀번호 찾기(재설정) 모달과 /api/auth/password-reset/complete 만 이 규칙을 추가로 적용한다.
+export const RESET_PASSWORD_MIN = 8
+export const RESET_PASSWORD_MAX = 16
+
+/** 재설정 새 비밀번호 규칙 위반 문구, 통과하면 null (공용 규칙은 별도로 먼저 검사한다) */
+export function resetPasswordViolation(password: string): string | null {
+  if (password.length < RESET_PASSWORD_MIN || password.length > RESET_PASSWORD_MAX) {
+    return `비밀번호는 ${RESET_PASSWORD_MIN}자 이상 ${RESET_PASSWORD_MAX}자 이하로 입력하세요.`
+  }
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+    return '비밀번호는 영문, 숫자, 특수문자(@#%* 등)를 모두 포함해야 해요.'
+  }
+  return null
+}

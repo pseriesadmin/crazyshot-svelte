@@ -2,6 +2,7 @@
   // PRD.1.7 — ChatHeader: 채팅 창 상단 사용자 정보 헤더
   // Figma node: 2497:8692 (user-info)
   import { supabase } from '$lib/services/supabase'
+  import { loginHref } from '$lib/utils/loginRedirect'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
 
@@ -108,7 +109,7 @@
     <div class="user-info guest-prompt">
       <button
         class="btn-login"
-        onclick={() => window.location.href = '/auth/login'}
+        onclick={() => window.location.href = loginHref(window.location.pathname, window.location.search)}
       >로그인</button>
       <button
         class="btn-guest"

@@ -1,5 +1,10 @@
 <script lang="ts">
   import { authState, performSignOut } from '$lib/stores/auth'
+  import { page } from '$app/stores'
+  import { loginHref } from '$lib/utils/loginRedirect'
+
+  // 로그인 링크 — 지금 화면을 redirect로 붙여 로그인 후 직전 화면으로 복귀
+  const signInHref = $derived(loginHref($page.url.pathname, $page.url.search))
 
   interface Props {
     open?: boolean
@@ -74,7 +79,7 @@
       </button>
     {:else}
       <!-- 미로그인 상태: 로그인 버튼 + 회원가입 링크 -->
-      <a href="/auth/login" class="mm-action-btn" onclick={onclose}>
+      <a href={signInHref} class="mm-action-btn" onclick={onclose}>
         <span class="mm-action-text">Sign in</span>
         <span class="mm-action-arrow" aria-hidden="true">
           <svg width="17" height="12" viewBox="0 0 17 12" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -4,6 +4,10 @@
   import { csToast } from '$lib/utils/toast'
   import { slide } from 'svelte/transition'
   import { tick } from 'svelte'
+  import { openChat } from '$lib/stores/chat.svelte'
+  import { goto } from '$app/navigation'
+  import { loginHref } from '$lib/utils/loginRedirect'
+  import { resetPasswordViolation } from '$lib/utils/passwordPolicy'
 
   type Mode = 'login' | 'signup' | 'find-email' | 'reset-pw'
 
@@ -58,6 +62,8 @@
   let emailKoreanWarned = false
   let emailAvailable = $state(false)
   let emailDuplicate = $state(false)
+  // 가입 확인이 "실제로 진행 중"인 동안만 true — 확인 실패(null 고착)와 구분해 Tab 가로채기가 갇히지 않게 한다
+  let emailChecking = false
 
   function onEmailInput(e: Event) {
     const el = e.currentTarget as HTMLInputElement
@@ -74,6 +80,7 @@
     }
     emailAvailable = false
     emailDuplicate = false
+    emailChecking = false
     const val = el.value
     if (emailCheckTimer) { clearTimeout(emailCheckTimer); emailCheckTimer = null }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
@@ -85,8 +92,16 @@
       }
       return
     }
+    emailChecking = true
     emailCheckTimer = setTimeout(async () => {
-      const { data } = await supabase.rpc('check_email_registered', { p_email: val } as never)
+      const { data, error } = await supabase.rpc('check_email_registered', { p_email: val } as never)
+      if (email.trim() !== val.trim()) return // 그 사이 이메일이 바뀜 — 오래된 응답은 무시(새 확인이 플래그를 관리)
+      emailChecking = false
+      if (error) {
+        pendingFocusPw = false
+        csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.')
+        return
+      }
       if (data) {
         csToast.warning('이미 가입한 아이디입니다.')
         emailAvailable = false
@@ -102,7 +117,7 @@
   // ── 이름 입력 노출: 비밀번호 확인까지 일치하게 입력되는 즉시 아래에 '성함' 입력란을 보여준다 ──
   // 한 번 노출되면 비밀번호를 다시 고쳐도 숨기지 않는다(입력 중인 이름이 사라지는 것 방지).
   const FULL_NAME_MAX_LENGTH = 30
-  const passwordsMatched = $derived(password.length >= 6 && passwordConfirm === password)
+  const passwordsMatched = $derived(resetPasswordViolation(password) === null && passwordConfirm === password)
   let nameRevealed = $state(false)
   $effect(() => {
     if (passwordsMatched) nameRevealed = true
@@ -123,8 +138,12 @@
     }
   })
   // Tab 키도 Enter와 같은 순서로 다음 '입력란'에 포커스한다(사이의 눈 아이콘·발송 버튼은 건너뜀, Shift+Tab·조합 중·보조키 조합은 기본 동작)
+  // 한글 조합 판정: isComposing 외에 Safari가 조합 종료 Enter를 isComposing=false·keyCode 229로 보내는 경우까지 조합 중으로 본다
+  function isImeKey(e: KeyboardEvent): boolean {
+    return e.isComposing || e.keyCode === 229
+  }
   function isPlainTab(e: KeyboardEvent): boolean {
-    return e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing
+    return e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !isImeKey(e)
   }
   function onTabTo(e: KeyboardEvent, nextId: string) {
     if (!isPlainTab(e)) return
@@ -136,7 +155,7 @@
   }
   function onSignupEnter(e: KeyboardEvent, nextId: string | null) {
     if (nextId) onTabTo(e, nextId)
-    if (e.key !== 'Enter' || e.isComposing) return
+    if (e.key !== 'Enter' || isImeKey(e)) return
     e.preventDefault()
     if (nextId === null) {
       if (canProceed) handleNextStep()
@@ -147,7 +166,7 @@
   }
   // 인증(OTP) 흐름 공용: Enter로 다음 입력란 포커스 또는 해당 단계 실행 (IME 조합 중 Enter 무시)
   function onEnterRun(e: KeyboardEvent, run: () => void) {
-    if (e.key !== 'Enter' || e.isComposing) return
+    if (e.key !== 'Enter' || isImeKey(e)) return
     e.preventDefault()
     run()
   }
@@ -167,8 +186,8 @@
   })
   function onResetEmailEnter(e: KeyboardEvent) {
     const tab = isPlainTab(e)
-    if (!tab && (e.key !== 'Enter' || e.isComposing)) return
-    const checking = resetEmailRegistered === null && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail.trim())
+    if (!tab && (e.key !== 'Enter' || isImeKey(e))) return
+    const checking = resetEmailChecking
     // Tab은 이동할 수 있을 때(확인 완료·확인 중)만 가로챈다 — 미가입·형식 오류면 기본 Tab 동작
     if (tab && !resetEmailRegistered && !checking) return
     e.preventDefault()
@@ -178,8 +197,8 @@
 
   function onSignupEmailEnter(e: KeyboardEvent) {
     const tab = isPlainTab(e)
-    if (!tab && (e.key !== 'Enter' || e.isComposing)) return
-    const checking = !emailAvailable && !emailDuplicate && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+    if (!tab && (e.key !== 'Enter' || isImeKey(e))) return
+    const checking = emailChecking
     // Tab은 이동할 수 있을 때(확인 완료·확인 중)만 가로챈다 — 중복 이메일·형식 오류면 기본 Tab 동작
     if (tab && !emailAvailable && !checking) return
     e.preventDefault()
@@ -191,6 +210,13 @@
   let isLoading = $state(false)
   let isSendingOtp = $state(false)
   let errorMsg = $state<string | null>(null)
+  // 모달 안 경고는 화면에 문구로 두지 않고 경고 토스트로 알린다(2026-10-24, Stephen 지시) — 각 핸들러는 기존처럼 errorMsg에 값을 넣기만 하면 된다
+  $effect(() => {
+    if (errorMsg) {
+      csToast.warning(errorMsg)
+      errorMsg = null
+    }
+  })
   let otpSent = $state(false)
   let otpVerified = $state(false)   // [인증 확인]으로 인증번호 확인을 마친 상태(가입 완료 때 재확인하지 않음)
   let signupFinalizePending = $state(false)   // 계정 전환은 끝났으나 서버의 이메일 확정(가입 마무리)이 실패한 상태 — [가입 완료]를 다시 누르면 마무리만 재시도
@@ -223,7 +249,9 @@
   })
 
   // ── 아이디 찾기 상태 ──
-  let findPhone = $state('')
+  let findPhone = $state('010-') // 전화번호 입력폼 표준: '010-' 기본값·자동 하이픈(비밀번호 찾기와 동일)
+  let findName = $state('')
+  const findNameOk = $derived(findName.trim().length >= 2) // 이름 입력 후에만 휴대폰 인증 단계가 열린다(비밀번호 찾기의 이메일 확인과 같은 역할)
   let findCode = $state('')
   let findOtpSent = $state(false)
   let isSendingFindOtp = $state(false)
@@ -244,9 +272,15 @@
   // 입력한 이메일이 가입된 계정인지(null=미확인) — 확인되면 휴대폰·인증번호 입력이 활성화된다
   let resetEmailRegistered = $state<boolean | null>(null)
   let resetEmailTimer: ReturnType<typeof setTimeout> | null = null
+  let resetEmailChecking = false // 확인이 실제로 진행 중일 때만 true(실패 후 null 고착과 구분)
 
   // ── 초기화 (모달 닫힐 때) ──
   function reset() {
+    // 키보드 이동 대기·가입 확인 진행 플래그 해제 — 모달을 닫았다 열어도 이전 대기가 포커스를 뺏지 않게 한다
+    pendingFocusPw = false
+    pendingFocusResetPhone = false
+    emailChecking = false
+    resetEmailChecking = false
     signupFinalizePending = false
     mode = initialMode
     loginEmail = ''
@@ -270,7 +304,8 @@
     codeFocused = false
     isLoading = false
     isSendingOtp = false
-    findPhone = ''
+    findName = ''
+    findPhone = '010-'
     findCode = ''
     findOtpSent = false
     isSendingFindOtp = false
@@ -312,6 +347,20 @@
     }
   }
 
+  // 아이디/비밀번호 찾기 완료 후 — 모달 로그인 폼이 아니라 기존 로그인 화면(/auth/login)으로 돌아간다.
+  // 이미 로그인 화면이면 모달만 닫아 그 화면이 보이고, 다른 화면(예: 상품상세)에서 열렸다면 지금 화면을 redirect로 붙여 이동한다.
+  function goToLoginPage() {
+    handleClose()
+    const { pathname, search } = window.location
+    if (!pathname.startsWith('/auth/login')) void goto(loginHref(pathname, search))
+  }
+
+  // 고객채팅 문의 — 로그인 모달(z-index 1000)이 채팅창을 가리므로 먼저 닫고 연다
+  function openSupportChat() {
+    handleClose()
+    openChat()
+  }
+
   function handleClose() {
     reset()
     onclose()
@@ -328,8 +377,9 @@
       errorMsg = '올바른 이메일 형식이 아닙니다.'
       return
     }
-    if (password.length < 6) {
-      errorMsg = '비밀번호는 6자 이상이어야 합니다.'
+    const pwViolation = resetPasswordViolation(password)
+    if (pwViolation) {
+      errorMsg = pwViolation
       return
     }
     if (password !== passwordConfirm) {
@@ -606,35 +656,72 @@
   }
 
   // ── 아이디 찾기: OTP 발송 ──
+  // ── 아이디 찾기: 이름·휴대폰이 모두 입력되면 일치 계정 여부를 자동 확인해 토스트로 알린다(문자 발송 없음) ──
+  let findCheckTimer: ReturnType<typeof setTimeout> | null = null
+  let findCheckedKey = ''
+  $effect(() => {
+    const nm = findName.trim()
+    const digits = findPhone.replace(/\D/g, '')
+    if (findCheckTimer) { clearTimeout(findCheckTimer); findCheckTimer = null }
+    if (mode !== 'find-email' || nm.length < 2 || !/^010\d{8}$/.test(digits)) { findCheckedKey = ''; return }
+    const key = `${nm}|${digits}`
+    if (key === findCheckedKey) return
+    findCheckTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/auth/find-email/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: nm, phone: digits }),
+        })
+        const data = await res.json() as { ok: boolean; matched?: boolean; error?: string }
+        if (`${findName.trim()}|${findPhone.replace(/\D/g, '')}` !== key) return // 확인 중 입력이 바뀌었으면 결과 무시
+        findCheckedKey = key
+        if (!data.ok) csToast.warning(data.error ?? '확인에 실패했어요. 잠시 후 다시 시도해 주세요.')
+        else if (data.matched) csToast.success('인증번호 입력 후 동일인 확인 가능합니다.')
+        else csToast.warning('입력하신 이름과 휴대폰 정보가 일치하는 계정을 찾을 수 없어요.')
+      } catch {
+        csToast.warning('네트워크 오류가 발생했습니다.')
+      }
+    }, 600)
+    return () => { if (findCheckTimer) { clearTimeout(findCheckTimer); findCheckTimer = null } }
+  })
+
   async function handleFindSendOtp() {
     errorMsg = null
+    if (!findNameOk) {
+      csToast.warning('이름을 입력해주세요.')
+      focusById('su-find-name')
+      return
+    }
     const cleaned = findPhone.replace(/\D/g, '')
     if (!/^010\d{8}$/.test(cleaned)) {
-      errorMsg = '올바른 휴대폰 번호를 입력해주세요. (예: 01012345678)'
+      csToast.warning('올바른 휴대폰 번호를 입력해주세요. (예: 01012345678)')
       return
     }
     isSendingFindOtp = true
     try {
       const ready = await ensureSignupSession()
       if (ready !== 'ok') {
-        errorMsg = '인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.'
+        csToast.warning('인증 세션 생성에 실패했습니다. 잠시 후 다시 시도해주세요.')
         return
       }
-      const res = await fetch('/api/profile/send-otp', {
+      const res = await fetch('/api/auth/find-email/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: cleaned }),
+        body: JSON.stringify({ name: findName.trim(), phone: cleaned }),
       })
       const data = await res.json() as { ok: boolean; error?: string; devCode?: string }
       if (!data.ok) {
-        errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'
+        csToast.warning(data.error ?? '인증번호 발송에 실패했습니다.')
+        focusById('su-find-phone')
         return
       }
       findOtpSent = true
+      csToast.success('인증번호를 문자로 보냈어요.')
       if (data.devCode) findCode = data.devCode
       focusById('su-find-code')
     } catch {
-      errorMsg = '네트워크 오류가 발생했습니다.'
+      csToast.warning('네트워크 오류가 발생했습니다.')
     } finally {
       isSendingFindOtp = false
     }
@@ -652,11 +739,12 @@
       const res = await fetch('/api/auth/find-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: findPhone.replace(/\D/g, ''), code: findCode }),
+        body: JSON.stringify({ name: findName.trim(), phone: findPhone.replace(/\D/g, ''), code: findCode }),
       })
       const data = await res.json() as { ok: boolean; email?: string; error?: string }
       if (!data.ok) {
         errorMsg = data.error ?? '아이디를 찾을 수 없습니다.'
+        focusById('su-find-code')
         return
       }
       foundEmail = data.email ?? null
@@ -698,15 +786,18 @@
   // 이메일 입력 즉시(0.6초 입력 멈춤 후) 가입 여부 확인 — 가입된 이메일이면 휴대폰·인증번호 영역을 활성화한다
   function handleResetEmailInput() {
     resetEmailRegistered = null
+    resetEmailChecking = false
     pendingFocusResetPhone = false // 이메일을 다시 고치면 대기 중이던 이동 취소
     if (resetStep !== 'info') { resetStep = 'info'; resetCode = '' }
     if (resetEmailTimer) { clearTimeout(resetEmailTimer); resetEmailTimer = null }
     const val = resetEmail.trim()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return
+    resetEmailChecking = true
     resetEmailTimer = setTimeout(async () => {
       const { data, error } = await supabase.rpc('check_email_registered', { p_email: val } as never)
       if (resetEmail.trim() !== val) return // 그 사이 이메일이 바뀜 — 오래된 응답 무시
-      if (error) { resetEmailRegistered = null; csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.'); return }
+      resetEmailChecking = false
+      if (error) { resetEmailRegistered = null; pendingFocusResetPhone = false; csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.'); return }
       if (data) {
         resetEmailRegistered = true
         csToast.warning('기존 계정정보가 확인되었습니다.')
@@ -728,9 +819,9 @@
     isResetting = true
     try {
       const data = await resetRequest<{ ok: boolean; error?: string; devCode?: string; code?: string }>('/api/auth/password-reset/send-otp', { email, phone: cleaned })
-      if (!data) return
-      if (!data.ok && data.code === 'admin_account') { csToast.warning('관리자계정은 CMS를 통해 수정하세요.'); return }
-      if (!data.ok) { errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'; return }
+      if (!data) { focusById('su-reset-phone'); return }
+      if (!data.ok && data.code === 'admin_account') { csToast.warning('관리자계정은 CMS를 통해 수정하세요.'); focusById('su-reset-phone'); return }
+      if (!data.ok) { errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'; focusById('su-reset-phone'); return }
       resetStep = 'code'
       resetCode = data.devCode ?? ''
       focusById('su-reset-code')
@@ -751,8 +842,8 @@
         phone: resetPhone.replace(/\D/g, ''),
         code: resetCode.trim(),
       })
-      if (!data) return
-      if (!data.ok || !data.token) { errorMsg = data.error ?? '인증번호가 올바르지 않습니다.'; return }
+      if (!data) { focusById('su-reset-code'); return }
+      if (!data.ok || !data.token) { errorMsg = data.error ?? '인증번호가 올바르지 않습니다.'; focusById('su-reset-code'); return }
       resetToken = data.token
       resetStep = 'newpw'
     } finally {
@@ -764,8 +855,9 @@
   // 3단계: 새 비밀번호 설정
   async function handleResetComplete() {
     errorMsg = null
-    if (resetNewPw.length < 6) { errorMsg = '비밀번호는 6자 이상 입력해주세요.'; return }
-    if (resetNewPw !== resetNewPw2) { errorMsg = '비밀번호가 일치하지 않습니다.'; return }
+    const pwViolation = resetPasswordViolation(resetNewPw)
+    if (pwViolation) { errorMsg = pwViolation; focusById('su-reset-newpw'); return }
+    if (resetNewPw !== resetNewPw2) { errorMsg = '비밀번호가 일치하지 않습니다.'; focusById('su-reset-newpw2'); return }
     if (!resetToken) { errorMsg = '인증 정보가 없습니다. 처음부터 다시 진행해주세요.'; return }
     isResetting = true
     try {
@@ -790,13 +882,35 @@
   }
 </script>
 
+<!-- 아이디/비밀번호 찾기 탭 — 두 화면 상단에 공통 배치(전환해도 각 화면에 입력하던 값은 유지) -->
+{#snippet findTabs()}
+  <div class="su-tabs" role="tablist" aria-label="아이디·비밀번호 찾기">
+    <button
+      type="button"
+      role="tab"
+      class="su-tab"
+      class:su-tab-active={mode === 'find-email'}
+      aria-selected={mode === 'find-email'}
+      onclick={() => { if (mode !== 'find-email') { mode = 'find-email'; errorMsg = null } }}
+    >아이디</button>
+    <button
+      type="button"
+      role="tab"
+      class="su-tab"
+      class:su-tab-active={mode === 'reset-pw'}
+      aria-selected={mode === 'reset-pw'}
+      onclick={() => { if (mode !== 'reset-pw') { mode = 'reset-pw'; errorMsg = null } }}
+    >비밀번호</button>
+  </div>
+{/snippet}
+
 {#if open}
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="su-overlay"
   role="dialog"
   aria-modal="true"
-  aria-label={mode === 'login' ? '로그인' : mode === 'find-email' ? '아이디 찾기' : mode === 'reset-pw' ? '비밀번호 찾기' : '회원가입'}
+  aria-label={mode === 'login' ? '로그인' : mode === 'find-email' ? '아이디 찾기' : mode === 'reset-pw' ? '비밀번호 재설정' : '회원가입'}
   tabindex="-1"
   onclick={handleOverlayClick}
   onkeydown={handleKeydown}
@@ -804,7 +918,7 @@
   <div class="su-modal">
     <!-- 헤더 -->
     <div class="su-header">
-      <span class="su-title">{mode === 'login' ? 'Login' : mode === 'find-email' ? '아이디 찾기' : mode === 'reset-pw' ? '비밀번호 찾기' : 'Sign Up'}</span>
+      <span class="su-title">{mode === 'login' ? 'Login' : mode === 'find-email' ? 'Confirm ID' : mode === 'reset-pw' ? 'Password Reset' : 'Sign Up'}</span>
       <button class="su-close" onclick={handleClose} aria-label="닫기" type="button">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
           <path d="M1 1L17 17M17 1L1 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -883,9 +997,6 @@
           <span class="su-remember-label">로그인 기억하기</span>
         </label>
 
-        {#if errorMsg}
-          <p class="su-error" role="alert">{errorMsg}</p>
-        {/if}
 
         <button class="su-cta" type="button" onclick={handleLogin} disabled={isLoggingIn} aria-busy={isLoggingIn}>
           {isLoggingIn ? '로그인 중...' : '로그인'}
@@ -923,15 +1034,17 @@
           </div>
 
           <!-- 비밀번호 -->
+          <p class="su-group-label su-group-label-center">영문, 숫자, 특수문자(@#%*)를 포함 <strong class="su-emph">8 ~ 16자</strong> 이내로 입력하세요.</p>
           <div class="su-field">
             <div class="su-input-wrap" onclick={() => { if (emailDuplicate) csToast.warning('이미 가입한 아이디입니다.') }}>
               <input
                 id="su-pw"
                 class="su-input"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="비밀번호 6자 이상 입력하세요."
+                placeholder="비밀번호를 입력하세요."
                 bind:value={password}
                 autocomplete="new-password"
+                maxlength={16}
                 enterkeyhint="next"
                 onkeydown={(e) => onSignupEnter(e, 'su-pw2')}
                 disabled={!emailAvailable}
@@ -970,6 +1083,7 @@
                 placeholder="비밀번호를 한 번 더 입력하세요"
                 bind:value={passwordConfirm}
                 autocomplete="new-password"
+                maxlength={16}
                 enterkeyhint="next"
                 onkeydown={(e) => onSignupEnter(e, 'su-name')}
                 disabled={!emailAvailable}
@@ -1017,16 +1131,13 @@
           {/if}
         </div>
 
-        {#if errorMsg}
-          <p class="su-error" role="alert">{errorMsg}</p>
-        {/if}
 
         <button class="su-cta" type="button" onclick={handleNextStep} disabled={!canProceed}>
           다음 단계 →
         </button>
 
-        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null }}>
-          이미 계정이 있으신가요? <span>로그인</span>
+        <button class="su-switch-mode" type="button" onclick={openSupportChat}>
+          <span>고객채팅 문의하기</span>
         </button>
 
       {:else}
@@ -1100,9 +1211,6 @@
           </div>
         </div>
 
-        {#if errorMsg}
-          <p class="su-error" role="alert">{errorMsg}</p>
-        {/if}
 
         <div class="su-btn-row">
           <button
@@ -1127,85 +1235,100 @@
       {:else if mode === 'find-email'}
         <!-- ── 아이디 찾기 ── -->
         {#if !foundEmail}
+          {@render findTabs()}
+          <!-- 비밀번호 찾기와 동일한 배치: 안내 문구(가운데·레드 강조) → 첫 입력란(이름) → 휴대폰 행 [인증번호 받기] → 인증번호 행 [인증 확인] (2026-10-24) -->
           <div class="su-group su-group-signup">
-            <p class="su-group-label">가입 시 등록한 휴대폰 번호로 아이디를 찾습니다.</p>
+            <p class="su-group-label su-group-label-center">가입된 <strong class="su-emph">이름, 휴대폰 정보</strong>가 동일해야<br class="su-br-m" /> 아이디(이메일)를 알려드립니다.</p>
             <div class="su-field">
-              <label class="su-field-label" for="su-find-phone">휴대폰 번호</label>
+              <input
+                id="su-find-name"
+                class="su-input"
+                type="text"
+                placeholder="이름을 입력해 주세요."
+                aria-label="이름"
+                autocomplete="name"
+                maxlength={FULL_NAME_MAX_LENGTH}
+                bind:value={findName}
+                disabled={isSendingFindOtp || isFinding}
+                enterkeyhint="next"
+                oninput={() => { findOtpSent = false; findCode = '' }}
+                onkeydown={(e) => onSignupEnter(e, 'su-find-phone')}
+              />
+            </div>
+            <div class="su-field">
               <div class="su-phone-row">
                 <input
                   id="su-find-phone"
                   class="su-input su-phone-input"
                   type="tel"
                   placeholder="01012345678"
-                  bind:value={findPhone}
-                  maxlength={11}
-                  disabled={findOtpSent}
+                  aria-label="휴대폰 번호"
+                  value={findPhone}
+                  disabled={isSendingFindOtp || isFinding || !findNameOk}
                   enterkeyhint="send"
-                  onkeydown={(e) => { onTabTo(e, 'su-find-code'); onEnterRun(e, () => { if (!isSendingFindOtp && !findOtpSent) void handleFindSendOtp() }) }}
+                  onkeydown={(e) => { onTabTo(e, 'su-find-code'); onEnterRun(e, () => { if (!isSendingFindOtp && !isFinding) void handleFindSendOtp() }) }}
+                  oninput={(e) => { findPhone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = findPhone; findOtpSent = false; findCode = '' }}
                 />
-                <button
-                  class="su-otp-btn"
-                  type="button"
-                  onclick={handleFindSendOtp}
-                  disabled={isSendingFindOtp || findOtpSent}
-                >
-                  {#if isSendingFindOtp}
-                    발송 중...
-                  {:else if findOtpSent}
-                    발송됨 ✓
-                  {:else}
-                    인증 발송
-                  {/if}
+                <button class="su-otp-btn" type="button" onclick={handleFindSendOtp} disabled={isSendingFindOtp || isFinding || !findNameOk}>
+                  {isSendingFindOtp ? '발송 중...' : '인증번호 받기'}
                 </button>
               </div>
               {#if findOtpSent}
                 <p class="su-otp-hint">📱 인증번호가 발송되었습니다. (3분 이내 입력)</p>
               {/if}
             </div>
-            {#if findOtpSent}
-              <div class="su-field">
-                <label class="su-field-label" for="su-find-code">인증번호</label>
+            <div class="su-field">
+              <div class="su-phone-row">
                 <input
                   id="su-find-code"
-                  class="su-input"
-                  type="text"
-                  placeholder="인증번호 6자리"
+                  class="su-input su-phone-input"
+                  type="tel"
+                  inputmode="numeric"
+                  placeholder="인증번호 입력"
+                  aria-label="인증번호"
                   bind:value={findCode}
                   maxlength={6}
+                  disabled={!findNameOk || !findOtpSent || isFinding}
                   enterkeyhint="go"
-                  onkeydown={(e) => onEnterRun(e, () => { if (findCode.length === 6 && !isFinding) void handleFindEmail() })}
+                  onkeydown={(e) => onEnterRun(e, () => { if (findOtpSent && findCode.length === 6 && !isFinding) void handleFindEmail() })}
+                  oninput={(e) => {
+                    const el = e.currentTarget as HTMLInputElement
+                    el.value = el.value.replace(/[^0-9]/g, '').slice(0, 6)
+                    findCode = el.value
+                  }}
                 />
+                <button
+                  class="su-otp-btn su-otp-btn-confirm"
+                  type="button"
+                  onclick={handleFindEmail}
+                  disabled={isFinding || !findOtpSent || findCode.length !== 6}
+                >
+                  {isFinding ? '확인 중...' : '인증 확인'}
+                </button>
               </div>
-            {/if}
+            </div>
           </div>
 
-          {#if errorMsg}
-            <p class="su-error" role="alert">{errorMsg}</p>
-          {/if}
-
-          {#if findOtpSent}
-            <button class="su-cta" type="button" onclick={handleFindEmail} disabled={isFinding} aria-busy={isFinding}>
-              {isFinding ? '확인 중...' : '아이디 확인'}
-            </button>
-          {/if}
         {:else}
           <div class="su-result-box">
             <p class="su-result-label">가입된 아이디(이메일)</p>
             <p class="su-result-email">{foundEmail}</p>
           </div>
-          <button class="su-cta" type="button" onclick={() => { reset(); mode = 'login' }}>로그인하기</button>
+          <button class="su-cta" type="button" onclick={goToLoginPage}>로그인하기</button>
         {/if}
 
-        <button class="su-switch-mode" type="button" onclick={() => { mode = 'login'; errorMsg = null; findPhone = ''; findCode = ''; findOtpSent = false; foundEmail = null }}>
-          <span>← 로그인으로 돌아가기</span>
+        <!-- 계정을 못 찾는 경우의 도움 경로 — 모달을 닫고 공통 고객 채팅을 연다(비로그인은 기존 채팅 계정 로직 그대로) -->
+        <button class="su-switch-mode" type="button" onclick={openSupportChat}>
+          <span>고객채팅 문의하기</span>
         </button>
 
       {:else if mode === 'reset-pw'}
         <!-- ── 비밀번호 재설정(문자 인증번호) ── -->
         {#if resetStep === 'info' || resetStep === 'code'}
+          {@render findTabs()}
           <!-- 기존회원 인증(LegacyMemberVerifyModal) 입력 배치와 동일: 라벨 없이 placeholder, 휴대폰 행 [인증번호 받기], 인증번호 행 [인증 확인]을 한 화면에 항상 노출(2026-10-23) -->
           <div class="su-group su-group-signup">
-            <p class="su-group-label su-group-label-center">가입된 <strong class="su-emph">아이디, 휴대폰 정보</strong>가 동일해야 인증번호가 발송됩니다.</p>
+            <p class="su-group-label su-group-label-center">가입된 <strong class="su-emph">아이디, 휴대폰 정보</strong>가<br class="su-br-m" /> 동일해야 인증번호가 발송됩니다.</p>
             <div class="su-field">
               <input
                 id="su-reset-email"
@@ -1286,22 +1409,19 @@
             </div>
           </div>
 
-          {#if errorMsg}
-            <p class="su-error" role="alert">{errorMsg}</p>
-          {/if}
         {:else if resetStep === 'newpw'}
           <div class="su-group su-group-signup">
-            <p class="su-group-label">새로 사용할 비밀번호를 입력해주세요.</p>
+            <p class="su-group-label su-group-label-center">영문, 숫자, 특수문자(@#%*)를 포함 <strong class="su-emph">8 ~ 16자</strong> 이내로 입력하세요.</p>
             <div class="su-field">
-              <label class="su-field-label" for="su-reset-newpw">새 비밀번호</label>
               <input
                 id="su-reset-newpw"
                 class="su-input"
+                aria-label="새 비밀번호"
                 type="password"
-                placeholder="6자 이상 입력"
+                placeholder="최소 6자 이상 입력하세요."
                 bind:value={resetNewPw}
                 autocomplete="new-password"
-                maxlength={72}
+                maxlength={16}
                 enterkeyhint="next"
                 onkeydown={(e) => { onTabTo(e, 'su-reset-newpw2'); onEnterRun(e, () => focusById('su-reset-newpw2')) }}
                 oninput={(e) => {
@@ -1314,15 +1434,15 @@
               />
             </div>
             <div class="su-field">
-              <label class="su-field-label" for="su-reset-newpw2">새 비밀번호 확인</label>
               <input
                 id="su-reset-newpw2"
                 class="su-input"
+                aria-label="새 비밀번호 확인"
                 type="password"
-                placeholder="비밀번호를 한 번 더 입력"
+                placeholder="한번 더 확인 입력하세요."
                 bind:value={resetNewPw2}
                 autocomplete="new-password"
-                maxlength={72}
+                maxlength={16}
                 enterkeyhint="go"
                 onkeydown={(e) => onEnterRun(e, () => { if (!isResetting) void handleResetComplete() })}
                 oninput={(e) => {
@@ -1336,9 +1456,6 @@
             </div>
           </div>
 
-          {#if errorMsg}
-            <p class="su-error" role="alert">{errorMsg}</p>
-          {/if}
 
           <button class="su-cta" type="button" onclick={handleResetComplete} disabled={isResetting} aria-busy={isResetting}>
             {isResetting ? '변경 중...' : '비밀번호 변경'}
@@ -1348,12 +1465,12 @@
             <p class="su-result-label">✅ 비밀번호가 변경되었습니다</p>
             <p class="su-result-desc">새 비밀번호로 로그인해주세요.</p>
           </div>
-          <button class="su-cta" type="button" onclick={() => { reset(); mode = 'login' }}>로그인하기</button>
+          <button class="su-cta" type="button" onclick={goToLoginPage}>로그인하기</button>
         {/if}
 
         {#if resetStep !== 'done'}
-          <button class="su-switch-mode" type="button" onclick={() => { reset(); mode = 'login' }}>
-            <span>← 로그인으로 돌아가기</span>
+          <button class="su-switch-mode" type="button" onclick={openSupportChat}>
+            <span>고객채팅 문의하기</span>
           </button>
         {/if}
 
@@ -1442,7 +1559,61 @@
   }
   /* 안내 문구 강조(레드 토큰 + 한 단계 굵게 900) — 2026-10-24 Stephen 지시 */
   .su-emph { color: var(--cs-red-badge); font-weight: 900; }
+  .su-br-m { display: none; } /* 모바일에서만 줄바꿈 */
+  @media (max-width: 640px) { .su-br-m { display: inline; } }
   .su-group-label-center { text-align: center; } /* 비밀번호 찾기 안내 문구 중앙 정렬(2026-10-24, Stephen 지시) */
+
+  /* 아이디/비밀번호 찾기 탭 — 단순 텍스트 탭: 배경·알약 없음, 활성은 진한 글자(900)+아래 바, 비활성은 연한 글자, 호버는 글자색만 */
+  .su-tabs {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    gap: 84px;
+    margin-bottom: 10px; /* 탭 ↔ 아래 영역 여백 20px → 30px(+50%, 본문 gap 20px + 10px) */
+  }
+  /* 탭 줄 전체 폭 구분선 — 1px 매우 옅은 그레이(면), 활성 바(3px)는 이 위에 겹쳐 보인다 */
+  .su-tabs::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--cs-border);
+    opacity: 0.6;
+  }
+  .su-tab {
+    position: relative;
+    min-height: 44px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: var(--cs-text-light);
+    font: var(--text-pc-title-16);
+    font-weight: 700;
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .su-tab-active { color: var(--cs-text); font-weight: 900; }
+  /* 활성 탭 아래 바 — 선(border)이 아니라 면(fill)으로 표현 */
+  .su-tab-active::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    border-radius: var(--radius-full);
+    background: var(--cs-purple-dark);
+    z-index: 1;
+  }
+  /* 모바일: 탭 글자 한 단계 작게(16→14px) */
+  @media (max-width: 640px) {
+    .su-tabs { gap: 50px; } /* PC 84px × 0.6 (모바일 비율) */
+    .su-tab { font: var(--text-m-script-14B); }
+    .su-tab-active { font-weight: 900; }
+  }
+  .su-tab:not(.su-tab-active):hover { color: var(--cs-text-mid); }
 
   /* 필드 */
   .su-field {
@@ -1532,7 +1703,7 @@
   .su-otp-btn-confirm { background: var(--cs-text-dark); }
   .su-otp-btn-confirm:not(:disabled):hover { background: var(--cs-dark); }
   @media (max-width: 640px) {
-    .su-otp-btn { height: 44px; padding: 0 16px; min-width: 120px; font: var(--text-m-script-14B); } /* 모바일 축소(2026-10-23): 글자 16→14px 한 단계·가로 축소, 높이는 터치 타겟 44px 유지 */
+    .su-otp-btn { height: 44px; padding: 0 12px; width: 120px; min-width: 120px; font: var(--text-m-script-14B); } /* 모바일 축소: 가로는 두 버튼 동일 120px 고정('인증번호 받기' 글자가 들어가는 폭, 2026-10-24 Stephen 지시), 높이는 터치 타겟 44px 유지, 글자 14px 그대로 */
   }
   /* PC 반응형(≥641px) 모달 안 모든 입력폼 그룹(로그인·회원가입 1단계·휴대폰 인증·아이디 찾기·비밀번호 찾기 + 새 비밀번호): 입력되는 글자만 사다리 두 단계 위로 14→16→18px(--text-pc-title-18, 2026-10-24, Stephen 지시).
      안내(placeholder) 글자는 기존 --text-pc-body-14 그대로 유지. 모바일·다른 모드(로그인·찾기·휴대폰 인증)는 변경 없음 */
@@ -1720,6 +1891,9 @@
   @media (max-width: 540px) {
     .su-modal { border-radius: var(--radius-xl); }
     .su-body { padding: 20px; }
-    .su-header { padding: 16px 20px; }
+    /* 모바일 비율(PC의 약 0.6): 상단 바 높이 84→50px(닫기 터치 영역 44px 유지 + 위아래 3px), 제목 18→16px 한 단계, 닫기 아이콘 18→12px */
+    .su-header { padding: 3px 14px 3px 20px; }
+    .su-title { font-size: 16px; }
+    .su-close svg { width: 12px; height: 12px; }
   }
 </style>
