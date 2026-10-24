@@ -3,6 +3,7 @@
   import { supabase, rpc } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
   import { slide } from 'svelte/transition'
+  import { tick } from 'svelte'
 
   type Mode = 'login' | 'signup' | 'find-email' | 'reset-pw'
 
@@ -60,6 +61,7 @@
 
   function onEmailInput(e: Event) {
     const el = e.currentTarget as HTMLInputElement
+    pendingFocusPw = false // 이메일을 다시 고치면 대기 중이던 '확인 끝나면 비밀번호로 이동'을 취소
     // 한글(비ASCII) 차단 — 로그인 화면과 동일 패턴
     const filtered = el.value.replace(/[^\x00-\x7F]/g, '')
     if (el.value !== filtered) {
@@ -110,12 +112,88 @@
     emailAvailable && !!password && !!passwordConfirm && nameRevealed && fullName.trim().length > 0,
   )
 
+  // ── 회원가입 1단계: Enter/키보드 '다음'으로 입력란을 차례로 이동 (IME-SAFE-INPUT: 한글 조합 중 Enter는 무시) ──
+  // 이메일 → 비밀번호 → 비밀번호 확인 → 성함 → (모두 충족하면) 다음 단계. 비활성 입력란에는 포커스하지 않는다.
+  // 이메일 가입 확인(0.6초 입력 멈춤 후)이 끝나기 전에 Enter를 눌렀다면 확인이 끝나는 즉시 비밀번호로 이동한다.
+  let pendingFocusPw = false
+  $effect(() => {
+    if (emailAvailable && pendingFocusPw) {
+      pendingFocusPw = false
+      void tick().then(() => document.getElementById('su-pw')?.focus())
+    }
+  })
+  // Tab 키도 Enter와 같은 순서로 다음 '입력란'에 포커스한다(사이의 눈 아이콘·발송 버튼은 건너뜀, Shift+Tab·조합 중·보조키 조합은 기본 동작)
+  function isPlainTab(e: KeyboardEvent): boolean {
+    return e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing
+  }
+  function onTabTo(e: KeyboardEvent, nextId: string) {
+    if (!isPlainTab(e)) return
+    const next = document.getElementById(nextId) as HTMLInputElement | null
+    if (next && !next.disabled) {
+      e.preventDefault()
+      next.focus()
+    }
+  }
+  function onSignupEnter(e: KeyboardEvent, nextId: string | null) {
+    if (nextId) onTabTo(e, nextId)
+    if (e.key !== 'Enter' || e.isComposing) return
+    e.preventDefault()
+    if (nextId === null) {
+      if (canProceed) handleNextStep()
+      return
+    }
+    const next = document.getElementById(nextId) as HTMLInputElement | null
+    if (next && !next.disabled) next.focus()
+  }
+  // 인증(OTP) 흐름 공용: Enter로 다음 입력란 포커스 또는 해당 단계 실행 (IME 조합 중 Enter 무시)
+  function onEnterRun(e: KeyboardEvent, run: () => void) {
+    if (e.key !== 'Enter' || e.isComposing) return
+    e.preventDefault()
+    run()
+  }
+  function focusById(id: string) {
+    void tick().then(() => {
+      const el = document.getElementById(id) as HTMLInputElement | null
+      if (el && !el.disabled) el.focus()
+    })
+  }
+  // 비밀번호 찾기 이메일: 가입 확인(0.6초)이 끝나기 전 Enter를 눌렀다면 확인 완료 즉시 휴대폰 입력란으로 이동
+  let pendingFocusResetPhone = false
+  $effect(() => {
+    if (resetEmailRegistered && pendingFocusResetPhone) {
+      pendingFocusResetPhone = false
+      focusById('su-reset-phone')
+    }
+  })
+  function onResetEmailEnter(e: KeyboardEvent) {
+    const tab = isPlainTab(e)
+    if (!tab && (e.key !== 'Enter' || e.isComposing)) return
+    const checking = resetEmailRegistered === null && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resetEmail.trim())
+    // Tab은 이동할 수 있을 때(확인 완료·확인 중)만 가로챈다 — 미가입·형식 오류면 기본 Tab 동작
+    if (tab && !resetEmailRegistered && !checking) return
+    e.preventDefault()
+    if (resetEmailRegistered) focusById('su-reset-phone')
+    else if (checking) pendingFocusResetPhone = true
+  }
+
+  function onSignupEmailEnter(e: KeyboardEvent) {
+    const tab = isPlainTab(e)
+    if (!tab && (e.key !== 'Enter' || e.isComposing)) return
+    const checking = !emailAvailable && !emailDuplicate && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+    // Tab은 이동할 수 있을 때(확인 완료·확인 중)만 가로챈다 — 중복 이메일·형식 오류면 기본 Tab 동작
+    if (tab && !emailAvailable && !checking) return
+    e.preventDefault()
+    if (emailAvailable) document.getElementById('su-pw')?.focus()
+    else if (checking) pendingFocusPw = true
+  }
+
   // ── 로딩·에러 ──
   let isLoading = $state(false)
   let isSendingOtp = $state(false)
   let errorMsg = $state<string | null>(null)
   let otpSent = $state(false)
   let otpVerified = $state(false)   // [인증 확인]으로 인증번호 확인을 마친 상태(가입 완료 때 재확인하지 않음)
+  let signupFinalizePending = $state(false)   // 계정 전환은 끝났으나 서버의 이메일 확정(가입 마무리)이 실패한 상태 — [가입 완료]를 다시 누르면 마무리만 재시도
   // 인증번호 유효시간 3분 타이머 — 인증번호 발송이 성공한 직후부터 시작(서버 유효시간 3분과 같음)
   const OTP_TTL_SEC = 180
   let otpRemain = $state(0)
@@ -169,6 +247,7 @@
 
   // ── 초기화 (모달 닫힐 때) ──
   function reset() {
+    signupFinalizePending = false
     mode = initialMode
     loginEmail = ''
     loginPassword = ''
@@ -341,6 +420,7 @@
       csToast.success('인증번호가 발송됐습니다.')
       // 개발 환경 바이패스: 서버가 devCode를 내려주면 자동 입력
       if (data.devCode) verifyCode = data.devCode
+      focusById('su-code') // 발송 직후 인증번호 입력란으로 이동
     } catch {
       errorMsg = '네트워크 오류가 발생했습니다.'
     } finally {
@@ -379,9 +459,58 @@
     }
   }
 
+  // 서버에 이메일 확정 요청(최대 2회) — 성공(ok:true)일 때만 true
+  async function finalizeSignupOnServer(): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch('/api/auth/confirm-verified-signup', { method: 'POST' })
+        const data = await res.json() as { ok?: boolean }
+        if (res.ok && data.ok) return true
+      } catch {
+        // 네트워크 오류 — 다시 시도
+      }
+    }
+    return false
+  }
+
+  // 로그인된 상태로 랜딩 — 서버가 이메일을 확정한 뒤에도 브라우저가 들고 있는 토큰은 가입 전(익명·이메일 없음) 내용이라
+  // GNB가 게스트로 보고 서버도 비회원으로 읽는다. 토큰을 새로 받아 로그인 계정(is_anonymous=false·이메일 포함)으로 맞추고,
+  // 그래도 익명이면 방금 만든 이메일·비밀번호로 직접 로그인한다.
+  async function landAfterSignup(): Promise<void> {
+    try {
+      const { data: refreshed } = await supabase.auth.refreshSession()
+      const user = refreshed.session?.user
+      if (!user || user.is_anonymous || !user.email) {
+        await performSignIn(email, password)
+      }
+    } catch {
+      try {
+        await performSignIn(email, password)
+      } catch {
+        // 로그인까지 실패해도 가입은 완료된 상태 — 이동 후 로그인 화면에서 다시 로그인할 수 있다
+      }
+    }
+  }
+
   // ── 회원가입 최종 완료 ──
   async function handleSignUp() {
     errorMsg = null
+    // 계정 전환은 끝났고 서버의 이메일 확정만 실패했던 경우 — 마무리만 다시 시도한다
+    if (signupFinalizePending) {
+      isLoading = true
+      try {
+        if (!(await finalizeSignupOnServer())) {
+          errorMsg = '가입 마무리에 실패했습니다. 잠시 후 [가입 완료]를 다시 눌러주세요.'
+          return
+        }
+        await landAfterSignup()
+        reset()
+        onsuccess()
+      } finally {
+        isLoading = false
+      }
+      return
+    }
     if (!otpSent) {
       errorMsg = '인증번호를 먼저 발송해주세요.'
       return
@@ -452,15 +581,14 @@
 
       await performSignUp(email, password)
 
-      // 휴대폰 인증을 실제 검증 채널로 채택 — 서버가 Supabase의 이메일 확인 요구사항을 우회
-      // (실패해도 가입 자체는 이미 완료된 상태이므로 조용히 넘어감 — 사용자가 재시도할 수단 없음,
-      //  다만 이 호출 실패는 이례적 상황이라 별도 알림 없이도 낮은 리스크로 판단)
-      try {
-        await fetch('/api/auth/confirm-verified-signup', { method: 'POST' })
-      } catch {
-        // no-op
+      // 가입 마무리 — 서버가 대기 중인 이메일을 계정에 확정한다. 실패하면 가입 완료로 보지 않고 안내한다(2026-10-24:
+      // 예전엔 실패를 조용히 넘겨 이메일이 계정·프로필에 없는 회원이 생겼다). 이미 계정 전환은 끝났으므로 다시 누르면 마무리만 재시도한다.
+      signupFinalizePending = true
+      if (!(await finalizeSignupOnServer())) {
+        errorMsg = '가입 마무리에 실패했습니다. 잠시 후 [가입 완료]를 다시 눌러주세요.'
+        return
       }
-
+      await landAfterSignup()
       reset()
       onsuccess()
     } catch (err) {
@@ -504,6 +632,7 @@
       }
       findOtpSent = true
       if (data.devCode) findCode = data.devCode
+      focusById('su-find-code')
     } catch {
       errorMsg = '네트워크 오류가 발생했습니다.'
     } finally {
@@ -569,6 +698,7 @@
   // 이메일 입력 즉시(0.6초 입력 멈춤 후) 가입 여부 확인 — 가입된 이메일이면 휴대폰·인증번호 영역을 활성화한다
   function handleResetEmailInput() {
     resetEmailRegistered = null
+    pendingFocusResetPhone = false // 이메일을 다시 고치면 대기 중이던 이동 취소
     if (resetStep !== 'info') { resetStep = 'info'; resetCode = '' }
     if (resetEmailTimer) { clearTimeout(resetEmailTimer); resetEmailTimer = null }
     const val = resetEmail.trim()
@@ -603,6 +733,7 @@
       if (!data.ok) { errorMsg = data.error ?? '인증번호 발송에 실패했습니다.'; return }
       resetStep = 'code'
       resetCode = data.devCode ?? ''
+      focusById('su-reset-code')
     } finally {
       isResetting = false
     }
@@ -686,7 +817,7 @@
 
       {#if mode === 'login'}
         <!-- ── 로그인 그룹 ── -->
-        <div class="su-group">
+        <div class="su-group su-group-signup">
           <p class="su-group-label">로그인</p>
 
           <div class="su-field">
@@ -773,7 +904,7 @@
       {:else if mode === 'signup'}
       {#if step === 'form'}
         <!-- ── 폼 그룹 ── -->
-        <div class="su-group">
+        <div class="su-group su-group-signup">
 
           <!-- 이메일 -->
           <div class="su-field">
@@ -785,7 +916,9 @@
               placeholder="사용할 메일 아이디를 입력하세요."
               bind:value={email}
               autocomplete="email"
+              enterkeyhint="next"
               oninput={onEmailInput}
+              onkeydown={onSignupEmailEnter}
             />
           </div>
 
@@ -799,6 +932,8 @@
                 placeholder="비밀번호 6자 이상 입력하세요."
                 bind:value={password}
                 autocomplete="new-password"
+                enterkeyhint="next"
+                onkeydown={(e) => onSignupEnter(e, 'su-pw2')}
                 disabled={!emailAvailable}
               />
               <button
@@ -835,6 +970,8 @@
                 placeholder="비밀번호를 한 번 더 입력하세요"
                 bind:value={passwordConfirm}
                 autocomplete="new-password"
+                enterkeyhint="next"
+                onkeydown={(e) => onSignupEnter(e, 'su-name')}
                 disabled={!emailAvailable}
               />
               <button
@@ -873,6 +1010,8 @@
                 bind:value={fullName}
                 autocomplete="name"
                 aria-label="성함"
+                enterkeyhint="next"
+                onkeydown={(e) => onSignupEnter(e, null)}
               />
             </div>
           {/if}
@@ -892,7 +1031,7 @@
 
       {:else}
         <!-- ── 인증 그룹 ── -->
-        <div class="su-group">
+        <div class="su-group su-group-signup">
           <p class="su-group-label">휴대폰 인증</p>
 
           <!-- 기존회원 인증(LegacyMemberVerifyModal)과 같은 구성: 라벨 없이 placeholder, 휴대폰 행 [인증번호 받기], 인증번호 행 [인증 확인] (2026-10-23) -->
@@ -906,6 +1045,8 @@
                 aria-label="휴대폰 번호"
                 value={phone}
                 disabled={otpVerified}
+                enterkeyhint="send"
+                onkeydown={(e) => { onTabTo(e, 'su-code'); onEnterRun(e, () => { if (!isSendingOtp && !otpVerified) void handleSendOtp() }) }}
                 oninput={(e) => { phone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = phone }}
               />
               <button
@@ -931,6 +1072,8 @@
                 value={verifyCode}
                 maxlength={6}
                 disabled={!otpSent || otpVerified}
+                enterkeyhint="go"
+                onkeydown={(e) => onEnterRun(e, () => { if (otpSent && !otpVerified && verifyCode.length === 6 && !otpExpired && !isVerifyingOtp) void handleVerifyOtp() })}
                 onfocus={() => { codeFocused = true }}
                 onblur={() => { codeFocused = false }}
                 oninput={(e) => {
@@ -940,7 +1083,7 @@
                 }}
               />
               <button
-                class="su-otp-btn"
+                class="su-otp-btn su-otp-btn-confirm"
                 type="button"
                 onclick={handleVerifyOtp}
                 disabled={isVerifyingOtp || otpVerified || !otpSent || otpExpired || verifyCode.length !== 6}
@@ -984,7 +1127,7 @@
       {:else if mode === 'find-email'}
         <!-- ── 아이디 찾기 ── -->
         {#if !foundEmail}
-          <div class="su-group">
+          <div class="su-group su-group-signup">
             <p class="su-group-label">가입 시 등록한 휴대폰 번호로 아이디를 찾습니다.</p>
             <div class="su-field">
               <label class="su-field-label" for="su-find-phone">휴대폰 번호</label>
@@ -997,6 +1140,8 @@
                   bind:value={findPhone}
                   maxlength={11}
                   disabled={findOtpSent}
+                  enterkeyhint="send"
+                  onkeydown={(e) => { onTabTo(e, 'su-find-code'); onEnterRun(e, () => { if (!isSendingFindOtp && !findOtpSent) void handleFindSendOtp() }) }}
                 />
                 <button
                   class="su-otp-btn"
@@ -1027,6 +1172,8 @@
                   placeholder="인증번호 6자리"
                   bind:value={findCode}
                   maxlength={6}
+                  enterkeyhint="go"
+                  onkeydown={(e) => onEnterRun(e, () => { if (findCode.length === 6 && !isFinding) void handleFindEmail() })}
                 />
               </div>
             {/if}
@@ -1057,8 +1204,8 @@
         <!-- ── 비밀번호 재설정(문자 인증번호) ── -->
         {#if resetStep === 'info' || resetStep === 'code'}
           <!-- 기존회원 인증(LegacyMemberVerifyModal) 입력 배치와 동일: 라벨 없이 placeholder, 휴대폰 행 [인증번호 받기], 인증번호 행 [인증 확인]을 한 화면에 항상 노출(2026-10-23) -->
-          <div class="su-group">
-            <p class="su-group-label">가입한 이메일과 휴대폰 번호가 일치하면 인증번호를 문자로 보내드립니다.</p>
+          <div class="su-group su-group-signup">
+            <p class="su-group-label su-group-label-center">가입된 <strong class="su-emph">아이디, 휴대폰 정보</strong>가 동일해야 인증번호가 발송됩니다.</p>
             <div class="su-field">
               <input
                 id="su-reset-email"
@@ -1071,6 +1218,8 @@
                 inputmode="email"
                 disabled={isResetting}
                 maxlength={254}
+                enterkeyhint="next"
+                onkeydown={onResetEmailEnter}
                 oninput={(e) => {
                   const el = e.currentTarget as HTMLInputElement
                   const filtered = el.value.replace(/[^\u0020-\u007E]/g, '')
@@ -1092,6 +1241,8 @@
                   placeholder="01012345678"
                   aria-label="휴대폰 번호"
                   value={resetPhone}
+                  enterkeyhint="send"
+                  onkeydown={(e) => { onTabTo(e, 'su-reset-code'); onEnterRun(e, () => { if (resetEmailRegistered && !isResetting) void handleResetSendOtp() }) }}
                   oninput={(e) => { resetPhone = formatPhoneWithHyphen((e.currentTarget as HTMLInputElement).value); (e.currentTarget as HTMLInputElement).value = resetPhone }}
                   disabled={isResetting || !resetEmailRegistered}
                 />
@@ -1115,6 +1266,8 @@
                   bind:value={resetCode}
                   maxlength={6}
                   disabled={isResetting || !resetEmailRegistered}
+                  enterkeyhint="go"
+                  onkeydown={(e) => onEnterRun(e, () => { if (resetStep === 'code' && resetCode.length === 6 && !isResetting) void handleResetVerify() })}
                   oninput={(e) => {
                     const el = e.currentTarget as HTMLInputElement
                     el.value = el.value.replace(/[^0-9]/g, '').slice(0, 6)
@@ -1122,7 +1275,7 @@
                   }}
                 />
                 <button
-                  class="su-otp-btn"
+                  class="su-otp-btn su-otp-btn-confirm"
                   type="button"
                   onclick={handleResetVerify}
                   disabled={isResetting || resetStep !== 'code' || resetCode.length !== 6}
@@ -1137,7 +1290,7 @@
             <p class="su-error" role="alert">{errorMsg}</p>
           {/if}
         {:else if resetStep === 'newpw'}
-          <div class="su-group">
+          <div class="su-group su-group-signup">
             <p class="su-group-label">새로 사용할 비밀번호를 입력해주세요.</p>
             <div class="su-field">
               <label class="su-field-label" for="su-reset-newpw">새 비밀번호</label>
@@ -1149,6 +1302,8 @@
                 bind:value={resetNewPw}
                 autocomplete="new-password"
                 maxlength={72}
+                enterkeyhint="next"
+                onkeydown={(e) => { onTabTo(e, 'su-reset-newpw2'); onEnterRun(e, () => focusById('su-reset-newpw2')) }}
                 oninput={(e) => {
                   const el = e.currentTarget as HTMLInputElement
                   const hadNonAscii = /[^\x00-\x7F]/.test(el.value)
@@ -1168,6 +1323,8 @@
                 bind:value={resetNewPw2}
                 autocomplete="new-password"
                 maxlength={72}
+                enterkeyhint="go"
+                onkeydown={(e) => onEnterRun(e, () => { if (!isResetting) void handleResetComplete() })}
                 oninput={(e) => {
                   const el = e.currentTarget as HTMLInputElement
                   const hadNonAscii = /[^\x00-\x7F]/.test(el.value)
@@ -1283,6 +1440,9 @@
     margin: 0;
     letter-spacing: -0.3px;
   }
+  /* 안내 문구 강조(레드 토큰 + 한 단계 굵게 900) — 2026-10-24 Stephen 지시 */
+  .su-emph { color: var(--cs-red-badge); font-weight: 900; }
+  .su-group-label-center { text-align: center; } /* 비밀번호 찾기 안내 문구 중앙 정렬(2026-10-24, Stephen 지시) */
 
   /* 필드 */
   .su-field {
@@ -1368,8 +1528,23 @@
   }
   .su-otp-btn:disabled { background: var(--cs-text-light); cursor: default; } /* 비활성: 반투명 보라 → 그레이 토큰(2026-10-23) */
   .su-otp-btn:not(:disabled):hover { background: var(--cs-purple-hover); }
+  /* '인증 확인' 버튼: 활성 시 짙은 그레이(--cs-text-dark), 호버는 배경색만 --cs-dark로(테두리·그림자 추가 금지). 비활성은 위 .su-otp-btn:disabled 그대로(2026-10-24, Stephen 지시) */
+  .su-otp-btn-confirm { background: var(--cs-text-dark); }
+  .su-otp-btn-confirm:not(:disabled):hover { background: var(--cs-dark); }
   @media (max-width: 640px) {
     .su-otp-btn { height: 44px; padding: 0 16px; min-width: 120px; font: var(--text-m-script-14B); } /* 모바일 축소(2026-10-23): 글자 16→14px 한 단계·가로 축소, 높이는 터치 타겟 44px 유지 */
+  }
+  /* PC 반응형(≥641px) 모달 안 모든 입력폼 그룹(로그인·회원가입 1단계·휴대폰 인증·아이디 찾기·비밀번호 찾기 + 새 비밀번호): 입력되는 글자만 사다리 두 단계 위로 14→16→18px(--text-pc-title-18, 2026-10-24, Stephen 지시).
+     안내(placeholder) 글자는 기존 --text-pc-body-14 그대로 유지. 모바일·다른 모드(로그인·찾기·휴대폰 인증)는 변경 없음 */
+  @media (min-width: 641px) {
+    .su-group-signup .su-input { font: var(--text-pc-title-18); }
+    .su-group-signup .su-input::placeholder { font: var(--text-pc-body-14); }
+    /* 인증번호 받기·인증 확인 버튼(.su-otp-btn) 글자: 직전 18px에서 두 단계 아래 18→16→14px(--text-pc-body-14, 2026-10-24, Stephen 지시) — 굵기 700 그대로.
+       입력폼 그룹(.su-group-signup)은 모달 안 모든 입력 단계가 공유한다.
+       .su-cta(주 버튼)는 기본 규칙이 아래에 있어 그 뒤에 따로 18px로 둔다(같은 우선순위에서 뒤 규칙이 이김) */
+    .su-otp-btn { font: var(--text-pc-body-14); }
+    /* 입력 그룹 안내 문구(.su-group-label) 13px → 한 단계 위 14px(--text-pc-body-14, 2026-10-24, Stephen 지시) — 굵기 700·글자 간격은 기존 그대로, 모달 안 모든 안내 문구 공통 */
+    .su-group-label { font: var(--text-pc-body-14); }
   }
 
   /* OTP 힌트 */
@@ -1408,6 +1583,9 @@
   .su-cta:hover:not(:disabled) { background: var(--cs-red); }
   .su-cta:disabled { background: var(--cs-chat-in-bg); cursor: not-allowed; }
   .su-cta-flex { flex: 1; width: auto; }
+  @media (min-width: 641px) {
+    .su-cta { font: var(--text-pc-title-18); } /* 위 PC 블록의 .su-otp-btn과 같은 한 단계 상향(16→18px) */
+  }
 
   /* 로그인 기억하기 — /auth/login .d-remember와 동일 레이아웃(체크박스+라벨) */
   .su-remember {

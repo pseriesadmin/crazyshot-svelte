@@ -58,6 +58,36 @@ export async function isAdminResetMatch(admin: SupabaseClient, email: string, ph
   return !!found?.isAdmin
 }
 
+interface ProfileMatchRow {
+  user_id: string
+  cms_role: string | null
+  withdrawal_status: string | null
+  deleted_at: string | null
+  email: string | null
+}
+
+/** 휴대폰 번호가 같고 프로필 이메일이 비어 있는 계정 중, 로그인 계정(auth) 이메일이 입력 이메일과 같은 계정 */
+async function findByAuthEmail(admin: SupabaseClient, email: string, phones: string[]): Promise<ProfileMatchRow[]> {
+  try {
+    const { data, error } = await admin
+      .from('user_profiles')
+      .select('user_id, cms_role, withdrawal_status, deleted_at, email')
+      .in('phone', phones)
+      .limit(5)
+    if (error) return []
+    const candidates = ((data ?? []) as ProfileMatchRow[]).filter((r) => r.user_id && !(r.email ?? '').trim())
+    const matched: ProfileMatchRow[] = []
+    for (const c of candidates) {
+      const { data: au } = await admin.auth.admin.getUserById(c.user_id)
+      const authEmail = (au?.user?.email ?? '').trim().toLowerCase()
+      if (authEmail && authEmail === email.trim().toLowerCase()) matched.push({ ...c, email: au?.user?.email ?? null })
+    }
+    return matched
+  } catch {
+    return []
+  }
+}
+
 async function lookupResetAccount(admin: SupabaseClient, email: string, phone: string): Promise<{ userId: string; isAdmin: boolean } | null> {
   // 프로필의 휴대폰 번호는 "01012345678"과 "010-1234-5678" 두 형식으로 섞여 저장돼 있다 — 둘 다 같은 번호로 본다
   const hyphenated = `${phone.slice(0, 3)}-${phone.slice(3, 7)}-${phone.slice(7)}`
@@ -71,7 +101,9 @@ async function lookupResetAccount(admin: SupabaseClient, email: string, phone: s
     console.error('[password-reset] 계정 조회 실패:', error.message)
     return null
   }
-  const rows = (data ?? []) as { user_id: string; cms_role: string | null; withdrawal_status: string | null; deleted_at: string | null; email: string | null }[]
+  let rows = (data ?? []) as ProfileMatchRow[]
+  // 프로필 이메일이 비어 있어도 로그인 계정(auth) 이메일이 같으면 같은 계정으로 본다(2026-10-24) — 가입 때 프로필 이메일이 채워지지 않은 회원 구제
+  if (rows.length === 0) rows = await findByAuthEmail(admin, email, [phone, hyphenated])
   // 같은 이메일·번호에 계정이 둘 이상이면 모호하므로 진행하지 않는다
   if (rows.length !== 1) return null
   const row = rows[0]

@@ -19,7 +19,7 @@ function panel(props: Record<string, unknown>): string {
   return render(CustomerDetailPanel, { props: { onclose: () => {}, ...props } as never }).body
 }
 
-const TAB_LABELS = ['크레이지스코어', '구독이력', '포인트이력', '상품대여이력', '빠른문의']
+const TAB_LABELS = ['크레이지스코어', '구독이력', '포인트·쿠폰', '상품대여이력', '빠른문의']
 
 describe('관리대상 신규(new) — 빈 패널', () => {
   const html = panel({ row: { ...baseRow, user_id: '', member_code: null, name: null, blacklist_reason: null }, mode: 'new' })

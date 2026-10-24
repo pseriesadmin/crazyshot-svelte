@@ -9,6 +9,9 @@ import {
   hasMenuAccess,
   type CmsMenuPermissionOverride,
 } from '$lib/constants/cmsMenus'
+import { CMS_REMEMBER_COOKIE, cmsRememberCookieOptions } from '$lib/server/cmsRememberCookie'
+import { recordCmsLogin } from '$lib/server/cmsLoginLog'
+import { REMEMBER_COOKIE } from '$lib/utils/authCookies'
 import type { LayoutServerLoad } from './$types'
 
 const PUBLIC_CMS_PATHS = ['/cms/login']
@@ -35,7 +38,7 @@ async function fetchMenuPermissionOverrides(userId: string): Promise<CmsMenuPerm
   return data as CmsMenuPermissionOverride[]
 }
 
-export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
+export const load: LayoutServerLoad = async ({ locals, url, cookies, request, getClientAddress }) => {
   if (PUBLIC_CMS_PATHS.some((p) => url.pathname.startsWith(p))) return {}
 
   const { session } = await locals.safeGetSession()
@@ -58,15 +61,30 @@ export const load: LayoutServerLoad = async ({ locals, url, cookies }) => {
     throw redirect(303, loginUrl)
   }
 
-  // 로그인 상태 유지 미체크 시: 브라우저 종료 후 재진입하면 cms-remember 세션쿠키가 없음 → 로그아웃
-  const rememberOk = cookies.get('cms-remember')
-  if (!rememberOk) {
-    await locals.supabase.auth.signOut()
-    const t = encodeURIComponent(new Date().toISOString())
-    throw redirect(303, `/cms/login?logout=expired&t=${t}`)
+  // 로그인 상태 유지 표식(cms-remember)이 없으면 CMS 로그인 화면을 거치지 않은 세션이다.
+  //  · 관리자 권한이 확인되면 표식을 새로 발급해 계속 진행한다 — 사용자 사이트에서 관리자 계정으로 로그인한 뒤 /cms로 오거나
+  //    표식만 먼저 만료된 경우에 로그인이 풀리지 않게 한다(수명은 로그인 선택 cs-remember를 따름: '0'이면 세션 쿠키, 그 외 400일).
+  //  · 관리자 권한이 없는 세션만 기존처럼 로그아웃시킨다.
+  //  · 이 경로의 진입도 CMS 접속 로그(cms_login_logs)에 남긴다(표식을 발급하는 최초 1회만 — 이후 이동은 기록하지 않음, 기록 실패는 접속을 막지 않음).
+  const profile = await fetchCmsProfileByAuthId(locals.supabase, session.user.id)
+  if (!cookies.get(CMS_REMEMBER_COOKIE)) {
+    if (!profile?.cms_role) {
+      await locals.supabase.auth.signOut()
+      const t = encodeURIComponent(new Date().toISOString())
+      throw redirect(303, `/cms/login?logout=expired&t=${t}`)
+    }
+    cookies.set(CMS_REMEMBER_COOKIE, '1', cmsRememberCookieOptions(cookies.get(REMEMBER_COOKIE) !== '0'))
+    let ip = 'unknown'
+    try { ip = getClientAddress() } catch { /* dev 환경 */ }
+    await recordCmsLogin({
+      userId: session.user.id,
+      email: session.user.email ?? '',
+      cmsRole: profile.cms_role,
+      ipAddress: request?.headers.get('x-forwarded-for') ?? ip,
+      userAgent: request?.headers.get('user-agent') ?? 'unknown',
+    })
   }
 
-  const profile = await fetchCmsProfileByAuthId(locals.supabase, session.user.id)
   if (!profile?.cms_role) throw redirect(303, '/cms/login')
 
   const role = profile.cms_role as string

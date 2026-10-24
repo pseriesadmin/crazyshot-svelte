@@ -216,6 +216,8 @@
   let loadingPoints = $state(false)
   let pointsLoaded = $state(false)
   let userCoupons = $state<UserCouponTx[]>([])
+  /** 포인트이력 하위탭 — earn: 포인트 적립 + 쿠폰 발급 / spend: 포인트 사용·차감 + 쿠폰 사용 */
+  let pointSubTab = $state<'earn' | 'spend'>('earn')
 
   // 스코어 탭 폼 상태
   let adjustDelta = $state(0)
@@ -377,6 +379,13 @@
     }
     return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   })
+
+  const visiblePointHistory = $derived(
+    pointHistory.filter((item) => {
+      const isEarnSide = item.kind === 'point' ? item.tx.amount > 0 : item.event === 'issued'
+      return pointSubTab === 'earn' ? isEarnSide : !isEarnSide
+    })
+  )
 
   function pointSourceLabel(tx: PointTx): string {
     if (tx.description) return tx.description
@@ -894,8 +903,10 @@
     </div>
     {#if row.member_code}
       <div class="member-qr-wrap member-qr-wrap--header">
-        <canvas bind:this={qrCanvasEl} width="300" height="300" aria-label="회원 QR 코드"></canvas>
-        <button class="qr-dl-btn" onclick={downloadMemberQR} title="QR PNG 다운로드" type="button">↓ QR 저장</button>
+        <!-- QR 이미지 자체가 저장 버튼 — 별도 '↓ QR 저장' 문구 제거, 마우스 오버 시 손가락 커서 + 배경색 변화(예약 패널 헤더 QR과 동일 구조) -->
+        <button class="qr-dl-btn" onclick={downloadMemberQR} title="클릭하면 QR PNG로 저장" aria-label="회원 QR 코드 PNG 저장" type="button">
+          <canvas bind:this={qrCanvasEl} width="300" height="300" aria-hidden="true"></canvas>
+        </button>
       </div>
     {/if}
     <button class="close-btn" onclick={onclose} aria-label="패널 닫기">✕</button>
@@ -949,7 +960,7 @@
       class="panel-tab"
       class:active={activeTab === 'points'}
       onclick={() => (activeTab = 'points')}
-    >포인트이력</button>
+    >포인트·쿠폰</button>
     <button
       class="panel-tab"
       class:active={activeTab === 'rental'}
@@ -1314,7 +1325,16 @@
         <form
           method="POST"
           action="/cms/customers?/deleteCustomer"
-          use:enhance={() => {
+          use:enhance={({ cancel }) => {
+            // 삭제 안전장치: 1차 제출은 경고 토스트 + 무장만 하고 취소, 무장 상태의 2차 제출만 실제 삭제.
+            // (버튼 type을 클릭 도중 button→submit으로 바꾸면 같은 클릭이 바로 제출돼 안전장치가 무력화됨)
+            if (!deleteWarnPending) {
+              deleteWarnPending = true
+              csToast.warning('한번 더 선택 시 삭제됩니다.')
+              setTimeout(() => { deleteWarnPending = false }, 4000)
+              cancel()
+              return
+            }
             return async ({ result, update }) => {
               if (result.type === 'success') {
                 csToast.success('회원이 삭제되었습니다.')
@@ -1331,18 +1351,11 @@
         >
           <input type="hidden" name="user_id" value={row.user_id} />
           <button
-            type={deleteWarnPending ? 'submit' : 'button'}
+            type="submit"
             class="act-del act-del-account"
             class:act-del--pending={deleteWarnPending}
             aria-label="회원 삭제"
             title="회원 삭제"
-            onclick={() => {
-              if (!deleteWarnPending) {
-                deleteWarnPending = true
-                csToast.warning('한번 더 선택 시 삭제됩니다.')
-                setTimeout(() => { deleteWarnPending = false }, 4000)
-              }
-            }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
             회원 삭제
@@ -1618,11 +1631,16 @@
 
       {#if loadingPoints}
         <div class="loading-text">로딩 중...</div>
-      {:else if pointHistory.length === 0}
-        <div class="no-data">포인트·쿠폰 이력이 없습니다.</div>
       {:else}
+        <div class="points-pills" role="tablist" aria-label="포인트·쿠폰 이력 분류">
+          <button type="button" role="tab" aria-selected={pointSubTab === 'earn'} class="points-subtab" class:active={pointSubTab === 'earn'} onclick={() => (pointSubTab = 'earn')}>적립</button>
+          <button type="button" role="tab" aria-selected={pointSubTab === 'spend'} class="points-subtab" class:active={pointSubTab === 'spend'} onclick={() => (pointSubTab = 'spend')}>소진</button>
+        </div>
+        {#if visiblePointHistory.length === 0}
+          <div class="no-data">{pointSubTab === 'earn' ? '적립된 포인트·쿠폰 이력이 없습니다.' : '소진된 포인트·쿠폰 이력이 없습니다.'}</div>
+        {:else}
         <div class="audit-list points-audit-list">
-          {#each pointHistory as item (item.key)}
+          {#each visiblePointHistory as item (item.key)}
             {#if item.kind === 'point'}
               {@const tx = item.tx}
               {@const isEarn = tx.amount > 0}
@@ -1647,6 +1665,7 @@
             {/if}
           {/each}
         </div>
+        {/if}
       {/if}
     {/if}
 
@@ -1785,7 +1804,15 @@
           <form
             method="POST"
             action="/cms/customers?/deleteManagedPerson"
-            use:enhance={() => {
+            use:enhance={({ cancel }) => {
+              // 삭제 안전장치: 1차 제출은 경고 토스트 + 무장만 하고 취소, 무장 상태의 2차 제출만 실제 삭제
+              if (!deleteWarnPending) {
+                deleteWarnPending = true
+                csToast.warning('한번 더 선택 시 삭제됩니다.')
+                setTimeout(() => { deleteWarnPending = false }, 4000)
+                cancel()
+                return
+              }
               return async ({ result }) => {
                 if (result.type === 'success') {
                   csToast.success('관리대상이 삭제되었습니다.')
@@ -1801,18 +1828,11 @@
           >
             <input type="hidden" name="id" value={row.user_id} />
             <button
-              type={deleteWarnPending ? 'submit' : 'button'}
+              type="submit"
               class="act-del act-del-account"
               class:act-del--pending={deleteWarnPending}
               aria-label="관리대상 삭제"
               title="관리대상 삭제"
-              onclick={() => {
-                if (!deleteWarnPending) {
-                  deleteWarnPending = true
-                  csToast.warning('한번 더 선택 시 삭제됩니다.')
-                  setTimeout(() => { deleteWarnPending = false }, 4000)
-                }
-              }}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M10,11v6M14,11v6"/><path d="M9,6V4h6v2"/></svg>
               관리대상 삭제
@@ -1968,16 +1988,15 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
   }
   .member-qr-wrap canvas { display: block; width: 44px; height: 44px; border-radius: var(--cms-radius-sm); border: 1px solid var(--cs-surface-gray); }
+  /* QR 이미지가 곧 저장 버튼 — 버튼 BG 는 평소 투명, 호버 시 BG 색만 바뀐다(outline·box-shadow 금지, cms bds §0-10). 터치 타겟 52px(QR 44px + 패딩 4px×2) */
   .member-qr-wrap .qr-dl-btn {
-    background: transparent; border: none;
-    color: var(--cs-text-light); font: var(--text-pc-script-12);
-    cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); min-height: 24px;
-    transition: color 0.12s, background 0.12s;
+    display: block; background: transparent; border: none;
+    cursor: pointer; padding: 4px; border-radius: var(--cms-radius-sm);
+    transition: background 0.12s;
   }
-  .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); color: var(--cs-purple); }
+  .member-qr-wrap .qr-dl-btn:hover { background: var(--cs-lilac); }
   .member-qr-wrap--header { margin-left: auto; margin-right: 12px; }
   .close-btn {
     flex-shrink: 0;
@@ -2175,6 +2194,16 @@
   .audit-list { display: flex; flex-direction: column; gap: 6px; }
   /* 포인트이력 탭 전용 — 크레이지스코어 탭(.audit-list 원본)은 그대로 두고 이 목록만
      행간 여백 3배(6px→18px) 확대(Stephen 지시, 2026-09-14) */
+  /* 포인트이력 하위탭 — 상단 패널 탭(.panel-tab)과 같은 밑줄 탭 형태, 중앙 정렬 */
+  .points-pills { display: flex; justify-content: center; gap: 0; margin-top: 20px; border-bottom: 1px solid #ECEBF4; }
+  .points-subtab {
+    width: 96px; height: 40px; background: transparent; border: none; border-bottom: 2px solid transparent;
+    font: var(--text-pc-body-14); color: var(--cs-text-mid); cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .points-subtab:hover { color: var(--cs-text); }
+  .points-subtab.active { color: var(--cs-purple); border-bottom-color: var(--cs-purple); font-weight: 700; }
+  .points-pills + .points-audit-list { margin-top: 16px; }
   .points-audit-list {
     gap: 18px;
     /* 포인트 추가 폼(.adjust-section) ↔ 목록 간 여백 — 공용 .panel-body gap:10px는 다른
