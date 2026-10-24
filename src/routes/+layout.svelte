@@ -13,6 +13,8 @@
 	import IosAddToHomeScreenBanner from '$lib/components/common/IosAddToHomeScreenBanner.svelte';
 	import ViewportDebug from '$lib/components/common/ViewportDebug.svelte';
 	import ChevronIcon from '$lib/components/common/ChevronIcon.svelte';
+	import ContentBlocksView from '$lib/components/common/ContentBlocksView.svelte';
+	import type { ContentBlock } from '$lib/types/content-editor';
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
 	import { supabase } from '$lib/services/supabase';
@@ -31,14 +33,18 @@
 	// 모바일(≤640px) 푸터 아코디언 — 기본 접힘(브랜드 로고만), 우상단 버튼으로 전체 펼침. PC(≥641px)는 항상 전체 노출
 	let footerOpen = $state(false);
 
-	// 푸터 법적 고지 모달
-	let policyModal = $state<{ open: boolean; title: string; text: string; loading: boolean }>({
-		open: false, title: '', text: '', loading: false
+	// 푸터 법적 고지·팀 소개 모달 — 공통 모달 하나를 재사용한다. 텍스트 정책은 text, 팀 정책(문서 편집기 저장값)은 blocks로 그린다
+	let policyModal = $state<{ open: boolean; title: string; text: string; loading: boolean; blocks: ContentBlock[] | null }>({
+		open: false, title: '', text: '', loading: false, blocks: null
 	});
+	// 모달을 연속으로 열 때 늦게 도착한 응답이 지금 열린 모달을 덮어쓰지 않도록 요청 번호로 구분
+	let modalSeq = 0;
 
 	async function openPolicyModal(field: 'privacy_text' | 'terms_text' | 'refund_text', title: string) {
-		policyModal = { open: true, title, text: '', loading: true };
+		const seq = ++modalSeq;
+		policyModal = { open: true, title, text: '', loading: true, blocks: null };
 		const { data, error } = await supabase.rpc('get_rental_policy_settings');
+		if (seq !== modalSeq) return;
 		if (error || !data) {
 			policyModal.loading = false;
 			policyModal.text = '내용을 불러오지 못했습니다.';
@@ -48,8 +54,27 @@
 		}
 	}
 
+	// 푸터 '소개 > 팀' — CMS 정책관리의 '팀 정책'(문서 편집기)을 서버가 정화한 값으로 받아 보여준다
+	async function openTeamModal() {
+		const seq = ++modalSeq;
+		policyModal = { open: true, title: '팀', text: '', loading: true, blocks: null };
+		try {
+			const res = await fetch('/api/team-policy');
+			const body = (await res.json()) as { ok?: boolean; blocks?: ContentBlock[] };
+			if (seq !== modalSeq) return;
+			if (!res.ok || !body.ok) throw new Error('team-policy');
+			policyModal.blocks = body.blocks ?? [];
+		} catch {
+			if (seq !== modalSeq) return;
+			policyModal.text = '내용을 불러오지 못했습니다.';
+		} finally {
+			if (seq === modalSeq) policyModal.loading = false;
+		}
+	}
+
 	function closePolicyModal() {
-		policyModal = { open: false, title: '', text: '', loading: false };
+		modalSeq++;
+		policyModal = { open: false, title: '', text: '', loading: false, blocks: null };
 	}
 
 	// 홈 화면(/) 데이터 호출 지연 감지 로딩 — 다른 화면에서 홈으로 이동할 때, 홈의
@@ -226,10 +251,10 @@
 						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('terms_text', '서비스이용정책')}>서비스이용정책</button>
 						<button class="footer-link footer-link-btn" onclick={() => openPolicyModal('refund_text', '환불규정')}>환불규정</button>
 					</div>
-					<!-- 소개: 준비중 (이번 범위 제외) -->
+					<!-- 소개: 팀은 공통 모달로 열린다(연락처·FAQ는 준비중) -->
 					<div class="footer-link-col">
 						<p class="footer-link-heading">소개</p>
-						<a href="/" class="footer-link">팀</a>
+						<button class="footer-link footer-link-btn" onclick={openTeamModal}>팀</button>
 						<a href="/" class="footer-link">연락처</a>
 						<a href="/" class="footer-link">FAQ</a>
 					</div>
@@ -258,6 +283,8 @@
 				<div class="policy-modal-body">
 					{#if policyModal.loading}
 						<p class="policy-modal-loading">불러오는 중...</p>
+					{:else if policyModal.blocks && policyModal.blocks.length > 0}
+						<ContentBlocksView blocks={policyModal.blocks} />
 					{:else if policyModal.text}
 						<pre class="policy-modal-text">{policyModal.text}</pre>
 					{:else}

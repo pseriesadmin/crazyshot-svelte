@@ -117,9 +117,9 @@ describe('정책관리 페이지 — 진입(load) 게이트', () => {
     await expect(run(true, role)).rejects.toMatchObject({ status: 303, location: '/cms?notice=access_denied' });
   });
 
-  it.each([['manager'], ['superadmin']])('%s는 통과하고 화면 데이터 5종을 반환한다', async (role) => {
+  it.each([['manager'], ['superadmin']])('%s는 통과하고 화면 데이터 6종을 반환한다', async (role) => {
     const data = await run(true, role);
-    expect(Object.keys(data).sort()).toEqual(['consents', 'guideText', 'policyItems', 'policySettings', 'serviceInfo']);
+    expect(Object.keys(data).sort()).toEqual(['consents', 'guideText', 'policyItems', 'policySettings', 'serviceInfo', 'teamBlocks']);
     expect(data.guideText).toBe('');
     expect(data.consents).toEqual([]);
     expect(data.policySettings).toEqual({ privacy_text: '', terms_text: '', refund_text: '' });

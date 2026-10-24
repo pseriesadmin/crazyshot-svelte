@@ -12,4 +12,5 @@ export const UPLOAD_MENU_KEYS: readonly string[] = [
   'consulting.qna',
   'subscription.list',
   'subscription.new',
+  'settings.policy', // 정책관리 '팀 정책' 문서 편집기(RichContentEditor) 이미지 업로드(2026-10-24)
 ]
