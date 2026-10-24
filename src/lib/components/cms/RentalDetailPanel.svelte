@@ -2090,13 +2090,20 @@
       if (!res.ok) {
         // SvelteKit error()는 {message}로, json({error})는 {error}로 응답 — 둘 다 읽어 실제 사유(예: 숫자 4~6자리)를 보여준다
         const d = await res.json().catch(() => ({})) as { error?: string; message?: string }
-        lockerPwError = d.error ?? d.message ?? '저장에 실패했습니다.'
+        if (res.status >= 500) {
+          // 서버·DB 쪽 오류(RPC 실패 등 500대 응답) — 사용자가 고칠 수 없는 장애라 확인 요청으로 안내한다(2026-10-23)
+          lockerPwError = '서버 또는 DB 장애 확인 요청'
+        } else {
+          lockerPwError = d.error ?? d.message ?? '저장에 실패했습니다.'
+        }
         csToast.error(lockerPwError)
       } else {
         csToast.success('무인보관함 비밀번호가 저장되었습니다.')
       }
     } catch {
-      lockerPwError = '저장 중 오류가 발생했습니다.'
+      // 요청이 서버 응답을 받기 전에 끊긴 경우(네트워크 단락) — 서버 오류와 구분해 안내한다(2026-10-23)
+      lockerPwError = '네트워크 장애 확인 요청'
+      csToast.warning(lockerPwError)
     } finally {
       lockerPwSaving = false
     }
