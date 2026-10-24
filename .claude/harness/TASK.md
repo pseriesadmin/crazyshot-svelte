@@ -67,7 +67,7 @@
 - [x] sp3 2차(2026-10-23): PASS-CONDITIONAL(BLOCKER 0·MAJOR 1·MINOR 1) → **전부 반영** — MAJOR: 쿠폰 발급 시각을 마이그레이션이 보장하는 `created_at`으로 교체(points/+server.ts 조회·정렬, 패널 타입·표시) / MINOR: 쿠폰 조회 실패 시 경고 토스트 + 예외 시 목록 초기화 / 권고: firstRentalLegacyDb.test.ts Stage URL 가드. 관련 vitest 7건 GREEN·svelte-check 변경 파일 오류 0, sp5 SKIP(신규 입력 경로·권한 변경 없음). 이월(비블로킹): CustomerDetailPanel.svelte 751·766행 기존 no-useless-escape 2건(이번 수정분 아님), 쿠폰 100건 초과 절단, sp3 재검수는 생략(수정이 지적 항목에 국한)
 - [x] sp3 3차(2026-10-23): PASS(BLOCKER 0·MAJOR 0·MINOR 3: aria-controls/화살표키 없음[기존 .panel-tab과 동일 수준]·클래스명 points-pills 잔재·#ECEBF4 하드코딩 1건[기존 관행]) · vitest 34건·eslint 신규 0·sp5 SKIP · Stephen 실화면 확인(동작·정렬 이상 없음). MINOR 3건은 미수정 이월
 - [ ] sp3 4차(진행): 삭제 안전장치 수정 2건(회원·관리대상) + 탭 이름 변경 · 보안은 sp3 판단 시에만 sp5
-- [ ] 커밋·배포(Stephen) — 코드 배포 후에만 첫 렌탈 쿠폰(`a02279e4-7498-4e60-aa6a-c01bf6e29267`) 자동배포 재개(Stephen 지시 대기)
+- [x] 첫 렌탈 쿠폰(`a02279e4-7498-4e60-aa6a-c01bf6e29267`) 자동배포 재개 완료(2026-10-24 11:33 KST, Stephen 지시): Production 배포 `d9c5bc75`(첫 렌탈 판정 코드 포함) READY·DB #751 적용 확인 후 `auto_distribute_enabled=true`. 다음 배포 주기(매시 정각·30분)에 전 회원에게 재발급되나 레거시 구매자는 장바구니 노출·사용 모두 차단(회수했던 2계정 포함) — 사후 확인 필요
 - [ ] 미확인: 포인트이력 탭 화면 실확인(소스 검토·svelte-check만 수행), 쿠폰 100건 초과 고객의 목록 절단(조회 상한 100)
 
 ## NOW — 🟡 BOUNDARY(가입 화면 UI·가입 직후 로그인 랜딩·로그인 복귀 경로, DB 변경 없음, 2026-10-24, 이 세션'만', ✅ Stephen 지시 · 커밋·배포 전)
@@ -78,6 +78,8 @@
 - 가입 1단계 Enter/키보드 '다음'으로 입력란 순차 이동, '인증 확인' 버튼 활성 색, PC 반응형 폰트 토큰 조정(입력 14→18px·안내 14px 유지·CTA 16→18px·인증번호 버튼 14px) — 모두 사용자 지시.
 
 ### 후속 수정 — sp3 1차(PASS, BLOCKER 0·MAJOR 0·MINOR 4) 이후 (2026-10-24, 최근순, 전부 `SignUpModal.svelte`)
+- (최근) **아이디 찾기 개편(sp3 미검수)**: ① 상단 탭 '아이디 | 비밀번호'(`findTabs`) ② 아이디 탭은 이메일 대신 이름 입력 + 비밀번호 찾기와 같은 UI·Enter/Tab 순차 이동 ③ `/api/auth/find-email` 이름 비교(공백·대소문자 무시, 불일치·미가입 동일 404) ④ **신규 `/api/auth/find-email/send-otp`**: 이름+휴대폰이 일반 고객 1건과 일치할 때만 인증번호를 `phone_otps`(현재 세션 기준)에 저장·문자 발송(관리자·탈회 완전삭제·중복 계정 제외, 번호 기준 1분 쿨다운·1시간 5회, 개발환경 devCode) — 비밀번호 재설정 테이블과 분리해 상호 사용 불가 ⑤ `handleFindSendOtp`가 새 엔드포인트 호출 + 불일치/제한 `csToast.warning`, 성공 `csToast.success`. 테스트 `findEmailSendOtp.test.ts`(11)·`findEmailName.test.ts`(7) 통과, svelte-check 신규 0(기존 2건 무관).
+- (최근) **sp3 후속 검수(PASS-CONDITIONAL: MAJOR 1·MINOR 5) 반영**: ① MAJOR — 이메일 가입 확인 실패 시 Tab 갇힘(WCAG 2.1.2): 확인 진행 여부를 별도 플래그(`emailChecking`·`resetEmailChecking`)로 두고 Tab 가로채기는 이 플래그가 true일 때만(응답·오류·재입력 시 해제), 가입 확인 호출에 `error` 처리 추가(토스트 + 대기 해제) ② m2 — `reset()`에서 `pendingFocusPw`·`pendingFocusResetPhone`·진행 플래그 해제 ③ m3 — 비밀번호 찾기 발송·확인 실패 시 `focusById`로 포커스 복구(요청 중 입력란이 disabled돼 포커스가 body로 빠지던 문제) ④ m4 — `isImeKey`(`isComposing || keyCode 229`)를 Tab/Enter 판정 4곳에 적용(Safari 조합 종료 Enter). 이월(미반영): m1 눈 아이콘·발송 버튼이 Tab 순서에서 빠지는 점(Tab 가로채기 유지 여부는 Stephen 결정), m5 순수 함수 분리·테스트.
 - (최근) **Tab 순차 이동**: Enter와 같은 순서로 Tab도 다음 '입력란'으로(`isPlainTab`·`onTabTo` — Shift/Ctrl/Alt/Meta·조합 중은 기본 동작, 사이의 눈 아이콘·발송 버튼은 건너뜀). 이메일 입력란(가입 1단계·비밀번호 찾기)은 가입 확인 중이거나 완료일 때만 Tab을 가로채고(`pendingFocus*`) 중복·미가입·형식 오류면 기본 Tab. 적용: 가입 1단계(이메일→비밀번호→확인→성함), 가입 휴대폰 인증(번호→인증번호), 비밀번호 찾기(이메일→휴대폰→인증번호)·새 비밀번호(→확인), 아이디 찾기(번호→인증번호).
 - **Enter 순차 이동·실행(OTP 흐름)**: `onEnterRun`·`focusById`·`onResetEmailEnter` — 비밀번호 찾기: 이메일→(가입 확인 후) 휴대폰, 휴대폰 Enter=인증번호 받기→발송 성공 시 인증번호 입력란 포커스, 인증번호 Enter=인증 확인, 새 비밀번호→확인→변경 실행. 가입 휴대폰 인증·아이디 찾기도 동일 패턴(발송 성공 후 `focusById('su-code'|'su-find-code')`). 로그인 화면은 미적용.
 - **비밀번호 찾기 안내 문구**: '가입된 아이디, 휴대폰 정보가 동일해야 인증번호가 발송됩니다.' + '아이디, 휴대폰 정보'만 `.su-emph`(레드 `--cs-red-badge`·900) + 이 문구만 가운데 정렬(`.su-group-label-center`). PC(≥641px) 안내 문구(`.su-group-label`) 13→14px(`--text-pc-body-14`) — 모달 안 모든 안내 문구 공통.
@@ -96,8 +98,8 @@
 
 ### 남음
 - [x] sp3 1차(2026-10-24): PASS — BLOCKER 0·MAJOR 0·MINOR 4(① ChatHeader 로그인 링크가 결제·구독 결과 화면 쿼리(paymentKey 등)를 redirect에 실을 수 있음 → `loginHref` 제외 규칙 권고 ② 폴백 로그인 실패 시 authState 어긋남·토스트 ③ 상품 상세 가입 직후 서버 session 낡음 ④ 컴포넌트 테스트 공백), sp5 SKIP(open redirect는 safeReturnPath로 서버·클라이언트 양쪽 방어 확인)
-- [ ] sp3-qa-agent 후속 검수(Enter/Tab 순차 이동·안내 문구·입력 그룹 스타일 확대) 진행 · 보안은 sp3 판단 시에만 sp5
-- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타)- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타), 비로그인 상세 화면→Sign In→원래 화면, 가입 1단계 Enter 이동
+- [x] sp3 후속 검수(2026-10-24): PASS-CONDITIONAL(MAJOR 1·MINOR 5), sp5 SKIP → 위 반영 후 재검수 진행 · 보안은 sp3 판단 시에만 sp5
+- [ ] Stephen 실화면 확인: 가입→홈 로그인 상태(아바타), 비로그인 상세 화면→Sign In→원래 화면, 가입 1단계 Enter·Tab 이동, 비밀번호 찾기·휴대폰 인증·아이디 찾기 Enter/Tab 이동, 안내 문구 줄바꿈
 - [ ] 커밋(Stephen): `SignUpModal.svelte`·`auth/login/+page.svelte`·`GNB`·`MobileMoreMenu`·`ChatHeader`·`loginRedirect.ts`·테스트 (모두 이 세션 변경, 다른 세션 변경 미혼재 확인 — git diff 기준 SignUpModal 78줄·login 4줄)
 - [ ] 이월 후보: 가입 직후에도 직전 화면 복귀로 할지(현재 홈 고정), 로그인 성공 처리에 `invalidateAll` 추가 여부(현재 가입에만 적용), 아이디 찾기·휴대폰 인증 단계 Enter 이동 확대
 
@@ -111,7 +113,9 @@
 - **sp3 1차: REJECT(소규모 — BLOCKER 0·MAJOR 1·MINOR 8·NIT 4)** → 같은 날 반영: MAJOR 편집기 입력 손실(같은 화면 다른 저장의 재조회가 편집기를 다시 만들어 미저장 입력을 지움 → `nextTeamEditorSync`로 서버 값 불변·미저장 입력 시 유지 + 저장 중 추가 입력 보존) / 구분선 0px(→1px) / 업로드 경로 `team-policy/content` / 크기 검증 바이트 기준(900KB)+`BLOCKS_TOO_LARGE`·`INVALID_BLOCKS` 안내 / `as unknown as` 제거 / 주석 정리. 시험 RED→GREEN(6파일 102건+렌더 5건), eslint 0, svelte-check 신규 0.
 - **결정 반영(2026-10-24, Stephen "A. 막기")**: upsert RPC를 `is_cms_manager_or_above()`(#647)로 교체 — **Migration #754**(Stage 적용·Production 미적용). partner 직접 호출 시 ACCESS_DENIED·기존 값 불변·superadmin 저장 가능을 Stage 라이브 시험으로 확인(RED→GREEN 7건). Stage 실제 상태 실측: 저장 함수 anon 불가·authenticated/service_role 가능·매니저 확인 포함·SECURITY DEFINER, 테이블 anon/authenticated 직접 접근 불가·RLS 켜짐·정책 0건·1행. 같은 구조의 서비스 기본 정보 RPC(#566·#567)는 이번 범위 밖(별건 결정 대기). ⚠️ 배포 순서: Production은 #753 → #754 순서로 DB 적용 후 코드.
 - 이월: `UPLOAD_MENU_KEYS` any-of 확대(manager 이상 한정이라 영향 작음), 규칙 문서(security-auth 매트릭스·service-operations 푸터 '팀') 미반영, 모달 경합 실행 시험·XSS 사례 시험 보강, Production 전 Stage 함수 정의 DRIFT 대조 필수, 실브라우저 확인 미실시.
-- ⚠️ 배포 순서: Production DB #753 먼저 → 코드 배포.
+- ✅ **Production DB #753 → #754 적용 완료(2026-10-24, Stephen 지시 "운영 DB #753 #754 적용 진행")**: 적용 전 읽기 조회로 #647 함수 존재·테이블/함수 부재 확인 → 순서대로 적용 → 실측: 저장 함수 anon 불가·authenticated/service_role 가능·매니저 확인 포함·옛 확인 없음·SECURITY DEFINER, 읽기 함수 anon 가능, 테이블 anon/authenticated 직접 접근 불가·RLS 켜짐·정책 0건·1행(빈 배열), 읽기 결과 `{"content_blocks":[]}`. 라이브 시험은 임시 계정을 만들기 때문에 Production에서는 실행하지 않음. **이제 코드 배포 가능**(Stephen 커밋·푸시).
+- **sp3 2차: PASS-CONDITIONAL(BLOCKER 0·MAJOR 0·MINOR 3·NIT 2·미검증 3)** — 1차 MAJOR 해소를 실제 페이지 마운트(편집기만 스텁) 8시나리오로 확인. 경미 4건 반영(Stephen "모두 반영", 2026-10-24): M1 검수자의 마운트 시험을 저장소로 이전(`teamPolicyEditorSync.mount.test.ts`+`teamPolicyEditor/` 스텁, 옛 '항상 재생성' 버그를 되돌리면 3건 실패함을 변이로 확인) · M3 DB 시험에 1MB 초과 BLOCKS_TOO_LARGE 추가 · N2 #754 롤백 SQL 전문 기재 · N1 정책 페이지 섹션 배너 주석 정리. 시험 GREEN(마운트 8·DB 7), eslint 0, svelte-check 신규 0.
+- **Production 선행 확인(2026-10-24 읽기 조회)**: Production에 `is_cms_manager_or_above()`(#647) 있음, `team_policy_settings` 테이블·팀 정책 함수 없음(#753·#754 미적용) → #753 → #754 순서로 적용 후 코드 배포. 남은 미검증: 실브라우저 확인, Stage 함수 정의 글자 단위 DRIFT 대조.
 - sp3 재검수 ⏳
 
 ## NOW — 🔴 CRITICAL(인증 경로 `src/routes/cms/login/**` 수정·DB 컬럼 추가): 관리자 비밀번호 복구 링크 — 인증번호 해시 저장 + 재발송 제한 (Migration #752 — Stage만 적용, 2026-10-23, 이 세션'만', ✅ Stephen 지시("1, 2번 개선 진행, 테스트 먼저"))
