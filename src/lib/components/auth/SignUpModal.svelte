@@ -110,12 +110,10 @@
         // 탈퇴한 이메일은 익명 전환일부터 3개월간 재가입할 수 없다(서버·DB도 같은 규칙으로 한 번 더 막는다)
         const { data: restriction, error: restrictionError } = await supabase.rpc('check_signup_restricted', { p_email: val } as never)
         if (email.trim() !== val.trim()) return
-        if (restrictionError) {
-          // 확인하지 못한 채 '등록 가능'으로 안내하지 않는다(가입 단계에서 서버가 한 번 더 막지만 안내가 어긋나지 않도록)
-          csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.')
-          return
-        }
-        const r = restriction as { restricted?: boolean } | null
+        // 이 사전 확인은 안내용이다 — 확인 자체가 실패(함수 미배포·일시 오류)해도 가입을 막지 않는다. 제한 이메일은 DB 트리거(enforce_signup_restriction)가 가입 단계에서 최종 거절한다.
+        // (2026-10-25 긴급: 운영 DB에 마이그레이션 #763이 적용되기 전에 코드가 먼저 배포돼 이 호출이 실패하면 신규 가입이 막혔다)
+        if (restrictionError) console.warn('[signup] check_signup_restricted 확인 실패(가입은 계속 진행):', restrictionError.message)
+        const r = restrictionError ? null : (restriction as { restricted?: boolean } | null)
         if (r?.restricted) {
           csToast.warning('탈퇴한 이메일은 탈퇴 후 3개월 동안 다시 가입할 수 없어요.')
           emailAvailable = false
