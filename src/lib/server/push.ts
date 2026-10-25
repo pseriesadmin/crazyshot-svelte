@@ -325,6 +325,18 @@ export async function sendPushToUser(
 }
 
 /**
+ * 계정 보안 알림 푸시 — 알림 수신 설정(allow_rental_alert/allow_benefit_alert)·CMS 문구 편집과 무관하게 발송한다
+ * (새 환경 로그인처럼 계정 주인이 꼭 알아야 하는 안내라 마케팅·대여 알림 수신거부의 영향을 받지 않는다). 실패해도 throw 하지 않는다.
+ */
+export async function sendSecurityPushToUser(userId: string, notifyType: string, payload: PushPayload): Promise<void> {
+  try {
+    await dispatch([userId], notifyType, payload)
+  } catch {
+    // 발신 허브 오류는 호출부로 전파하지 않음
+  }
+}
+
+/**
  * 예약 라이프사이클 고객 푸시 — CMS 상태 전환 액션에서 기존 send_rental_chat_notification 호출
  * 직후에 병행 호출한다. 예약 행(user_id·상품명)을 직접 조회하므로 채팅 RPC와 완전히 독립적으로
  * 동작하며, 실패해도 절대 throw하지 않는다(호출부의 채팅 발송 성공 여부에 영향 없음).
@@ -494,6 +506,25 @@ export async function sendPushToAdmins(eventKey: string, payload: PushPayload): 
     const targets = await filterAdminPushRecipientsByMenu(supabase, eventKey, recipientIds)
     if (targets.length === 0) return
     await dispatch(targets, eventKey, payload)
+  } catch {
+    // 발신 허브 오류는 호출부로 전파하지 않음
+  }
+}
+
+/**
+ * 매니저 이상(manager·superadmin) 관리자 전원에게 푸시 — 개별 수신 설정 열이 없는 운영 알림용(예: 법정 보존 만료 도래, 2026-10-24).
+ * 실패해도 throw하지 않는다(호출부 크론은 알림 실패와 무관하게 결과를 기록한다).
+ */
+export async function sendPushToManagers(type: string, payload: PushPayload): Promise<void> {
+  try {
+    const supabase = getServiceClient()
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .in('cms_role', ['manager', 'superadmin'])
+      .is('deleted_at', null)
+    if (error || !data || data.length === 0) return
+    await dispatch((data as { id: string }[]).map((r) => r.id), type, payload)
   } catch {
     // 발신 허브 오류는 호출부로 전파하지 않음
   }
