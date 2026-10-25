@@ -7,6 +7,7 @@
   import { csToast } from '$lib/utils/toast'
   import { smsNotifyTypesForCard } from '$lib/utils/smsCardTypes'
   import { mediaThumbUrl } from '$lib/utils/cannedBlocks'
+  import { safeActionUrl } from '$lib/utils/safeActionUrl'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
 
@@ -99,11 +100,12 @@
     )
   )
   // 썸네일만 있는 카드(대표 이미지·버튼 문구·링크 없음) — 버튼을 숨긴다(서버가 button_label을 빈 문자열로 보낸다)
-  let hideCta = $derived(payload.type === 'canned_cta' && payload.button_label === '' && !payload.action_url)
+  let hideCta = $derived(payload.type === 'canned_cta' && payload.button_label === '' && !safeActionUrl(payload.action_url))
   // CTA 버튼 레이블 + 색상 결정
   let ctaLabel = $derived(payload.button_label ?? ctaDefaults(payload.type).label)
   let ctaColor = $derived(payload.button_color ?? ctaDefaults(payload.type).color)
-  let ctaUrl = $derived(payload.action_url ?? null)
+  // 버튼 주소는 항상 검사를 거친다(javascript:·data: 등 실행 가능한 주소 차단, sp5 SEC-001 2026-10-24)
+  let ctaUrl = $derived(safeActionUrl(payload.action_url))
 
   // SHIPMENT_TRACKING_CARD — 운송장 미등록 상태(chatActionEnrich.ts enrichShipmentTrackingCard)는
   // action_url이 없어 CTA 버튼이 눌러도 반응 없는 죽은 버튼이 된다 — 대신 등록 안내 문구로 폴백.

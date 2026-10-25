@@ -6,6 +6,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { requireTrueSuperadmin } from '$lib/server/requireTrueSuperadmin'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
+import { canReuseAuthUserAsAdmin } from '$lib/server/adminOrphanReuse'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -68,7 +69,11 @@ export const actions: Actions = {
         if (profileData && (profileData as { cms_role: string | null }).cms_role) {
           return fail(400, { error: '이미 등록된 관리자 계정입니다.' })
         }
-        // 고아 상태 (auth.users만 있고 cms_role 없음) — 기존 auth 유저 재사용
+        // 로그인·예약 이력이 있으면 일반 회원 계정 — 관리자로 전환하지 않는다(고객 계정 인수 방지, sp5 SEC-003)
+        if (!(await canReuseAuthUserAsAdmin(serviceClient, existing))) {
+          return fail(400, { error: '이미 일반 회원으로 사용 중인 이메일입니다. 다른 이메일로 계정을 만들어 주세요.' })
+        }
+        // 고아 상태 (auth.users만 있고 cms_role 없음, 사용 이력 없음) — 기존 auth 유저 재사용
         authData = { user: existing }
         createErr = null
       }
