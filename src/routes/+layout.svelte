@@ -14,6 +14,7 @@
 	import ViewportDebug from '$lib/components/common/ViewportDebug.svelte';
 	import ChevronIcon from '$lib/components/common/ChevronIcon.svelte';
 	import ContentBlocksView from '$lib/components/common/ContentBlocksView.svelte';
+	import AccountRestoredModal from '$lib/components/auth/AccountRestoredModal.svelte';
 	import type { ContentBlock } from '$lib/types/content-editor';
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
@@ -22,6 +23,16 @@
 
 	interface Props { data: PageData }
 	let { data }: Props = $props();
+
+	// 탈퇴 유예 중 본인 로그인으로 계정이 복원된 경우(서버가 withdrawalRestored 전달) 안내 모달을 한 번 띄운다
+	let restoredModalOpen = $state(false);
+	$effect(() => {
+		if (data.withdrawalRestored) restoredModalOpen = true;
+	});
+	// 관리자가 삭제한 계정은 복원되지 않고 로그아웃된다 — 안내 토스트
+	$effect(() => {
+		if (data.accountNotice === 'admin_deleted') csToast.warning('삭제 처리된 계정입니다. 문의가 필요하면 고객센터로 연락해 주세요.');
+	});
 
 	// '서비스 기본 정보'(Migration #566) — 공통 푸터가 참조하는 단일 소스. +layout.server.ts가
 	// 세션 유무와 무관하게 항상 내려주므로 데이터가 없을 일은 없으나, 방어적으로 빈 값 폴백.
@@ -270,6 +281,8 @@
 		</div>
 	</footer>
 	{/if}
+
+	<AccountRestoredModal open={restoredModalOpen} onclose={() => (restoredModalOpen = false)} />
 
 	<!-- 법적 고지 모달 -->
 	{#if policyModal.open}

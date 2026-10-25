@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit'
+import { describeDeletionBlockers } from '$lib/utils/accountDeletion'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
@@ -342,17 +343,47 @@ export const actions: Actions = {
 
     const form = await request.formData()
     const user_id = String(form.get('user_id') ?? '').trim()
+    const reason = String(form.get('reason') ?? '').trim()
 
     if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
 
-    const { data, error } = await adminClient.rpc('soft_delete_customer', {
-      p_user_id:    user_id,
-      p_deleted_by: session.user.email ?? session.user.id,
+    // 2026-10-24: 즉시 삭제(soft_delete_customer) 폐기 — 본인 탈퇴와 같은 흐름(공통 차단 조건 → 30일 유예 → 익명 전환).
+    // 관리대상 지정·거래 기록은 그대로 유지되고, 유예 중에는 관리자가 [삭제 취소]로 복구할 수 있다.
+    const { data, error } = await adminClient.rpc('cms_request_account_deletion', {
+      p_user_id:  user_id,
+      p_admin_id: session.user.id,
+      p_reason:   reason || null,
     })
 
+    const result = data as { ok: boolean; error?: string; error_code?: string; blockers?: string[]; purge_at?: string } | null
+    if (!result?.ok) {
+      const detail = result?.error_code === 'not_deletable' ? ` (${describeDeletionBlockers(result.blockers)})` : ''
+      return fail(400, { ok: false, error: `${result?.error ?? error?.message ?? '삭제 요청 실패'}${detail}`, blockers: result?.blockers ?? [] })
+    }
+    return { ok: true, deleted: true, purge_at: result.purge_at }
+  },
+
+  // 삭제 유예 중인 고객의 삭제 요청 취소(복구) — 본인 탈퇴 건·관리자 삭제 건 모두 manager 이상이 복구할 수 있다
+  restoreCustomerDeletion: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'customers.list')
+    if (denied) return denied
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(403, { ok: false, error: '권한 없음' })
+    const role = (await getCmsRoleForAction(locals)) ?? ''
+    if (!['manager', 'superadmin'].includes(role)) return fail(403, { ok: false, error: '복구 권한이 없습니다.' })
+
+    const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceRoleKey) return fail(500, { ok: false, error: '서버 설정 오류' })
+    const adminClient = createClient(getSupabaseUrl(), serviceRoleKey)
+
+    const form = await request.formData()
+    const user_id = String(form.get('user_id') ?? '').trim()
+    if (!user_id) return fail(400, { ok: false, error: '사용자 ID 필수' })
+
+    const { data, error } = await adminClient.rpc('cms_restore_account_deletion', { p_user_id: user_id, p_admin_id: session.user.id })
     const result = data as { ok: boolean; error?: string } | null
-    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '삭제 실패' })
-    return { ok: true, deleted: true }
+    if (!result?.ok) return fail(400, { ok: false, error: result?.error ?? error?.message ?? '복구 실패' })
+    return { ok: true, restored: true }
   },
 
   // ── 사전 등록 관리대상과 일치한 가입자 확인 — Migration #708 ───────────────────────────────────

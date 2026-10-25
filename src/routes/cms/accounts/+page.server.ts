@@ -7,6 +7,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { requireTrueSuperadmin } from '$lib/server/requireTrueSuperadmin'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { canReuseAuthUserAsAdmin } from '$lib/server/adminOrphanReuse'
+import { signupRestrictedMessage } from '$lib/server/signupRestriction'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ parent }) => {
@@ -80,6 +81,9 @@ export const actions: Actions = {
     }
 
     if (createErr || !authData?.user) {
+      // 탈퇴 후 3개월 재가입 제한 이메일이면 사유를 안내한다(인증 서버 오류 문구에는 사유가 없다)
+      const restricted = createErr ? await signupRestrictedMessage(serviceClient, email, createErr) : null
+      if (restricted) return fail(400, { error: restricted })
       return fail(500, { error: createErr?.message ?? '계정 생성에 실패했습니다.' })
     }
 
