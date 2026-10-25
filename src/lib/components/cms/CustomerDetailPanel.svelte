@@ -216,6 +216,19 @@
   let loadingPoints = $state(false)
   let pointsLoaded = $state(false)
   let userCoupons = $state<UserCouponTx[]>([])
+  // 익명 전환된 고객의 법정 보존 만료 도래 상태(패널 배너 배지) — 자동 삭제 없음, 관리자 확인용
+  interface RetentionInfo { txn_state: string | null; txn_expires_at: string | null; chat_state: string | null; chat_expires_at: string | null }
+  let retention = $state<RetentionInfo | null>(null)
+  $effect(() => {
+    const id = row.user_id
+    if (!id || row.withdrawal_status !== 'purged') { retention = null; return }
+    let cancelled = false
+    fetch(`/api/cms/customers/${encodeURIComponent(id)}/retention`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { retention: RetentionInfo | null } | null) => { if (!cancelled) retention = j?.retention ?? null })
+      .catch(() => { if (!cancelled) retention = null })
+    return () => { cancelled = true }
+  })
   /** 포인트이력 하위탭 — earn: 포인트 적립 + 쿠폰 발급 / spend: 포인트 사용·차감 + 쿠폰 사용 */
   let pointSubTab = $state<'earn' | 'spend'>('earn')
 
@@ -1269,13 +1282,25 @@
             {#if row.withdrawal_status === 'requested'}
               <span class="withdrawal-status-text">탈회 신청됨</span>
             {:else if row.withdrawal_status === 'purged'}
-              <span class="withdrawal-status-text">탈회 완전삭제 완료</span>
+              <span class="withdrawal-status-text">익명 전환 완료</span>
+              {#if retention?.txn_state === 'due' || retention?.chat_state === 'due'}
+                <span class="badge badge-error">법정 보존 만료 도래</span>
+              {:else if retention?.txn_state === 'soon' || retention?.chat_state === 'soon'}
+                <span class="badge badge-info">보존 만료 90일 이내</span>
+              {:else if retention}
+                <span class="badge badge-active">법정 보존 중</span>
+              {/if}
             {/if}
           </div>
           {#if row.withdrawal_status === 'requested'}
             <div class="withdrawal-status-detail">
               <span>신청일: {formatDate(row.withdrawal_requested_at)}</span>
-              <span>완전삭제 예정일: {formatDate(row.withdrawal_purge_at)}</span>
+              <span>익명 전환 예정일: {formatDate(row.withdrawal_purge_at)}</span>
+            </div>
+          {:else if row.withdrawal_status === 'purged' && retention}
+            <div class="withdrawal-status-detail">
+              {#if retention.txn_expires_at}<span>거래 기록 보존 만료: {formatDate(retention.txn_expires_at)}</span>{/if}
+              {#if retention.chat_expires_at}<span>상담 기록 보존 만료: {formatDate(retention.chat_expires_at)}</span>{/if}
             </div>
           {/if}
         </div>
@@ -1322,6 +1347,26 @@
             {recoveryBusy ? '발행 중…' : recoveryLink ? '링크 다시 발행' : '링크 발행'}
           </button>
         {/if}
+        {#if mode === 'member' && row.withdrawal_status === 'requested'}
+          <form
+            method="POST"
+            action="/cms/customers?/restoreCustomerDeletion"
+            use:enhance={() => {
+              return async ({ result, update }) => {
+                if (result.type === 'success') {
+                  csToast.success('삭제 요청이 취소되어 계정이 복구되었습니다.')
+                  await update()
+                } else if (result.type === 'failure') {
+                  csToast.error((result.data as { error?: string })?.error ?? '복구 실패')
+                }
+              }
+            }}
+          >
+            <input type="hidden" name="user_id" value={row.user_id} />
+            <button type="submit" class="btn-primary">삭제 취소</button>
+          </form>
+        {/if}
+        {#if row.withdrawal_status !== 'requested'}
         <form
           method="POST"
           action="/cms/customers?/deleteCustomer"
@@ -1337,10 +1382,10 @@
             }
             return async ({ result, update }) => {
               if (result.type === 'success') {
-                csToast.success('회원이 삭제되었습니다.')
+                // 즉시 삭제가 아니라 삭제 요청 접수 — 30일 유예 후 익명 전환(그 전에는 [삭제 취소]로 복구 가능). 패널은 열어 둔 채 상태를 갱신한다
+                csToast.success('삭제 요청이 접수되었습니다. 30일 뒤 개인정보가 익명 처리되며, 그 전에는 삭제를 취소할 수 있어요.')
                 deleteWarnPending = false
                 await update()
-                onclose()
               } else if (result.type === 'failure') {
                 const err = (result.data as { error?: string })?.error ?? '삭제 실패'
                 csToast.error(err)
@@ -1361,6 +1406,7 @@
             회원 삭제
           </button>
         </form>
+        {/if}
       </div>
     {/if}
 

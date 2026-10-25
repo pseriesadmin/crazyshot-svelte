@@ -11,10 +11,12 @@ function makeAdmin(opts: {
   otpProof?: boolean
   users: Array<{ email?: string | null; new_email?: string | null } | null>   // getUserById 호출 순서별 응답
   updateError?: string
+  restricted?: boolean   // 재가입 제한 조회 결과
 }) {
   const calls: Array<Record<string, unknown>> = []
   let getIdx = 0
   const admin = {
+    rpc: vi.fn(async () => ({ data: { restricted: opts.restricted === true }, error: null })),
     from: () => ({
       select: () => ({
         eq: () => ({
@@ -45,6 +47,13 @@ function makeAdmin(opts: {
 }
 
 describe('finalizeVerifiedSignup', () => {
+  it('갱신 오류가 재가입 제한 때문이면 409와 안내 문구', async () => {
+    const { admin } = makeAdmin({ users: [{ email: '', new_email: 'a@b.com' }], updateError: 'Database error updating user', restricted: true })
+    const r = await finalizeVerifiedSignup(admin, 'u1')
+    expect(r).toMatchObject({ ok: false, status: 409 })
+    expect((r as { error: string }).error).toContain('3개월')
+  })
+
   it('휴대폰 인증 기록이 없으면 403 — 아무것도 바꾸지 않는다', async () => {
     const { admin, calls } = makeAdmin({ otpProof: false, users: [{ email: '', new_email: 'a@b.com' }] })
     const r = await finalizeVerifiedSignup(admin, 'u1')

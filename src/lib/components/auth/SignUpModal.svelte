@@ -107,6 +107,21 @@
         emailAvailable = false
         emailDuplicate = true
       } else {
+        // 탈퇴한 이메일은 익명 전환일부터 3개월간 재가입할 수 없다(서버·DB도 같은 규칙으로 한 번 더 막는다)
+        const { data: restriction, error: restrictionError } = await supabase.rpc('check_signup_restricted', { p_email: val } as never)
+        if (email.trim() !== val.trim()) return
+        if (restrictionError) {
+          // 확인하지 못한 채 '등록 가능'으로 안내하지 않는다(가입 단계에서 서버가 한 번 더 막지만 안내가 어긋나지 않도록)
+          csToast.warning('이메일 확인에 실패했습니다. 잠시 후 다시 시도해주세요.')
+          return
+        }
+        const r = restriction as { restricted?: boolean } | null
+        if (r?.restricted) {
+          csToast.warning('탈퇴한 이메일은 탈퇴 후 3개월 동안 다시 가입할 수 없어요.')
+          emailAvailable = false
+          emailDuplicate = false
+          return
+        }
         csToast.success('등록 가능한 아이디입니다.')
         emailAvailable = true
         emailDuplicate = false
@@ -643,7 +658,9 @@
       onsuccess()
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
-      if (msg.includes('already registered') || msg.includes('already been registered')) {
+      if (msg.includes('SIGNUP_RESTRICTED')) {
+        errorMsg = '탈퇴한 이메일은 일정 기간 다시 가입할 수 없어요. 가입 가능일은 이메일 입력 시 안내해 드려요.'
+      } else if (msg.includes('already registered') || msg.includes('already been registered')) {
         errorMsg = '이미 가입된 이메일입니다.'
       } else if (msg.includes('rate limit') || msg.includes('429')) {
         errorMsg = '잠시 후 다시 시도해주세요.'

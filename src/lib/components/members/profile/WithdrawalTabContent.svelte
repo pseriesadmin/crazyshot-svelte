@@ -3,6 +3,7 @@
   import { supabase } from '$lib/services/supabase'
   import { csToast } from '$lib/utils/toast'
   import { callTypedRpc } from '$lib/utils/rpc'
+  import { describeDeletionBlockers } from '$lib/utils/accountDeletion'
   import { unregisterCurrentPushToken } from '$lib/utils/push'
   import type { UserProfile } from '../../../../routes/account/profile/+page.server'
 
@@ -55,7 +56,7 @@
     if (!confirmed) return
 
     submitting = true
-    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string }>(
+    const { data, error } = await callTypedRpc<{ ok: boolean; error?: string; error_code?: string; blockers?: string[] }>(
       supabase,
       'request_account_withdrawal',
       {
@@ -66,8 +67,12 @@
     submitting = false
 
     if (error || !(data as { ok?: boolean })?.ok) {
-      const msg = (data as { error?: string })?.error ?? '탈퇴 처리 중 오류가 발생했습니다.'
-      csToast.error(msg)
+      const res = data as { error?: string; error_code?: string; blockers?: string[] } | null
+      // 정리가 끝나지 않은 거래가 있으면 그 사유를 함께 안내한다(진행 중 대여·반납 후 검수 미결·이용 중인 구독)
+      const detail = res?.error_code === 'not_deletable' || res?.error_code === 'active_rental_exists'
+        ? (res.blockers && res.blockers.length > 0 ? ` (${describeDeletionBlockers(res.blockers)})` : '')
+        : ''
+      csToast.error(`${res?.error ?? '탈퇴 처리 중 오류가 발생했습니다.'}${detail}`)
       return
     }
 
@@ -153,9 +158,10 @@
     <div class="notice-block">
       <p class="notice-title">탈퇴 전 확인사항</p>
       <ul class="notice-list">
-        <li>탈퇴 후 30일간 개인정보가 보관되며, 이 기간 안에 동일 계정으로 다시 로그인하면 자동으로 계정이 복구됩니다. 30일이 지나면 개인정보는 완전히 삭제되며 복구할 수 없습니다.</li>
-        <li>진행 중인 대여 주문, 예약, 보관 중인 포인트·쿠폰은 탈퇴와 동시에 모두 소멸되며 복구되지 않습니다.</li>
-        <li>관련 법령(전자상거래법 등)에 따라 보존이 의무화된 거래 기록은 별도 기간 동안 보관될 수 있습니다.</li>
+        <li>탈퇴 후 30일간 계정이 보관되며, 이 기간 안에 동일 계정으로 다시 로그인하면 자동으로 복구됩니다. 30일이 지나면 개인정보는 익명 처리되어 복구할 수 없습니다.</li>
+        <li>익명 처리일로부터 3개월 동안은 같은 이메일로 다시 가입할 수 없습니다.</li>
+        <li>진행 중인 대여·반납 후 검수·이용 중인 구독이 있으면 탈퇴할 수 없습니다. 보관 중인 포인트·쿠폰은 탈퇴와 함께 소멸되며 복구되지 않습니다.</li>
+        <li>관련 법령(전자상거래법 등)에 따라 계약·결제 기록은 5년, 소비자 불만·분쟁(상담) 기록은 3년 동안 별도로 보관됩니다.</li>
       </ul>
     </div>
 

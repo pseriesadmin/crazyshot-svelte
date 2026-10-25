@@ -34,6 +34,7 @@ import { getSupabaseUrl, getSupabaseAnonKey } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { randomBytes } from 'crypto'
+import { signupRestrictedMessage } from '$lib/server/signupRestriction'
 import type { RequestHandler } from './$types'
 
 // 인증번호 확인(verified_at) 후 이 시간 안에 완료해야 한다 — 유출된 token 의 재사용 방지 (2026-10-23, sp5 SEC-4)
@@ -133,6 +134,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   }
 
   if (createErr || !authData?.user) {
+    const restricted = createErr ? await signupRestrictedMessage(admin, member.email as string, createErr) : null
+    if (restricted) return json({ ok: false, error: restricted, code: 'signup_restricted' }, { status: 409 })
     return json({ ok: false, error: '계정 생성 중 오류가 발생했습니다.' }, { status: 500 })
   }
 

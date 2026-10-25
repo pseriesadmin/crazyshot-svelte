@@ -9,6 +9,7 @@ import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
  * - 세션이 있을 때만 user_profiles에서 withdrawal_status를 1회 조회한다(PK 단건, 저비용).
  * - withdrawal_status='requested'면 restore_withdrawn_account() RPC를 호출한다.
  * - 결과에 따른 하드 리다이렉트 없음 — 루프 위험 방지. 경계 레이스(expired:true)는 당일 cron이 정리.
+ * - 복구되면 withdrawalRestored:true를 내려 복원 안내 모달을 띄운다(2026-10-24). 관리자가 삭제한 계정(admin_blocked)은 복구하지 않고 로그아웃 + accountNotice.
  * - 반환값은 최소 {} — 각 페이지의 +page.server.ts가 필요한 데이터를 따로 로드한다.
  *
  * withdrawal_status 컬럼은 Migration #365로 추가됐으나 database.ts 타입은 G1에서 갱신 예정.
@@ -37,10 +38,24 @@ export const load: ServerLoad = async ({ locals }) => {
   }
 
   if (profile?.withdrawal_status === 'requested') {
-    // 유예기간 내 재접속 시 자동복구 시도
-    // restored:true/false 어느 결과든 하드 리다이렉트 없이 통과
-    // expired:true(경계 레이스)도 허용 — 당일 pg_cron(purge-withdrawn-accounts)이 정리
-    await locals.supabase.rpc('restore_withdrawn_account')
+    // 유예기간 내 재접속 시 자동복구 시도(본인 탈퇴 건만 — 관리자가 삭제한 계정은 되살아나지 않고 로그아웃된다)
+    // 하드 리다이렉트 없이 통과 — 루프 위험 방지. expired:true(경계 레이스)도 허용 — 당일 pg_cron(purge-withdrawn-accounts)이 정리
+    const { data: restore, error: restoreError } = (await locals.supabase.rpc('restore_withdrawn_account')) as unknown as {
+      data: { restored?: boolean; admin_blocked?: boolean } | null
+      error: { message: string } | null
+    }
+    if (restoreError) {
+      // 복구 확인에 실패해도 페이지 로드는 막지 않는다(다음 접속 때 다시 시도) — 원인은 서버 로그에 남긴다
+      console.error('[layout] restore_withdrawn_account 실패:', restoreError.message)
+    }
+    if (restore?.admin_blocked) {
+      await locals.supabase.auth.signOut()
+      return { serviceInfo, accountNotice: 'admin_deleted' as const }
+    }
+    if (restore?.restored) {
+      // 클라이언트가 "탈퇴 신청이 취소되어 계정이 복원되었습니다" 안내 모달을 한 번 띄운다
+      return { serviceInfo, withdrawalRestored: true }
+    }
   }
 
   return { serviceInfo }

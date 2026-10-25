@@ -57,7 +57,7 @@ describe('D 고객 상세 패널 탭 데이터 조회(cms/customers/*/+server.ts
 describe('C /cms/customers 서버 액션', () => {
   const src = read('src/routes/cms/customers/+page.server.ts')
   it('import', () => expect(src).toContain("import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'"))
-  for (const a of ['toggleBlacklist', 'cancelSubscription', 'updateCustomerInfo', 'adjustScore', 'grantCustomerPoints', 'deleteCustomer']) {
+  for (const a of ['toggleBlacklist', 'cancelSubscription', 'updateCustomerInfo', 'adjustScore', 'grantCustomerPoints', 'deleteCustomer', 'restoreCustomerDeletion']) {
     it(`${a}: 첫 문장이 게이트`, () => {
       expect(firstStatementAfter(src, new RegExp(`${a}: async \\([^\\n]*=>\\s*\\{\\n`))).toBe(
         "const denied = await requireMenuAccessAction(locals, 'customers.list')",

@@ -5,6 +5,7 @@
 // 규칙: ① 서버가 최근 30분 내 이 사용자의 검증된 phone_otps를 재확인해야만 실행 ② 대기 중 이메일을 계정에 직접 확정(메일 미발송)
 //       ③ 처리 후 계정에 이메일이 실제로 들어갔는지 다시 읽어 확인 — 아니면 실패로 돌려준다(가입 화면이 오류를 안내).
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { signupRestrictedMessage } from '$lib/server/signupRestriction'
 
 export type FinalizeResult =
   | { ok: true; email: string }
@@ -46,6 +47,8 @@ export async function finalizeVerifiedSignup(admin: SupabaseClient, userId: stri
   })
   if (updateErr) {
     console.error('[confirm-verified-signup] updateUserById error:', updateErr.message)
+    const restricted = await signupRestrictedMessage(admin, target, updateErr)
+    if (restricted) return { ok: false, status: 409, error: restricted }
     return { ok: false, status: 500, error: '이메일 확인 처리에 실패했습니다.' }
   }
 

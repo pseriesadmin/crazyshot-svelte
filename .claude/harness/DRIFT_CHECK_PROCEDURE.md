@@ -133,6 +133,35 @@ from user_profiles up join auth.users au on au.id=up.id;
 - 트리거 존재 확인: `select tgname from pg_trigger where tgrelid='auth.users'::regclass and tgname='on_auth_user_email_changed'` (양쪽 1건).
 - 라이브 테스트: `profileEmailSyncDb.test.ts`(트리거·비밀번호 찾기 계정 이메일 보완, Stage) · 단위: `confirmVerifiedSignup.test.ts`.
 
+## 절차 7 — 관리자 등급(cms_role) 방어 점검 (2026-10-25 신설, Migration #759·#766)
+
+배경: 익명 로그인 계정이 user_profiles 에 직접 INSERT/UPDATE 해 관리자 등급을 스스로 만들 수 있던 권한 상승 경로(#759)를 막았고, 그 방어가 표 권한 회수 한 곳에만 의존하던 것을
+트리거·정책 삭제·익명 불인정(#766)으로 보강했다. 이 방어는 자동 시험으로 지켜지지 않는다(표 권한이 먼저 막아 supabase-js 로는 트리거에 닿지 않음). 권한 일괄 부여(GRANT ... ON ALL TABLES),
+user_profiles 정책·트리거 변경, 2026-10-30 Supabase 권한 정책 변경 대응 작업 직후와 분기마다 stage·production 양쪽에서 읽기 전용으로 실행한다.
+
+```sql
+select 'grant_insert_update_to_clients' k, count(*)::text v
+  from information_schema.role_table_grants
+ where table_schema='public' and table_name='user_profiles' and grantee in ('anon','authenticated','PUBLIC') and privilege_type in ('INSERT','UPDATE')       -- 0이어야 함
+union all select 'guard_trigger_enabled', coalesce(string_agg(tgenabled::text, ','), 'MISSING')
+  from pg_trigger where tgrelid='public.user_profiles'::regclass and tgname='trg_user_profiles_guard_cms_role'                                              -- 'O' 여야 함
+union all select 'insert_or_update_policies', count(*)::text
+  from pg_policy where polrelid='public.user_profiles'::regclass and polcmd in ('a','w','*')                                                                 -- 0이어야 함
+union all select 'cms_holders_anonymous', count(*)::text
+  from user_profiles up join auth.users au on au.id=up.id where up.cms_role is not null and au.is_anonymous                                                 -- 0이어야 함
+union all select 'is_cms_fn_excludes_anonymous', count(*)::text
+  from pg_proc where pronamespace='public'::regnamespace and proname in ('is_cms_user','is_cms_admin','is_cms_manager_or_above')
+   and pg_get_functiondef(oid) like '%is_anonymous%'                                                                                                          -- 3이어야 함
+union all select 'table_privilege_insert_update', (has_table_privilege('anon','public.user_profiles','INSERT,UPDATE')
+                                                 or has_table_privilege('authenticated','public.user_profiles','INSERT,UPDATE'))::text                                -- 'false' 여야 함(role_table_grants 가 놓치는 상속·다른 부여 경로까지 실효 권한으로 확인)
+union all select 'column_privilege_cms_role', (has_column_privilege('anon','public.user_profiles','cms_role','INSERT,UPDATE')
+                                             or has_column_privilege('authenticated','public.user_profiles','cms_role','INSERT,UPDATE'))::text;                      -- 'false' 여야 함(컬럼 단위 GRANT UPDATE (cms_role) 탐지)
+```
+- 7개 행의 기준: 0 / 'O' / 0 / 0 / 3 / false / false. 앞 5개는 표 단위 부여 목록·정책·트리거를, 뒤 2개는 실효 권한(컬럼 단위 포함)을 본다 — 컬럼 단위 권한이 열리면 트리거(`O`)가 마지막 방어선이다.
+- 하나라도 기준과 다르면 즉시 중단하고 Stephen 에게 알린다(특히 `grant_insert_update_to_clients` > 0 이면 관리자 등급 탈취 가능 상태 — 권한 회수가 먼저).
+- 트리거 함수: `public.user_profiles_guard_cms_role` 은 anon·authenticated 가 직접 호출할 수 없어야 한다(`has_function_privilege`).
+- 관련 시험: `userProfilesInsertLockdownDb.test.ts` · `userProfilesCmsRoleGuardDb.test.ts`(Stage) — 정책·정의 규칙은 security-auth.md "관리자 등급(cms_role) 변경은 서버 경로로만" 절.
+
 ## 체크리스트 (복붙용)
 
 ```
@@ -142,6 +171,7 @@ from user_profiles up join auth.users au on au.id=up.id;
 [ ] 절차4: list_migrations 최근 10~15건 육안 대조 — 한쪽에만 있는 항목 없는가?
 [ ] 절차5: 코드가 이미 배포됐다면 배포 SHA 시점 마이그레이션 파일 = production 적용 이력?
 [ ] 절차6: 가입·Auth 설정·auth 트리거 변경이 있었다면 계정·프로필 이메일 정합 점검 쿼리 3항목 0건 + 트리거 on_auth_user_email_changed 존재?
+[ ] 절차7: 권한 일괄 부여·user_profiles 정책/트리거 변경 후 관리자 등급 방어 점검 쿼리 7항목이 기준(0/'O'/0/0/3/false/false)과 일치?
 ```
 
 ---
