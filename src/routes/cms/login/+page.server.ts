@@ -7,6 +7,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import { sendSms } from '$lib/server/sms'
+import { sendSecurityPushToUser } from '$lib/server/push'
+import {
+  LOGIN_BLOCKED_MESSAGE,
+  clearLoginFailures,
+  hashLoginEmail,
+  isLoginBlocked,
+  isNewLoginEnvironment,
+  recordLoginFailure,
+  UNKNOWN_IP,
+} from '$lib/server/cmsLoginGuard'
 import { generateOtpCode } from '$lib/server/otpCode'
 import { hashRecoveryOtp, recoveryOtpMatches } from '$lib/server/recoveryOtp'
 import { REMEMBER_COOKIE } from '$lib/utils/authCookies'
@@ -198,11 +208,25 @@ export const actions: Actions = {
       maxAge: 60 * 60 * 24 * 365,
     })
 
+    // 반복 실패 제한(Migration #762) — 같은 이메일 15분 5회·같은 접속지 15분 20회 실패면 인증 서버를 호출하지 않고 거절
+    const guardKey = env.SUPABASE_SERVICE_ROLE_KEY
+    const guardAdmin = guardKey ? createClient(PUBLIC_SUPABASE_URL, guardKey) : null
+    const emailHash = hashLoginEmail(email, guardKey ?? '')
+    let clientIp: string = UNKNOWN_IP
+    try { clientIp = getClientAddress() } catch { /* dev 환경 */ }
+    if (guardAdmin && (await isLoginBlocked(guardAdmin, emailHash, clientIp))) {
+      // 모니터링용 — 잠금이 실제로 발생하는 빈도·접속지를 Vercel 로그에서 본다(계정 잠금 악용 여부 판단 자료, Stephen 지시 '모니터링 후 대안 모색')
+      console.warn('[cms-login-guard] 로그인 시도 차단', { emailHash: emailHash.slice(0, 12), ip: clientIp })
+      return fail(429, { error: LOGIN_BLOCKED_MESSAGE })
+    }
+
     const { data, error } = await locals.supabase.auth.signInWithPassword({ email, password })
 
     if (error || !data.session) {
+      if (guardAdmin) await recordLoginFailure(guardAdmin, emailHash, clientIp)
       return fail(401, { error: '이메일 또는 비밀번호가 올바르지 않습니다.' })
     }
+    if (guardAdmin) await clearLoginFailures(guardAdmin, emailHash)
 
     const p = await fetchCmsProfileByAuthId(locals.supabase, data.session.user.id)
     if (!p?.cms_role) {
@@ -217,14 +241,37 @@ export const actions: Actions = {
         const admin = createClient(PUBLIC_SUPABASE_URL, serviceRoleKey)
         let ip = 'unknown'
         try { ip = getClientAddress() } catch { /* dev 환경 */ }
+        // 접속지는 플랫폼이 확정한 getClientAddress 값을 우선 쓴다(요청 헤더 x-forwarded-for 는 클라이언트가 앞부분을 덧붙일 수 있어 새 환경 알림 회피에 악용될 수 있음, sp5 XFF)
+        const loginIp = ip !== UNKNOWN_IP ? ip : (request.headers.get('x-forwarded-for') ?? ip)
+        const loginUa = request.headers.get('user-agent') ?? 'unknown'
+        // 새 환경 판별용 이전 기록(이번 로그인 기록을 남기기 전에 조회)
+        const { data: prevLogs } = await admin
+          .from('cms_login_logs')
+          .select('ip_address, user_agent')
+          .eq('user_id', data.session.user.id)
+          .order('logged_in_at', { ascending: false })
+          .limit(100)
         await admin.from('cms_login_logs').insert({
           user_id:      data.session.user.id,
           email:        data.session.user.email ?? email,
           cms_role:     p.cms_role,
-          ip_address:   request.headers.get('x-forwarded-for') ?? ip,
-          user_agent:   request.headers.get('user-agent') ?? 'unknown',
+          ip_address:   loginIp,
+          user_agent:   loginUa,
           logged_in_at: new Date().toISOString(),
         })
+        // 처음 보는 접속지+브라우저 → 감사로그 기록 + 계정 주인에게 알림(알림 실패는 로그인에 영향 없음)
+        if (isNewLoginEnvironment((prevLogs ?? []) as Array<{ ip_address: string | null; user_agent: string | null }>, loginIp, loginUa)) {
+          await insertCmsAdminAuditLog(admin, {
+            actorId: data.session.user.id,
+            actionType: 'login_new_environment',
+            targetUserId: data.session.user.id,
+            afterValue: { ip_address: loginIp, user_agent: loginUa },
+          })
+          await sendSecurityPushToUser(data.session.user.id, 'admin_login_new_environment', {
+            title: '새 환경에서 관리자 로그인',
+            body: '처음 보는 접속지 또는 브라우저에서 CMS에 로그인했습니다. 본인이 아니라면 즉시 비밀번호를 바꾸고 관리자에게 알려주세요.',
+          })
+        }
       }
     } catch { /* 로그 저장 실패는 무시 */ }
 

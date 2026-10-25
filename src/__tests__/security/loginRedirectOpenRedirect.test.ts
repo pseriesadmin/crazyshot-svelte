@@ -75,6 +75,7 @@ describe('가드: 로그인 화면의 모든 redirect/goto 가 safeReturnPath �
     const raw = svelte.match(/searchParams\.get\('redirect'\) \?\? '\/'/g) ?? []
     expect(raw.length).toBe(0)
     const safe = svelte.match(/safeReturnPath\(\$page\.url\.searchParams\.get\('redirect'\)\)/g) ?? []
-    expect(safe.length).toBe(2)
+    // 로그인 성공 1곳만 redirect 를 따른다 — 가입 직후는 항상 홈('/')으로 보낸다(2026-10-24 Stephen 지시, 가입 성공 goto 는 redirect 를 읽지 않음)
+    expect(safe.length).toBe(1)
   })
 })
