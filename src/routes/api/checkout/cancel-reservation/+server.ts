@@ -2,7 +2,7 @@
  * POST /api/checkout/cancel-reservation
  *
  * 고객 셀프 "예약신청취소"
- *   - hold 상태: update_reservation_status(cancelled) — Toss 불필요
+ *   - hold 상태: update_reservation_status(cancelled) — Toss 불필요, 같은 주문의 신청대기 예약 행 전체 취소
  *   - confirmed 상태(서명+결제 후): 즉시 환불하지 않고 취소 요청 접수(관리자 승인·환불은 CMS [예약취소], 2026-10-09)
  *
  * 취소 가능 조건 (서버가 재계산 — 클라이언트 값 신뢰 금지):
@@ -132,19 +132,35 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   // ─── hold 상태: Toss 불필요 → update_reservation_status만 ───────────
   if (reservation.status === 'hold') {
-    const { data: rpcData, error: rpcErr } = await admin.rpc('update_reservation_status', {
-      p_reservation_id: reservationId,
-      p_new_status: 'cancelled',
-    })
-    if (rpcErr) {
-      return json({ ok: false, error: '취소 처리 중 오류가 발생했습니다.' }, { status: 500 })
+    // 주문 1건 = 취소 1건(2026-10-26 Stephen 확정): 상품이 여러 개 담긴 하나의 예약(예약코드)은 통째로 취소된다.
+    // 같은 주문의 신청대기(hold) 예약 행 전부가 대상 — 소유권은 위 IDOR 검사(orders.user_id)와 user_id 조건으로 확인.
+    // 이미 취소·만료된 행은 건드리지 않는다.
+    const targetIds: number[] = [reservationId]
+    if (orderId != null) {
+      const { data: sibItems } = await admin.from('order_items').select('reservation_id').eq('order_id', orderId)
+      const sibIds = ((sibItems ?? []) as Array<{ reservation_id: number | null }>)
+        .map(i => i.reservation_id).filter((v): v is number => v != null && v !== reservationId)
+      if (sibIds.length > 0) {
+        const { data: sibRows } = await admin.from('rental_reservations').select('id').in('id', sibIds).eq('status', 'hold').eq('user_id', session.user.id)
+        for (const row of (sibRows ?? []) as Array<{ id: number }>) targetIds.push(row.id)
+      }
     }
-    const parsed = rpcData as { ok?: boolean; error?: string } | null
-    if (!parsed?.ok) {
-      return json({ ok: false, error: parsed?.error ?? '취소 처리 중 오류가 발생했습니다.' }, { status: 500 })
+    const cancelledIds: number[] = []
+    for (const id of targetIds) {
+      const { data: rpcData, error: rpcErr } = await admin.rpc('update_reservation_status', {
+        p_reservation_id: id,
+        p_new_status: 'cancelled',
+      })
+      const parsed = rpcData as { ok?: boolean; error?: string } | null
+      if (rpcErr || !parsed?.ok) {
+        // 일부만 취소된 채 실패해도 이미 취소된 행의 표식은 남긴다(재시도하면 남은 행이 취소되어 수렴)
+        if (cancelledIds.length > 0) await markCustomerCancelled(cancelledIds)
+        return json({ ok: false, error: parsed?.error ?? '취소 처리 중 오류가 발생했습니다.' }, { status: 500 })
+      }
+      cancelledIds.push(id)
     }
 
-    await markCustomerCancelled([reservationId])
+    await markCustomerCancelled(cancelledIds)
 
     // 알림 (fail-soft)
     try {

@@ -120,8 +120,8 @@ export async function loadCancelKinds(
 
   for (const row of rows) {
     const own = kindOf(row, rules, nowMs)
-    // hold(신청대기)는 결제·계약 전이라 그 건만 개별 취소된다(update_reservation_status) — 형제 예약 판정을 적용하지 않는다
-    // (취소 API가 hold를 형제 없이 판정하는 것과 동일하게 맞춤, QA M-2)
+    // hold(신청대기)는 결제·계약 전이라 언제든 취소 가능 — 형제 예약 판정을 적용하지 않는다
+    // (취소 API는 같은 주문의 hold 형제를 함께 취소한다, 2026-10-26)
     if (row.status === 'hold') { result.set(String(row.id), own); continue }
     const orderId = orderOf.get(String(row.id))
     const sibKinds: CancelKind[] = []
@@ -169,4 +169,19 @@ export async function evaluateReservationCancelKind(
   if (own !== 'free' && own !== 'after_deadline') return own
   const siblings = orderId != null ? await loadOrderSiblingKinds(client, orderId, reservation.id, nowMs) : []
   return worstCancelKind([own, ...siblings])
+}
+
+/** 예약 id → 주문 id (order_items 기준). 주문에 묶이지 않은 예약은 맵에 없다 — 마이페이지 대여 카드 묶기용 */
+export async function loadReservationOrderIds(
+  client: SupabaseClient,
+  reservationIds: Array<string | number>,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (reservationIds.length === 0) return out
+  const res = await client.from('order_items').select('reservation_id, order_id').in('reservation_id', reservationIds)
+  const rows = ((res as { data?: Array<{ reservation_id: number | null; order_id: number | null }> | null } | null)?.data ?? [])
+  for (const i of rows) {
+    if (i.reservation_id != null && i.order_id != null) out.set(String(i.reservation_id), i.order_id)
+  }
+  return out
 }
