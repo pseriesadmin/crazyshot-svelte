@@ -33,10 +33,14 @@
       .map(s => (status === 'draft' && s.status === 'hold' ? { ...s, label: '예약대기' } : s))
   )
 
+  // 장바구니에 담기만 한 임시예약(draft)은 맨 앞에 '장바구니' 원형 배지를 둔다(2026-10-26, Stephen 지시 — '장바구니에 담긴 상품'임을 알리는 UI).
+  // 이 배지가 현재 단계(활성 모션·화살표 물결)이고, 예약신청이 등록되면(hold) 배지는 사라지고 기존 단계 흐름으로 이어진다. CMS 목록의 '임시예약' 배지와 같은 개념.
+  let displaySteps = $derived(status === 'draft' ? [{ status: 'cart', label: '장바구니' }, ...visibleSteps] : visibleSteps)
+
   let currentStepIndex = $derived(
     status === 'completed'
-      ? visibleSteps.length - 1
-      : visibleSteps.findIndex(s => s.status === (returnDay === 'reached' && status === 'in_use' ? 'return_requested' : status === 'draft' ? 'hold' : status))
+      ? displaySteps.length - 1
+      : displaySteps.findIndex(s => s.status === (returnDay === 'reached' && status === 'in_use' ? 'return_requested' : status === 'draft' ? 'cart' : status))
   )
 
   // 슬림형 원형 배지 안 텍스트 — 4글자 이상은 반으로 나눠 두 줄(계약/완료), 3글자 이하는 한 줄
@@ -87,7 +91,7 @@
   {#if productName}
     <p class="stepper-product-name">{productName}</p>
   {/if}
-  <div class="stepper-scroll" style="--n: {visibleSteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
+  <div class="stepper-scroll" style="--n: {displaySteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
     {#if isCancelled}
       <div class="journey-cancelled">
         <span class="cancelled-icon">✕</span>
@@ -96,13 +100,13 @@
         </span>
       </div>
     {:else}
-      {#each visibleSteps as step, i}
+      {#each displaySteps as step, i}
         <div
           class="step-item"
           role="listitem"
           class:done={i < currentStepIndex}
           class:active={i === currentStepIndex}
-          class:last={i === visibleSteps.length - 1}
+          class:last={i === displaySteps.length - 1}
           style="--i: {i}"
         >
           {#if slim}
@@ -117,7 +121,7 @@
             <span class="step-label">{step.label}</span>
           {/if}
         </div>
-        {#if i < visibleSteps.length - 1}
+        {#if i < displaySteps.length - 1}
           <div class="step-connector" class:done={i < currentStepIndex} style="--i: {i}">
             {#if slim && i === currentStepIndex}
               <!-- 현재 단계 오른쪽 화살표 — 화살표 모양 마스크 안에서 옅은 퍼플 줄무늬가 왼쪽→오른쪽으로 반복해서 흐른다.
@@ -288,9 +292,9 @@
     -webkit-mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
     mask-image: linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent);
   }
-  /* PC 반응형(≥768px)에서는 배지 사이 여백을 넓힌다 — 컨테이너 폭에 비례(7.5%, 18~40px), 배지는 남은 폭에 맞춰 34~46px */
+  /* PC 반응형(≥768px)에서는 배지 사이 여백을 넓힌다 — 컨테이너 폭에 비례(7.5%, 30~40px), 배지는 남은 폭에 맞춰 34~46px */
   @media (min-width: 768px) {
-    .journey-stepper.slim.fluid .stepper-scroll { --circle: clamp(34px, calc((100cqw - (var(--n) - 1) * var(--conn)) / var(--n)), 46px); --conn: clamp(18px, 7.5cqw, 40px); }
+    .journey-stepper.slim.fluid .stepper-scroll { --circle: clamp(34px, calc((100cqw - (var(--n) - 1) * var(--conn)) / var(--n)), 46px); --conn: clamp(30px, 7.5cqw, 40px); } /* 배지 사이 최소 간격 18→30px(2026-10-26, Stephen 지시 — PC 폭이 좁아질 때 배지가 너무 붙어 보임). 모자라면 배지를 더 줄이지 않고 가로로 밀어 보는 띠(fade)로 전환 */
     .journey-stepper.slim.fluid .step-connector-icon, .journey-stepper.slim.fluid .wave-arrow { width: 14px; height: 9px; }
   }
 
