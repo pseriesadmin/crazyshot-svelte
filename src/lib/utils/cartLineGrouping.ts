@@ -23,6 +23,8 @@ export interface CartLineItemOption {
   isRequired: boolean
   minSelectRequired: boolean
   qtyFollowsMain: boolean
+  // 무료 제공(product_option_links.is_free) — 요금 영역에 "무료제공"을 보여주는 표시 전용 필드. 무료일 때만 true 로 채운다(2026-10-26)
+  isFree?: boolean
 }
 
 export interface GroupableProduct {
@@ -88,7 +90,8 @@ function fromOptionInput(
   deliveryDisabledByProductId: Map<string, boolean>,
   requiredByProductId: Map<string, boolean>,
   minSelectByProductId: Map<string, boolean>,
-  qtyFollowsMainByProductId: Map<string, boolean>
+  qtyFollowsMainByProductId: Map<string, boolean>,
+  freeByProductId: Map<string, boolean>
 ): CartLineItemOption {
   return {
     optionProductId: o.option_product_id,
@@ -110,6 +113,8 @@ function fromOptionInput(
     minSelectRequired: o.option_product_id ? (minSelectByProductId.get(o.option_product_id) ?? false) : false,
     // 수량 본상품 연동(product_option_links.qty_follows_main, 2026-09-28) — 위와 동일 패턴.
     qtyFollowsMain: o.option_product_id ? (qtyFollowsMainByProductId.get(o.option_product_id) ?? false) : false,
+    // 무료 제공 — 무료인 옵션에만 true 를 싣는다(유료는 필드 없음 — 기존 기대값·직렬화 유지)
+    ...(o.option_product_id && freeByProductId.get(o.option_product_id) ? { isFree: true } : {}),
   }
 }
 
@@ -147,6 +152,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
     const requiredByProductId = new Map<string, boolean>()
     const minSelectByProductId = new Map<string, boolean>()
     const qtyFollowsMainByProductId = new Map<string, boolean>()
+    const freeByProductId = new Map<string, boolean>()
     for (const m of members) {
       for (const o of m.options) {
         if (o.optionProductId && !imageUrlByProductId.get(o.optionProductId)) {
@@ -166,6 +172,9 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
         }
         if (o.optionProductId && !qtyFollowsMainByProductId.get(o.optionProductId)) {
           qtyFollowsMainByProductId.set(o.optionProductId, o.qtyFollowsMain)
+        }
+        if (o.optionProductId && !freeByProductId.get(o.optionProductId)) {
+          freeByProductId.set(o.optionProductId, !!o.isFree)
         }
       }
     }
@@ -193,7 +202,7 @@ export function groupCartLineItems(items: GroupableLineItem[]): CartLineGroup[] 
       returnTime: canonical.returnTime,
       durationType: canonical.durationType,
       status: canonical.status,
-      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId, deliveryDisabledByProductId, requiredByProductId, minSelectByProductId, qtyFollowsMainByProductId)),
+      options: mergedOptions.map((o) => fromOptionInput(o, imageUrlByProductId, unitPrice12hByProductId, deliveryDisabledByProductId, requiredByProductId, minSelectByProductId, qtyFollowsMainByProductId, freeByProductId)),
     }
   })
 }

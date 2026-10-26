@@ -5,6 +5,7 @@
   import { csToast } from '$lib/utils/toast'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import { applyOptionFlag } from '$lib/utils/optionLinkFlags'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
@@ -59,6 +60,8 @@
     is_required: boolean
     min_select_required: boolean
     delivery_rental_disabled: boolean
+    is_free: boolean
+    qty_follows_main: boolean
   }
 
   let optionKeyword = $state('')
@@ -69,6 +72,8 @@
   let bulkRequired = $state(false)
   let bulkMinSelectRequired = $state(false)
   let bulkDeliveryDisabled = $state(false)
+  let bulkFree = $state(false)
+  let bulkQtyFollowsMain = $state(false)
 
   interface ProductSearchRow {
     id: string
@@ -121,6 +126,8 @@
         is_required: false,
         min_select_required: false,
         delivery_rental_disabled: false,
+        is_free: false,
+        qty_follows_main: false,
       },
     ]
     showOptionModal = false
@@ -138,6 +145,8 @@
       is_required: bulkRequired,
       min_select_required: bulkMinSelectRequired,
       delivery_rental_disabled: bulkDeliveryDisabled,
+      is_free: bulkFree,
+      qty_follows_main: bulkQtyFollowsMain,
     }))
   }
 
@@ -148,6 +157,8 @@
         is_required: o.is_required,
         min_select_required: o.min_select_required,
         delivery_rental_disabled: o.delivery_rental_disabled,
+        is_free: o.is_free,
+        qty_follows_main: o.qty_follows_main,
         display_order: i,
       }))
     )
@@ -1257,18 +1268,18 @@
         <!-- 일괄 적용 행 -->
         <div class="bulk-row">
           <span class="bulk-label">일괄 적용</span>
-          <label class="cb-label">
-            <input type="checkbox" class="cb-input" bind:checked={bulkRequired} />
-            필수 선택
-          </label>
-          <label class="cb-label">
-            <input type="checkbox" class="cb-input" bind:checked={bulkMinSelectRequired} />
-            최소 1개 선택 필수
-          </label>
-          <label class="cb-label">
-            <input type="checkbox" class="cb-input" bind:checked={bulkDeliveryDisabled} />
-            배송 대여 불가
-          </label>
+          <div class="opt-combo-group">
+            <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkRequired}
+              onclick={() => { bulkRequired = !bulkRequired; selectedOptions = applyOptionFlag(selectedOptions, 'is_required', bulkRequired) }}>필수 선택</button>
+            <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkMinSelectRequired}
+              onclick={() => { bulkMinSelectRequired = !bulkMinSelectRequired; selectedOptions = applyOptionFlag(selectedOptions, 'min_select_required', bulkMinSelectRequired) }}>최소 1개 선택 필수</button>
+            <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkDeliveryDisabled}
+              onclick={() => { bulkDeliveryDisabled = !bulkDeliveryDisabled; selectedOptions = applyOptionFlag(selectedOptions, 'delivery_rental_disabled', bulkDeliveryDisabled) }}>배송 대여 불가</button>
+            <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkFree}
+              onclick={() => { bulkFree = !bulkFree; selectedOptions = applyOptionFlag(selectedOptions, 'is_free', bulkFree) }}>무료 제공</button>
+            <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={bulkQtyFollowsMain}
+              onclick={() => { bulkQtyFollowsMain = !bulkQtyFollowsMain; selectedOptions = applyOptionFlag(selectedOptions, 'qty_follows_main', bulkQtyFollowsMain) }}>수량 본상품 연동</button>
+          </div>
           <button type="button" class="btn-bulk-apply" onclick={applyBulk}>적용</button>
         </div>
 
@@ -1293,30 +1304,16 @@
                   24h: {opt.price_24h.toLocaleString()}원 · 재고: {opt.stock_quantity}개
                 </p>
                 <div class="selected-option-cbs">
-                  <label class="cb-label">
-                    <input
-                      type="checkbox"
-                      class="cb-input"
-                      bind:checked={selectedOptions[i].is_required}
-                    />
-                    필수 선택
-                  </label>
-                  <label class="cb-label">
-                    <input
-                      type="checkbox"
-                      class="cb-input"
-                      bind:checked={selectedOptions[i].min_select_required}
-                    />
-                    최소 1개 선택 필수
-                  </label>
-                  <label class="cb-label">
-                    <input
-                      type="checkbox"
-                      class="cb-input"
-                      bind:checked={selectedOptions[i].delivery_rental_disabled}
-                    />
-                    배송 대여 불가
-                  </label>
+                  <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={selectedOptions[i].is_required}
+                    onclick={() => { selectedOptions[i].is_required = !selectedOptions[i].is_required }}>필수 선택</button>
+                  <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={selectedOptions[i].min_select_required}
+                    onclick={() => { selectedOptions[i].min_select_required = !selectedOptions[i].min_select_required }}>최소 1개 선택 필수</button>
+                  <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={selectedOptions[i].delivery_rental_disabled}
+                    onclick={() => { selectedOptions[i].delivery_rental_disabled = !selectedOptions[i].delivery_rental_disabled }}>배송 대여 불가</button>
+                  <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={selectedOptions[i].is_free}
+                    onclick={() => { selectedOptions[i].is_free = !selectedOptions[i].is_free }}>무료 제공</button>
+                  <button type="button" class="opt-combo-btn" class:opt-combo-btn--on={selectedOptions[i].qty_follows_main}
+                    onclick={() => { selectedOptions[i].qty_follows_main = !selectedOptions[i].qty_follows_main }}>수량 본상품 연동</button>
                 </div>
               </div>
               <button
@@ -2364,30 +2361,46 @@
   .bulk-row {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
     padding: 10px 14px;
     background: rgba(59,47,138,0.04);
     border-radius: var(--cms-radius-sm);
+    flex-wrap: wrap;
   }
   .bulk-label {
     font: var(--text-pc-body-14);
     color: var(--cs-text-mid);
     white-space: nowrap;
+    flex-shrink: 0;
   }
-  .cb-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
+  /* 옵션 설정 버튼형 콤보 — ProductDetailPanel.svelte 옵션상품 탭의 .opt-combo-btn 과 동일 스펙 */
+  .opt-combo-group { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .opt-combo-btn {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-md);
+    background: var(--cs-white);
+    font: var(--text-pc-script-12); font-weight: 500;
+    color: var(--cs-text-mid);
     cursor: pointer;
-    min-height: 44px;
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, color .15s;
   }
-  .cb-input {
-    accent-color: var(--cs-purple);
-    width: 16px;
-    height: 16px;
-    cursor: pointer;
+  .opt-combo-btn:hover:not(.opt-combo-btn--on) {
+    border-color: var(--cs-purple);
+    background: rgba(59,47,138,.06);
+    color: var(--cs-purple);
+  }
+  .opt-combo-btn--on {
+    border-color: var(--cs-purple);
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    font-weight: 600;
+  }
+  .opt-combo-btn--on:hover {
+    background: var(--cs-dark);
+    border-color: var(--cs-dark);
   }
   .btn-bulk-apply {
     margin-left: auto;
@@ -2451,7 +2464,8 @@
   }
   .selected-option-cbs {
     display: flex;
-    gap: 14px;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .no-option-msg {
     font: var(--text-pc-body-14);
