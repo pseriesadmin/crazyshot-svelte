@@ -5,7 +5,8 @@ import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
 import { loadMyActivity } from '$lib/server/account/loadMyActivity'
 import { loadPointTransactions } from '$lib/server/account/loadPointTransactions'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
-import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
+import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
+import { groupRentalsByOrder } from '$lib/utils/groupRentalsByOrder'
 import { maskDocUrlsForClient } from '$lib/server/userDocs'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
@@ -154,6 +155,9 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     pcNowMs,
   )
 
+  // 같은 주문의 예약은 PC 대여 패널에서도 카드 1장으로 묶는다(주문 1건 = 카드 1장)
+  const rentalOrderIds = await loadReservationOrderIds(locals.supabase, rentalReservationIds)
+
   return {
     user: {
       name: profile?.full_name ?? '고객',
@@ -197,7 +201,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
         product_name:     product?.name ?? null,
       }
     })(),
-    rentals: ((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => {
+    rentals: groupRentalsByOrder(((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => {
       const product = r.products as { name: string; category: string } | null
       const status = contractStatus.get(String(r.id))
       return {
@@ -214,12 +218,14 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
         has_signed_contract:    status?.signed ?? false,
         pending_contract_token: status?.pendingToken ?? null,
         tracking_number:        r.tracking_number as string | null,
+        returnSubmittable:      false,
+        returnSubmitted:        false,
         cancelKind: rentalCancelKinds.get(String(r.id)) ?? 'unavailable',
         cancelRequested: rentalCancelRequestedIds.has(String(r.id)),
         cancelling: (r.status === 'cancelled' && !!r.customer_cancelled_at && !r.cancel_confirmed_at) || (r.status !== 'cancelled' && !!r.cancel_requested_at),
         canCancel: (rentalCancelKinds.get(String(r.id)) ?? 'unavailable') === 'free',
       }
-    }),
+    }), rentalOrderIds),
     cancels: (cancelsRes.data ?? []) as Array<{
       id: string; status: string; reservation_code: string
       start_date: string | null; end_date: string | null; created_at: string

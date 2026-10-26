@@ -1,7 +1,8 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
-import { loadCancelKinds, loadCancelRequestedIds } from '$lib/server/cancelPolicyLoader'
+import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
+import { groupRentalsByOrder, type RentalGroupItem } from '$lib/utils/groupRentalsByOrder'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -26,6 +27,9 @@ export interface MyRental {
   pending_contract_token: string | null
   // 고객 셀프 예약신청취소 가능 여부 (서버에서 계산)
   canCancel:              boolean
+  // 같은 주문(장바구니 1건)의 상품 목록 — 카드 1장에 모두 표시(2026-10-26)
+  items:                  RentalGroupItem[]
+  returnTargetId:         string
   cancelKind:             CancelKind
   cancelRequested:        boolean
   /** 고객이 취소했고 관리자 취소확인 전 — "취소중" 비활성 카드 */
@@ -91,7 +95,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     for (const x of (subs ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
   }
 
-  const rentals: MyRental[] = (data ?? []).map((r: Record<string, unknown>) => {
+  const rows: Array<Omit<MyRental, 'items' | 'returnTargetId'>> = (data ?? []).map((r: Record<string, unknown>) => {
     const product = (r.products as { name: string; category: string } | null) ?? null
     const status = contractStatus.get(String(r.id))
     return {
@@ -116,6 +120,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       canCancel: (cancelKinds.get(String(r.id)) ?? 'unavailable') === 'free',
     }
   })
+
+  // 같은 주문의 예약은 카드 1장으로 묶는다(주문 1건 = 대여 카드 1장, service-operations §4)
+  const orderIds = await loadReservationOrderIds(locals.supabase, reservationIds)
+  const rentals: MyRental[] = groupRentalsByOrder(rows, orderIds)
 
   return { rentals }
 }

@@ -16,6 +16,8 @@
     created_at: string
     product_name?: string | null
     product_category?: string | null
+    // 같은 주문의 상품 목록(서버에서 묶음) — 카드 1장에 모두 표시
+    items?: Array<{ id: string; name: string | null; category: string | null }>
     has_signed_contract?: boolean
     pending_contract_token?: string | null
     canCancel?: boolean
@@ -211,14 +213,16 @@
             </div>
           </div>
 
-          {#if rental.product_name}
-            <div class="product-row">
-              <span class="product-name">{rental.product_name}</span>
-              {#if rental.product_category}
-                <span class="product-cat">{rental.product_category}</span>
-              {/if}
-            </div>
-          {/if}
+          {#each rental.items ?? [{ id: rental.id, name: rental.product_name ?? null, category: rental.product_category ?? null }] as item (item.id)}
+            {#if item.name}
+              <div class="product-row">
+                <span class="product-name">{item.name}</span>
+                {#if item.category}
+                  <span class="product-cat">{item.category}</span>
+                {/if}
+              </div>
+            {/if}
+          {/each}
 
           <div class="card-dates">
             <span class="date-label">대여기간</span>

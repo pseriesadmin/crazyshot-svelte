@@ -236,14 +236,16 @@
               </div>
             </div>
 
-            {#if rental.product_name}
-              <div class="product-row">
-                <span class="product-name">{rental.product_name}</span>
-                {#if rental.product_category}
-                  <span class="product-cat">{rental.product_category}</span>
-                {/if}
-              </div>
-            {/if}
+            {#each rental.items as item (item.id)}
+              {#if item.name}
+                <div class="product-row">
+                  <span class="product-name">{item.name}</span>
+                  {#if item.category}
+                    <span class="product-cat">{item.category}</span>
+                  {/if}
+                </div>
+              {/if}
+            {/each}
 
             <div class="card-dates">
               <span class="date-label">대여기간</span>
@@ -270,7 +272,7 @@
                   type="button"
                   class="card-actions-btn primary"
                   disabled={rental.returnSubmitted}
-                  onclick={() => openReturnSubmit(rental.id)}
+                  onclick={() => openReturnSubmit(rental.returnTargetId)}
                 >
                   {rental.returnSubmitted ? '반납정보 등록 완료' : '반납정보 등록하기'}
                 </button>
