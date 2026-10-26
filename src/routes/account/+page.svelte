@@ -180,7 +180,7 @@
                 onclick={() => (showQrModal = true)}
                 aria-label="회원 확인 QR 보기"
                 class="bg-[#553fe0] flex flex-col gap-[10px] items-center justify-center rounded-[25px] size-[70px] overflow-hidden"
-                style="border:none; padding:0; cursor:pointer;"
+                style="border:none; padding:0; cursor:pointer; background:#553fe0;"
               >
                 <div class="flex flex-col gap-[5px] items-center justify-center shrink-0">
                   <div class="relative shrink-0 size-[27px]">
