@@ -20,7 +20,7 @@ describe('서류 등록 UX 배선', () => {
     expect(profile).toContain('buildMissingDocsMessage(missingIdentityDocs(identityType))')
   })
 
-  it('상품상세·장바구니는 본인증명 미등록이어도 예약을 막지 않고 토스트 대신 서버 요청(채팅카드+SMS)을 보낸다(2026-10-15)', () => {
+  it('상품상세·장바구니는 본인증명 미등록이어도 예약을 막지 않고, 등록요청 카드는 보내지 않는다 — 관리자 예약승인에서만 발송(2026-10-26)', () => {
     const product = read('src/routes/products/[id]/+page.svelte')
     const cart = read('src/routes/cart/+page.svelte')
     // 차단 토스트 호출이 사라졌다 — 호출문이 남아 있으면(import 포함) 예약 흐름이 다시 막힌다
@@ -28,9 +28,12 @@ describe('서류 등록 UX 배선', () => {
     expect(cart).not.toContain('showDocGateToast(')
     expect(product).not.toMatch(/if \(showDocGateToast/)
     expect(cart).not.toMatch(/if \(showDocGateToast/)
-    // 대신 서류 미등록이면 서버에 등록 요청을 보낸다(응답을 기다리지 않는 fire-and-forget)
-    expect(product).toContain('requestDocRegistrationIfNeeded(docGate)')
-    expect(cart).toContain('requestDocRegistrationIfNeeded(data.docGate)')
+    // 등록요청 카드는 고객 화면이 아니라 관리자 '예약승인'(approveReservation)만 보낸다(Stephen 확정 2026-10-26) — 화면 호출이 되살아나면 예약신청 즉시 카드가 가고 승인 때는 24시간 중복 방지로 건너뛴다
+    expect(product).not.toContain('requestDocRegistrationIfNeeded')
+    expect(cart).not.toContain('requestDocRegistrationIfNeeded')
+    expect(product).not.toContain('docRequestClient')
+    expect(cart).not.toContain('docRequestClient')
+    expect(read('src/routes/cms/reservation/+page.server.ts')).toContain('requestIdentityDocRegistration(admin, ownerId')
     // 게이트 토스트 헬퍼는 정책을 되돌릴 때 쓰도록 남겨 둔다
     expect(read('src/lib/utils/docGateToast.ts')).toContain('export function showDocGateToast')
   })

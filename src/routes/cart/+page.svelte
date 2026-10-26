@@ -18,7 +18,6 @@
   import { supabase } from '$lib/services/supabase';
   import { isAddressInDeliveryArea, type DeliveryAreaLike } from '$lib/utils/deliveryArea';
   import { csToast } from '$lib/utils/toast';
-  import { requestDocRegistrationIfNeeded } from '$lib/utils/docRequestClient'
   import { browser } from '$app/environment';
   import { env as publicEnv } from '$env/dynamic/public';
   import { isLockerHour } from '$lib/utils/lockerTimeRange';
@@ -2977,10 +2976,8 @@
             csToast.warning(describeSubmitBlocker(), { id: 'cart-submit-blocker' })
             return
           }
-          // 2026-10-15(Stephen 확정): 본인증명정보 미등록·승인 대기여도 예약신청을 막지 않는다(DB 차단도 Migration #716으로 해제).
-          // 차단 토스트 대신 서류가 미등록(none)이면 서버가 기존 "본인증명 등록요청" 대화카드 + 푸시 + SMS로 등록을 요청한다
-          // (응답을 기다리지 않는다·24시간 중복 방지·상태 재판정은 서버). 상품상세와 같은 공용 헬퍼.
-          requestDocRegistrationIfNeeded(data.docGate)
+          // 본인증명 등록요청 카드는 이 화면에서 보내지 않는다(2026-10-26, Stephen 확정) — 관리자가 '예약승인'을 실행할 때만 발송된다.
+          // 서류가 미등록·승인 대기여도 예약신청을 막지 않는다(Migration #716).
           isConfirming = true
           try {
             // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로
