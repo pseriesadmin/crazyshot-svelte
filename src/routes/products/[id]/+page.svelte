@@ -870,6 +870,13 @@
                 </div>
               </div>
               <div class="option-bottom-row">
+                {#if opt.is_free}
+                  <div class="option-dual-price">
+                    <div class="option-price-wrap">
+                      <span class="option-price-num">무료제공</span>
+                    </div>
+                  </div>
+                {:else}
                 <div class="option-dual-price">
                   <div class="option-price-wrap">
                     <span class="option-price-label">Day</span>
@@ -885,6 +892,7 @@
                     </div>
                   </div>
                 </div>
+                {/if}
                 <div class="qty-control small" class:qty-control--locked={opt.qty_follows_main && opt.is_required}>
                   <button
                     onclick={() => { const before = opt.qty; opt.qty = opt.qty_follows_main ? 0 : Math.max(0, opt.qty - 1); if (opt.qty !== before) void handleOptionEdited(); }}

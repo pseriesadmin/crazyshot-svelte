@@ -217,3 +217,25 @@ describe('groupCartLineItems — 그룹 표시 필드는 canonical(최초 생성
     expect(groups[0].pickupMethod).toBe('visit')
   })
 })
+
+describe('groupCartLineItems — 무료 제공(isFree) 옵션 표시 필드 보존 (2026-10-26)', () => {
+  const freeOpt = { optionProductId: 'opt-free', name: '배터리', qty: 1, unitPrice: 0, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false, isFree: true }
+  const paidOpt = { optionProductId: 'opt-paid', name: '삼각대', qty: 1, unitPrice: 3000, unitPrice12h: null, imageUrl: null, deliveryRentalDisabled: false, isRequired: false, minSelectRequired: false, qtyFollowsMain: false }
+
+  it('무료 옵션은 병합 후에도 isFree=true, 유료 옵션은 isFree 표시 없음', () => {
+    const groups = groupCartLineItems([makeItem({ reservationId: '10', options: [freeOpt, paidOpt] })])
+    const byId = Object.fromEntries(groups[0].options.map((o) => [o.optionProductId, o]))
+    expect(byId['opt-free'].isFree).toBe(true)
+    expect(byId['opt-paid'].isFree).toBeFalsy()
+  })
+
+  it('여러 예약행에 걸쳐 같은 옵션이 합산돼도 무료 표시가 유지된다', () => {
+    const groups = groupCartLineItems([
+      makeItem({ reservationId: '10', options: [freeOpt] }),
+      makeItem({ reservationId: '20', options: [{ ...freeOpt, qty: 2 }] }),
+    ])
+    expect(groups[0].options).toHaveLength(1)
+    expect(groups[0].options[0].qty).toBe(3)
+    expect(groups[0].options[0].isFree).toBe(true)
+  })
+})

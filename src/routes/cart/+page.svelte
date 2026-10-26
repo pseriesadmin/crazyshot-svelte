@@ -25,6 +25,7 @@
   import { calcRentalDays, calcRentalFee, calcFirstDayFee, hasFullRentalDay, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import { fireAndLog } from '$lib/utils/fireAndLog';
+  import { planFollowOptionSync, withFollowOptionQty } from '$lib/utils/followOptionSync';
   import { deriveCartMode, getPurchaseReservationDates, isRentalLine } from '$lib/utils/cartPurchaseMode';
   import {
     resolveParentProductId,
@@ -327,6 +328,49 @@
   // ⚠️ RPC에는 groupsBaseById(확정값만)를 넘기고, pendingDelta는 스텝마다 "1개씩만" 줄인다
   // (전부 한번에 비우지 않음) — 그래야 override 반영 전후로 화면(groupsById=확정값+남은
   // 델타)에 순간적인 값 되돌림(깜빡임)이 생기지 않는다(2026-09-02 발견·수정).
+  // 본상품 수량 확정 후 "수량 본상품 연동"(qty_follows_main) 옵션 수량을 본상품 수량에 맞춰 서버에 저장한다(2026-10-26, Stephen 지시).
+  // 장바구니에서 본상품 수량을 바꾸면 새 예약행이 옵션 없이 추가될 뿐이라 연동 옵션 수량이 그대로 남던 결함 수정.
+  // set_reservation_options 는 옵션 목록 전체를 교체하므로 연동이 아닌 옵션도 현재 값 그대로 함께 보낸다(서버도 같은 규칙으로 보정).
+  // 연동 옵션 동기화 재시도 타이머 — 화면을 벗어나면 모두 정리한다(언마운트 뒤 실행 방지)
+  const followSyncTimers = new Set<ReturnType<typeof setTimeout>>()
+  $effect(() => () => { followSyncTimers.forEach(clearTimeout); followSyncTimers.clear() })
+
+  async function syncFollowOptionsToMainQty(canonicalId: string, attempt = 0): Promise<void> {
+    const fresh = groupsBaseById.get(canonicalId)
+    if (!fresh || fresh.options.length === 0) return
+    const plan = planFollowOptionSync(fresh.options, fresh.qty, stockCapFor, { includeOwnQty: fresh.status === 'hold' })
+    if (!plan.changed) return
+    if (pendingOptionKey) {
+      // 다른 옵션 변경이 처리 중 — 조용히 포기하지 않고 잠시 뒤 다시 시도한다(최대 5회). 끝내 못 맞춰도 주문 생성 때 서버가 같은 규칙으로 보정한다.
+      if (attempt < 5) {
+        const t = setTimeout(() => { followSyncTimers.delete(t); void syncFollowOptionsToMainQty(canonicalId, attempt + 1) }, 500)
+        followSyncTimers.add(t)
+      }
+      return
+    }
+    pendingOptionKey = `${canonicalId}:follow-sync`
+    try {
+      const { error } = await (supabase.rpc as unknown as SetOptionsRpcFn)('set_reservation_options', {
+        p_reservation_id: Number(canonicalId),
+        p_options:        plan.payload,
+      })
+      if (error) {
+        const msg = (error as { message?: string })?.message ?? ''
+        csToast.error(
+          msg.includes('OPTION_STOCK_EXCEEDED')
+            ? '옵션상품 재고가 부족해 연동 수량을 맞추지 못했습니다.'
+            : '연동 옵션 수량 변경에 실패했습니다.'
+        )
+        return
+      }
+      await invalidateAll()
+    } catch {
+      csToast.error('네트워크 오류가 발생했습니다.')
+    } finally {
+      pendingOptionKey = null
+    }
+  }
+
   async function flushQtyChange(canonicalId: string): Promise<void> {
     if (pendingQtyKey === canonicalId) return
     clearTimeout(debounceTimers[canonicalId])
@@ -346,6 +390,8 @@
         const ok = dir === 1 ? await incrementGroupQtyImmediate(fresh, 1) : await decrementGroupQtyImmediate(fresh, -1)
         if (!ok) break
       }
+      // 본상품 수량이 확정된 뒤 "수량 본상품 연동" 옵션 수량을 서버에도 같은 값으로 맞춘다(2026-10-26)
+      await syncFollowOptionsToMainQty(canonicalId)
     } catch {
       csToast.error('네트워크 오류가 발생했습니다.')
     } finally {
@@ -940,7 +986,7 @@
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
   type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; discount_scope?: string; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
-  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean }
+  type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean; isFree?: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
   // 2026-08-28: 동일 부모상품 중복담기 병합 — 서버(cartLineGrouping.ts groupCartLineItems)가
   // 예약행(재고단위) 여러 건을 하나의 그룹으로 묶어 내려준다. qty=reservationIds.length,
@@ -981,9 +1027,20 @@
     const ov = qtyOverrides[g.canonicalReservationId]
     return [g.canonicalReservationId, ov ? { ...g, qty: ov.qty, reservationIds: ov.reservationIds } : g]
   })))
+  // 서버에서 불러온 그룹 본상품 수량(수량 변경·미확정 델타 반영 전) — 연동 옵션 표시 보정의 기준
+  const serverMainQtyById = $derived(new Map(effectiveLineGroups.map(g => [g.canonicalReservationId, g.qty] as [string, number])))
   const groupsById = $derived(new Map(Array.from(groupsBaseById.entries()).map(([id, base]) => {
     const delta = pendingDelta[id] ?? 0
-    return [id, delta === 0 ? base : { ...base, qty: base.qty + delta }]
+    const withQty = delta === 0 ? base : { ...base, qty: base.qty + delta }
+    // "수량 본상품 연동" 옵션은 본상품 수량이 바뀌는 즉시 화면(옵션 수량·합계)에 같은 수량으로 보인다 — 서버 반영은 flushQtyChange 가 이어서 한다.
+    // RPC·동기화 판단에는 이 표시용 값이 아니라 groupsBaseById(확정값)를 쓴다.
+    // 서버에서 불러온 수량과 같으면(수량 변경 없음) 저장된 옵션 수량을 그대로 보여주고, 바뀌었을 때만 규칙대로 보정한다.
+    // hold 는 이 그룹이 이미 점유한 옵션 수량이 "남은 재고"에서 빠져 있어 재고 상한에 자기 몫을 더한다(서버 계산과 일치, sp3 MAJOR-2).
+    const options = withFollowOptionQty(withQty.options, withQty.qty, stockCapFor, {
+      serverMainQty: serverMainQtyById.get(id),
+      includeOwnQty: base.status === 'hold',
+    })
+    return [id, options === withQty.options ? withQty : { ...withQty, options }]
   })))
   // 가용 재고 상한 (2026-09-02, Stephen GATE B 승인 — Migration 421) — products/[id]/+page.svelte와
   // 동일 규칙. 로드 시점 스냅샷 1회만 사용(실시간 재조회 없음).
@@ -3243,6 +3300,10 @@
                 csToast.error(rejected.error ?? '함께 사용할 수 없는 쿠폰이 포함되어 있습니다.')
                 return
               }
+              if (rejected?.code === 'OPTION_DELIVERY_DISABLED') {
+                csToast.error(rejected.error ?? '배송 대여가 불가능한 옵션상품이 포함되어 있어 배송 방식으로 신청할 수 없습니다.')
+                return
+              }
             }
             // 서버가 사전검증에서 조건 미충족 쿠폰을 제외하고 주문을 다시 계산한 경우 — 화면에 보여준 금액과
             // 주문 금액이 달라지므로 신청완료로 넘어가지 않고 선택을 갱신해 다시 확인하게 한다.
@@ -3579,6 +3640,13 @@
                     {/if}
                   </div>
                   <div class="option-subcard-bottom">
+                    {#if opt.isFree}
+                      <div class="dual-price-row dual-price-row--opt">
+                        <div class="price-unit">
+                          <span class="price-amount">무료제공</span>
+                        </div>
+                      </div>
+                    {:else}
                     <div class="dual-price-row dual-price-row--opt">
                       <div class="price-unit">
                         <span class="price-unit-label">Day</span>
@@ -3594,6 +3662,7 @@
                         </div>
                       </div>
                     </div>
+                    {/if}
                     <div class="opt-qty-ctrl">
                       <button class="opt-qty-arrow" onclick={() => updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1)} disabled={opt.qty <= 1 || opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                       <span class="opt-qty-num">{opt.qty}</span>
@@ -3708,6 +3777,13 @@
                   {/if}
                 </div>
                 <div class="option-subcard-bottom">
+                  {#if opt.isFree}
+                    <div class="dual-price-row dual-price-row--opt">
+                      <div class="price-unit">
+                        <span class="price-amount">무료제공</span>
+                      </div>
+                    </div>
+                  {:else}
                   <div class="dual-price-row dual-price-row--opt">
                     <div class="price-unit">
                       <span class="price-unit-label">Day</span>
@@ -3723,6 +3799,7 @@
                       </div>
                     </div>
                   </div>
+                  {/if}
                   <div class="opt-qty-ctrl">
                     <button class="opt-qty-arrow" onclick={(e) => { e.stopPropagation(); updateOptionQty(item.id, line, opt.optionProductId, opt.qty - 1) }} disabled={opt.qty <= 1 || opt.qtyFollowsMain || pendingOptionKey === `${item.id}:${opt.optionProductId}`} aria-label="옵션 수량 감소">−</button>
                     <span class="opt-qty-num">{opt.qty}</span>

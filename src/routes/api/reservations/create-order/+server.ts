@@ -101,6 +101,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
         { status: 400 },
       )
     }
+    // "배송 대여 불가" 옵션이 담긴 상품을 배송형 방식으로 신청(Migration 769) — 요청 거부(400)
+    if (errMessage.includes('OPTION_DELIVERY_DISABLED')) {
+      return json(
+        { error: '배송 대여가 불가능한 옵션상품이 포함되어 있어 배송 방식으로 신청할 수 없습니다. 수령·반납 방식을 변경해 주세요.', code: 'OPTION_DELIVERY_DISABLED' },
+        { status: 400 },
+      )
+    }
     console.error('[reservations/create-order] create_reservation_order 실패:', error)
     return json({ error: '주문 연결 생성 실패' }, { status: 500 })
   }

@@ -507,6 +507,7 @@ export const load: PageServerLoad = async ({ locals }) => {
         isRequired:      linkFlags.isRequired,
         minSelectRequired: linkFlags.minSelectRequired,
         qtyFollowsMain:  linkFlags.qtyFollowsMain,
+        isFree:          isFreeForThisMain,
       })
       optionsByReservation[key] = list
     }
@@ -796,6 +797,7 @@ interface CartLineItemOption {
   isRequired: boolean
   minSelectRequired: boolean
   qtyFollowsMain: boolean
+  isFree?: boolean
 }
 
 interface CartLineItem {
