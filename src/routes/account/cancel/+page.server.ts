@@ -1,5 +1,9 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
+import { createClient } from '@supabase/supabase-js'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
+import { loadPaymentReceipts, type CardPaymentInfo } from '$lib/server/account/loadPaymentReceipts'
 
 export interface MyCancel {
   id:               string
@@ -8,6 +12,8 @@ export interface MyCancel {
   start_date:       string | null
   end_date:         string | null
   created_at:       string
+  /** 카드 취소내역 버튼 정보 — 카드 결제 취소 건만(없으면 null) */
+  payment:          CardPaymentInfo | null
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -29,5 +35,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     return { cancels: [] as MyCancel[] }
   }
 
-  return { cancels: (data ?? []) as MyCancel[] }
+  const rows = (data ?? []) as Array<Omit<MyCancel, 'payment'>>
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  const payments = serviceRoleKey
+    ? await loadPaymentReceipts(createClient(getSupabaseUrl(), serviceRoleKey), session.user.id, rows.map(r => r.id))
+    : new Map<string, CardPaymentInfo>()
+
+  return { cancels: rows.map(r => ({ ...r, payment: payments.get(String(r.id)) ?? null })) as MyCancel[] }
 }

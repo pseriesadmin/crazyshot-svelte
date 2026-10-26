@@ -7,6 +7,10 @@ import { loadPointTransactions } from '$lib/server/account/loadPointTransactions
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
 import { groupRentalsByOrder } from '$lib/utils/groupRentalsByOrder'
+import { loadPaymentReceipts, pickCardPayment } from '$lib/server/account/loadPaymentReceipts'
+import { createClient } from '@supabase/supabase-js'
+import { env } from '$env/dynamic/private'
+import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { maskDocUrlsForClient } from '$lib/server/userDocs'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
@@ -158,6 +162,13 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
   // 같은 주문의 예약은 PC 대여 패널에서도 카드 1장으로 묶는다(주문 1건 = 카드 1장)
   const rentalOrderIds = await loadReservationOrderIds(locals.supabase, rentalReservationIds)
 
+  // 카드 영수증·취소내역 버튼 정보(결제 행이 있는 예약만) — 서버 전용 서비스 롤, 최소 정보만 내려감
+  const cancelRows = (cancelsRes.data ?? []) as Array<{ id: string }>
+  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
+  const cardPayments = serviceRoleKey
+    ? await loadPaymentReceipts(createClient(getSupabaseUrl(), serviceRoleKey), session.user.id, [...rentalReservationIds, ...cancelRows.map(c => c.id)])
+    : new Map()
+
   return {
     user: {
       name: profile?.full_name ?? '고객',
@@ -225,11 +236,11 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
         cancelling: (r.status === 'cancelled' && !!r.customer_cancelled_at && !r.cancel_confirmed_at) || (r.status !== 'cancelled' && !!r.cancel_requested_at),
         canCancel: (rentalCancelKinds.get(String(r.id)) ?? 'unavailable') === 'free',
       }
-    }), rentalOrderIds),
-    cancels: (cancelsRes.data ?? []) as Array<{
+    }), rentalOrderIds).map(g => ({ ...g, payment: pickCardPayment(g.items.map(i => i.id), cardPayments) })),
+    cancels: ((cancelsRes.data ?? []) as Array<{
       id: string; status: string; reservation_code: string
       start_date: string | null; end_date: string | null; created_at: string
-    }>,
+    }>).map(c => ({ ...c, payment: cardPayments.get(String(c.id)) ?? null })),
     inquiries: (inquiriesRes.data ?? []) as Array<{
       id: string; title: string; content: string; category: string; status: string; created_at: string
       cs_inquiries: Array<{ id: string; response: string; is_resolution: boolean; created_at: string }>

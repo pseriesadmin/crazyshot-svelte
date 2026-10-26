@@ -3,6 +3,7 @@ import type { PageServerLoad } from './$types'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
 import { groupRentalsByOrder, type RentalGroupItem } from '$lib/utils/groupRentalsByOrder'
+import { loadPaymentReceipts, pickCardPayment, type CardPaymentInfo } from '$lib/server/account/loadPaymentReceipts'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
@@ -30,6 +31,8 @@ export interface MyRental {
   // 같은 주문(장바구니 1건)의 상품 목록 — 카드 1장에 모두 표시(2026-10-26)
   items:                  RentalGroupItem[]
   returnTargetId:         string
+  /** 카드 영수증·취소내역 버튼 정보 — 결제 행이 없으면(신청대기 등) null */
+  payment:                CardPaymentInfo | null
   cancelKind:             CancelKind
   cancelRequested:        boolean
   /** 고객이 취소했고 관리자 취소확인 전 — "취소중" 비활성 카드 */
@@ -95,7 +98,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     for (const x of (subs ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
   }
 
-  const rows: Array<Omit<MyRental, 'items' | 'returnTargetId'>> = (data ?? []).map((r: Record<string, unknown>) => {
+  const rows: Array<Omit<MyRental, 'items' | 'returnTargetId' | 'payment'>> = (data ?? []).map((r: Record<string, unknown>) => {
     const product = (r.products as { name: string; category: string } | null) ?? null
     const status = contractStatus.get(String(r.id))
     return {
@@ -123,7 +126,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   // 같은 주문의 예약은 카드 1장으로 묶는다(주문 1건 = 대여 카드 1장, service-operations §4)
   const orderIds = await loadReservationOrderIds(locals.supabase, reservationIds)
-  const rentals: MyRental[] = groupRentalsByOrder(rows, orderIds)
+  const grouped = groupRentalsByOrder(rows, orderIds)
+  // 카드 영수증·취소내역 — 결제 행이 있는 카드에만 버튼 노출(서버 전용 서비스 롤, 최소 정보만 내려감)
+  const payments = serviceRoleKey
+    ? await loadPaymentReceipts(createClient(getSupabaseUrl(), serviceRoleKey), session.user.id, reservationIds)
+    : new Map<string, CardPaymentInfo>()
+  const rentals: MyRental[] = grouped.map(g => ({ ...g, payment: pickCardPayment(g.items.map(i => i.id), payments) }))
 
   return { rentals }
 }

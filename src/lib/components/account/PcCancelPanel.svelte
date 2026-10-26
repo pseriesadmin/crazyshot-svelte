@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CardPaymentButtons from '$lib/components/account/CardPaymentButtons.svelte'
   interface CancelItem {
     id: string
     status: string
@@ -6,6 +7,8 @@
     start_date: string | null
     end_date: string | null
     created_at: string
+    // 카드 취소내역 버튼 정보(카드 결제 취소 건만)
+    payment?: { receiptUrl: string | null; cancelled: boolean; partial: boolean; cancelDetail: boolean } | null
   }
 
   interface Props {
@@ -36,7 +39,10 @@
       {#each cancels as item (item.id)}
         <div class="cancel-card">
           <div class="card-head">
-            <span class="code">{item.reservation_code}</span>
+            <div class="card-head-left">
+              <span class="code">{item.reservation_code}</span>
+              <CardPaymentButtons reservationId={item.id} payment={item.payment} mode="cancel" />
+            </div>
             <span class="status-chip">취소</span>
           </div>
 
@@ -114,6 +120,14 @@
     flex-direction: column;
     gap: 10px;
   }
+  .card-head-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    min-width: 0;
+  }
+
   .card-head {
     display: flex;
     align-items: center;
