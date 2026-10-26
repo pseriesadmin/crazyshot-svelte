@@ -21,8 +21,6 @@
   import { isRealMemberSession } from '$lib/utils/authGuard';
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
-  import { getDocGateStatus, type DocGateRow } from '$lib/utils/docApproval';
-  import { requestDocRegistrationIfNeeded } from '$lib/utils/docRequestClient';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
   import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
@@ -524,20 +522,8 @@
     }
     if (!currentSession) return; // isRealMemberSession 통과 시 항상 존재 — TS 타입 좁히기용
 
-    // 본인증명 또는 외국인증명 파일 등록 여부 확인 (2026-08-19) — 둘 중 하나라도 등록돼
-    // 있으면 통과. is_foreign 플래그는 외국인증명 등록 시에만 자동 true로 바뀌므로(update_
-    // user_doc_url RPC) 플래그 자체로 분기하면 아직 아무것도 등록 안 한 외국인 사용자를
-    // 영구히 막게 됨 — 두 문서 URL 존재 여부로만 판정한다.
-    const { data: verifyRow } = await supabase
-      .from('user_profiles')
-      .select('identity_doc_url, identity_type, identity_verified_at, identity_approved_at, foreign_doc_url, foreign_doc_urls, foreign_type, foreign_verified_at, foreign_approved_at')
-      .eq('user_id', currentSession.user.id)
-      .maybeSingle();
-    // 2026-10-15(Stephen 확정): 본인증명 미등록·승인 대기여도 장바구니 담기·예약신청을 막지 않는다(DB 차단도 Migration #716으로 해제).
-    // 차단 토스트 대신, 서류가 미등록(none)이면 서버가 기존 "본인증명 등록요청" 대화카드 + 푸시 + SMS로 등록을 요청한다
-    // (응답을 기다리지 않는다·24시간 중복 방지는 서버). 서류 확인은 이 요청과 관리자 예약 승인 단계에서 이뤄진다.
-    const docGate = getDocGateStatus(verifyRow as DocGateRow | null);
-    requestDocRegistrationIfNeeded(docGate);
+    // 본인증명 등록요청 카드는 이 화면에서 보내지 않는다(2026-10-26, Stephen 확정) — 관리자가 '예약승인'을 실행할 때만 채팅·푸시·SMS로 발송된다.
+    // 예약신청·장바구니 담기는 서류 상태와 무관하게 막지 않는다(Migration #716).
 
     isReserving = true;
     trackCartAdd(data.productId);
