@@ -2,6 +2,7 @@ import { writable, derived } from 'svelte/store';
 import type { User, Session } from '@supabase/supabase-js';
 import { auth as authService, supabase, rpc } from '$lib/services/supabase';
 import { setRememberChoice } from '$lib/utils/authCookies';
+import { pickGuestToken, requestGuestChatMerge } from '$lib/utils/guestChatMerge';
 
 // Store types
 interface AuthState {
@@ -120,6 +121,15 @@ export const performSignIn = async (email: string, password: string, remember?: 
     authState.update((state) => ({ ...state, loading: true, error: null }));
     if (typeof remember === 'boolean') setRememberChoice(remember);
 
+    // 로그인 직전의 비회원(익명) 세션 토큰을 보관한다 — 로그인하면 그 세션이 회원 세션으로 교체되어, 방금까지의 비회원 채팅이 고아가 되기 때문(2026-10-27)
+    let guestToken: string | null = null;
+    try {
+      const { data: { session: beforeSession } } = await supabase.auth.getSession();
+      guestToken = pickGuestToken(beforeSession);
+    } catch {
+      // 토큰 보관 실패는 로그인에 영향이 없다 — 통합만 건너뛴다
+    }
+
     const data = await authService.signIn(email, password);
 
     authState.set({
@@ -128,6 +138,9 @@ export const performSignIn = async (email: string, password: string, remember?: 
       loading: false,
       error: null,
     });
+
+    // 비회원 채팅을 회원 채팅으로 통합 — 로그인 흐름을 막지 않도록 기다리지 않고, 실패해도 조용히 넘어간다
+    if (guestToken) void requestGuestChatMerge(guestToken);
 
     return { user: data.user, session: data.session };
   } catch (error) {
