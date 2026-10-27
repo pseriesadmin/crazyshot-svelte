@@ -46,6 +46,8 @@
       if (outOfRange(g.fuzzy, r.fuzzy.min, r.fuzzy.max)) return true
       for (const v of Object.values(g.boost)) if (outOfRange(v, r.boost.min, r.boost.max)) return true
     }
+    if (outOfRange(draft.learning.minUsers, r.learningMinUsers.min, r.learningMinUsers.max) || !Number.isInteger(draft.learning.minUsers)) return true
+    if (outOfRange(draft.popularity.weight, r.popularityWeight.min, r.popularityWeight.max)) return true
     return outOfRange(draft.semantic.weight, r.semanticWeight.min, r.semanticWeight.max)
   })
 
@@ -213,6 +215,51 @@
           >{draft.semantic.shadow ? 'ON' : 'OFF'}</button>
           <span class="param-def">{data.defaults.semantic.shadow ? '켜짐' : '꺼짐'}</span>
         </div>
+      </div>
+
+      <h3 class="group-title">검색 학습 · 인기 반영</h3>
+      <p class="section-desc">고객이 검색어를 입력하고 상품을 누른 기록을 검색에 학습시키는 기준입니다. 서로 다른 사용자가 같은 검색어로 같은 상품을 정해진 인원 이상 눌러야 검색 키워드로 합쳐집니다(로그인하지 않아 구분할 수 없는 고객은 모두 합쳐 1명으로 셉니다). '인기 반영'을 켜면 검색을 거치지 않고 상품 페이지에 직접 들어온 방문자가 많은 상품이 검색 순위에서 약하게 앞섭니다(최근 30일, 매일 새벽 집계).</p>
+      <div class="param-table">
+        <label class="param-row">
+          <span class="param-name">학습 승격 최소 인원(명)<small>learning.minUsers</small></span>
+          <input
+            class="param-input"
+            class:invalid={outOfRange(draft.learning.minUsers, data.ranges.learningMinUsers.min, data.ranges.learningMinUsers.max) || !Number.isInteger(draft.learning.minUsers)}
+            type="number"
+            step="1"
+            min={data.ranges.learningMinUsers.min}
+            max={data.ranges.learningMinUsers.max}
+            value={draft.learning.minUsers}
+            oninput={(e) => (draft.learning.minUsers = num(e.currentTarget.value, 3))}
+          />
+          <span class="param-def">{data.defaults.learning.minUsers}</span>
+        </label>
+        <div class="param-row">
+          <span class="param-name">직접 진입 인기 반영<small>popularity.enabled</small></span>
+          <button
+            type="button"
+            class="combo-btn"
+            class:combo-active={draft.popularity.enabled}
+            aria-pressed={draft.popularity.enabled}
+            aria-label={draft.popularity.enabled ? '직접 진입 인기 반영 켜짐' : '직접 진입 인기 반영 꺼짐'}
+            onclick={() => (draft.popularity.enabled = !draft.popularity.enabled)}
+          >{draft.popularity.enabled ? 'ON' : 'OFF'}</button>
+          <span class="param-def">{data.defaults.popularity.enabled ? '켜짐' : '꺼짐'}</span>
+        </div>
+        <label class="param-row">
+          <span class="param-name">인기 반영 비중<small>popularity.weight</small></span>
+          <input
+            class="param-input"
+            class:invalid={outOfRange(draft.popularity.weight, data.ranges.popularityWeight.min, data.ranges.popularityWeight.max)}
+            type="number"
+            step="0.05"
+            min={data.ranges.popularityWeight.min}
+            max={data.ranges.popularityWeight.max}
+            value={draft.popularity.weight}
+            oninput={(e) => (draft.popularity.weight = num(e.currentTarget.value, 0))}
+          />
+          <span class="param-def">{data.defaults.popularity.weight}</span>
+        </label>
       </div>
 
       <div class="foot-row">

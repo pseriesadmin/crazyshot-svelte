@@ -108,3 +108,33 @@ describe('resolve*IndexConfig — 파라미터 반영', () => {
     expect(c.storeFields).toEqual(PRODUCT_INDEX_CONFIG.storeFields)
   })
 })
+
+describe('learning · popularity (2026-10-27 서로 다른 사용자 수 승격 + 직접 진입 인기)', () => {
+  it('기본값: 최소 3명, 인기 반영 꺼짐', () => {
+    expect(DEFAULT_NLSEARCH_PARAMS.learning).toEqual({ minUsers: 3 })
+    expect(DEFAULT_NLSEARCH_PARAMS.popularity.enabled).toBe(false)
+    expect(sanitizeNlsearchParams({}).learning.minUsers).toBe(3)
+    expect(sanitizeNlsearchParams(null).popularity.enabled).toBe(false)
+  })
+
+  it('읽기: 범위 밖 값은 맞추고 소수는 반올림, 타입 오류는 기본값', () => {
+    expect(sanitizeNlsearchParams({ learning: { minUsers: 99 } }).learning.minUsers).toBe(10)
+    expect(sanitizeNlsearchParams({ learning: { minUsers: 0 } }).learning.minUsers).toBe(1)
+    expect(sanitizeNlsearchParams({ learning: { minUsers: 2.6 } }).learning.minUsers).toBe(3)
+    expect(sanitizeNlsearchParams({ learning: { minUsers: 'x' } }).learning.minUsers).toBe(3)
+    expect(sanitizeNlsearchParams({ popularity: { enabled: 'yes', weight: 9 } }).popularity).toEqual({ enabled: false, weight: 2 })
+  })
+
+  it('저장: 범위 밖·소수·타입 오류는 거절, 정상값은 통과', () => {
+    expect(validateNlsearchParams({ learning: { minUsers: 11 } }).ok).toBe(false)
+    expect(validateNlsearchParams({ learning: { minUsers: 1.5 } }).ok).toBe(false)
+    expect(validateNlsearchParams({ popularity: { weight: 3 } }).ok).toBe(false)
+    expect(validateNlsearchParams({ popularity: { enabled: 'true' } }).ok).toBe(false)
+    const ok = validateNlsearchParams({ learning: { minUsers: 3 }, popularity: { enabled: true, weight: 0.5 } })
+    expect(ok.ok).toBe(true)
+    if (ok.ok) {
+      expect(ok.params.learning.minUsers).toBe(3)
+      expect(ok.params.popularity).toEqual({ enabled: true, weight: 0.5 })
+    }
+  })
+})
