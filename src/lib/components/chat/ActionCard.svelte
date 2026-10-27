@@ -102,10 +102,12 @@
   // 썸네일만 있는 카드(대표 이미지·버튼 문구·링크 없음) — 버튼을 숨긴다(서버가 button_label을 빈 문자열로 보낸다)
   let hideCta = $derived(payload.type === 'canned_cta' && payload.button_label === '' && !safeActionUrl(payload.action_url))
   // CTA 버튼 레이블 + 색상 결정
-  let ctaLabel = $derived(payload.button_label ?? ctaDefaults(payload.type).label)
+  // 취소문의 카드: 고객에게는 '대여 정보 확인', 관리자에게는 payload 의 '취소문의 확인'
+  let ctaLabel = $derived(payload.type === 'cancel_inquiry' && !isAdmin ? '대여 정보 확인' : (payload.button_label ?? ctaDefaults(payload.type).label))
   let ctaColor = $derived(payload.button_color ?? ctaDefaults(payload.type).color)
   // 버튼 주소는 항상 검사를 거친다(javascript:·data: 등 실행 가능한 주소 차단, sp5 SEC-001 2026-10-24)
-  let ctaUrl = $derived(safeActionUrl(payload.action_url))
+  // 취소문의 카드는 고객 화면에서 payload 의 CMS 주소를 열지 못하게 대여 정보(대여예약카드)로 고정한다(2026-10-26)
+  let ctaUrl = $derived(payload.type === 'cancel_inquiry' && !isAdmin ? '/account/rental' : safeActionUrl(payload.action_url))
 
   // SHIPMENT_TRACKING_CARD — 운송장 미등록 상태(chatActionEnrich.ts enrichShipmentTrackingCard)는
   // action_url이 없어 CTA 버튼이 눌러도 반응 없는 죽은 버튼이 된다 — 대신 등록 안내 문구로 폴백.
@@ -141,6 +143,7 @@
       case 'identity_review_request': return { label: '본인증명정보 등록', color: 'purple' }
       case 'identity_approved':      return { label: '내 정보 확인하기', color: 'green' }
       case 'cancel_request':         return { label: '취소요청 확인', color: 'red' }
+      case 'cancel_inquiry':         return { label: '취소문의 확인', color: 'red' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드
@@ -628,6 +631,8 @@
         {:else}
           {#if payload.type === 'cancel_request'}
             <p class="product-link-badge">예약 취소 요청</p>
+          {:else if payload.type === 'cancel_inquiry'}
+            <p class="product-link-badge">예약 취소 문의</p>
           {/if}
           {#if payload.reservation_no}
             <p class="reservation-no">예약번호: {payload.reservation_no}</p>

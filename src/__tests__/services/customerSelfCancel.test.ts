@@ -321,7 +321,7 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
     expect(res.status).toBe(403)
   })
 
-  it('SC-3 confirmed + 운송장 있음 → 403 취소불가', async () => {
+  it('SC-3 confirmed + 운송장 있음 + 비배송형 → 403 취소불가 (배송형은 SC-3b)', async () => {
     const { POST } = await import('../../routes/api/checkout/cancel-reservation/+server')
     // 예약 조회: confirmed + tracking_number 있음
     mockMaybeSingle.mockResolvedValueOnce({
@@ -331,13 +331,40 @@ describe('C. POST /api/checkout/cancel-reservation', () => {
     // order_items 조회: 없음
     mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
     // rental_method_options 조회
-    mockMaybeSingle.mockResolvedValueOnce({ data: { is_delivery_type: true }, error: null })
+    mockMaybeSingle.mockResolvedValueOnce({ data: { is_delivery_type: false }, error: null })
 
     const res = await POST({
       locals: makeLocals('user-1'),
       request: makeRequest({ reservationId: 42 }),
     } as never) as { status: number }
     expect(res.status).toBe(403)
+  })
+
+  it('SC-3b confirmed + 운송장 있음 + 배송형 + 배송 당일 09시 전 → 취소 요청 접수 (운송장은 판정에 쓰지 않음, 2026-10-26)', async () => {
+    const { POST } = await import('../../routes/api/checkout/cancel-reservation/+server')
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { id: 42, status: 'confirmed', user_id: 'user-1', tracking_number: 'TRACK123', pickup_method: 'delivery', start_date: '2099-12-31', pickup_time: null },
+      error: null,
+    })
+    mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
+    mockMaybeSingle.mockResolvedValueOnce({ data: { is_delivery_type: true }, error: null })
+    mockMaybeSingle.mockResolvedValue({ data: { reservation_code: 'CS1', end_date: '2099-12-31', products: { name: 'P' } }, error: null })
+    const res = await POST({ locals: makeLocals('user-1'), request: makeRequest({ reservationId: 42 }) } as never) as { status: number }
+    expect(res.status).toBe(200)
+    expect(mockSubmitCancelRequest).toHaveBeenCalled()
+  })
+
+  it('SC-3c 배송형 + 배송 당일 09시 이후(수령일이 지난 계약완료) → 403 + use_inquiry', async () => {
+    const { POST } = await import('../../routes/api/checkout/cancel-reservation/+server')
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { id: 42, status: 'confirmed', user_id: 'user-1', tracking_number: null, pickup_method: 'delivery', start_date: '2020-01-01', pickup_time: null },
+      error: null,
+    })
+    mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
+    mockMaybeSingle.mockResolvedValueOnce({ data: { is_delivery_type: true }, error: null })
+    const res = await POST({ locals: makeLocals('user-1'), request: makeRequest({ reservationId: 42 }) } as never) as { status: number; json: () => Promise<{ code?: string }> }
+    expect(res.status).toBe(403)
+    expect((await res.json()).code).toBe('use_inquiry')
   })
 
   it('SC-1 hold 예약 취소 → update_reservation_status(cancelled), cancelReservationWithRefund 미호출', async () => {

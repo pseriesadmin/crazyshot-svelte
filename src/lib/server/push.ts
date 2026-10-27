@@ -10,6 +10,10 @@ import { getMessaging } from 'firebase-admin/messaging'
 import type { Database, NotificationToken, PushNotificationConfig } from '$lib/types/database'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { sendLifecycleSms } from './sms'
+import { liveTracking, trackingNoticeText } from '$lib/utils/trackingNotice'
+
+/** 푸시·문자 본문에 택배사·운송장 번호 줄을 붙이는 알림 타입(채팅카드는 DB 함수가 payload 로 싣는다) */
+const TRACKING_NOTIFY_TYPES = ['shipment_notify', 'tracking_notify']
 import { filterAdminPushRecipientsByMenu } from '$lib/server/adminPushMenuFilter'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
@@ -46,7 +50,8 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
   },
   shipment_notify: {
     title: '상품이 반출됐어요',
-    body: (p) => `${p}이(가) 발송됐어요.`,
+    // 택배사·운송장 번호 줄은 값이 없으면 발송 시 빠진다(applyNotifyTemplate) — 화면 기본 문구와 동일해야 한다(notifyDefaultsMatchActual)
+    body: (p) => `${p}이(가) 발송됐어요.\n택배사: {{택배사}}\n운송장 번호: {{운송장번호}}`,
   },
   rental_confirm: {
     title: '대여가 시작됐어요',
@@ -99,7 +104,7 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
   // 'tracking_notify' CASE)와 쌍을 이루는 브라우저 푸시 — service-operations.md §15 동기화 원칙.
   tracking_notify: {
     title: '운송장 번호가 등록됐어요',
-    body: (p) => `${p} 운송장 번호가 등록됐어요. 채팅에서 배송 정보를 확인해주세요.`,
+    body: (p) => `${p} 운송장 번호가 등록됐어요.\n택배사: {{택배사}}\n운송장 번호: {{운송장번호}}`,
   },
   // Migration #494: 예약변경 — 결제취소 후 hold 재진입 안내.
   // 채팅카드(send_rental_chat_notification 'payment_cancelled_reissue')와 쌍을 이루는 브라우저 푸시.
@@ -357,7 +362,7 @@ export async function sendReservationLifecyclePush(
 
     const { data: resv } = await admin
       .from('rental_reservations')
-      .select('user_id, reservation_code, start_date, end_date, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+      .select('user_id, reservation_code, start_date, end_date, pickup_time, return_time, tracking_number, courier_code, dhero_meta, products!rental_reservations_product_id_fkey(name, parent_product_id)')
       .eq('id', reservationId)
       .single()
 
@@ -368,6 +373,9 @@ export async function sendReservationLifecyclePush(
       end_date?: string | null
       pickup_time?: string | null
       return_time?: string | null
+      tracking_number?: string | null
+      courier_code?: string | null
+      dhero_meta?: { canceledAt?: unknown } | null
       products?: { name?: string } | { name?: string }[] | null
     } | null
     if (!row?.user_id) return
@@ -385,6 +393,8 @@ export async function sendReservationLifecyclePush(
     const profileRow = userProfile as { phone?: string | null; full_name?: string | null } | null
 
     // 안내문장 변수(CMS 편집 문장용) — 값이 없는 항목은 비워 둔다
+    // 두발히어로에서 취소된 접수번호는 싣지 않는다(Migration 775 와 같은 기준)
+    const live = liveTracking(row.courier_code, row.tracking_number, row.dhero_meta)
     const joinDateTime = (date?: string | null, time?: string | null): string =>
       [date ?? '', time ?? ''].filter(Boolean).join(' ')
     const vars: NotifyVars = {
@@ -393,7 +403,11 @@ export async function sendReservationLifecyclePush(
       ...(row.reservation_code ? { 예약코드: row.reservation_code } : {}),
       ...(row.start_date ? { 수령일시: joinDateTime(row.start_date, row.pickup_time) } : {}),
       ...(row.end_date ? { 반납일시: joinDateTime(row.end_date, row.return_time) } : {}),
+      // 반출·운송장 알림 전용(2026-10-27) — 번호가 없으면 비워 두고 템플릿이 그 줄을 뺀다
+      ...(live.number ? { 운송장번호: live.number } : {}),
+      ...(live.number && live.courier ? { 택배사: live.courier } : {}),
     }
+    const trackingText = TRACKING_NOTIFY_TYPES.includes(notifyType) ? trackingNoticeText(live.courier, live.number) : ''
     // 무인보관함 이용 안내(2026-10-11): 푸시알림 설정의 공통 안내문장을 정본으로 이 고객 한 명에게만 보낸다.
     // 크론이 이미 조립한 문장(bodyOverride)이 있으면 그대로, 없으면 여기서 조립한다(조립 실패 시 기존 문구).
     let lockerBody: string | undefined
@@ -404,7 +418,7 @@ export async function sendReservationLifecyclePush(
     await sendPushToUser(
       row.user_id,
       notifyType,
-      { title: copy.title, body: lockerBody ?? copy.body(productName), link: '/account/rental' },
+      { title: copy.title, body: lockerBody ?? (TRACKING_NOTIFY_TYPES.includes(notifyType) ? applyNotifyTemplate(copy.body(productName), vars) : copy.body(productName)), link: '/account/rental' },
       // 무인보관함은 조립 실패(lockerBody 없음) 때도 편집 문장을 적용하지 않는다 — 함번호·비밀번호 변수 없이 치환되면 깨진 문장이 나가기 때문
       { vars, noOverride: notifyType === 'locker_guide' || lockerBody !== undefined },
     )
@@ -429,6 +443,7 @@ export async function sendReservationLifecyclePush(
           linkOverride: options?.smsLink,
           force: options?.forceSms,
           customMessage,
+          trackingText,
         })
       }
     }

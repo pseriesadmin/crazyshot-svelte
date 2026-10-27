@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import type { PageServerLoad } from './$types'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
@@ -18,6 +19,8 @@ export interface MyCancel {
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
+  // 익명(채팅 게스트) 세션은 가입 전 계정이라 로그인으로 보낸다(빈 화면 방지, 2026-10-27)
+  if (!isRealMemberSession(session)) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
   if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const { data, error } = await locals.supabase

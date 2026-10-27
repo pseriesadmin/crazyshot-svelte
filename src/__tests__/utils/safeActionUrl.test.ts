@@ -44,7 +44,8 @@ describe('safeActionUrl', () => {
   it('ActionCard 는 payload.action_url 을 이 검사를 거쳐서만 사용한다', () => {
     const src = readFileSync('src/lib/components/chat/ActionCard.svelte', 'utf8')
     expect(src).toContain("from '$lib/utils/safeActionUrl'")
-    expect(src).toMatch(/ctaUrl\s*=\s*\$derived\(safeActionUrl\(payload\.action_url\)\)/)
+    // 취소문의 카드를 고객이 열면 CMS 주소 대신 고정 내부 경로(/account/rental)를 쓴다(2026-10-27) — 그 외는 모두 safeActionUrl 을 거친다
+    expect(src).toMatch(/ctaUrl\s*=\s*\$derived\(\s*(payload\.type === 'cancel_inquiry' && !isAdmin \? '\/account\/rental' : )?safeActionUrl\(payload\.action_url\)\)/)
     // 검사를 거치지 않은 원본 주소를 직접 열거나 링크에 쓰는 곳이 없어야 한다
     expect(src).not.toMatch(/location\.href\s*=\s*payload\.action_url/)
     expect(src).not.toMatch(/window\.open\(\s*payload\.action_url/)

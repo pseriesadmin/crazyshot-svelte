@@ -1,4 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
@@ -59,6 +60,8 @@ export interface ShippingAddress {
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
+  // 익명(채팅 게스트) 세션은 가입 전 계정이라 로그인으로 보낸다(빈 화면 방지, 2026-10-27)
+  if (!isRealMemberSession(session)) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
   if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // relative_days("첫 확인일로부터 N일") 쿠폰: 이 화면에서 쿠폰 목록을 열어보는 시점을

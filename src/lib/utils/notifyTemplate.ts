@@ -18,6 +18,8 @@ export type NotifyVarKey =
   | '무인함비밀번호'
   | '중앙현관비밀번호'
   | '반납기한'
+  | '택배사'
+  | '운송장번호'
 
 export interface NotifyVarDef {
   key: NotifyVarKey
@@ -42,9 +44,16 @@ export const NOTIFY_VARIABLES: Record<NotifyVarKey, NotifyVarDef> = {
   무인함비밀번호: { key: '무인함비밀번호', label: '무인함 비밀번호', sample: '*8821', worst: '*123456789' },
   중앙현관비밀번호: { key: '중앙현관비밀번호', label: '중앙현관 비밀번호', sample: '0418*', worst: '*123456789' },
   반납기한: { key: '반납기한', label: '반납 기한(날짜·시각)', sample: '2026-10-14 14:00', worst: '2026-10-14 14:00' },
+  // 반출·운송장 알림 전용(2026-10-27) — 값이 없으면 그 변수가 든 줄은 통째로 빠진다(applyNotifyTemplate)
+  택배사: { key: '택배사', label: '택배사', sample: '두발히어로', worst: '두발히어로택배사' },
+  운송장번호: { key: '운송장번호', label: '운송장 번호', sample: '1234567890123', worst: '12345678901234567890' },
 }
 
 const RESERVATION_VARS: NotifyVarKey[] = ['고객이름', '상품명', '예약코드', '수령일시', '반납일시']
+/** 반출·운송장 알림 — 예약 변수 + 택배사·운송장 번호 */
+const TRACKING_VARS: NotifyVarKey[] = [...RESERVATION_VARS, '택배사', '운송장번호']
+/** 값이 없으면 그 변수가 든 줄을 뺀다(빈 "택배사:" 줄이 남지 않게) */
+const LINE_OPTIONAL_VARS: NotifyVarKey[] = ['택배사', '운송장번호']
 
 export interface NotifyTypeSpec {
   notifyType: string
@@ -61,14 +70,14 @@ export interface NotifyTypeSpec {
 export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   { notifyType: 'reservation_hold', vars: RESERVATION_VARS, sms: false, defaultMessage: '{{상품명}} 예약 신청이 접수됐어요. 전자계약서 발송을 기다려주세요.' },
   { notifyType: 'reservation_approval', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 대여가 확정됐어요. 수령 안내를 확인해주세요.' },
-  { notifyType: 'shipment_notify', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}}이(가) 발송됐어요.' },
+  { notifyType: 'shipment_notify', vars: TRACKING_VARS, sms: true, defaultMessage: '{{상품명}}이(가) 발송됐어요.\n택배사: {{택배사}}\n운송장 번호: {{운송장번호}}' },
   { notifyType: 'rental_confirm', vars: RESERVATION_VARS, sms: false, defaultMessage: '{{상품명}} 수령이 확인되어 대여가 시작됐어요.' },
   { notifyType: 'return_registration', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납 정보를 등록해주세요.' },
   { notifyType: 'return_remind', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납예정일이 다가와요. 반납 방법을 확인해주세요.' },
   { notifyType: 'rental_complete', vars: RESERVATION_VARS, sms: false, defaultMessage: '{{상품명}} 대여가 정상적으로 종료됐어요. 이용해주셔서 감사합니다.' },
   { notifyType: 'reservation_cancelled', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 예약이 취소됐어요. 자세한 내용은 채팅을 확인해주세요.' },
   { notifyType: 'damage_claimed', vars: RESERVATION_VARS, sms: false, defaultMessage: '{{상품명}} 파손 신고가 접수됐어요. 담당자가 확인 후 안내드릴게요.' },
-  { notifyType: 'tracking_notify', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 운송장 번호가 등록됐어요. 채팅에서 배송 정보를 확인해주세요.' },
+  { notifyType: 'tracking_notify', vars: TRACKING_VARS, sms: true, defaultMessage: '{{상품명}} 운송장 번호가 등록됐어요.\n택배사: {{택배사}}\n운송장 번호: {{운송장번호}}' },
   // 무인보관함 이용 안내(2026-10-11, Stephen 확정): 이 안내문장이 푸시·문자·채팅카드 세 곳의 공통 정본이다(비우면 아래 기본 문구).
   // 문자는 SMS_BRAND_PREFIX가 앞에 붙고 길면 LMS로 나간다. 비밀번호가 푸시 알림 본문에도 들어가므로 해당 고객 1명에게만 발송된다.
   { notifyType: 'locker_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 무인보관함 이용 {{무인함번호}}번함 비밀번호는 '{{무인함비밀번호}}'입니다.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
@@ -139,7 +148,12 @@ export function findUnknownVariables(notifyType: string, template: string): stri
  * 알 수 없는 변수도 빈 문자열이 된다 — 저장 단계에서 이미 거절되므로 정상 흐름에선 발생하지 않는다.
  */
 export function applyNotifyTemplate(template: string, vars: NotifyVars): string {
-  const out = template.replace(VAR_PATTERN, (_all, name: string) => {
+  // 택배사·운송장번호 값이 없으면 그 변수가 든 줄은 통째로 뺀다(다른 변수는 기존처럼 빈 값으로 치환)
+  const kept = template
+    .split('\n')
+    .filter((line) => !LINE_OPTIONAL_VARS.some((v) => line.includes(`{{${v}}}`) && !(vars as Record<string, string | undefined>)[v]))
+    .join('\n')
+  const out = kept.replace(VAR_PATTERN, (_all, name: string) => {
     const value = (vars as Record<string, string | undefined>)[name]
     return value ?? ''
   })

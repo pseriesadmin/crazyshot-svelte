@@ -24,9 +24,12 @@ export function ruleFromMethodRow(
   return resolveLeadRule({ isDeliveryType: row?.is_delivery_type === true, deadlineText: row?.deadline_time ?? null })
 }
 
-/** 방식 키 → 신청 마감 규칙 (활성 방식 중 display_order가 앞선 행 우선, 없으면 기본 규칙) */
-export async function loadLeadRuleMap(client: SupabaseClient, methodKeys: string[]): Promise<Map<string, LeadRule>> {
-  const map = new Map<string, LeadRule>()
+/** 방식 키 → 취소 판정에 필요한 정보(신청 마감 규칙 + 배송형 여부) */
+export interface MethodCancelInfo { rule: LeadRule; isDeliveryType: boolean }
+
+/** 방식 키 → 취소 판정 정보 (활성 방식 중 display_order가 앞선 행 우선, 없으면 맵에 없음) */
+export async function loadMethodCancelInfo(client: SupabaseClient, methodKeys: string[]): Promise<Map<string, MethodCancelInfo>> {
+  const map = new Map<string, MethodCancelInfo>()
   const keys = [...new Set(methodKeys.filter(Boolean))]
   if (keys.length === 0) return map
   const res = await client
@@ -37,22 +40,31 @@ export async function loadLeadRuleMap(client: SupabaseClient, methodKeys: string
     .is('deleted_at', null)
     .order('display_order', { ascending: true })
   for (const row of ((res as { data?: MethodRow[] | null } | null)?.data ?? [])) {
-    if (!map.has(row.method_key)) map.set(row.method_key, ruleFromMethodRow(row))
+    if (!map.has(row.method_key)) map.set(row.method_key, { rule: ruleFromMethodRow(row), isDeliveryType: row.is_delivery_type === true })
   }
   return map
 }
 
-function kindOf(row: CancelRow, rules: Map<string, LeadRule>, nowMs: number): CancelKind {
+/** 방식 키 → 신청 마감 규칙 (기존 호출부 호환) */
+export async function loadLeadRuleMap(client: SupabaseClient, methodKeys: string[]): Promise<Map<string, LeadRule>> {
+  const info = await loadMethodCancelInfo(client, methodKeys)
+  return new Map([...info].map(([k, v]) => [k, v.rule]))
+}
+
+function kindOf(row: CancelRow, methods: Map<string, MethodCancelInfo>, nowMs: number): CancelKind {
+  const method = row.pickup_method ? methods.get(row.pickup_method) : undefined
   return getCancelKind({
     status: row.status,
     trackingNumber: row.tracking_number,
     startDate: row.start_date,
-    rule: row.pickup_method ? rules.get(row.pickup_method) : undefined,
+    rule: method?.rule,
+    isDeliveryType: method?.isDeliveryType === true,
     nowMs,
   })
 }
 
-const ACTIVE = new Set(['hold', 'confirmed'])
+// shipped 포함(2026-10-27): 같은 주문에 반출된 예약이 있으면 나머지 예약도 [취소문의]/취소 불가로 같이 판정한다(한 주문은 한 번에 취소)
+const ACTIVE = new Set(['hold', 'confirmed', 'shipped'])
 
 /** 주문에 묶인 다른 예약(self 제외)들의 취소 판정 — 취소 API용 */
 export async function loadOrderSiblingKinds(
@@ -72,7 +84,7 @@ export async function loadOrderSiblingKinds(
     .in('id', ids)
   const rows = ((resRes as { data?: CancelRow[] | null } | null)?.data ?? []).filter(r => ACTIVE.has(r.status))
   if (rows.length === 0) return []
-  const rules = await loadLeadRuleMap(client, rows.map(r => r.pickup_method ?? ''))
+  const rules = await loadMethodCancelInfo(client, rows.map(r => r.pickup_method ?? ''))
   return rows.map(r => kindOf(r, rules, nowMs))
 }
 
@@ -116,7 +128,7 @@ export async function loadCancelKinds(
 
   const byId = new Map<string, CancelRow>()
   for (const r of [...rows, ...extra]) byId.set(String(r.id), r)
-  const rules = await loadLeadRuleMap(client, [...byId.values()].map(r => r.pickup_method ?? ''))
+  const rules = await loadMethodCancelInfo(client, [...byId.values()].map(r => r.pickup_method ?? ''))
 
   for (const row of rows) {
     const own = kindOf(row, rules, nowMs)
@@ -164,7 +176,7 @@ export async function evaluateReservationCancelKind(
   orderId: number | null,
   nowMs: number,
 ): Promise<CancelKind> {
-  const rules = await loadLeadRuleMap(client, [reservation.pickup_method ?? ''])
+  const rules = await loadMethodCancelInfo(client, [reservation.pickup_method ?? ''])
   const own = kindOf(reservation, rules, nowMs)
   if (own !== 'free' && own !== 'after_deadline') return own
   const siblings = orderId != null ? await loadOrderSiblingKinds(client, orderId, reservation.id, nowMs) : []
