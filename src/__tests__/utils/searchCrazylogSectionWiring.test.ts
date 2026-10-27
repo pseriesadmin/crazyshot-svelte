@@ -86,7 +86,8 @@ describe('자동완성 로그 분리 · 입력창 채움 · 더보기 (2026-10-0
   })
 
   it('결과 화면 검색은 기존 /api/search/products(로그·CTR 학습 유지)를 그대로 쓴다', () => {
-    expect(page).toContain('/api/search/products?q=${encodeURIComponent(q)}&limit=12')
+    // 2026-10-27: 더보기 도입으로 한 번에 SEARCH_FETCH_LIMIT(50)개를 받아 12개씩 보여준다 — searchLoadMore.test.ts 참고
+    expect(page).toContain('/api/search/products?q=${encodeURIComponent(q)}&limit=${SEARCH_FETCH_LIMIT}&page=${pageNo}')
   })
 
   it('입력창 표시 문구를 직접 관리해 키워드 칩 클릭·?q= 진입 때도 검색어가 채워진다', () => {

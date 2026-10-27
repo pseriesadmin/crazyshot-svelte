@@ -25,6 +25,12 @@
     hideEmpty?: boolean
     /** 아래에 결과 섹션이 이어 붙을 때 하단 패딩을 줄여 섹션 사이 간격이 이중으로 벌어지지 않게 */
     attached?: boolean
+    /** 있으면 그리드 하단에 '더보기' 버튼 노출(검색 결과 12개씩 이어 보기) — 없으면 버튼 없음 */
+    onLoadMore?: () => void
+    /** 더보기 불러오는 중 — 버튼 비활성 */
+    loadingMore?: boolean
+    /** 헤더 건수·더보기 버튼에 쓰는 전체 건수 문구(예: '39', 서버에 더 있으면 '50+') — 없으면 보이는 개수(products.length) */
+    totalLabel?: string
   }
 
   let {
@@ -34,6 +40,9 @@
     onWishToggle,
     hideEmpty = false,
     attached = false,
+    onLoadMore,
+    loadingMore = false,
+    totalLabel,
   }: Props = $props()
 
 </script>
@@ -43,7 +52,7 @@
   <div class="results-inner">
     <div class="results-header">
       <h2 class="results-title">{title}</h2>
-      <span class="results-count">{products.length}</span>
+      <span class="results-count">{totalLabel ?? products.length}</span>
     </div>
 
       <!-- 표시 순서 = products 배열 순서(API search_products RPC 랭킹 그대로) -->
@@ -67,6 +76,14 @@
           </div>
         {/each}
       </div>
+
+      {#if onLoadMore}
+        <div class="more-wrap">
+          <button type="button" class="more-btn" disabled={loadingMore} aria-busy={loadingMore} onclick={onLoadMore}>
+            {#if loadingMore}불러오는 중…{:else if totalLabel}더보기 ({products.length}/{totalLabel}){:else}더보기{/if}
+          </button>
+        </div>
+      {/if}
   </div>
 </section>
 {:else if !hideEmpty}
@@ -201,6 +218,42 @@
     }
     .product-grid-item {
       width: auto;
+    }
+  }
+
+  /* 더보기 버튼 — front-uiux §5 보조 버튼(.cs-btn-secondary) 값 그대로: 모바일 높이 44·좌우 20·30px 반경, 가로 100% */
+  .more-wrap {
+    display: flex;
+    justify-content: center;
+    margin-top: 40px;
+  }
+  .more-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 44px;
+    padding: 0 20px;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border: none;
+    border-radius: var(--radius-xl);
+    font: var(--text-m-body-16B);
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .more-btn:hover { background: var(--cs-purple-hover); }
+  .more-btn:disabled { background: #B0ABCC; cursor: not-allowed; }
+
+  @media (min-width: 768px) {
+    /* PC — 높이 50·좌우 30·PC 타이포, 가로폭은 320px로 제한하고 가운데 정렬 */
+    .more-wrap { margin-top: 60px; }
+    .more-btn {
+      max-width: 320px;
+      height: 50px;
+      padding: 0 30px;
+      font: var(--text-pc-title-16);
     }
   }
 

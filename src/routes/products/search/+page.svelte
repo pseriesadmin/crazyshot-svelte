@@ -8,6 +8,16 @@
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { recordSearchClick } from '$lib/services/searchService'
   import { toggleWish } from '$lib/utils/wishlist'
+  import { csToast } from '$lib/utils/toast'
+  import {
+    SEARCH_FETCH_LIMIT,
+    SEARCH_VISIBLE_BATCH,
+    extractTotalCount,
+    formatResultTotal,
+    hasMoreAfterPage,
+    hasMoreResults,
+    runLoadMore,
+  } from '$lib/utils/searchLoadMore'
   import { page } from '$app/stores'
   import { goto } from '$app/navigation'
   import type { PageData } from './$types'
@@ -45,7 +55,19 @@
     href?: string
     wished?: boolean
   }
+  /** 서버에서 받아둔 검색 결과(한 번에 SEARCH_FETCH_LIMIT개) — 화면에는 visibleCount개만 보여주고 더보기로 늘린다 */
   let searchResults      = $state<SearchProduct[]>([])
+  let visibleCount       = $state(SEARCH_VISIBLE_BATCH)
+  /** 마지막으로 받은 검색 API 페이지 번호 / 서버에 다음 페이지가 더 있는지 */
+  let resultsPage        = $state(1)
+  /** 서버가 첫 응답에서 알려준 전체 건수(total_count) — 약한 매칭 폴백 응답처럼 없으면 null */
+  let resultTotal        = $state<number | null>(null)
+  let hasMoreRemote      = $state(false)
+  let isLoadingMore      = $state(false)
+  const visibleResults   = $derived(searchResults.slice(0, visibleCount))
+  const showMoreButton   = $derived(hasMoreResults(visibleCount, searchResults.length, hasMoreRemote))
+  /** 헤더 건수 — 보이는 개수가 아니라 전체 건수(서버가 알려주면 그 값, 모르면 받아온 개수·더 있으면 '50+') */
+  const resultTotalLabel = $derived(formatResultTotal(searchResults.length, hasMoreRemote, resultTotal))
   /** 크레이지로그 검색 결과 — 검색 실행(Enter·아이콘·키워드 칩) 때만 조회, 자동완성·추천에서는 호출하지 않음 */
   let crazylogResults    = $state<SearchCrazylogPost[]>([])
   /** 마지막 검색 요청 번호 — 늦게 도착한 이전 검색 응답이 최신 결과를 덮지 않게 */
@@ -140,7 +162,7 @@
     if (debounceTimer) clearTimeout(debounceTimer)
     suggestAbort?.abort()
     suggestResults = []
-    if (!q) { searchSeq++; isSearching = false; submittedQuery = ''; searchResults = []; crazylogResults = []; return }
+    if (!q) { searchSeq++; isSearching = false; submittedQuery = ''; searchResults = []; resultTotal = null; hasMoreRemote = false; isLoadingMore = false; crazylogResults = []; return }
     doSearch(q)
   }
 
@@ -152,10 +174,11 @@
     }
   }
 
-  async function fetchProductResults(q: string): Promise<{ results: Record<string, unknown>[]; search_log_id?: string | null }> {
+  async function fetchProductResults(q: string, pageNo = 1): Promise<{ results: Record<string, unknown>[]; search_log_id?: string | null }> {
     // 2026-08-06: 브라우저 직접 RPC → /api/search/products API 라우트 경유로 전환
     // 자연어 레이어(MiniSearch)는 서버에서만 동작 가능 — 이 배선 변경이 필수 전제조건
-    const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=12`)
+    // 2026-10-27: 한 번에 SEARCH_FETCH_LIMIT개를 받아 12개씩 보여준다(더보기). 다음 페이지는 받아둔 결과를 다 보여준 뒤에만 요청한다.
+    const resp = await fetch(`/api/search/products?q=${encodeURIComponent(q)}&limit=${SEARCH_FETCH_LIMIT}&page=${pageNo}`)
     if (!resp.ok) throw new Error(`검색 API 오류: ${resp.status}`)
     return await resp.json()
   }
@@ -178,12 +201,51 @@
     if (productsRes.status === 'fulfilled') {
       // G-3: search_log_id 캡처 (migration 203 이후 RPC가 반환)
       searchLogId = productsRes.value.search_log_id ?? null
-      searchResults = (productsRes.value.results ?? []).map(mapSearchApiRow)
+      const raw = productsRes.value.results ?? []
+      searchResults = raw.map(mapSearchApiRow)
+      resultsPage = 1
+      resultTotal = extractTotalCount(raw)
+      hasMoreRemote = hasMoreAfterPage({ loaded: searchResults.length, total: resultTotal, rawCount: raw.length, added: searchResults.length })
     } else {
       searchResults = []
+      resultTotal = null
+      hasMoreRemote = false
     }
+    visibleCount = SEARCH_VISIBLE_BATCH
+    isLoadingMore = false
     crazylogResults = logsRes.status === 'fulfilled' ? (logsRes.value.results ?? []).map(mapCrazylogRow) : []
     isSearching = false
+  }
+
+  /** 더보기 — 동작 규칙(연타·검색 중 무시·이전 응답 폐기·실패 복구)은 runLoadMore(searchLoadMore.ts)가 맡는다 */
+  function loadMore() {
+    return runLoadMore<SearchProduct>({
+      getSeq: () => searchSeq,
+      read: () => ({
+        query: submittedQuery,
+        results: searchResults,
+        visibleCount,
+        resultsPage,
+        total: resultTotal,
+        hasMoreRemote,
+        isLoadingMore,
+        isSearching,
+      }),
+      write: (patch) => {
+        if (patch.results !== undefined) searchResults = patch.results
+        if (patch.visibleCount !== undefined) visibleCount = patch.visibleCount
+        if (patch.resultsPage !== undefined) resultsPage = patch.resultsPage
+        if (patch.total !== undefined) resultTotal = patch.total
+        if (patch.hasMoreRemote !== undefined) hasMoreRemote = patch.hasMoreRemote
+        if (patch.isLoadingMore !== undefined) isLoadingMore = patch.isLoadingMore
+      },
+      fetchPage: async (q, pageNo) => {
+        const res = await fetchProductResults(q, pageNo)
+        const raw = res.results ?? []
+        return { items: raw.map(mapSearchApiRow), rawCount: raw.length, total: extractTotalCount(raw) }
+      },
+      onError: () => csToast.error('결과를 더 불러오지 못했어요. 잠시 후 다시 시도해주세요.', { id: 'search-load-more' }),
+    })
   }
 
   /** G-3: 상품 클릭 시 CTR 기록 — fire-and-forget (UX 차단 없음) */
@@ -276,9 +338,12 @@
   <!-- ── 검색 결과 그리드 ── -->
   <SearchProductGrid
     title={submittedQuery ? `"${submittedQuery}" 검색결과` : '추천 상품'}
-    products={submittedQuery ? searchResults : recommendedProducts}
+    products={submittedQuery ? visibleResults : recommendedProducts}
     onProductClick={submittedQuery ? handleProductClick : undefined}
     onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+    totalLabel={submittedQuery ? resultTotalLabel : undefined}
+    onLoadMore={submittedQuery && showMoreButton ? loadMore : undefined}
+    loadingMore={isLoadingMore}
     hideEmpty={!!submittedQuery && crazylogResults.length > 0}
     attached={!!submittedQuery && crazylogResults.length > 0}
   />
