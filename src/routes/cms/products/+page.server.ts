@@ -4,7 +4,9 @@ import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
-import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
+import { productSearchOrFilterForTerms } from '$lib/utils/similarNameSuggest'
+import { loadSynonymGroups } from '$lib/server/synonymLearning'
+import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
 import { rankProductsByRelevance, parsePinId } from '$lib/utils/productSearchRanking'
 import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
@@ -20,6 +22,8 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
 import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
+import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
+import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
 import { resolveParentProductFields, PARENT_DISPLAY_FIELDS, PARENT_CONTENT_FIELDS, PARENT_POLICY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
@@ -387,6 +391,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   }
 
   // 전체 개수 쿼리 (페이지네이션용, 1차: ilike 기본 필터) — 부모 상품만 (재고 자식 제외)
+  // 동의어 변환어(예: 소니→Sony)도 항상 함께 검색한다 — 일반 검색 결과가 4건 이상이면 아래 자연어 보강이 실행되지 않아
+  // 영문 표기 상품이 통째로 빠지던 문제(2026-10-27). 동의어 조회 실패 시 원 검색어만 사용.
+  let searchTerms: string[] = q ? [q] : []
+  if (q) {
+    try {
+      const groups = await loadSynonymGroups()
+      const expansion = expandQueryByTokens(q, groups)
+      searchTerms = [q, ...expansion.whole, ...expansion.tokenVariants]
+    } catch (e) {
+      console.error('[cms/products] 동의어 확장 오류:', e)
+    }
+  }
+  const searchOr = q ? productSearchOrFilterForTerms(searchTerms) : ''
+
   let countQ = admin
     .from('products')
     .select('*', { count: 'exact', head: true })
@@ -394,7 +412,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     .is('parent_product_id', null)
   if (categoryValues) countQ = countQ.in('category', categoryValues)
   // BND-5: 자동완성 매치 필드와 동일하게 name·brand·description·product_caption 확장 검색
-  if (q) countQ = countQ.or(productSearchOrFilter(q))
+  if (q) countQ = countQ.or(searchOr)
 
   // BND-3: count 먼저 조회해 totalPages 산출 → pageParam을 clamp한 뒤 range 쿼리 실행
   const { count: ilikeCount } = await countQ
@@ -410,6 +428,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       codeMatchIds = await findParentIdsByProductCode(admin, q)
     } catch (e) {
       console.error('[cms/products] 품번 검색 오류:', e)
+    }
+    // 키워드(배열 칼럼)는 ilike 필터로 못 찾으므로 별도 매칭 id를 합친다 — 실패해도 기본 검색은 그대로
+    try {
+      const keywordIds = await findParentIdsByKeyword(admin, q)
+      codeMatchIds = Array.from(new Set([...codeMatchIds, ...keywordIds]))
+    } catch (e) {
+      console.error('[cms/products] 키워드 검색 오류:', e)
+    }
+    // 공백·하이픈 무시 매칭("R6 Mark II"↔"R6MarkII", "AGCX10"↔"AG-CX10") — 실패해도 기본 검색은 그대로
+    try {
+      const compactIds = await findParentIdsByCompactText(admin, q)
+      codeMatchIds = Array.from(new Set([...codeMatchIds, ...compactIds]))
+    } catch (e) {
+      console.error('[cms/products] 공백 무시 검색 오류:', e)
     }
   }
   let nlsearchFallbackIds: string[] = [...codeMatchIds]
@@ -437,7 +469,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
         nlsearchFallbackIds = mergedIds
 
         // 확장 OR 필터: ilike + NLSearch 폴백 IDs 합집합
-        const expandedOrFilter = `${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`
+        const expandedOrFilter = `${searchOr},id.in.(${nlsearchFallbackIds.join(',')})`
 
         // 확장 필터로 totalCount 재계산 (정확한 페이지네이션을 위해 countQ 재구성)
         let expandedCountQ = admin
@@ -463,8 +495,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   let rankedIds: string[] | null = null
   if (relevanceMode) {
     const rankOrFilter = nlsearchFallbackIds.length > 0
-      ? `${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`
-      : productSearchOrFilter(q)
+      ? `${searchOr},id.in.(${nlsearchFallbackIds.join(',')})`
+      : searchOr
     let rankQ = admin
       .from('products')
       .select('id, name, brand, description, product_caption')
@@ -490,7 +522,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
           .maybeSingle()
         if (pinRow) candidates.push(pinRow as RankRow)
       }
-      rankedIds = rankProductsByRelevance(candidates, q, pinId).map((r) => r.id)
+      rankedIds = rankProductsByRelevance(candidates, q, pinId, searchTerms.slice(1)).map((r) => r.id)
       // 총 건수는 실제로 정렬·노출되는 후보 수와 항상 일치시킨다(500건 상한·pin 추가 시에도 빈 페이지 없음)
       totalCount = rankedIds.length
     }
@@ -516,9 +548,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // BND-5 + K-3 하이브리드: ilike 필터 (+ NLSearch 폴백 IDs OR 병합)
   if (q) {
     if (nlsearchFallbackIds.length > 0) {
-      listQ = listQ.or(`${productSearchOrFilter(q)},id.in.(${nlsearchFallbackIds.join(',')})`)
+      listQ = listQ.or(`${searchOr},id.in.(${nlsearchFallbackIds.join(',')})`)
     } else {
-      listQ = listQ.or(productSearchOrFilter(q))
+      listQ = listQ.or(searchOr)
     }
   }
 

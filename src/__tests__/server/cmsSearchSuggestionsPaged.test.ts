@@ -16,6 +16,8 @@ vi.mock('$env/static/private', () => ({ SUPABASE_SERVICE_ROLE_KEY: 'test' }))
 vi.mock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'http://localhost' }))
 vi.mock('$lib/server/getCmsRoleForAction', () => ({ getCmsRoleForAction: async () => 'manager' }))
 vi.mock('$lib/server/products/searchByProductCode', () => ({ findParentIdsByProductCode: async () => [] }))
+vi.mock('$lib/server/products/searchByKeyword', () => ({ findParentIdsByKeyword: async () => [] }))
+vi.mock('$lib/server/products/searchByCompactText', () => ({ findParentIdsByCompactText: async () => [] }))
 vi.mock('$lib/server/searchEngine/adapters/productSearchIndex', () => ({ getProductSearchIndex: async () => ({ search: () => [] }) }))
 vi.mock('$lib/server/synonymLearning', () => ({ loadSynonymGroups: async () => [] }))
 vi.mock('@supabase/supabase-js', () => ({

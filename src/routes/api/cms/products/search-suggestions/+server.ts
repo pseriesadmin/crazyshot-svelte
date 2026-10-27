@@ -33,8 +33,10 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { productSearchOrFilter, resolveProductSearchMatchLabel, relevanceTier } from '$lib/utils/similarNameSuggest'
+import { productSearchOrFilter, productSearchOrFilterForTerms, resolveProductSearchMatchLabel, relevanceTier } from '$lib/utils/similarNameSuggest'
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
+import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
+import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
@@ -56,7 +58,7 @@ type PagedRow = {
   id: string; name: string; brand: string | null; category: string | null; product_code: string | null
   description: string | null; product_caption: string | null
 }
-const pagedCache = new Map<string, { at: number; rows: PagedRow[]; codeMatchIds: string[] }>()
+const pagedCache = new Map<string, { at: number; rows: PagedRow[]; codeMatchIds: string[]; keywordMatchIds: string[] }>()
 
 // ── GET: 상품 검색 제안 ────────────────────────────────────────────────────────
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -85,6 +87,23 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // H-2: 초성 쿼리 감지 — 전부 자음(ㄱ-ㅎ)으로만 이뤄진 검색어
   const isChosung = isChosungQuery(q)
 
+  // 동의어 변환어(예: 소니→Sony)도 항상 함께 검색한다 — 일반 검색 결과가 4건 이상이면 아래 폴백이 실행되지 않아
+  // 영문 표기 상품이 통째로 빠지던 문제(2026-10-27). 조회 실패 시 원 검색어만 사용.
+  let searchTerms: string[] = [q]
+  if (q && !isChosung) {
+    try {
+      const groups = await loadSynonymGroups()
+      const expansion = expandQueryByTokens(q, groups)
+      searchTerms = [q, ...expansion.whole, ...expansion.tokenVariants]
+    } catch (e) {
+      console.error('[cms/products/search-suggestions] 동의어 확장 오류:', e)
+    }
+  }
+  const searchOr = productSearchOrFilterForTerms(searchTerms)
+  // 동의어 변환어로 맞은 상품은 같은 등급이라도 원 검색어 일치보다 반 등급 뒤
+  const tierOf = (row: { name: string; brand: string | null; description: string | null; product_caption: string | null }): number =>
+    Math.min(relevanceTier(row, q), ...searchTerms.slice(1).map((t) => relevanceTier(row, t) + 0.5))
+
   // admin 클라이언트 — products RLS를 우회해 비활성 상품도 조회 가능하게 (CMS 전용)
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -99,6 +118,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
     if (!hit) {
       let poolCodeIds: string[] = []
+      let poolKeywordIds: string[] = []
       let poolQ = admin
         .from('products')
         .select('id, name, brand, category, product_code, description, product_caption')
@@ -110,10 +130,22 @@ export const GET: RequestHandler = async ({ url, locals }) => {
         } catch (e) {
           console.error('[cms/products/search-suggestions] 품번 검색 오류:', e)
         }
+        // 키워드(배열 칼럼)는 ilike로 못 찾으므로 별도 매칭 id를 합친다(실패해도 기본 검색 유지)
+        try {
+          poolKeywordIds = await findParentIdsByKeyword(admin, q)
+        } catch (e) {
+          console.error('[cms/products/search-suggestions] 키워드 검색 오류:', e)
+        }
+        try {
+          poolKeywordIds = Array.from(new Set([...poolKeywordIds, ...(await findParentIdsByCompactText(admin, q))]))
+        } catch (e) {
+          console.error('[cms/products/search-suggestions] 공백 무시 검색 오류:', e)
+        }
+        const poolExtraIds = Array.from(new Set([...poolCodeIds, ...poolKeywordIds]))
         poolQ = poolQ.or(
-          poolCodeIds.length > 0
-            ? `${productSearchOrFilter(q)},id.in.(${poolCodeIds.join(',')})`
-            : productSearchOrFilter(q)
+          poolExtraIds.length > 0
+            ? `${searchOr},id.in.(${poolExtraIds.join(',')})`
+            : searchOr
         )
       }
       poolQ = poolQ.is('deleted_at', null).is('parent_product_id', null).order('name').limit(PAGED_POOL_MAX)
@@ -125,10 +157,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       if (poolError) return json({ error: poolError.message }, { status: 500 })
 
       const ranked = [...((poolData ?? []) as PagedRow[])].sort((a, b) => {
-        const diff = relevanceTier(a, q) - relevanceTier(b, q)
+        const diff = tierOf(a) - tierOf(b)
         return diff !== 0 ? diff : a.name.localeCompare(b.name, 'ko')
       })
-      hit = { at: now, rows: ranked, codeMatchIds: poolCodeIds }
+      hit = { at: now, rows: ranked, codeMatchIds: poolCodeIds, keywordMatchIds: poolKeywordIds }
       if (pagedCache.size >= PAGED_CACHE_MAX_ENTRIES) {
         const oldest = pagedCache.keys().next().value
         if (oldest !== undefined) pagedCache.delete(oldest)
@@ -162,7 +194,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
           ? '초성 매칭'
           : hit!.codeMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
             ? '품번'
-            : resolveProductSearchMatchLabel(row, q),
+            : hit!.keywordMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
+              ? '키워드'
+              : resolveProductSearchMatchLabel(row, q),
         image_url: thumbMap.get(row.id)?.image_urls?.[0] ?? null,
         slug: thumbMap.get(row.id)?.slug ?? null,
         price_24h: priceMap.get(row.id) ?? null,
@@ -178,6 +212,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     .from('products')
     .select('id, name, brand, category, product_code, description, product_caption, image_urls, slug')
   let codeMatchIds: string[] = []
+  let keywordMatchIds: string[] = []
 
   if (isChosung) {
     // H-2: 초성 생성컬럼 사용 (Migration 354에서 추가된 name_chosung·brand_chosung)
@@ -190,10 +225,22 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     } catch (e) {
       console.error('[cms/products/search-suggestions] 품번 검색 오류:', e)
     }
+    // 키워드(배열 칼럼)는 ilike로 못 찾으므로 별도 매칭 id를 합친다(실패해도 기본 검색 유지)
+    try {
+      keywordMatchIds = await findParentIdsByKeyword(admin, q)
+    } catch (e) {
+      console.error('[cms/products/search-suggestions] 키워드 검색 오류:', e)
+    }
+    try {
+      keywordMatchIds = Array.from(new Set([...keywordMatchIds, ...(await findParentIdsByCompactText(admin, q))]))
+    } catch (e) {
+      console.error('[cms/products/search-suggestions] 공백 무시 검색 오류:', e)
+    }
+    const extraIds = Array.from(new Set([...codeMatchIds, ...keywordMatchIds]))
     ilikeQ = ilikeQ.or(
-      codeMatchIds.length > 0
-        ? `${productSearchOrFilter(q)},id.in.(${codeMatchIds.join(',')})`
-        : productSearchOrFilter(q)
+      extraIds.length > 0
+        ? `${searchOr},id.in.(${extraIds.join(',')})`
+        : searchOr
     )
   }
 
@@ -238,7 +285,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // relevanceTier로 재정렬 후 요청 limit만큼만 최종 노출 — 후보군(candidatePoolSize)은
   // 랭킹 재료일 뿐 화면에 그대로 나가지 않는다.
   const rankedRows = [...ilikeRows].sort((a, b) => {
-    const diff = relevanceTier(a, q) - relevanceTier(b, q)
+    const diff = tierOf(a) - tierOf(b)
     return diff !== 0 ? diff : a.name.localeCompare(b.name, 'ko')
   })
   const limitedRows = rankedRows.slice(0, limit)
@@ -259,7 +306,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       ? matchLabelForChosung
       : codeMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
         ? '품번'
-        : resolveProductSearchMatchLabel(row, q),
+        : keywordMatchIds.includes(row.id) && resolveProductSearchMatchLabel(row, q) === '상품'
+          ? '키워드'
+          : resolveProductSearchMatchLabel(row, q),
     // L1: Cloudinary public_id = image_urls[0], slug = URL에 사용될 슬러그
     image_url: (row.image_urls as string[] | null)?.[0] ?? null,
     slug: row.slug ?? null,

@@ -15,6 +15,12 @@ export function toIlikePattern(kw: string): string {
   return `"${dslEscaped}"`
 }
 
+/** 검색어 + 동의어 변환어(예: 소니→Sony)를 모두 포함하는 OR 필터 — 항상 원 검색어 필터가 먼저 온다 */
+export function productSearchOrFilterForTerms(terms: string[]): string {
+  const uniq = Array.from(new Set(terms.map((t) => t.trim()).filter(Boolean)))
+  return uniq.map((t) => productSearchOrFilter(t)).join(',')
+}
+
 export function productSearchOrFilter(kw: string): string {
   const pattern = toIlikePattern(kw)
   return [

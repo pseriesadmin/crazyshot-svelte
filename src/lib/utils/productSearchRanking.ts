@@ -18,7 +18,8 @@ export interface RankableProduct {
 export function rankProductsByRelevance<T extends RankableProduct>(
   rows: T[],
   q: string,
-  pinId: string | null = null
+  pinId: string | null = null,
+  altTerms: string[] = []
 ): T[] {
   const needle = q.trim().toLowerCase()
   const scored = rows.map((row) => {
@@ -26,9 +27,19 @@ export function rankProductsByRelevance<T extends RankableProduct>(
     const pos = needle ? name.indexOf(needle) : -1
     return {
       row,
-      tier: relevanceTier(
-        { name: row.name ?? '', brand: row.brand, description: row.description, product_caption: row.product_caption },
-        q
+      tier: Math.min(
+        relevanceTier(
+          { name: row.name ?? '', brand: row.brand, description: row.description, product_caption: row.product_caption },
+          q
+        ),
+        // 동의어 변환어(소니→Sony)로 맞은 상품은 같은 등급이어도 원 검색어 일치보다 반 등급 뒤
+        ...altTerms.map(
+          (t) =>
+            relevanceTier(
+              { name: row.name ?? '', brand: row.brand, description: row.description, product_caption: row.product_caption },
+              t
+            ) + 0.5
+        )
       ),
       pos: pos < 0 ? Number.MAX_SAFE_INTEGER : pos,
       len: name.length,
