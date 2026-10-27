@@ -71,6 +71,26 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // 비로그인 사용자: session = null → p_user_id = null로 익명 검색 정상 동작
   const { session } = await locals.safeGetSession()
 
+  // ── 동의어 확장 — 결과 수와 상관없이 항상 계산한다(2026-10-27) ─────────────────────
+  // 이전에는 1차 결과가 3건 이하일 때만 확장해 "소니"(18건)처럼 결과가 있는 검색어는 영문 표기(Sony) 상품이 통째로 빠졌다.
+  // 확장어는 1차 RPC의 p_extra_terms(FTS OR)로 한 번에 넘긴다 — search_logs·페이지·총 건수는 원래 검색어 기준 그대로.
+  // synonymGroups가 없거나 비면 확장어 없이 기존 동작과 같다. 동의어 로드가 실패해도 기존 검색은 그대로 진행한다.
+  let expandedTerms: string[] = []
+  // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch 폴백에서도 쓴다.
+  let tokenVariantTerms: string[] = []
+  if (q.length >= 1) {
+    try {
+      const synonymGroups = await loadSynonymGroups()
+      const expansion = expandQueryByTokens(q, synonymGroups)
+      expandedTerms = expansion.whole
+      tokenVariantTerms = expansion.tokenVariants
+    } catch (e) {
+      // 동의어 확장 실패 시 확장어 없이 진행 — 서비스 중단 없음(장애를 알아챌 수 있게 로그만 남긴다)
+      console.error('[api/search/products] 동의어 확장 오류:', e)
+    }
+  }
+  const extraTerms = [...tokenVariantTerms, ...expandedTerms]
+
   // ── 1차: search_products RPC (기존 CTR 랭킹 · 학습자산 보존) ──────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rpcData, error } = await (supabase.rpc as any)('search_products', {
@@ -80,6 +100,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     p_limit:      limit,
     p_session_id: session?.user?.id ?? null,
     p_user_id:    session?.user?.id ?? null,
+    p_extra_terms: extraTerms,
   })
 
   if (error) return httpError(500, error.message)
@@ -137,42 +158,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   )
   const mergedResults = [...rpcResults]
 
-  // 동의어 그룹 1회 로드 — 확장 RPC 재조회 + MiniSearch 폴백 두 곳에서 재사용
-  let expandedTerms: string[] = []
-  // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch(메모리)에서만 검색한다.
-  // 검색 RPC를 다시 부르면 호출마다 search_logs가 쌓여 인기 검색어(get_trending_keywords)에 변형어가 섞이기 때문.
-  let tokenVariantTerms: string[] = []
-  try {
-    const synonymGroups = await loadSynonymGroups()
-    const expansion = expandQueryByTokens(q, synonymGroups)
-    expandedTerms = expansion.whole
-    tokenVariantTerms = expansion.tokenVariants
-
-    // 각 확장어로 search_products RPC 재조회 (세션 개인화 학습 제외)
-    for (const expandedQ of expandedTerms) {
-      if (mergedResults.length >= limit) break
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: expData } = await (supabase.rpc as any)('search_products', {
-        p_query:      expandedQ,
-        p_category:   category,
-        p_page:       1,
-        p_limit:      limit,
-        p_session_id: null,
-        p_user_id:    null,
-      })
-      const expResults: Record<string, unknown>[] = expData ?? []
-      for (const row of expResults) {
-        const id = String(row['product_id'] ?? row['id'] ?? '')
-        if (!seenIds.has(id)) {
-          seenIds.add(id)
-          mergedResults.push({ ...row, _source: 'synonym_expansion', _expanded_from: expandedQ })
-        }
-      }
-    }
-  } catch {
-    // 동의어 확장 실패 시 기존 결과 유지 — 서비스 중단 없음
-  }
+  // 동의어 확장어는 위 1차 RPC(p_extra_terms)에서 이미 반영됐다 — 확장어로 RPC를 다시 부르지 않는다(검색 기록 중복 방지).
 
   // ── 3차: MiniSearch 자연어 폴백 (여전히 부족하면) ─────────────────────────
   try {

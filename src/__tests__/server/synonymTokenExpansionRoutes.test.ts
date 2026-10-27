@@ -5,15 +5,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  *
  * 핵심:
  *   1. "소니 카메라"처럼 여러 단어 검색어에서 단어 하나를 동의어로 바꾼 변형("Sony 카메라")이 MiniSearch로 검색된다
- *   2. 변형은 검색 RPC(search_products)를 다시 부르지 않는다 — 호출마다 search_logs가 쌓여 인기 검색어에 섞이므로
+ *   2. 동의어 확장어(변형·전체 동의어)는 1차 RPC 한 번의 p_extra_terms로만 넘긴다 — 확장어로 RPC를 다시 부르지 않는다(search_logs 중복 방지, 2026-10-27)
  *   3. 변형 결과가 원문 결과보다 먼저 들어간다(원문이 limit을 먼저 채워 밀려나지 않게)
  *   4. 동의어 그룹이 없으면 기존과 동일(RPC 1회, MiniSearch는 원문만)
- *   5. 검색어 전체가 동의어인 기존 경로(whole)는 RPC 재조회를 그대로 한다
- *   6. 1차 RPC 결과가 충분하면(>3건) 확장 자체를 실행하지 않는다(기존 한계 유지)
+ *   5. 검색어 전체가 동의어인 경우(whole)도 RPC 재조회 없이 p_extra_terms로 넘긴다
+ *   6. 1차 RPC 결과가 충분하면(>3건) MiniSearch 폴백은 실행하지 않지만, 동의어 확장어는 항상 1차 RPC에 전달된다
  *   7. 동의어 로드가 실패해도 기존 결과를 돌려준다(서비스 중단 없음)
  *
  * CMS 검색 제안(/api/cms/products/search-suggestions) 핸들러도 같은 방식으로 직접 호출한다(파일 하단 describe):
- *   변형어는 ilike(.or) 재조회에 쓰이지 않고 MiniSearch로만 검색 / 변형이 원문보다 먼저 / match_label '키워드·상세' 유지 /
+ *   변형어도 ilike(.or) 한 번의 합쳐진 OR 필터에 들어간다(DB 기록 없음, 2026-10-27) + MiniSearch 검색 / 변형이 원문보다 먼저 / match_label '키워드·상세' 유지 /
  *   동의어 없으면 기존 순서
  */
 
@@ -153,22 +153,24 @@ describe('/api/search/products — 동의어 단어 단위 치환', () => {
     expect(ids(r)).toEqual(['cam-1'])
   })
 
-  it('검색어 전체가 동의어인 기존 경로는 확장어로 검색 RPC를 다시 부르고 MiniSearch 순서도 [원문, 확장어] 그대로', async () => {
+  it('검색어 전체가 동의어면 확장어는 1차 RPC의 p_extra_terms로 한 번에 넘기고(재조회 없음) MiniSearch 순서는 [원문, 확장어] 그대로', async () => {
     groups = SONY
-    rpcByQuery = { 소니: [], Sony: [{ product_id: 'rpc-sony', name: 'Sony RPC', search_log_id: 'l2' }] }
+    rpcByQuery = { 소니: [] }
     miniByQuery = { 소니: [doc('m-1', '소니 로컬')] }
     const r = await call('소니')
-    expect(rpcCalls.map((c) => c.args.p_query)).toEqual(['소니', 'Sony'])
+    expect(rpcCalls.map((c) => c.args.p_query)).toEqual(['소니'])
+    expect(rpcCalls[0].args.p_extra_terms).toContain('Sony')
     expect(miniSearchCalls[0]).toBe('소니')
-    expect(ids(r)).toContain('rpc-sony')
+    expect(ids(r)).toContain('m-1')
   })
 
-  it('1차 RPC 결과가 충분하면(>3건) 확장도 폴백도 실행하지 않는다(기존 한계 유지)', async () => {
+  it('1차 RPC 결과가 충분하면(>3건) 폴백은 실행하지 않지만 동의어 확장어는 항상 1차 RPC에 전달된다', async () => {
     groups = SONY
     rpcRows = [1, 2, 3, 4].map((n) => ({ product_id: `rpc-${n}`, name: `RPC ${n}`, search_log_id: 'l' }))
     await call('소니 카메라')
     expect(miniSearchCalls).toHaveLength(0)
     expect(rpcCalls).toHaveLength(1)
+    expect(rpcCalls[0].args.p_extra_terms).toContain('Sony 카메라')
   })
 
   it('동의어 로드가 실패해도 기존 결과를 돌려주고 원문 MiniSearch 폴백은 계속된다', async () => {
@@ -193,15 +195,15 @@ async function cmsCall(q: string, limit = 8): Promise<Array<{ id: string; match_
 }
 
 describe('/api/cms/products/search-suggestions — 동의어 단어 단위 치환', () => {
-  it('변형은 MiniSearch로만 검색되고 ilike(.or) 재조회에는 쓰이지 않으며, 변형이 원문보다 먼저 검색된다', async () => {
+  it('변형은 MiniSearch로도 검색되고 ilike(.or)에는 원문과 한 번에 합쳐 들어가며, 변형이 원문보다 먼저 검색된다', async () => {
     groups = SONY
     miniByQuery = { 'Sony 카메라': [doc('sony-1', 'Sony FX6')] }
     const items = await cmsCall('소니 카메라')
     expect(items.map((i) => i.id)).toContain('sony-1')
     expect(miniSearchCalls.slice(0, 2)).toEqual(['Sony 카메라', '소니 카메라'])
-    // ilike 필터는 원문 한 번뿐 — 변형어("Sony 카메라")는 어떤 DB 필터에도 들어가지 않는다
+    // ilike 필터는 한 번의 OR 에 원문과 변형어("Sony 카메라")가 함께 들어간다(검색 기록은 쌓이지 않음)
     expect(orFilters.length).toBe(1)
-    expect(orFilters.join('|').includes('Sony')).toBe(false)
+    expect(orFilters.join('|').includes('Sony')).toBe(true)
   })
 
   it('MiniSearch로 들어온 항목은 match_label "키워드·상세"를 유지한다(썸네일 보강 로직이 이 라벨로 식별)', async () => {
