@@ -29,7 +29,7 @@
     onLoadMore?: () => void
     /** 더보기 불러오는 중 — 버튼 비활성 */
     loadingMore?: boolean
-    /** 헤더 건수·더보기 버튼에 쓰는 전체 건수 문구(예: '39', 서버에 더 있으면 '50+') — 없으면 보이는 개수(products.length) */
+    /** 헤더 건수에 쓰는 전체 건수 문구(예: '39', 서버에 더 있으면 '50+') — 없으면 보이는 개수(products.length) */
     totalLabel?: string
   }
 
@@ -80,7 +80,7 @@
       {#if onLoadMore}
         <div class="more-wrap">
           <button type="button" class="more-btn" disabled={loadingMore} aria-busy={loadingMore} onclick={onLoadMore}>
-            {#if loadingMore}불러오는 중…{:else if totalLabel}더보기 ({products.length}/{totalLabel}){:else}더보기{/if}
+            {loadingMore ? '불러오는 중…' : 'more'}
           </button>
         </div>
       {/if}
@@ -221,7 +221,7 @@
     }
   }
 
-  /* 더보기 버튼 — front-uiux §5 보조 버튼(.cs-btn-secondary) 값 그대로: 모바일 높이 44·좌우 20·30px 반경, 가로 100% */
+  /* 더보기 버튼 — front-uiux §5 보조 버튼 크기 값(모바일 높이 44·좌우 20·30px 반경, 가로 100%) + 옅은 퍼플 면(2026-10-27 Stephen 지시: BG --cs-purple-op10, 글자 --cs-purple-dark(짙은 퍼플), 호버는 배경만 --cs-purple-pale, 글자 크기는 모바일 14px(--text-m-script-14B)·PC 16px로 모바일이 한 단계 작게) */
   .more-wrap {
     display: flex;
     justify-content: center;
@@ -234,20 +234,21 @@
     width: 100%;
     height: 44px;
     padding: 0 20px;
-    background: var(--cs-purple);
-    color: var(--cs-white);
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple-dark);
     border: none;
     border-radius: var(--radius-xl);
-    font: var(--text-m-body-16B);
+    font: var(--text-m-script-14B);
     cursor: pointer;
     transition: background 0.15s;
     white-space: nowrap;
   }
-  .more-btn:hover { background: var(--cs-purple-hover); }
-  .more-btn:disabled { background: #B0ABCC; cursor: not-allowed; }
+  .more-btn:hover { background: var(--cs-purple-pale); }
+  .more-btn:disabled { color: var(--cs-text-light); cursor: not-allowed; }
+  .more-btn:disabled:hover { background: var(--cs-purple-op10); }
 
   @media (min-width: 768px) {
-    /* PC — 높이 50·좌우 30·PC 타이포, 가로폭은 320px로 제한하고 가운데 정렬 */
+    /* PC — 높이 50·좌우 30·PC 타이포(16px), 가로폭은 320px로 제한하고 가운데 정렬 */
     .more-wrap { margin-top: 60px; }
     .more-btn {
       max-width: 320px;
