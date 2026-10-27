@@ -8,6 +8,7 @@
   import CmsHolidayCalendar from '$lib/components/cms/CmsHolidayCalendar.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
+  import { carrierVisibleMethods } from '$lib/utils/deliveryCarrierMethods'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import PostcodeSearchButton from '$lib/components/common/PostcodeSearchButton.svelte'
   import DeliveryAreaMap from '$lib/components/cms/DeliveryAreaMap.svelte'
@@ -296,6 +297,28 @@
   let usedMethodKeys = $derived(new Set(methods.map((m) => m.method_key).filter(Boolean)))
 
   $effect(() => { methods = data.methods })
+
+  // ─── 배송송출연동 관리(2026-10-27, Stephen 지시) ───
+  // 배송업체(현재 두발히어로) 연동 스위치를 "대여 방법 조건 설정"과 분리한 별도 블록. 제휴 배송업체가 늘면 아래 배열에 업체 한 줄을 더하고
+  // (업체 전용 켜짐 컬럼·켜고 끄는 액션/RPC는 서버 쪽에 함께 추가) 같은 행 템플릿을 그대로 쓴다 — 화면 구조를 다시 만들 필요가 없다.
+  // 칩은 배송형(is_delivery_type) 방식만 보이고, 이미 켜진 방식은 항상 보인다(carrierVisibleMethods).
+  interface DeliveryCarrierRow {
+    key: string
+    label: string
+    /** 켜고 끄는 서버 액션 (예: '?/toggleDheroIntegration') */
+    action: string
+    help: string
+    isOn: (m: RentalMethodOption) => boolean
+  }
+  const deliveryCarriers: DeliveryCarrierRow[] = [
+    {
+      key: 'dhero',
+      label: '두발히어로 연동',
+      action: '?/toggleDheroIntegration',
+      help: "ON으로 지정한 방식은 두발히어로로 새 배송 접수(출고 처리 시)·반품 접수·장바구니 주소 확인이 나갑니다. 이미 운송장이 저장된 예약의 취소·상태 동기화는 이 스위치와 상관없이 계속됩니다. 장바구니 '일괄적용'(반납방식 고정·시간선택 숨김)과는 별개이며 서로 영향을 주지 않습니다. 켜기 전에 두발히어로 계정(환경변수)과 반품 접수 가능 여부를 확인하세요.",
+      isOn: (m) => m.is_dhero_integration,
+    },
+  ]
 
   // ─── 지점 정보 ───
   let branches = $state<PickupPoint[]>(data.branches)
@@ -1392,6 +1415,48 @@
             {/each}
           </div>
         </div>
+      </div>
+
+      <!-- 배송송출연동 관리(2026-10-27, Stephen 지시) — "대여 방법 조건 설정"에서 분리한 별도 블록. 배송업체(현재 두발히어로)별 연동 대상 방식을 지정한다.
+           타이틀은 "배송 안내문"·"대여 방법 조건 설정"과 동일한 .subsection-head/.subsection-title 표준. 업체는 deliveryCarriers 배열로 늘린다. -->
+      <div class="subsection-head carrier-manage-head">
+        <h3 class="subsection-title">배송송출연동 관리</h3>
+      </div>
+      <div class="subsection bulk-delivery-section bulk-delivery-section--group-start">
+        {#each deliveryCarriers as c (c.key)}
+          {@const carrierMethods = carrierVisibleMethods(methods, c.isOn)}
+          <div class="sf-row">
+            <CmsHelpBubble text={c.help}>
+              <span class="sf-label">{c.label}</span>
+            </CmsHelpBubble>
+            <div class="shipping-chips">
+              {#each carrierMethods as m (m.id)}
+                <form
+                  method="POST"
+                  action={c.action}
+                  class="chip-form"
+                  use:enhance={() => {
+                    return async ({ result, update }) => {
+                      if (result.type === 'success') {
+                        await update({ reset: false })
+                      } else if (result.type === 'failure') {
+                        csToast.error((result.data as { error?: string })?.error ?? '변경에 실패했습니다.')
+                      }
+                    }
+                  }}
+                >
+                  <input type="hidden" name="id" value={m.id} />
+                  <button type="submit" class="s-chip" class:s-chip--on={c.isOn(m)}>
+                    {m.name}
+                  </button>
+                </form>
+              {/each}
+            </div>
+          </div>
+          {#if carrierMethods.length === 0}
+            <p class="empty-hint">배송형 방식이 없습니다. 위 "대여 방법 조건 설정"의 "배송 반납 허용 지정"에서 배송 방식을 먼저 지정해 주세요.</p>
+          {/if}
+        {/each}
       </div>
 
       <!-- 배송료 우대설정 — 대여금액+조건 만족 시 배송비(왕복+배송+반납 합계)를 할인해주는
@@ -3256,6 +3321,11 @@
   /* "대여 방법 조건 설정" 타이틀 — 이 그룹의 원래 진입부 상단 여백(60px)을 이어받음 */
   .subsection-head.rental-restriction-head {
     margin-top: 60px;
+  }
+
+  /* "배송송출연동 관리" 타이틀 — 위 "대여 방법 조건 설정" 카드와의 분리 여백(별도 블록이라는 시각적 구분) */
+  .subsection-head.carrier-manage-head {
+    margin-top: 40px;
   }
 
   .subsection-title {

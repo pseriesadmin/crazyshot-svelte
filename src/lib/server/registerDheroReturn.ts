@@ -6,13 +6,13 @@
 // 이 트리거를 우회했으므로(배송대여 예약에서 반품 접수·반납 배송완료 자동 전환이 일어나지 않던 구멍), 두 경로가 전환 성공 직후 이 헬퍼를 호출한다.
 //
 // 규칙(updateStatus 의 return_requested 분기와 동일):
-//   - 반납방식이 is_bulk_delivery(두발히어로 연동 대상, DB 플래그 — 리터럴 비교 금지)이고 운송장(tracking_number)이 있을 때만 호출
+//   - 반납방식이 is_dhero_integration(두발히어로 연동 대상, DB 플래그 — 리터럴 비교 금지)이고 운송장(tracking_number)이 있을 때만 호출
 //   - 이미 반품 접수(dhero_return_book_id)가 있으면 중복 접수하지 않는다(재제출·재시도 방어)
 //   - 어떤 오류도 throw 하지 않는다 — 결과(outcome)로 돌려주고 호출자는 제출·등록 자체를 성공 처리한다
 //   - H-01: DB 쓰기는 update_reservation_dhero_shipment RPC 경유
 
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
-import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
+import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { registerReturn, DHERO_STATUS_LABEL, DheroApiError } from '$lib/server/dhero'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,8 +47,8 @@ export async function registerDheroReturn(
     const res = await getReservationForDhero(admin, reservationId)
     if (!res) return { outcome: 'skipped' }
 
-    const isBulk = await isBulkDeliveryMethod(admin, res.returnMethod)
-    if (!isBulk || !res.trackingNumber) return { outcome: 'skipped' }
+    const isDheroOn = await isDheroIntegrationMethod(admin, res.returnMethod)
+    if (!isDheroOn || !res.trackingNumber) return { outcome: 'skipped' }
     if (res.dheroReturnBookId) return { outcome: 'skipped' }
 
     let returnRes: Awaited<ReturnType<typeof registerReturn>>

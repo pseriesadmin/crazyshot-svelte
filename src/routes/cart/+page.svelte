@@ -70,6 +70,8 @@
     addrDetail: string;
     postalCode: string;
     notes: string;
+    // 2026-10-27(Stephen 확정 C안, Migration #774): 수령(배송) 주소 공동현관 출입번호 전용 칸 — 두발히어로 frontdoorPassword(운송장 미인쇄·라이더앱 전용)로 전달. 수령 폼(배송형)에서만 사용
+    frontdoor: string;
     memberCheck: boolean;
     memberCheck2: boolean;
     // 2026-09-07(Stephen 요청) — 방문대여/방문반납 선택 시 여러 방문 지점 중 하나를 고를 수
@@ -148,7 +150,7 @@
   }
 
   function defaultForm(): FormState {
-    return { name: '', email: '', phone: '', addr: '', addrDetail: '', postalCode: '', notes: '', memberCheck: false, memberCheck2: false, pickupPointId: '' };
+    return { name: '', email: '', phone: '', addr: '', addrDetail: '', postalCode: '', notes: '', frontdoor: '', memberCheck: false, memberCheck2: false, pickupPointId: '' };
   }
 
   // ── 카트 라인아이템 UI 상태 (무제한 — 카드1/카드2 고정 구조 폐기 2026-07-27)
@@ -905,7 +907,7 @@
   // 지웠는데도 개별 상품에 옛 값이 남아 입력 완전성 게이트가 통과되던 부작용 해소).
   const bulkRentalTouched = new Set<keyof FormState>()
   const bulkReturnTouched = new Set<keyof FormState>()
-  const FORM_KEYS: Array<keyof FormState> = ['name', 'email', 'phone', 'addr', 'addrDetail', 'postalCode', 'notes', 'memberCheck', 'memberCheck2', 'pickupPointId']
+  const FORM_KEYS: Array<keyof FormState> = ['name', 'email', 'phone', 'addr', 'addrDetail', 'postalCode', 'notes', 'frontdoor', 'memberCheck', 'memberCheck2', 'pickupPointId']
   function markFormTouched(touched: Set<keyof FormState>, prev: FormState, next: FormState) {
     for (const k of FORM_KEYS) if (prev[k] !== next[k]) touched.add(k)
   }
@@ -919,6 +921,7 @@
       addrDetail: pick('addrDetail'),
       postalCode: pick('postalCode'),
       notes: pick('notes'),
+      frontdoor: pick('frontdoor'),
       memberCheck: pick('memberCheck'),
       memberCheck2: pick('memberCheck2'),
       pickupPointId: pick('pickupPointId'),
@@ -1711,6 +1714,17 @@
       p_pickup_postal_code:    pickupPostalCode || null,
     })
     return { success: !error, errorMessage: error?.message ?? null }
+  }
+
+  // 수령 공동현관 출입번호 저장(Migration #774) — 배송형(퀵 제외) 수령에서만. 선택 입력이라 실패해도 예약신청은 막지 않고 안내만 한다.
+  // 빈 값이면 호출하지 않는다 — 새 예약은 지울 이전 값이 없고, 불필요한 왕복·(DB 적용 전 배포 시) 허위 경고를 피한다.
+  async function saveFrontdoorPassword(resId: string | undefined, pickup: DeliveryMethod | null, password: string): Promise<void> {
+    if (!resId || !isShippingFeeMethod(pickup) || !password.trim()) return
+    const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_frontdoor_password', {
+      p_reservation_id: Number(resId),
+      p_password:       password.trim(),
+    })
+    if (error) csToast.warning('공동현관 출입번호를 저장하지 못했습니다. 예약 후 채팅으로 알려주세요.')
   }
 
   // 옵션상품 수량 변경 — set_reservation_options는 전체 옵션 목록을 통째로 교체(delete+insert)하는
@@ -3082,6 +3096,7 @@
                     csToast.error(saved.errorMessage ?? '수령 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
                   }
+                  await saveFrontdoorPassword(reservationId, pm, effectiveForms(it).rental.frontdoor)
                 }
                 continue
               }
@@ -3244,6 +3259,7 @@
                     csToast.error(shipmentResultCo.errorMessage ?? '수령/반납 방식 저장에 실패했습니다. 방식을 다시 선택해주세요.')
                     return
                   }
+                  await saveFrontdoorPassword(reservationId, pickupMethodSafe, effectiveForms(it).rental.frontdoor)
                   const { error: durationErrorCo } = await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
                     p_reservation_id: Number(reservationId),
                     p_duration_type:  durationTypeCo,
@@ -4077,11 +4093,21 @@
   </div>
 {/snippet}
 
-{#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void; method?: DeliveryMethod | null })}
+{#snippet NotesSection(p: { form: FormState; onFormChange: (f: FormState) => void; method?: DeliveryMethod | null; showFrontdoor?: boolean })}
+  {#if p.showFrontdoor}
+    <!-- 수령(배송) 공동현관 출입번호 전용 칸 — 두발히어로 라이더앱에만 전달되고 운송장에는 인쇄되지 않는다(Migration #774, 2026-10-27) -->
+    <div class="form-section">
+      <span class="form-section-label">공동현관 출입번호</span>
+      <input class="f-input" placeholder="공동현관 출입번호 입력 (선택)" maxlength={50} value={p.form.frontdoor} oninput={(e) => p.onFormChange({ ...p.form, frontdoor: readInputValue(e) })}/>
+      <p class="form-note-sm">배송기사에게만 전달되며 운송장에는 인쇄되지 않아요.</p>
+    </div>
+  {/if}
   <div class="form-section">
     <span class="form-section-label">요청 사항</span>
     <input class="f-input" placeholder="알아보기 쉽게 입력 (선택)" value={p.form.notes} oninput={(e) => p.onFormChange({ ...p.form, notes: readInputValue(e) })}/>
-    {#if p.method !== 'visit'}
+    {#if p.showFrontdoor}
+      <p class="form-note-sm">경비실 호출 / 세대호출 / 자유 출입가능 등 (운송장에 인쇄될 수 있어요)</p>
+    {:else if p.method !== 'visit'}
       <p class="form-note-sm">공동현관 출입번호 / 경비실 호출 / 세대호출 / 자유 출입가능 등</p>
     {/if}
   </div>
@@ -4385,7 +4411,7 @@
 
     {@render DeliveryAddressSection({ form: props.form, onFormChange: props.onFormChange, method: props.method, type: props.type, hasUserAddress: props.hasUserAddress, userAddressInfo: props.userAddressInfo, pickupPoints: props.pickupPoints })}
 
-    {@render NotesSection({ form: props.form, onFormChange: props.onFormChange, method: props.method })}
+    {@render NotesSection({ form: props.form, onFormChange: props.onFormChange, method: props.method, showFrontdoor: props.type === 'rental' && isShippingFeeMethod(props.method) })}
 
     <!-- Copy to return checkbox -->
     {#if props.type === 'rental' && props.onCopyChange}

@@ -36,8 +36,8 @@ vi.mock('$lib/server/getReservationForDhero', () => ({
 }));
 
 const mockIsBulk = vi.fn().mockResolvedValue(true);
-vi.mock('$lib/server/isBulkDeliveryMethod', () => ({
-  isBulkDeliveryMethod: (...args: unknown[]) => mockIsBulk(...args),
+vi.mock('$lib/server/isDheroIntegrationMethod', () => ({
+  isDheroIntegrationMethod: (...args: unknown[]) => mockIsBulk(...args),
 }));
 
 const mockCreateDelivery = vi.fn();

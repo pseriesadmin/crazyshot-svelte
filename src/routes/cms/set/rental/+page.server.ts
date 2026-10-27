@@ -88,6 +88,9 @@ export interface RentalMethodOption {
   display_order: number
   is_active: boolean
   is_bulk_delivery: boolean
+  // 두발히어로 연동 대상 방식(배송 접수·반품·취소·동기화·주소 사전 확인) — 장바구니 "요청 A"(is_bulk_delivery)와 완전히 분리된
+  // 전용 스위치(Migration #772, 2026-10-27). 기본 false, 켜기는 이 화면에서만.
+  is_dhero_integration: boolean
   // 휴무일 캘린더 제한 대상(택배사 의존 여부) — is_bulk_delivery("요청 A" 전용)와는
   // 별개 목적(감사 RSC-B3, Migration #386). /cart courierClosedMap 적용 방식 판정에만 쓰임.
   is_courier_dependent: boolean
@@ -189,7 +192,7 @@ export const load: PageServerLoad = async ({ locals }) => {
       .order('display_order'),
 
     untypedFrom(supabase, 'rental_method_options')
-      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_courier_dependent, is_delivery_type, deadline_time, return_deadline_time')
+      .select('id, name, method_key, display_order, is_active, is_bulk_delivery, is_dhero_integration, is_courier_dependent, is_delivery_type, deadline_time, return_deadline_time')
       .is('deleted_at', null)
       .order('display_order'),
 
@@ -641,6 +644,22 @@ export const actions: Actions = {
     const data = await request.formData()
     const id = data.get('id') as string
     const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_bulk_delivery', { p_id: id })
+    if (error) return fail(400, { error: error.message })
+    return { success: true }
+  },
+
+  // 두발히어로 연동 대상 방식 지정(2026-10-27, Migration #772) — 장바구니 "요청 A"(is_bulk_delivery)와 완전히 분리된 전용 스위치.
+  // 켜면 그 방식의 새 배송 접수(출고 처리 시)·반품 접수·장바구니 주소 사전 확인이 두발히어로로 나간다(외부 호출 — 매니저 이상만).
+  // 이미 운송장이 저장된 예약의 취소·상태 동기화는 이 스위치와 무관하게 계속된다.
+  // RPC 도 is_cms_manager_or_above 로 한 번 더 막는다.
+  toggleDheroIntegration: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { error: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!hasSettingsAccess(cmsRole ?? '')) return fail(403, { error: '권한 없음' })
+    const data = await request.formData()
+    const id = data.get('id') as string
+    const { error } = await untypedRpc(locals.supabase, 'toggle_rental_method_dhero_integration', { p_id: id })
     if (error) return fail(400, { error: error.message })
     return { success: true }
   },

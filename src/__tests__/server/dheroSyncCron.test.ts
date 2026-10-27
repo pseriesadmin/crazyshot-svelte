@@ -131,6 +131,27 @@ describe('cron dhero-sync — 자동전이 연동', () => {
     )
   })
 
+  it('C-1b — 두발히어로 쪽에서 취소된 접수(canceledAt)는 상태 코드가 그대로여도 라벨 \'취소\'로 저장하고 자동전이는 일어나지 않는다', async () => {
+    setupFromMocks([{
+      id: 110, tracking_number: 'BOOK-110', dhero_return_book_id: null, dhero_status_code: null, dhero_dong_group: null,
+      status: 'confirmed', pickup_method: 'crazydelivery', return_method: 'crazydelivery',
+    }])
+    mockGetDeliveryByBookId.mockResolvedValue({ status: 0, bookId: 'BOOK-110', canceledAt: '2026-10-27 15:34:52', canceledReason: '(고객사취소) 테스트' })
+    mockAdminRpc.mockResolvedValue({ data: null, error: null })
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', { headers: { authorization: 'Bearer test-cron-secret' } })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    await GET({ request } as Parameters<typeof GET>[0])
+
+    const call = mockAdminRpc.mock.calls.find((c) => c[0] === 'update_reservation_dhero_shipment')
+    expect(call).toBeTruthy()
+    const args = call?.[1] as { p_status: string; p_status_code: number; p_meta: { canceledAt?: string; canceledReason?: string } }
+    expect(args.p_status).toBe('취소')
+    expect(args.p_status_code).toBe(0) // 코드는 그대로 — 취소는 canceledAt 으로만 구분
+    expect(args.p_meta.canceledAt).toBe('2026-10-27 15:34:52')
+    expect(args.p_meta.canceledReason).toContain('고객사취소') // 취소 사유가 dhero_meta 에 기록된다
+  })
+
   it('C-2 — dhero_return_book_id 있는 예약: 반납 leg도 조회해서 direction=return으로 자동전이 호출', async () => {
     const reservation = {
       id: 102,

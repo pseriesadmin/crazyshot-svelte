@@ -95,10 +95,10 @@ vi.mock('$lib/server/getReservationForDhero', () => ({
   getReservationForDhero: (...args: unknown[]) => mockGetReservationForDhero(...args),
 }))
 
-// isBulkDeliveryMethod 모킹
+// isDheroIntegrationMethod 모킹
 const mockIsBulkDelivery = vi.fn()
-vi.mock('$lib/server/isBulkDeliveryMethod', () => ({
-  isBulkDeliveryMethod: (...args: unknown[]) => mockIsBulkDelivery(...args),
+vi.mock('$lib/server/isDheroIntegrationMethod', () => ({
+  isDheroIntegrationMethod: (...args: unknown[]) => mockIsBulkDelivery(...args),
 }))
 
 // push, notification 모킹
@@ -146,7 +146,7 @@ describe('updateStatus 액션 — dhero fail-soft 트리거', () => {
   })
 
   it('케이스 1 — shipped 전이 + bulk delivery → createDelivery 호출, 성공', async () => {
-    // GREEN 상태: updateStatus 액션이 shipped 전이 시 isBulkDeliveryMethod 조회 후 createDelivery 호출
+    // GREEN 상태: updateStatus 액션이 shipped 전이 시 isDheroIntegrationMethod 조회 후 createDelivery 호출
 
     // update_reservation_status 성공
     mockRpc.mockImplementation((fn: string) => {

@@ -149,6 +149,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/payment/pg-status',
       'src/routes/api/cms/reservations/[id]/products',
       'src/routes/api/cms/reservations/[id]/rental-siblings',
+      'src/routes/api/cms/reservations/[id]/request-notes',
       'src/routes/api/cms/reservations/[id]/tracking',
       'src/routes/api/cms/reservations/resolve',
       // 1g(Stephen 확정 2026-10-05): 모바일 전용 API — 호출처는 /cms/mobile 화면뿐

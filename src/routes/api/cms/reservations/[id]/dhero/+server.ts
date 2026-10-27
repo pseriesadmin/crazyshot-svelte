@@ -1,6 +1,6 @@
 /**
  * GET  /api/cms/reservations/[id]/dhero — 두발히어로 배송상태 조회 (수동 새로고침)
- * POST /api/cms/reservations/[id]/dhero — 배송접수 / 재시도 (createDelivery)
+ * POST /api/cms/reservations/[id]/dhero — 배송접수 / 재시도 (createDelivery) — 예약코드(주문) 1건 = 배송 1건: 같은 주문의 상품 전부를 한 건으로 접수하고 접수번호를 전부에 저장
  *
  * - CMS 관리자 전용 (getCmsRoleForAction)
  * - 두발히어로 API 호출은 fail-soft: 실패해도 400/500이 아닌 json with dhero_error
@@ -19,9 +19,13 @@ import {
   DHERO_STATUS_LABEL,
   DheroApiError,
 } from '$lib/server/dhero'
+import { dheroStatusLabel, liveDheroBookings } from '$lib/utils/dheroLabels'
 import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
-import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
+import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
+import { pickDeliveryMemo } from '$lib/server/dheroMemo'
+import { notifyTrackingRegistered } from '$lib/server/notifyTrackingRegistered'
+import { listOrderReservationIds, joinProductNames } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
 // ── 공통 유틸 ──────────────────────────────────────────────────────────────────
@@ -50,12 +54,15 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const res = await getReservationForDhero(admin, reservationId)
   if (!res) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
-  // bulk-delivery 여부 확인 (컴포넌트가 UI 분기 결정에 사용)
-  const isBulkDelivery = await isBulkDeliveryMethod(admin, res.pickupMethod)
+  // 응답 최소화 — 공동현관 출입번호는 패널이 이 응답에서 읽지 않으므로 내려주지 않는다(request-notes 가 manager 이상에게만 별도 제공, sp5 LOW)
+  const resPublic = { ...res, frontdoorPassword: null }
+
+  // 두발히어로 연동 대상 방식 여부 확인(is_dhero_integration — 컴포넌트가 UI 분기 결정에 사용)
+  const isDheroIntegration = await isDheroIntegrationMethod(admin, res.pickupMethod)
 
   // trackingNumber 없으면 두발히어로 연동 이력 없음
   if (!res.trackingNumber) {
-    return json({ dhero: null, reservation: res, is_bulk_delivery: isBulkDelivery })
+    return json({ dhero: null, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   }
 
   // 두발히어로 API 호출 (fail-soft)
@@ -66,7 +73,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       p_reservation_id:  reservationId,
       p_tracking_number: res.trackingNumber,
       p_courier_code:    '두발히어로',
-      p_status:          DHERO_STATUS_LABEL[status.status] ?? String(status.status),
+      p_status:          dheroStatusLabel(status),
       p_status_code:     status.status,
       p_dong_group:      res.dheroDongGroup,
       p_meta:            status as Record<string, unknown>,
@@ -92,7 +99,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
           p_reservation_id:  reservationId,
           p_tracking_number: res.trackingNumber,
           p_courier_code:    '두발히어로',
-          p_status:          DHERO_STATUS_LABEL[returnStatus.status] ?? String(returnStatus.status),
+          p_status:          dheroStatusLabel(returnStatus),
           p_status_code:     returnStatus.status,
           p_dong_group:      res.dheroDongGroup,
           p_meta:            returnStatus as Record<string, unknown>,
@@ -114,12 +121,12 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       }
     }
 
-    return json({ dhero: status, reservation: res, is_bulk_delivery: isBulkDelivery })
+    return json({ dhero: status, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   } catch (e) {
     const dheroError = e instanceof DheroApiError
       ? { message: e.message, statusCode: e.statusCode }
       : { message: e instanceof Error ? e.message : '알 수 없는 오류' }
-    return json({ dhero: null, dhero_error: dheroError, reservation: res, is_bulk_delivery: isBulkDelivery })
+    return json({ dhero: null, dhero_error: dheroError, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   }
 }
 
@@ -138,17 +145,24 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   const res = await getReservationForDhero(admin, reservationId)
   if (!res) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
-  // RSV-B-C3: 멱등성 가드 — 이미 배송 접수된 예약은 중복 접수 차단
-  if (res.trackingNumber) {
+  // 같은 주문(예약코드)의 다른 상품 — 배송은 주문당 1건으로 접수한다(상품명 합침·접수번호 전부 저장)
+  const orderIds = await listOrderReservationIds(admin, reservationId)
+  const others = (await Promise.all(orderIds.filter((id) => id !== reservationId).map((id) => getReservationForDhero(admin, id).catch(() => null))))
+    .filter((r): r is NonNullable<typeof r> => r != null)
+
+  // RSV-B-C3: 멱등성 가드 — 주문의 어느 상품에든 접수번호가 이미 있으면 중복 접수 차단
+  // 두발히어로 쪽에서 이미 취소된 접수(dhero_meta.canceledAt)는 재접수를 막지 않는다(createDelivery 가 `예약코드-N` 새 번호로 접수).
+  // 접수 1건은 형제 예약이 공유하므로 같은 접수번호 중 하나라도 취소로 기록돼 있으면 그 접수 전체를 취소로 본다(liveDheroBookings)
+  if (liveDheroBookings([res, ...others]).length > 0) {
     return json(
       { error: '이미 배송이 접수된 예약입니다. 두발히어로 콘솔에서 현황을 확인해주세요.' },
       { status: 409 },
     )
   }
 
-  // bulk-delivery 방식이 아니면 두발히어로 접수 불가
-  const isBulk = await isBulkDeliveryMethod(admin, res.pickupMethod)
-  if (!isBulk) {
+  // 두발히어로 연동 대상 방식이 아니면 접수 불가
+  const isDheroOn = await isDheroIntegrationMethod(admin, res.pickupMethod)
+  if (!isDheroOn) {
     return json({ error: '두발히어로 배송 방식이 아닙니다.' }, { status: 422 })
   }
 
@@ -164,21 +178,27 @@ export const POST: RequestHandler = async ({ params, locals }) => {
       receiverAddress:           res.address,
       receiverAddressDetail:     res.addressDetail,
       receiverAddressPostalCode: res.postalCode,
-      productName:               res.productName,
+      productName:               joinProductNames([res.productName, ...others.map((o) => o.productName)]),
       orderIdFromCorp:           res.reservationCode ?? String(reservationId),
-      memoFromCustomer:          res.notes ?? undefined,
+      memoFromCustomer:          pickDeliveryMemo(res),
+      frontdoorPassword:         res.frontdoorPassword ?? undefined,
     })
 
-    await admin.rpc('update_reservation_dhero_shipment', {
-      p_reservation_id:  reservationId,
-      p_tracking_number: deliveryRes.bookId,
-      p_courier_code:    '두발히어로',
-      p_status:          DHERO_STATUS_LABEL[0] ?? '배송접수',
-      p_status_code:     0,
-      p_dong_group:      deliveryRes.dongGroup ?? null,
-      p_meta:            deliveryRes as Record<string, unknown>,
-      p_return_book_id:  null,
-    })
+    for (const id of orderIds) {
+      await admin.rpc('update_reservation_dhero_shipment', {
+        p_reservation_id:  id,
+        p_tracking_number: deliveryRes.bookId,
+        p_courier_code:    '두발히어로',
+        p_status:          DHERO_STATUS_LABEL[0] ?? '배송접수',
+        p_status_code:     0,
+        p_dong_group:      deliveryRes.dongGroup ?? null,
+        p_meta:            deliveryRes as Record<string, unknown>,
+        p_return_book_id:  null,
+      })
+    }
+
+    // 운송장(접수번호) 저장 직후 고객에게 택배사·운송장 번호 안내(주문당 1회·대표 예약, fail-soft, 2026-10-27)
+    await notifyTrackingRegistered(admin, reservationId)
 
     return json({ ok: true, bookId: deliveryRes.bookId, dongGroup: deliveryRes.dongGroup ?? null })
   } catch (e) {
