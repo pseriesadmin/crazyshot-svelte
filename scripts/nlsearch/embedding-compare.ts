@@ -32,7 +32,7 @@ const BATCH = 64
 
 async function get(path: string): Promise<Record<string, unknown>[]> {
   const r = await fetch(`${BASE}/${path}`, { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } })
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+  if (!r.ok) throw new Error(`공개 상품 조회 실패(HTTP ${r.status})`) // 응답 본문은 출력하지 않는다
   return (await r.json()) as Record<string, unknown>[]
 }
 
