@@ -14,6 +14,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { env } from '$env/dynamic/private'
 import { sendReservationLifecyclePush, sendPushToAdmins } from '$lib/server/push'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
+import { isDheroBooking } from '$lib/server/dheroOrderUnits'
 
 type CancelResult =
   /** cancelledIds: 이번 취소로 실제 cancelled 전이된 예약 id(주문 전체 취소 시 형제 포함) */
@@ -229,15 +230,16 @@ export async function cancelReservationWithRefund({
     } catch (e) {
       // fail-soft
     }
-    // 두발히어로 취소 (운송장 있을 때만)
+    // 두발히어로 취소 — tracking_number + courier_code 있을 때만 (P3-2: isDheroBooking 가드)
     try {
       const { data: rsvRow } = await admin
         .from('rental_reservations')
-        .select('tracking_number')
+        .select('tracking_number, courier_code')
         .eq('id', rsvId)
         .maybeSingle()
       const trackingNumber = (rsvRow as { tracking_number?: string | null } | null)?.tracking_number
-      if (trackingNumber) {
+      const courierCode = (rsvRow as { courier_code?: string | null } | null)?.courier_code
+      if (trackingNumber && isDheroBooking(courierCode)) {
         try {
           await cancelDelivery(trackingNumber)
         } catch (e) {

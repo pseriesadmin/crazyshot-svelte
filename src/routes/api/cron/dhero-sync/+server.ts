@@ -15,6 +15,7 @@ import {
   getDeliveryByBookId,
   isDheroTerminalStatus,
 } from '$lib/server/dhero'
+import { isDheroBooking } from '$lib/server/dheroOrderUnits'
 import { dheroStatusLabel } from '$lib/utils/dheroLabels'
 import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
 import type { RequestHandler } from './$types'
@@ -43,14 +44,14 @@ export const GET: RequestHandler = async ({ request }) => {
   // 종료 status(completed/returned/cancelled/damage_claimed) 아닌 예약만 대상
   const { data: rows, error: fetchErr } = await admin
     .from('rental_reservations')
-    .select('id, tracking_number, dhero_return_book_id, dhero_status_code, dhero_dong_group, status, pickup_method, return_method')
+    .select('id, tracking_number, courier_code, dhero_return_book_id, dhero_status_code, dhero_dong_group, dhero_meta, status, pickup_method, return_method')
     .not('status', 'in', `(${TERMINAL_RESERVATION_STATUSES.map(s => `"${s}"`).join(',')})`)
     .not('tracking_number', 'is', null)  // tracking_number 있는 건만 (발송 leg 기준)
 
   // dhero_return_book_id만 있고 tracking_number가 없는 건은 별도 조회
   const { data: returnOnlyRows, error: returnFetchErr } = await admin
     .from('rental_reservations')
-    .select('id, tracking_number, dhero_return_book_id, dhero_status_code, dhero_dong_group, status, pickup_method, return_method')
+    .select('id, tracking_number, courier_code, dhero_return_book_id, dhero_status_code, dhero_dong_group, dhero_meta, status, pickup_method, return_method')
     .not('status', 'in', `(${TERMINAL_RESERVATION_STATUSES.map(s => `"${s}"`).join(',')})`)
     .is('tracking_number', null)
     .not('dhero_return_book_id', 'is', null)
@@ -64,13 +65,23 @@ export const GET: RequestHandler = async ({ request }) => {
   }
 
   // 발송 leg 대상: dhero_status_code가 아직 종료 아닌 건
+  // + 취소된 접수(dhero_meta.canceledAt)는 제외 — 두발히어로는 취소 후에도 status_code=0을 유지해
+  //   isDheroTerminalStatus(0)=false 이지만, canceledAt 이 기록된 건을 계속 재조회할 필요가 없다.
+  //   반납 leg 가 별도로 붙은 건(dhero_return_book_id 있음)은 반납 leg 동기화가 필요하므로 제외 대상에서 뺀다.
   const pickupTargets = (rows ?? []).filter((r) => {
     const row = r as Record<string, unknown>
-    return !isDheroTerminalStatus(row.dhero_status_code as number | null | undefined)
+    if (isDheroTerminalStatus(row.dhero_status_code as number | null | undefined)) return false
+    if (!row.dhero_return_book_id) {
+      const meta = row.dhero_meta as Record<string, unknown> | null
+      if (meta?.canceledAt) return false
+    }
+    // P3-2: 두발히어로 접수번호가 아닌 운송장(타 택배사 수동 입력)은 동기화 제외
+    if (!isDheroBooking(row.courier_code as string | null | undefined)) return false
+    return true
   })
 
   let synced = 0
-  let skipped = 0
+  const skipped = 0
   let failed = 0
 
   // ── 발송(pickup) leg 처리 ───────────────────────────────────────────────

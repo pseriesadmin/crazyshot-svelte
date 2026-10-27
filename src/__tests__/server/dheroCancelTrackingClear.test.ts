@@ -60,6 +60,27 @@ function setupFrom(trackingNumber: string | null) {
   });
 }
 
+// 헬퍼 내부 단위 시험 — MockDheroApiError 는 statusCode + message 를 가지므로 직접 호출 가능
+import { isAlreadyCanceledError } from '$lib/server/dheroCancelErrors'
+
+describe('isAlreadyCanceledError — 순수 판별 헬퍼', () => {
+  it('412 + "이미 취소된 배송입니다." 포함 → true', () => {
+    expect(isAlreadyCanceledError({ statusCode: 412, message: '이미 취소된 배송입니다.' })).toBe(true)
+  })
+  it('412 + 출발 후 취소불가 메시지 → false', () => {
+    expect(isAlreadyCanceledError({ statusCode: 412, message: '이미 배송이 출발하였거나 배송이 연기, 완료 및 분실 완료된 상태인 건은 취소할 수 없습니다.' })).toBe(false)
+  })
+  it('412 + 빈 메시지 → false (fail-safe)', () => {
+    expect(isAlreadyCanceledError({ statusCode: 412, message: '' })).toBe(false)
+  })
+  it('200 + 이미 취소 메시지 → false (상태코드 다름)', () => {
+    expect(isAlreadyCanceledError({ statusCode: 200, message: '이미 취소된 배송입니다.' })).toBe(false)
+  })
+  it('422 + 이미 취소 메시지 → false (412 아님)', () => {
+    expect(isAlreadyCanceledError({ statusCode: 422, message: '이미 취소된 배송입니다.' })).toBe(false)
+  })
+})
+
 describe('RSV-B-C4: 두발히어로 취소 후 tracking_number NULL 초기화', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -89,9 +110,12 @@ describe('RSV-B-C4: 두발히어로 취소 후 tracking_number NULL 초기화', 
     expect((clearCalls[0][1] as { p_reservation_id: number }).p_reservation_id).toBe(10);
   });
 
-  it('EC-4b: 412 에러 → RPC 미호출, dhero_cancel_failed 반환', async () => {
+  it('EC-4b: 412 취소불가(출발 후) → 422 + dhero_cancel_failed, RPC 미호출', async () => {
     setupFrom('BOOK-999');
-    mockCancelDelivery.mockRejectedValue(new MockDheroApiError('배송 진행 중', 412));
+    mockCancelDelivery.mockRejectedValue(new MockDheroApiError(
+      '이미 배송이 출발하였거나 배송이 연기, 완료 및 분실 완료된 상태인 건은 취소할 수 없습니다.',
+      412,
+    ));
 
     const res = await PUT({
       params:  { id: '10' },
@@ -109,5 +133,72 @@ describe('RSV-B-C4: 두발히어로 취소 후 tracking_number NULL 초기화', 
       (c: unknown[]) => (c[0] as string) === 'clear_reservation_tracking_number'
     );
     expect(clearCalls.length).toBe(0);
+  });
+
+  // EC-4c: 이미 취소된 배송 → 성공에 준하게 처리 (tracking_number 초기화 + ok:true)
+  it('EC-4c: 412 "이미 취소된 배송입니다." → ok:true + clear RPC 호출', async () => {
+    setupFrom('BOOK-123');
+    mockCancelDelivery.mockRejectedValue(new MockDheroApiError('이미 취소된 배송입니다.', 412));
+
+    const res = await PUT({
+      params:  { id: '10' },
+      locals:  makeLocals(),
+      request: {} as Request,
+      url:     new URL('http://localhost'),
+    } as never) as { status: number; json: () => Promise<unknown> };
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; already_canceled?: boolean };
+    expect(body.ok).toBe(true);
+
+    // 이미 취소된 배송도 tracking_number 초기화 RPC를 호출해야 함
+    const clearCalls = mockRpc.mock.calls.filter(
+      (c: unknown[]) => (c[0] as string) === 'clear_reservation_tracking_number'
+    );
+    expect(clearCalls.length).toBe(1);
+    expect((clearCalls[0][1] as { p_reservation_id: number }).p_reservation_id).toBe(10);
+  });
+
+  // EC-4d: fail-safe — 빈 메시지 412는 (b) 취소불가 경로로 처리
+  it('EC-4d: 412 빈 메시지 → 422 + dhero_cancel_failed (fail-safe)', async () => {
+    setupFrom('BOOK-123');
+    mockCancelDelivery.mockRejectedValue(new MockDheroApiError('', 412));
+
+    const res = await PUT({
+      params:  { id: '10' },
+      locals:  makeLocals(),
+      request: {} as Request,
+      url:     new URL('http://localhost'),
+    } as never) as { status: number; json: () => Promise<unknown> };
+
+    expect(res.status).toBe(422);
+    const body = await res.json() as { dhero_cancel_failed: boolean };
+    expect(body.dhero_cancel_failed).toBe(true);
+
+    const clearCalls = mockRpc.mock.calls.filter(
+      (c: unknown[]) => (c[0] as string) === 'clear_reservation_tracking_number'
+    );
+    expect(clearCalls.length).toBe(0);
+  });
+
+  // EC-4e: fail-soft — 이미 취소된 배송인데 clear RPC가 실패해도 ok:true 유지
+  it('EC-4e: 412 이미 취소 + clear RPC 실패 → ok:true (fail-soft)', async () => {
+    setupFrom('BOOK-123');
+    mockCancelDelivery.mockRejectedValue(new MockDheroApiError('이미 취소된 배송입니다.', 412));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'clear_reservation_tracking_number') throw new Error('RPC 네트워크 오류')
+      return Promise.resolve({ data: null, error: null })
+    });
+
+    const res = await PUT({
+      params:  { id: '10' },
+      locals:  makeLocals(),
+      request: {} as Request,
+      url:     new URL('http://localhost'),
+    } as never) as { status: number; json: () => Promise<unknown> };
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean };
+    expect(body.ok).toBe(true);
   });
 });

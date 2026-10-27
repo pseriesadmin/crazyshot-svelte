@@ -22,7 +22,8 @@ import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult } from '$lib/server/contractAutoIssue'
-import { listOrderReservationIds, joinProductNames } from '$lib/server/dheroOrderUnits'
+import { listOrderReservationIds, joinProductNames, isDheroBooking } from '$lib/server/dheroOrderUnits'
+import { isAlreadyCanceledError } from '$lib/server/dheroCancelErrors'
 import { planOrderTransition, ORDER_LIFECYCLE_TARGETS, type OrderUnit } from '$lib/utils/orderStatusTransition'
 
 export interface RentalListRow {
@@ -259,12 +260,18 @@ async function triggerDheroForTransition(
         }
       } else if (newStatus === 'cancelled') {
         const trackingNumber = res.trackingNumber
-        if (trackingNumber) {
+        if (trackingNumber && isDheroBooking(res.courierCode)) {  // P3-2: 두발히어로 접수번호만 취소 호출
           try {
             await cancelDelivery(trackingNumber)
           } catch (e) {
             if (e instanceof DheroApiError && e.statusCode === 412) {
-              dheroCancelFailed = true
+              if (isAlreadyCanceledError(e)) {
+                // (a) 두발히어로 쪽 이미 취소된 배송 → 성공에 준함, 경고 플래그 없음 (dhero-delivery-api.md §5)
+                // tracking_number 미초기화 — 기존 취소 성공 경로와 동일하게 유지(예약이 cancelled 상태로 전환되므로 운송장 잔존 무해)
+              } else {
+                // (b) 취소 불가 상태(배송 출발·완료 등) 또는 메시지 불명확 → fail-safe: 경고 플래그
+                dheroCancelFailed = true
+              }
             } else {
               console.error('[dhero/cancelled] fail-soft:', e instanceof Error ? e.message : e)
             }

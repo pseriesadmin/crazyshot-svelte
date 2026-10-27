@@ -435,3 +435,205 @@ describe('updateStatus 액션 — dhero fail-soft 트리거', () => {
     expect(mockCreateDelivery).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * TDD — triggerDheroForTransition cancelled 분기 412 처리 분리
+ *
+ * 수정 목표: isAlreadyCanceledError로 판별되는 412는 dheroCancelFailed=false(성공에 준함).
+ * 그 외 412(배송출발·메시지 불명확) 및 비 DheroApiError는 기존 동작 유지.
+ *
+ * 가드 검증: EC-3 테스트(이미 취소 412 → false)는 isAlreadyCanceledError 가드를
+ *            제거(전부 true)하면 실패한다 — 행동 기반 검증.
+ */
+describe('triggerDheroForTransition cancelled 분기 — 412 처리 분리', () => {
+  /** EC-2 와 동일한 모킹 세팅 재사용 헬퍼 */
+  function setupCancelledScene(trackingNum = 'DHERO-BOOK-888') {
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'cancel_reservation_payment') return Promise.resolve({ data: { success: true }, error: null })
+      if (fn === 'send_rental_chat_notification') return Promise.resolve({ data: null, error: null })
+      return Promise.resolve({ data: null, error: null })
+    })
+    mockGetReservationForDhero.mockResolvedValue({
+      reservationId: 2001,
+      status: 'shipped',
+      pickupMethod: 'crazydelivery',
+      returnMethod: 'crazydelivery',
+      trackingNumber: trackingNum,
+      reservationCode: 'CS-2026-CANCEL-412',
+      dheroStatus: '배송접수', dheroStatusCode: 0, dheroSyncedAt: null,
+      dheroDongGroup: null, dheroReturnBookId: null, dheroMeta: null,
+      customerName: '테스트유저',
+      customerPhone: '010-0000-0001',
+      address: '서울시 강남구 테스트로 1',
+      addressDetail: null,
+      postalCode: '06000',
+      productName: '테스트장비',
+    })
+  }
+
+  beforeEach(() => {
+    mockRpc.mockReset()
+    mockCreateDelivery.mockReset()
+    mockCancelDelivery.mockReset()
+    mockRegisterReturn.mockReset()
+    mockIsBulkDelivery.mockReset()
+    mockGetReservationForDhero.mockReset()
+    mockGetCmsRoleForAction.mockResolvedValue('manager')
+  })
+
+  it('EC-3: 이미 취소된 배송 412 → dheroCancelFailed false (경고 플래그 없음)', async () => {
+    // 가드 제거(전부 true) 시 이 테스트는 실패한다 — isAlreadyCanceledError 가드가 필요함을 증명
+    setupCancelledScene()
+    const { DheroApiError } = await import('$lib/server/dhero')
+    mockCancelDelivery.mockRejectedValue(new DheroApiError('이미 취소된 배송입니다.', 412))
+
+    const formData = makeFormData({ reservation_id: '2001', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    const result = await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    // 예약 취소 자체는 성공 — cancel_reservation_payment 호출됨
+    expect(mockRpc).toHaveBeenCalledWith('cancel_reservation_payment', expect.anything())
+    // 이미 취소된 배송은 성공에 준함 → dhero_cancel_failed 플래그 없음
+    expect(result).not.toMatchObject(expect.objectContaining({ dhero_cancel_failed: true }))
+  })
+
+  it('EC-2b: 빈 메시지 412 → dheroCancelFailed true (fail-safe)', async () => {
+    setupCancelledScene()
+    const { DheroApiError } = await import('$lib/server/dhero')
+    mockCancelDelivery.mockRejectedValue(new DheroApiError('', 412))
+
+    const formData = makeFormData({ reservation_id: '2001', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    const result = await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    expect(result).toMatchObject(expect.objectContaining({ dhero_cancel_failed: true }))
+  })
+
+  it('EC-2c: 출발 후 취소불가 원문 412 → dheroCancelFailed true', async () => {
+    setupCancelledScene()
+    const { DheroApiError } = await import('$lib/server/dhero')
+    mockCancelDelivery.mockRejectedValue(new DheroApiError(
+      '이미 배송이 출발하였거나 배송이 연기, 완료 및 분실 완료된 상태인 건은 취소할 수 없습니다.',
+      412,
+    ))
+
+    const formData = makeFormData({ reservation_id: '2001', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    const result = await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    expect(result).toMatchObject(expect.objectContaining({ dhero_cancel_failed: true }))
+  })
+
+  it('EC-fail-soft: 네트워크 오류(412 아님) → fail-soft, dhero_cancel_failed 플래그 없음', async () => {
+    setupCancelledScene()
+    // DheroApiError가 아닌 일반 네트워크 오류
+    mockCancelDelivery.mockRejectedValue(new Error('Network timeout'))
+
+    const formData = makeFormData({ reservation_id: '2001', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    const result = await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    // fail-soft: 예약 취소 자체는 성공
+    expect(mockRpc).toHaveBeenCalledWith('cancel_reservation_payment', expect.anything())
+    // 경고 플래그 없음 (412 아닌 오류는 console.error만, 플래그 미설정)
+    expect(result).not.toMatchObject(expect.objectContaining({ dhero_cancel_failed: true }))
+  })
+})
+
+/**
+ * P3-2: triggerDheroForTransition cancelled 분기 — courier_code 가드
+ *
+ * 완료조건:
+ *   - courierCode = "CJ대한통운" → cancelDelivery 미호출 (타 택배사 방어)
+ *   - courierCode = null/두발히어로 → cancelDelivery 호출 (하위호환 + 정상 경로)
+ *   가드를 제거(isDheroBooking 항상 true)하면 CJ대한통운 케이스가 실패해야 함.
+ */
+describe('P3-2 courier_code 가드 — triggerDheroForTransition cancelled 분기', () => {
+  beforeEach(() => {
+    mockRpc.mockReset()
+    mockCreateDelivery.mockReset()
+    mockCancelDelivery.mockReset()
+    mockRegisterReturn.mockReset()
+    mockIsBulkDelivery.mockReset()
+    mockGetReservationForDhero.mockReset()
+    mockGetCmsRoleForAction.mockResolvedValue('manager')
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'update_reservation_status') return Promise.resolve({ data: { ok: true }, error: null })
+      if (fn === 'cancel_reservation_payment') return Promise.resolve({ data: { success: true }, error: null })
+      if (fn === 'send_rental_chat_notification') return Promise.resolve({ data: null, error: null })
+      return Promise.resolve({ data: null, error: null })
+    })
+  })
+
+  it('courierCode = "CJ대한통운" → cancelDelivery 미호출 (타 택배사 수동 입력 방어)', async () => {
+    mockGetReservationForDhero.mockResolvedValue({
+      reservationId: 3001,
+      status: 'shipped',
+      pickupMethod: 'delivery',
+      returnMethod: 'delivery',
+      trackingNumber: 'CJ-9988776655',
+      courierCode: 'CJ대한통운',
+      reservationCode: 'CS-P3-CJ',
+      dheroStatus: null, dheroStatusCode: null, dheroSyncedAt: null,
+      dheroDongGroup: null, dheroReturnBookId: null, dheroMeta: null,
+      customerName: '테스터',
+      customerPhone: '010-0000-0002',
+      address: '서울시 테스트로 1',
+      addressDetail: null,
+      postalCode: '04000',
+      productName: '테스트장비',
+    })
+
+    const formData = makeFormData({ reservation_id: '3001', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    // P3-2 가드: 타 택배사 운송장은 두발히어로 취소 호출 안 함
+    expect(mockCancelDelivery).not.toHaveBeenCalled()
+  })
+
+  it('courierCode = null → cancelDelivery 호출 (하위호환: 기존 예약)', async () => {
+    mockGetReservationForDhero.mockResolvedValue({
+      reservationId: 3002,
+      status: 'shipped',
+      pickupMethod: 'crazydelivery',
+      returnMethod: 'crazydelivery',
+      trackingNumber: 'DHERO-P3-001',
+      courierCode: null,
+      reservationCode: 'CS-P3-NULL',
+      dheroStatus: null, dheroStatusCode: null, dheroSyncedAt: null,
+      dheroDongGroup: null, dheroReturnBookId: null, dheroMeta: null,
+      customerName: '테스터2',
+      customerPhone: '010-0000-0003',
+      address: '서울시 테스트로 2',
+      addressDetail: null,
+      postalCode: '04001',
+      productName: '테스트장비2',
+    })
+    mockCancelDelivery.mockResolvedValue(undefined)
+
+    const formData = makeFormData({ reservation_id: '3002', status: 'cancelled' })
+    const { actions } = await import('../../routes/cms/reservation/+page.server')
+    await actions.updateStatus({
+      request: { formData: async () => formData } as Request,
+      locals: makeLocals(),
+    } as unknown as Parameters<typeof actions.updateStatus>[0])
+
+    expect(mockCancelDelivery).toHaveBeenCalledWith('DHERO-P3-001')
+  })
+})

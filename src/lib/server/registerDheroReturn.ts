@@ -14,6 +14,7 @@
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { registerReturn, DHERO_STATUS_LABEL, DheroApiError } from '$lib/server/dhero'
+import { listSameBookReservationIds } from '$lib/server/dheroOrderUnits'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySupabaseClient = { from: (table: string) => any; rpc: (...args: any[]) => any }
@@ -39,6 +40,35 @@ export interface DheroReturnResult {
   message?: string
 }
 
+/**
+ * 같은 주문·같은 접수번호의 형제 예약 중 이미 반품 접수된 건이 있으면 그 반품번호를 반환한다.
+ * 형제가 없거나 아직 아무도 접수하지 않았거나 조회 중 오류가 나면 null 을 반환한다(fail-soft).
+ *
+ * 단일 예약(형제 없음)에서 admin.from 을 호출하지 않도록 others.length === 0 을 먼저 확인한다.
+ */
+async function findSiblingReturnBookId(
+  admin: AnySupabaseClient,
+  reservationId: number,
+  trackingNumber: string,
+): Promise<string | null> {
+  try {
+    const sibIds = await listSameBookReservationIds(admin, reservationId, trackingNumber)
+    const others = sibIds.filter((id) => id !== reservationId)
+    if (others.length === 0) return null
+    const { data, error: sibErr } = (await admin
+      .from('rental_reservations')
+      .select('dhero_return_book_id')
+      .in('id', others)
+      .not('dhero_return_book_id', 'is', null)
+      .limit(1)
+      .maybeSingle()) as { data: { dhero_return_book_id: string } | null; error: { message: string } | null }
+    if (sibErr) return null  // fail-soft: 조회 오류 시 기존 단독 접수 흐름으로 이어짐
+    return data?.dhero_return_book_id ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function registerDheroReturn(
   admin: AnySupabaseClient,
   reservationId: number,
@@ -50,6 +80,36 @@ export async function registerDheroReturn(
     const isDheroOn = await isDheroIntegrationMethod(admin, res.returnMethod)
     if (!isDheroOn || !res.trackingNumber) return { outcome: 'skipped' }
     if (res.dheroReturnBookId) return { outcome: 'skipped' }
+
+    // 형제 단위 중복 방어 — 같은 주문·같은 접수번호의 형제가 이미 반품 접수됐으면
+    // 두발히어로 API 를 다시 호출하지 않고 형제 반품번호를 저장한다.
+    const siblingReturnBookId = await findSiblingReturnBookId(admin, reservationId, res.trackingNumber)
+    if (siblingReturnBookId !== null) {
+      // 현재 저장된 dhero 값(크론이 갱신한 상태·코드·동그룹·메타)을 그대로 전달한다.
+      // RPC 는 p_status·p_status_code·p_dong_group·p_meta 를 COALESCE 없이 덮어쓰므로
+      // null/{} 를 넘기면 기존 값이 지워진다(supabase/migrations/*343* 53~64행 참조).
+      const { error: siblingErr } = await admin.rpc('update_reservation_dhero_shipment', {
+        p_reservation_id:  reservationId,
+        p_tracking_number: res.trackingNumber,
+        p_courier_code:    '두발히어로',
+        p_status:          res.dheroStatus ?? (DHERO_STATUS_LABEL[0] ?? '반품접수'),
+        p_status_code:     res.dheroStatusCode ?? 0,
+        p_dong_group:      res.dheroDongGroup ?? null,
+        p_meta:            res.dheroMeta ?? {},
+        p_return_book_id:  siblingReturnBookId,
+      })
+      if (siblingErr) {
+        console.error(
+          `[registerDheroReturn] 형제 반품번호 저장 실패 (id=${reservationId}, bookId=${siblingReturnBookId}):`,
+          (siblingErr as { message: string }).message,
+        )
+        return {
+          outcome: 'failed',
+          message: `두발히어로에는 반품이 접수됐지만(${siblingReturnBookId}) 이 예약에 저장하지 못했습니다. 예약 상세에서 확인 후 수동으로 등록해 주세요.`,
+        }
+      }
+      return { outcome: 'registered' }
+    }
 
     let returnRes: Awaited<ReturnType<typeof registerReturn>>
     try {

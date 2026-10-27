@@ -1971,6 +1971,7 @@
   let isDheroMethod      = $state(false)  // 두발히어로 연동 대상 방식(is_dhero_integration, Migration #772)
   let dheroData          = $state<DheroInfo | null>(null)
   let dheroError         = $state<string | null>(null)
+  let dheroCourierCode   = $state<string | null>(null)  // dhero GET 응답의 courier_code (P3 Issue #4)
   let dheroBookLoading   = $state(false)  // 배송접수 POST 진행 중
   let dheroBookError     = $state<string | null>(null)
   let dheroCancelLoading = $state(false)
@@ -1991,16 +1992,18 @@
     dheroData         = null
     dheroError        = null
     isDheroMethod     = false
+    dheroCourierCode  = null
     dheroLoading      = true
 
     fetch(`/api/cms/reservations/${id}/dhero`)
       .then(r => r.json())
-      .then((d: { dhero: DheroInfo | null; is_dhero_integration?: boolean; dhero_error?: { message: string } }) => {
+      .then((d: { dhero: DheroInfo | null; is_dhero_integration?: boolean; dhero_error?: { message: string }; reservation?: { courierCode?: string | null } }) => {
         if (dheroFetchedForId === id) {
-          isDheroMethod  = d.is_dhero_integration ?? false
-          dheroData     = d.dhero ?? null
-          dheroError    = d.dhero_error?.message ?? null
-          dheroLoading  = false
+          isDheroMethod    = d.is_dhero_integration ?? false
+          dheroData       = d.dhero ?? null
+          dheroError      = d.dhero_error?.message ?? null
+          dheroCourierCode = d.reservation?.courierCode ?? null
+          dheroLoading    = false
         }
       })
       .catch(() => {
@@ -2013,8 +2016,9 @@
   async function refreshDheroStatus(): Promise<void> {
     dheroFetchedForId = null  // 재-fetch 강제
     // 다음 $effect 실행을 위해 상태 초기화
-    dheroData  = null
-    dheroError = null
+    dheroData       = null
+    dheroError      = null
+    dheroCourierCode = null
   }
 
   async function registerDheroDelivery(): Promise<void> {
@@ -2048,11 +2052,15 @@
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/dhero/cancel`, {
         method: 'PUT',
       })
-      const d = await res.json() as { ok?: boolean; dhero_cancel_failed?: boolean; error?: string; dhero_error?: { message: string } }
+      const d = await res.json() as { ok?: boolean; dhero_cancel_failed?: boolean; dhero_skipped?: boolean; error?: string; dhero_error?: { message: string } }
       if (d.dhero_cancel_failed) {
         dheroCancelError = '두발히어로에서 이미 배차된 건은 취소할 수 없습니다.'
       } else if (!res.ok) {
         dheroCancelError = d.error ?? d.dhero_error?.message ?? '취소에 실패했습니다.'
+      } else if (d.dhero_skipped) {
+        csToast.info('다른 택배사 운송장이라 두발히어로 취소 대상이 아닙니다.')
+        dheroFetchedForId = null
+        onrefresh()
       } else {
         csToast.success('배송이 취소되었습니다.')
         dheroFetchedForId = null
@@ -3176,6 +3184,14 @@
             {/if}
             <div class="info-row">
               <span class="info-label">접수번호(bookId)</span>
+              <span class="info-value mono">{row.tracking_number}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">택배사</span>
+              <span class="info-value">{dheroCourierCode ?? '-'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">운송장 번호</span>
               <span class="info-value mono">{row.tracking_number}</span>
             </div>
             {#if row.dhero_return_book_id}

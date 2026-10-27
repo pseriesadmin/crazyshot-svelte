@@ -25,7 +25,7 @@ import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { pickDeliveryMemo } from '$lib/server/dheroMemo'
 import { notifyTrackingRegistered } from '$lib/server/notifyTrackingRegistered'
-import { listOrderReservationIds, joinProductNames } from '$lib/server/dheroOrderUnits'
+import { listOrderReservationIds, joinProductNames, isDheroBooking } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
 // ── 공통 유틸 ──────────────────────────────────────────────────────────────────
@@ -60,8 +60,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // 두발히어로 연동 대상 방식 여부 확인(is_dhero_integration — 컴포넌트가 UI 분기 결정에 사용)
   const isDheroIntegration = await isDheroIntegrationMethod(admin, res.pickupMethod)
 
-  // trackingNumber 없으면 두발히어로 연동 이력 없음
-  if (!res.trackingNumber) {
+  // trackingNumber 없거나 두발히어로 택배사가 아니면 dhero API 건너뜀 (P3-2: 타 택배사 수동 입력 방어)
+  if (!res.trackingNumber || !isDheroBooking(res.courierCode)) {
     return json({ dhero: null, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   }
 
