@@ -1,6 +1,7 @@
 <script lang="ts">
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
+  import CardPaymentButtons from '$lib/components/account/CardPaymentButtons.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { goto, invalidateAll } from '$app/navigation'
   import { returnDayState } from '$lib/utils/returnNoticeTime'
@@ -18,6 +19,8 @@
     product_category?: string | null
     // 같은 주문의 상품 목록(서버에서 묶음) — 카드 1장에 모두 표시
     items?: Array<{ id: string; name: string | null; category: string | null }>
+    // 카드 영수증·취소내역 버튼 정보(서버가 결제 행이 있는 카드에만 채움)
+    payment?: { receiptUrl: string | null; cancelled: boolean; partial: boolean; cancelDetail: boolean } | null
     has_signed_contract?: boolean
     pending_contract_token?: string | null
     canCancel?: boolean
@@ -196,7 +199,10 @@
         {@const st = STATUS_STYLE[rental.status] ?? STATUS_STYLE['hold']}
         <div class="rental-card" class:rental-card--cancelling={rental.cancelling}>
           <div class="card-head">
-            <span class="code">{rental.reservation_code}</span>
+            <div class="card-head-left">
+              <span class="code">{rental.reservation_code}</span>
+              <CardPaymentButtons reservationId={rental.id} payment={rental.payment} mode="rental" cancelling={rental.cancelling} />
+            </div>
             <div class="card-head-right">
               <span class="status-chip" style="background:{st.bg};color:{st.color}">
                 {STATUS_LABEL[rental.status] ?? rental.status}
@@ -453,6 +459,14 @@
     font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
+  }
+
+  .card-head-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    min-width: 0;
   }
 
   .card-head-right {

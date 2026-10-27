@@ -1,6 +1,7 @@
 <script lang="ts">
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import { goto } from '$app/navigation'
+  import CardPaymentButtons from '$lib/components/account/CardPaymentButtons.svelte'
   import type { PageData } from './$types'
   import type { MyCancel } from './+page.server'
 
@@ -48,7 +49,10 @@
         {#each data.cancels as item (item.id)}
           <div class="cancel-card">
             <div class="card-head">
-              <span class="code">{item.reservation_code}</span>
+              <div class="card-head-left">
+                <span class="code">{item.reservation_code}</span>
+                <CardPaymentButtons reservationId={item.id} payment={item.payment} mode="cancel" />
+              </div>
               <span class="status-chip">취소</span>
             </div>
 
@@ -194,6 +198,14 @@
   /* front-uiux.md §4 카드 반경 대/중 2단 체계 — 대(large) Mobile 30px(하드코딩, 전용 변수 없음) */
   @media (max-width: 640px) {
     .cancel-card { border-radius: 30px; }
+  }
+
+  .card-head-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    min-width: 0;
   }
 
   .card-head {

@@ -3,6 +3,7 @@
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import { returnDayState } from '$lib/utils/returnNoticeTime'
   import ChatIcon from '$lib/components/common/ChatIcon.svelte'
+  import CardPaymentButtons from '$lib/components/account/CardPaymentButtons.svelte'
   import FloatingButton from '$lib/components/chat/FloatingButton.svelte'
   import ReturnSubmitModal from '$lib/components/account/ReturnSubmitModal.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
@@ -219,7 +220,10 @@
           {@const st = STATUS_STYLE[rental.status] ?? STATUS_STYLE['hold']}
           <div class="rental-card" class:rental-card--cancelling={rental.cancelling}>
             <div class="card-head">
-              <span class="code">{rental.reservation_code}</span>
+              <div class="card-head-left">
+                <span class="code">{rental.reservation_code}</span>
+                <CardPaymentButtons reservationId={rental.id} payment={rental.payment} mode="rental" cancelling={rental.cancelling} />
+              </div>
               <div class="card-head-right">
                 <span class="status-chip" style="background:{st.bg};color:{st.color}">
                   {STATUS_LABEL[rental.status] ?? rental.status}
@@ -540,6 +544,14 @@
     font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
+  }
+
+  .card-head-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    min-width: 0;
   }
 
   .card-head-right {

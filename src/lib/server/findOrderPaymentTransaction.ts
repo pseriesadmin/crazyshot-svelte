@@ -6,12 +6,18 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // 같은 주문의 결제 행을 찾는다 — cancel_reservation_payment RPC(Migration 379/384)의
 // 1a/1b 조회 패턴과 동일. 이게 없으면 형제 예약의 "결제정보" 탭이 항상 "결제 정보가
 // 없습니다"로 뜨고 환불 버튼도 영구히 비활성화된다(CMS 감사로 발견).
+// 고객용 영수증·취소내역은 결제 재시도로 생긴 실패·대기 행이 아니라 완료·취소된 결제 행을 봐야 한다(settledOnly) —
+// 기본값(false)은 기존 동작(가장 최신 행)이라 CMS 소비처는 영향이 없다.
+const SETTLED_STATUSES = ['done', 'cancelled', 'partial_cancelled']
+
 export async function findOrderPaymentTransaction(
   admin: SupabaseClient,
   reservationId: number,
+  opts: { settledOnly?: boolean } = {},
 ) {
   const selectCols = `
     order_id,
+    user_id,
     payment_key,
     payment_method,
     total_amount,
@@ -28,10 +34,12 @@ export async function findOrderPaymentTransaction(
     cancel_reason
   `
 
-  const { data: direct, error: directErr } = await admin
+  let directQuery = admin
     .from('payment_transactions')
     .select(selectCols)
     .eq('reservation_id', reservationId)
+  if (opts.settledOnly) directQuery = directQuery.in('status', SETTLED_STATUSES)
+  const { data: direct, error: directErr } = await directQuery
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
@@ -56,10 +64,12 @@ export async function findOrderPaymentTransaction(
     .filter((v): v is number => v != null)
   if (siblingIds.length === 0) return { data: null, error: null }
 
-  return admin
+  let siblingQuery = admin
     .from('payment_transactions')
     .select(selectCols)
     .in('reservation_id', siblingIds)
+  if (opts.settledOnly) siblingQuery = siblingQuery.in('status', SETTLED_STATUSES)
+  return siblingQuery
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
