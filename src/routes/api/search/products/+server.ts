@@ -84,8 +84,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       const expansion = expandQueryByTokens(q, synonymGroups)
       expandedTerms = expansion.whole
       tokenVariantTerms = expansion.tokenVariants
-    } catch {
-      // 동의어 확장 실패 시 확장어 없이 진행 — 서비스 중단 없음
+    } catch (e) {
+      // 동의어 확장 실패 시 확장어 없이 진행 — 서비스 중단 없음(장애를 알아챌 수 있게 로그만 남긴다)
+      console.error('[api/search/products] 동의어 확장 오류:', e)
     }
   }
   const extraTerms = [...tokenVariantTerms, ...expandedTerms]
