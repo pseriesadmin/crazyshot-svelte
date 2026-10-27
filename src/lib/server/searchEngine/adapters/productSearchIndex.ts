@@ -10,7 +10,7 @@
  * - keywords(TEXT[]), product_caption, content_blocks(JSONB → 텍스트 추출) 포함
  * - H-1(2026-08-07): components·specifications(JSONB key-value) 색인 추가 — boost 3(keywords_text 동급)
  * - `description` 컬럼은 products.md §2-10⑤에 따라 영구 미사용(항상 NULL) — 제외
- * - J-2(2026-08-07): product_search_stats 학습 기반 키워드 자동승격 — promote_threshold 이상 클릭된
+ * - J-2(2026-08-07): product_search_stats 학습 기반 키워드 자동승격 — 서로 다른 사용자 learning.minUsers명 이상이 클릭한(2026-10-27 변경)
  *   (product_id, search_term) 쌍을 색인 키워드에 추가 (TTL 60초 캐시 패턴 재사용)
  * - I-4(2026-08-26): cms_admin_product_search_confirmations 관리자 확인 신호 소비 — status='confirmed'인
  *   (product_id, search_term)을 J-2 학습 키워드와 같은 라인에서 keywords_text에 병합
@@ -72,52 +72,17 @@ function isCacheValid(): boolean {
   return cachedIndex !== null && Date.now() - cachedAt < CACHE_TTL_MS
 }
 
-// ── J-2: 학습 설정 캐시 (promote_threshold, TTL 60초) ────────────────────────
-// search_learning_settings는 RLS 미설정(service_role 전용) → admin 클라이언트 필수
-
-const FALLBACK_PROMOTE_THRESHOLD = 3
-const LEARN_SETTINGS_CACHE_TTL_MS = 60_000
-
-let cachedPromoteThreshold: number | null = null
-let promoteThresholdCachedAt = 0
-
-async function loadPromoteThreshold(): Promise<number> {
-  if (
-    cachedPromoteThreshold !== null &&
-    Date.now() - promoteThresholdCachedAt < LEARN_SETTINGS_CACHE_TTL_MS
-  ) {
-    return cachedPromoteThreshold
-  }
-  try {
-    const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    const { data, error } = await admin
-      .from('search_learning_settings')
-      .select('promote_threshold')
-      .limit(1)
-      .maybeSingle()
-    if (error || !data) return FALLBACK_PROMOTE_THRESHOLD
-    const threshold =
-      typeof data.promote_threshold === 'number'
-        ? data.promote_threshold
-        : FALLBACK_PROMOTE_THRESHOLD
-    cachedPromoteThreshold = threshold
-    promoteThresholdCachedAt = Date.now()
-    return threshold
-  } catch {
-    return FALLBACK_PROMOTE_THRESHOLD
-  }
-}
-
 // ── J-2: 학습된 검색어 로드 (product_search_stats, anon 조회 가능) ──────────
 // pss_read_all 정책: anon·authenticated 모두 SELECT 허용
 // 인덱스 재구축 시마다 호출 — 인덱스 TTL과 수명 공유
+// 승격 기준(2026-10-27): 클릭 횟수가 아니라 "서로 다른 사용자 수"(click_user_count, Migration #778) — 설정 learning.minUsers
 async function loadLearnedSearchTerms(
-  promoteThreshold: number,
+  minUsers: number,
 ): Promise<Map<string, string[]>> {
   const { data, error } = await supabase
     .from('product_search_stats')
     .select('product_id, search_term')
-    .gte('click_count', promoteThreshold)
+    .gte('click_user_count', minUsers)
   if (error || !data) {
     console.error('[productSearchIndex] 학습 검색어 조회 실패:', error?.message)
     return new Map()
@@ -236,7 +201,7 @@ export function getLastIndexBuildStats(): IndexBuildStats | null {
  * TTL 내 재호출은 캐시 재사용, 만료 시 재구축.
  *
  * J-2: 인덱스 빌드 시 product_search_stats에서 학습된 검색어를 가져와
- * 각 상품의 keywords_text에 병합 (promote_threshold 이상 클릭된 search_term만).
+ * 각 상품의 keywords_text에 병합 (서로 다른 사용자 learning.minUsers명 이상이 클릭한 search_term만).
  *
  * I-4: cms_admin_product_search_confirmations에서 status='confirmed'인 신호를 함께 로드해
  * 동일 keywords_text 병합 라인에서 J-2 학습 키워드와 합산(저장 분리 / 소비 시점 병합).
@@ -250,8 +215,8 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
 
   const buildStartedAt = Date.now()
 
-  // J-2 + I-4 + L-1 + L-2: 상품 조회 · promote_threshold · 관리자 확인 신호 · 공개 후기 · 분류 이름을 병렬 실행
-  const [productResult, promoteThreshold, adminConfirmedTerms, reviewTexts, categoryLabels, nlParams] = await Promise.all([
+  // J-2 + I-4 + L-1 + L-2: 상품 조회 · 관리자 확인 신호 · 공개 후기 · 분류 이름을 병렬 실행
+  const [productResult, adminConfirmedTerms, reviewTexts, categoryLabels, nlParams] = await Promise.all([
     supabase
       .from('products')
       .select(
@@ -261,7 +226,6 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
       .eq('is_active', true)
       .eq('option_only', false)
       .is('deleted_at', null),
-    loadPromoteThreshold(),
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
     loadReviewSearchTerms(),           // L-1: 공개 후기 텍스트 (fail-safe: 실패 시 빈 맵)
     loadCategoryLabels(),              // L-2: 한글 분류 이름 (fail-safe: 실패 시 빈 맵)
@@ -282,7 +246,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
   }
 
   // J-2: 학습된 검색어 로드 (product_search_stats, anon client)
-  const learnedTerms = await loadLearnedSearchTerms(promoteThreshold)
+  const learnedTerms = await loadLearnedSearchTerms(nlParams.learning.minUsers)
 
   // 문서 변환은 순수 모듈(productSearchDocs.buildProductDocs)이 한다 — J-2 학습·I-4 관리자 확인·L-1 후기·L-2 분류 이름 병합
   const docs: ProductDoc[] = buildProductDocs(data as Record<string, unknown>[], {
@@ -316,11 +280,8 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
 
 /**
  * 캐시를 강제 무효화합니다 (테스트 또는 수동 갱신 시 사용).
- * J-2: promote_threshold 캐시도 함께 초기화.
  */
 export function invalidateProductSearchCache(): void {
   cachedIndex = null
   cachedAt = 0
-  cachedPromoteThreshold = null
-  promoteThresholdCachedAt = 0
 }

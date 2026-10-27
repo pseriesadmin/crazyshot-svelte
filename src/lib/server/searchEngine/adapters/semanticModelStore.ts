@@ -21,7 +21,7 @@ import { buildSemanticCorpus, type SemanticCorpus, type SemanticCorpusInput } fr
 
 export const SEMANTIC_BUCKET = 'nlsearch-models'
 const KEEP_VERSIONS = 3
-const LEARNED_CLICK_THRESHOLD = 3
+const LEARNED_MIN_USERS = 3 // 기본 learning.minUsers 와 같게 고정(CMS 설정과는 연동하지 않음 — 말뭉치 지문 안정)
 
 const sha256 = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex')
 
@@ -49,7 +49,7 @@ export async function loadSemanticCorpusInput(admin: SupabaseClient): Promise<Se
     must<Record<string, unknown>>('post_comments', admin.from('post_comments').select('post_id, content, is_public').eq('is_public', true).limit(10000)),
     must<Record<string, unknown>>('canned_responses', admin.from('canned_responses').select('title, content, match_keywords, pending_review').eq('pending_review', false)),
     must<{ term: string; synonym_groups: { canonical_term: string } }>('synonym_group_members', admin.from('synonym_group_members').select('term, synonym_groups!inner(canonical_term)').eq('status', 'confirmed').returns<{ term: string; synonym_groups: { canonical_term: string } }[]>()),
-    must<{ product_id: string; search_term: string }>('product_search_stats', admin.from('product_search_stats').select('product_id, search_term').gte('click_count', LEARNED_CLICK_THRESHOLD).returns<{ product_id: string; search_term: string }[]>()),
+    must<{ product_id: string; search_term: string }>('product_search_stats', admin.from('product_search_stats').select('product_id, search_term').gte('click_user_count', LEARNED_MIN_USERS).returns<{ product_id: string; search_term: string }[]>()),
   ])
 
   const groupMap = new Map<string, string[]>()

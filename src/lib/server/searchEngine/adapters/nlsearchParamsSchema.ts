@@ -22,12 +22,18 @@ export type NlsearchParams = {
   product: IndexParams
   crazylog: IndexParams
   semantic: { weight: number; recommend: boolean; shadow: boolean }
+  /** 검색 학습 승격 기준: 같은 (상품, 검색어)를 서로 다른 사용자 minUsers명 이상이 눌러야 색인에 합쳐진다 */
+  learning: { minUsers: number }
+  /** 상품 페이지 직접 진입(검색을 거치지 않은 방문) 인기를 순위에 약하게 더한다. 기본 꺼짐 */
+  popularity: { enabled: boolean; weight: number }
 }
 
 export const PARAM_RANGES = {
   boost: { min: 0, max: 20 },
   fuzzy: { min: 0, max: 0.5 },
   semanticWeight: { min: 0, max: 1 },
+  learningMinUsers: { min: 1, max: 10 },
+  popularityWeight: { min: 0, max: 2 },
 } as const
 
 export const DEFAULT_NLSEARCH_PARAMS: NlsearchParams = {
@@ -42,6 +48,8 @@ export const DEFAULT_NLSEARCH_PARAMS: NlsearchParams = {
     prefix: CRAZYLOG_INDEX_CONFIG.defaultPrefix,
   },
   semantic: { weight: 0, recommend: false, shadow: false },
+  learning: { minUsers: 3 },
+  popularity: { enabled: false, weight: 0.3 },
 }
 
 type Rec = Record<string, unknown>
@@ -71,6 +79,8 @@ function sanitizeIndexParams(raw: unknown, def: IndexParams): IndexParams {
 export function sanitizeNlsearchParams(raw: unknown): NlsearchParams {
   const o = isRec(raw) ? raw : {}
   const sem = isRec(o.semantic) ? o.semantic : {}
+  const learn = isRec(o.learning) ? o.learning : {}
+  const pop = isRec(o.popularity) ? o.popularity : {}
   return {
     product: sanitizeIndexParams(o.product, DEFAULT_NLSEARCH_PARAMS.product),
     crazylog: sanitizeIndexParams(o.crazylog, DEFAULT_NLSEARCH_PARAMS.crazylog),
@@ -78,6 +88,15 @@ export function sanitizeNlsearchParams(raw: unknown): NlsearchParams {
       weight: sanitizeNumber(sem.weight, 0, PARAM_RANGES.semanticWeight.min, PARAM_RANGES.semanticWeight.max),
       recommend: typeof sem.recommend === 'boolean' ? sem.recommend : false,
       shadow: typeof sem.shadow === 'boolean' ? sem.shadow : false,
+    },
+    learning: {
+      minUsers: Math.round(
+        sanitizeNumber(learn.minUsers, DEFAULT_NLSEARCH_PARAMS.learning.minUsers, PARAM_RANGES.learningMinUsers.min, PARAM_RANGES.learningMinUsers.max),
+      ),
+    },
+    popularity: {
+      enabled: typeof pop.enabled === 'boolean' ? pop.enabled : false,
+      weight: sanitizeNumber(pop.weight, DEFAULT_NLSEARCH_PARAMS.popularity.weight, PARAM_RANGES.popularityWeight.min, PARAM_RANGES.popularityWeight.max),
     },
   }
 }
@@ -129,7 +148,30 @@ export function validateNlsearchParams(raw: unknown): ValidateResult {
       if (raw.semantic.shadow !== undefined && typeof raw.semantic.shadow !== 'boolean') errors.push('semantic.shadow: true/false여야 합니다')
     }
   }
-  for (const k of Object.keys(raw)) if (!['product', 'crazylog', 'semantic'].includes(k)) errors.push(`${k}: 알 수 없는 항목입니다`)
+  if (raw.learning !== undefined) {
+    if (!isRec(raw.learning)) errors.push('learning: 객체여야 합니다')
+    else {
+      const m = raw.learning.minUsers
+      if (m !== undefined) {
+        if (!isNum(m) || !Number.isInteger(m)) errors.push('learning.minUsers: 정수여야 합니다')
+        else if (m < PARAM_RANGES.learningMinUsers.min || m > PARAM_RANGES.learningMinUsers.max)
+          errors.push(`learning.minUsers: ${PARAM_RANGES.learningMinUsers.min}~${PARAM_RANGES.learningMinUsers.max} 범위여야 합니다`)
+      }
+    }
+  }
+  if (raw.popularity !== undefined) {
+    if (!isRec(raw.popularity)) errors.push('popularity: 객체여야 합니다')
+    else {
+      const w = raw.popularity.weight
+      if (w !== undefined) {
+        if (!isNum(w)) errors.push('popularity.weight: 숫자여야 합니다')
+        else if (w < PARAM_RANGES.popularityWeight.min || w > PARAM_RANGES.popularityWeight.max)
+          errors.push(`popularity.weight: ${PARAM_RANGES.popularityWeight.min}~${PARAM_RANGES.popularityWeight.max} 범위여야 합니다`)
+      }
+      if (raw.popularity.enabled !== undefined && typeof raw.popularity.enabled !== 'boolean') errors.push('popularity.enabled: true/false여야 합니다')
+    }
+  }
+  for (const k of Object.keys(raw)) if (!['product', 'crazylog', 'semantic', 'learning', 'popularity'].includes(k)) errors.push(`${k}: 알 수 없는 항목입니다`)
   if (errors.length > 0) return { ok: false, errors }
   return { ok: true, params: sanitizeNlsearchParams(raw) }
 }
