@@ -37,6 +37,7 @@ import { productSearchOrFilter, productSearchOrFilterForTerms, resolveProductSea
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
 import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
 import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
+import { findParentIdsByDetailText } from '$lib/server/products/searchByDetailText'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
@@ -141,6 +142,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
         } catch (e) {
           console.error('[cms/products/search-suggestions] 공백 무시 검색 오류:', e)
         }
+        try {
+          poolKeywordIds = Array.from(new Set([...poolKeywordIds, ...(await findParentIdsByDetailText(admin, q))]))
+        } catch (e) {
+          console.error('[cms/products/search-suggestions] 상세설명·구성품·사양 검색 오류:', e)
+        }
         const poolExtraIds = Array.from(new Set([...poolCodeIds, ...poolKeywordIds]))
         poolQ = poolQ.or(
           poolExtraIds.length > 0
@@ -235,6 +241,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       keywordMatchIds = Array.from(new Set([...keywordMatchIds, ...(await findParentIdsByCompactText(admin, q))]))
     } catch (e) {
       console.error('[cms/products/search-suggestions] 공백 무시 검색 오류:', e)
+    }
+    try {
+      keywordMatchIds = Array.from(new Set([...keywordMatchIds, ...(await findParentIdsByDetailText(admin, q))]))
+    } catch (e) {
+      console.error('[cms/products/search-suggestions] 상세설명·구성품·사양 검색 오류:', e)
     }
     const extraIds = Array.from(new Set([...codeMatchIds, ...keywordMatchIds]))
     ilikeQ = ilikeQ.or(
