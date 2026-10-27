@@ -3,7 +3,7 @@
  *
  * - 같은 bookId로 복수 반품 접수 가능 (R, 1R, 2R 순차)
  * - 취소/사고/분실완료 상태는 반품 불가 (두발히어로 API가 에러 반환)
- * - RPC로 dhero_return_book_id 갱신
+ * - RPC로 dhero_return_book_id 갱신 — 주문(예약코드) 1건 = 배송 1건이므로 반품 접수는 한 번만 호출하고 같은 접수번호를 가진 같은 주문의 상품 전부에 반품번호를 저장한다
  */
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
@@ -13,6 +13,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { registerReturn, DHERO_STATUS_LABEL, DheroApiError } from '$lib/server/dhero'
+import { listSameBookReservationIds } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
@@ -44,16 +45,18 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   try {
     const returnRes = await registerReturn(trackingNumber)
 
-    await admin.rpc('update_reservation_dhero_shipment', {
-      p_reservation_id:  reservationId,
-      p_tracking_number: trackingNumber,
-      p_courier_code:    '두발히어로',
-      p_status:          DHERO_STATUS_LABEL[0] ?? '반품접수',
-      p_status_code:     0,
-      p_dong_group:      returnRes.dongGroup ?? null,
-      p_meta:            returnRes as Record<string, unknown>,
-      p_return_book_id:  returnRes.bookId,
-    })
+    for (const id of await listSameBookReservationIds(admin, reservationId, trackingNumber)) {
+      await admin.rpc('update_reservation_dhero_shipment', {
+        p_reservation_id:  id,
+        p_tracking_number: trackingNumber,
+        p_courier_code:    '두발히어로',
+        p_status:          DHERO_STATUS_LABEL[0] ?? '반품접수',
+        p_status_code:     0,
+        p_dong_group:      returnRes.dongGroup ?? null,
+        p_meta:            returnRes as Record<string, unknown>,
+        p_return_book_id:  returnRes.bookId,
+      })
+    }
 
     return json({ ok: true, returnBookId: returnRes.bookId, dongGroup: returnRes.dongGroup ?? null })
   } catch (e) {

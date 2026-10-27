@@ -4,6 +4,7 @@
  * - 취소 가능 범위: 접수~배송배차(상태코드 0~3). 출발 이후는 412 반환.
  * - fail-soft 아님 — 이 엔드포인트는 관리자가 의도적으로 취소하는 동작이라
  *   실패 시 에러를 그대로 클라이언트에 전달한다(RentalDetailPanel이 경고 노출).
+ * - 주문(예약코드) 1건 = 배송 1건: 취소는 한 번만 호출하고, 같은 접수번호를 가진 같은 주문의 상품 전부의 운송장을 초기화한다.
  * - 예약 status 자체는 변경하지 않음 (별도 updateStatus 액션으로만 변경).
  */
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
@@ -14,6 +15,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
+import { listSameBookReservationIds } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
 export const PUT: RequestHandler = async ({ params, locals }) => {
@@ -48,7 +50,9 @@ export const PUT: RequestHandler = async ({ params, locals }) => {
     // clear_reservation_tracking_number RPC(Migration 403) — 재접수 가능 상태로 되돌림.
     // 실패해도 취소 자체는 이미 완료됐으므로 ok:true 응답 유지.
     try {
-      await admin.rpc('clear_reservation_tracking_number', { p_reservation_id: reservationId })
+      for (const id of await listSameBookReservationIds(admin, reservationId, trackingNumber)) {
+        await admin.rpc('clear_reservation_tracking_number', { p_reservation_id: id })
+      }
     } catch (rpcErr) {
       console.error('[dhero/cancel] tracking_number 초기화 RPC 실패(fail-soft):', rpcErr instanceof Error ? rpcErr.message : rpcErr)
     }

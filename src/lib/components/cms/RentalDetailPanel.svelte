@@ -26,6 +26,7 @@
   } from '$lib/utils/inspection'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
+  import { summarizeOrderTransition } from '$lib/utils/orderStatusTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
@@ -34,7 +35,7 @@
     const msg = result.type === 'failure' && result.status === 403 ? result.data?.error : null
     return typeof msg === 'string' && msg ? msg : '처리 중 오류가 발생했습니다.'
   }
-  import { DHERO_STATUS_LABEL } from '$lib/utils/dheroLabels'
+  import { DHERO_STATUS_LABEL, isDheroCanceled } from '$lib/utils/dheroLabels'
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
@@ -711,9 +712,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ memo: adminRetMemo, checklist: adminRetChecks, media: adminRetMedia.map((m) => ({ path: m.path, kind: m.kind })) }),
       })
-      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      const body = (await res.json().catch(() => ({}))) as { error?: string; dhero_return_failed?: string }
       if (!res.ok) { csToast.error(body.error ?? '등록에 실패했습니다.'); return }
       csToast.success('반납정보를 등록했습니다.')
+      // 두발히어로 반품 접수가 실패해도 등록 자체는 성공이다 — 실패 사유를 관리자에게 알린다(알려진 이슈 #10)
+      if (typeof body.dhero_return_failed === 'string') csToast.warning(body.dhero_return_failed)
       adminRetMemo = ''; adminRetChecks = []
       for (const m of adminRetMedia) URL.revokeObjectURL(m.previewUrl)
       adminRetMedia = []
@@ -1039,6 +1042,38 @@
       })
       .catch(() => {
         if (optionsFetchedForId === id) { optionsError = '옵션상품 정보를 불러오지 못했습니다.'; optionsLoading = false }
+      })
+  })
+
+  // 고객 요청사항(2026-10-27, Stephen 지시) — 장바구니 "요청 사항"(공동현관 출입번호 등)은 수령용·반납용으로 예약에 저장되지만 관리자 화면에 표시되지 않던 것을
+  // 대여정보 탭에 읽기 전용으로 노출한다. 결제정보 탭과 같은 lazy-fetch 패턴.
+  interface RequestNotes { notes: string | null; pickup_request_note: string | null; return_request_note: string | null; pickup_frontdoor_password: string | null }
+  let requestNotesFetchedForId = $state<number | null>(null)
+  let requestNotes             = $state<RequestNotes | null>(null)
+  let requestNotesLoading      = $state(false)
+  let requestNotesError        = $state<string | null>(null)
+
+  $effect(() => {
+    if (activeTab !== 'rental') return
+    if (requestNotesLoading) return
+    if (requestNotesFetchedForId === row.reservation_id) return
+
+    const id = row.reservation_id
+    requestNotesFetchedForId = id
+    requestNotes             = null
+    requestNotesError        = null
+    requestNotesLoading      = true
+
+    fetch(`/api/cms/reservations/${id}/request-notes`)
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({})) as Partial<RequestNotes> & { error?: string }
+        if (requestNotesFetchedForId !== id) return
+        if (!r.ok) requestNotesError = d.error ?? '요청사항을 불러오지 못했습니다.'
+        else requestNotes = { notes: d.notes ?? null, pickup_request_note: d.pickup_request_note ?? null, return_request_note: d.return_request_note ?? null, pickup_frontdoor_password: d.pickup_frontdoor_password ?? null }
+        requestNotesLoading = false
+      })
+      .catch(() => {
+        if (requestNotesFetchedForId === id) { requestNotesError = '요청사항을 불러오지 못했습니다.'; requestNotesLoading = false }
       })
   })
 
@@ -1838,6 +1873,8 @@
   let trackingLoading      = $state(false)
   let trackingSaving       = $state(false)
   let trackingError        = $state<string | null>(null)
+  // 수동 운송장 영역 노출 여부 — 수령방식이 배송형일 때만 true(2026-10-27). null=확인 전(숨김), 응답에 값이 없거나 조회 실패면 true(fail-open)
+  let trackingApplicable   = $state<boolean | null>(null)
 
   $effect(() => {
     if (activeTab !== 'rental') return
@@ -1849,20 +1886,23 @@
     trackingNumber       = ''
     trackingCourierCode  = ''
     trackingError        = null
+    trackingApplicable   = null
     trackingLoading      = true
 
     fetch(`/api/cms/reservations/${id}/tracking`)
       .then(r => r.json())
-      .then((d: { tracking_number: string | null; courier_code: string | null }) => {
+      .then((d: { tracking_number: string | null; courier_code: string | null; tracking_applicable?: boolean }) => {
         if (trackingFetchedForId === id) {
           trackingNumber      = d.tracking_number ?? ''
           trackingCourierCode = d.courier_code    ?? ''
+          trackingApplicable  = d.tracking_applicable === false ? false : true
           trackingLoading     = false
         }
       })
       .catch(() => {
         if (trackingFetchedForId === id) {
           trackingError   = '운송장 정보를 불러오지 못했습니다.'
+          trackingApplicable = true
           trackingLoading = false
         }
       })
@@ -1871,6 +1911,9 @@
   async function saveTracking(): Promise<void> {
     trackingSaving = true
     trackingError  = null
+    // 앞뒤 공백은 입력칸에서도 바로 지워 저장 결과와 화면 값이 같게 한다(서버도 같은 규칙으로 지운다)
+    trackingNumber      = trackingNumber.trim()
+    trackingCourierCode = trackingCourierCode.trim()
     try {
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/tracking`, {
         method:  'PATCH',
@@ -1881,10 +1924,16 @@
         }),
       })
       if (!res.ok) {
-        const d = await res.json().catch(() => ({})) as { error?: string }
-        trackingError = d.error ?? '저장에 실패했습니다.'
+        const d = await res.json().catch(() => ({})) as { error?: string; message?: string }
+        trackingError = d.error ?? d.message ?? '저장에 실패했습니다.'
       } else {
-        csToast.success('운송장 정보가 저장되었습니다.')
+        const d = await res.json().catch(() => ({})) as { notified?: boolean }
+        // 새 번호가 등록·변경된 때만 고객에게 안내가 나간다 — 빈 값 저장·같은 번호 재저장은 저장만 된다
+        csToast.success(
+          d.notified === false
+            ? (trackingNumber ? '운송장 정보가 저장되었습니다. (같은 번호라 고객 안내는 다시 보내지 않았어요)' : '운송장 정보가 저장되었습니다. (번호가 없어 고객 안내는 보내지 않았어요)')
+            : '운송장 정보가 저장되었습니다. 고객에게 안내가 발송됩니다.'
+        )
         // Stage 4 QA 수정: onrefresh() 없으면 row.tracking_number가 stale해
         // canReassignProductCode(재배정 버튼 노출 게이트)가 저장 직후에도 그대로 true로 남아있음.
         onrefresh()
@@ -1909,6 +1958,8 @@
     placePageUrl?:           string | null
     sentBackReason?:         string | null
     lostReason?:             string | null
+    canceledAt?:             string | null   // 두발히어로 쪽 취소일시(취소돼도 status 코드는 그대로라 이 값으로만 판단)
+    canceledReason?:         string | null
     delayedDeliveries?:      Array<{ reason: string; delayedDate?: string; [key: string]: unknown }> | null
     pickupScheduledAt?:      string | null
     deliveryCompletedAt?:    string | null
@@ -1917,7 +1968,7 @@
 
   let dheroFetchedForId  = $state<number | null>(null)
   let dheroLoading       = $state(false)
-  let isBulkMethod       = $state(false)
+  let isDheroMethod      = $state(false)  // 두발히어로 연동 대상 방식(is_dhero_integration, Migration #772)
   let dheroData          = $state<DheroInfo | null>(null)
   let dheroError         = $state<string | null>(null)
   let dheroBookLoading   = $state(false)  // 배송접수 POST 진행 중
@@ -1926,6 +1977,8 @@
   let dheroCancelError   = $state<string | null>(null)
   let dheroReturnLoading = $state(false)
   let dheroReturnError   = $state<string | null>(null)
+  // 두발히어로 쪽에서 취소된 접수 — 취소 정보를 보여주고 재접수(새 접수번호)를 허용한다(2026-10-27)
+  let dheroCanceled      = $derived(isDheroCanceled(dheroData))
 
   $effect(() => {
     if (activeTab !== 'rental') return
@@ -1937,14 +1990,14 @@
     dheroFetchedForId = id
     dheroData         = null
     dheroError        = null
-    isBulkMethod      = false
+    isDheroMethod     = false
     dheroLoading      = true
 
     fetch(`/api/cms/reservations/${id}/dhero`)
       .then(r => r.json())
-      .then((d: { dhero: DheroInfo | null; is_bulk_delivery?: boolean; dhero_error?: { message: string } }) => {
+      .then((d: { dhero: DheroInfo | null; is_dhero_integration?: boolean; dhero_error?: { message: string } }) => {
         if (dheroFetchedForId === id) {
-          isBulkMethod  = d.is_bulk_delivery ?? false
+          isDheroMethod  = d.is_dhero_integration ?? false
           dheroData     = d.dhero ?? null
           dheroError    = d.dhero_error?.message ?? null
           dheroLoading  = false
@@ -2997,6 +3050,38 @@
       </div>
       </div>
 
+      <!-- 고객 요청사항 — 장바구니에서 고객이 남긴 수령·반납 요청(공동현관 출입번호·경비실 호출 등). 읽기 전용(2026-10-27) -->
+      <div class="section-title">고객 요청사항</div>
+      {#if requestNotesLoading}
+        <div class="loading-box">요청사항 조회 중...</div>
+      {:else if requestNotesError}
+        <div class="tracking-error-msg" role="alert">{requestNotesError}</div>
+      {:else}
+        <div class="info-section">
+          {#if requestNotes?.notes}
+            <div class="info-row info-row-note">
+              <span class="info-label">요청 사항</span>
+              <span class="info-value info-value-note">{requestNotes.notes}</span>
+            </div>
+          {/if}
+          <!-- 공동현관 출입번호(Migration #774) — 수령방식이 배송형이고 manager 이상일 때만 행을 둔다(방문·무인보관함은 의미 없음, partner 는 API 가 값을 주지 않아 '-'가 오해를 부름). 값이 없으면 수령·반납 요청과 같이 '-' -->
+          {#if trackingApplicable === true && canManagePaymentAndLocker}
+            <div class="info-row info-row-note">
+              <span class="info-label">공동현관 출입번호</span>
+              <span class="info-value info-value-note">{requestNotes?.pickup_frontdoor_password ?? '-'}</span>
+            </div>
+          {/if}
+          <div class="info-row info-row-note">
+            <span class="info-label">수령 요청</span>
+            <span class="info-value info-value-note">{requestNotes?.pickup_request_note ?? '-'}</span>
+          </div>
+          <div class="info-row info-row-note">
+            <span class="info-label">반납 요청</span>
+            <span class="info-value info-value-note">{requestNotes?.return_request_note ?? '-'}</span>
+          </div>
+        </div>
+      {/if}
+
       <!-- 무인보관함 비밀번호 — 방문대여(visit)+영업외시간(23:00~08:59) 조합일 때만, manager 이상 전용
            (rental-lifecycle.md·service-operations.md 정책 참고 — 2026-08-20 신설) -->
       {#if showLockerPasswordField}
@@ -3068,8 +3153,8 @@
 
       <!-- 운송장/배송 정보 + 상태 액션 + 알림 발송 — 하나의 그룹으로 묶음 (2026-08-25 Stephen 요청) -->
       <div class="rental-shipping-group">
-      <!-- 운송장 정보 / 두발히어로 배송 자동화 — pickup_method is_bulk_delivery 기준 분기 -->
-      {#if isBulkMethod}
+      <!-- 운송장 정보 / 두발히어로 배송 자동화 — pickup_method 의 is_dhero_integration(연동 전용 스위치) 기준 분기 -->
+      {#if isDheroMethod}
         <!-- ── 두발히어로 자동화 뷰 ──────────────────────────────────────── -->
         <div class="section-title">두발히어로 배송</div>
         {#if dheroLoading}
@@ -3080,9 +3165,15 @@
             <div class="info-row">
               <span class="info-label">배송상태</span>
               <span class="dhero-status-badge dhero-code-{row.dhero_status_code ?? ''}">
-                {row.dhero_status ?? (DHERO_STATUS_LABEL[row.dhero_status_code ?? -1] ?? '접수됨')}
+                {dheroCanceled ? '취소' : (row.dhero_status ?? (DHERO_STATUS_LABEL[row.dhero_status_code ?? -1] ?? '접수됨'))}
               </span>
             </div>
+            {#if dheroCanceled}
+              <div class="info-row">
+                <span class="info-label">두발히어로 취소</span>
+                <span class="info-value dhero-reason-text">{dheroData?.canceledAt}{dheroData?.canceledReason ? ` · ${dheroData.canceledReason}` : ''}</span>
+              </div>
+            {/if}
             <div class="info-row">
               <span class="info-label">접수번호(bookId)</span>
               <span class="info-value mono">{row.tracking_number}</span>
@@ -3139,25 +3230,39 @@
             >
               상태 새로고침
             </button>
-            {#if !row.dhero_return_book_id}
+            {#if dheroCanceled}
+              <!-- 두발히어로 쪽에서 이미 취소된 접수 — 다시 취소·반송 등록은 불가(412·400). 새 접수번호로 재접수만 허용 -->
               <button
-                class="btn-dhero-return"
-                onclick={registerDheroReturn}
-                disabled={dheroReturnLoading}
+                class="btn-dhero-book"
+                onclick={registerDheroDelivery}
+                disabled={dheroBookLoading}
               >
-                {dheroReturnLoading ? '처리 중...' : '반송 등록'}
+                {dheroBookLoading ? '접수 중...' : '두발히어로 배송 재접수'}
+              </button>
+            {:else}
+              {#if !row.dhero_return_book_id}
+                <button
+                  class="btn-dhero-return"
+                  onclick={registerDheroReturn}
+                  disabled={dheroReturnLoading}
+                >
+                  {dheroReturnLoading ? '처리 중...' : '반송 등록'}
+                </button>
+              {/if}
+              <button
+                class="btn-dhero-cancel"
+                onclick={cancelDheroDelivery}
+                disabled={dheroCancelLoading}
+              >
+                {dheroCancelLoading ? '처리 중...' : '배송 취소'}
               </button>
             {/if}
-            <button
-              class="btn-dhero-cancel"
-              onclick={cancelDheroDelivery}
-              disabled={dheroCancelLoading}
-            >
-              {dheroCancelLoading ? '처리 중...' : '배송 취소'}
-            </button>
           </div>
           {#if dheroCancelError}
             <div class="tracking-error-msg">{dheroCancelError}</div>
+          {/if}
+          {#if dheroCanceled && dheroBookError}
+            <div class="tracking-error-msg">{dheroBookError}</div>
           {/if}
           {#if dheroReturnError}
             <div class="tracking-error-msg">{dheroReturnError}</div>
@@ -3180,8 +3285,8 @@
             </button>
           </div>
         {/if}
-      {:else}
-        <!-- ── 일반 수동 운송장 입력 뷰 (quick/epost/locker/visit 등) ────── -->
+      {:else if trackingApplicable === true}
+        <!-- ── 일반 수동 운송장 입력 뷰 — 수령방식이 배송형일 때만(2026-10-27, Stephen 지시). 방문·무인보관함·퀵서비스에는 운송장이 없다 ────── -->
         <!-- 제목 줄 + 입력 박스(+ 오류 문구)를 하나의 그룹으로 묶음(레이아웃 그룹핑만 — 스타일 변경 없음, 2026-10-08) -->
         <div class="tracking-group">
         <div class="section-title-row">
@@ -3878,65 +3983,30 @@
             <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>예약취소</button>
           </form>
 
-        <!-- 대여 라이프사이클 — 한 주문에 상품이 여러 개(주문 1건 = 1행, Migration 618, Q1 B안):
-             상품(예약)별로 각자의 다음 단계 버튼을 따로 처리한다. 상태는 상품마다 달라질 수 있다. -->
-        {:else if isMultiOrder}
-          {#if rentalSiblingsFetchedForId !== row.reservation_id || rentalSiblingsLoading}
-            <p class="order-batch-note">주문에 묶인 상품을 불러오는 중입니다…</p>
-          {:else if rentalSiblingsError}
-            <p class="order-batch-note">{rentalSiblingsError}</p>
-          {:else if lifecycleUnits.some(u => u.next)}
-          <div class="unit-actions">
-            {#each lifecycleUnits as u (u.reservationId)}
-              <div class="unit-action-row">
-                <span class="unit-action-name">{u.name}</span>
-                <span class="unit-action-status">{STATUS_LABEL[u.status] ?? u.status}</span>
-                {#if u.next}
-                  <form
-                    method="POST"
-                    action="/cms/reservation?/updateStatus"
-                    use:enhance={() => {
-                      isSubmitting = true
-                      return async ({ result, update }) => {
-                        isSubmitting = false
-                        if (result.type === 'success') {
-                          csToast.success('상태가 변경되었습니다.')
-                          const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
-                          if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
-                          // 상품별 처리 후 형제 목록(각 상품 상태·다음 단계 버튼)을 다시 조회해 화면에 남은 이전 상태를 없앤다
-                          rentalSiblingsFetchedForId = null
-                          onrefresh()
-                        }
-                        else csToast.error(actionErrorMessage(result))
-                        await update()
-                      }
-                    }}
-                  >
-                    <input type="hidden" name="reservation_id" value={u.reservationId} />
-                    <input type="hidden" name="status" value={u.next} />
-                    <button type="submit" class="btn-action" disabled={isSubmitting}>
-                      {nextLabel(u.status, u.pickupMethod, u.returnMethod)}
-                    </button>
-                  </form>
-                {/if}
-              </div>
-            {/each}
-          </div>
-          {/if}
-
-        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 → 완료 처리 (단일 상품 주문) -->
+        <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 (2026-10-27 ④, Stephen 확정 — 하단 버튼 하나).
+             같은 주문에 상품이 여러 개여도 버튼 하나가 주문 전체를 다음 단계로 처리한다(updateOrderStatus — 가장 덜 진행된 단계의 상품 대상, 고객 알림·두발히어로 접수는 주문당 1회).
+             상품별 처리 줄(구 Q1 B안)은 위쪽 "상품 정보"와 정보가 중복이라 제거했다. 상품별 실물 확인은 모바일 QR 스캔이 맡는다. 단일 상품 주문은 기존 updateStatus 그대로. -->
         {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
           <form
             method="POST"
-            action="/cms/reservation?/updateStatus"
+            action={isMultiOrder ? '/cms/reservation?/updateOrderStatus' : '/cms/reservation?/updateStatus'}
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
                 isSubmitting = false
                 if (result.type === 'success') {
-                  csToast.success('상태가 변경되었습니다.')
-                  const bookFailed = (result.data as Record<string, unknown> | undefined)?.dhero_book_failed
-                  if (typeof bookFailed === 'string') csToast.warning(bookFailed + ' 운송장 정보를 확인해 주세요.')
+                  const data = (result.data ?? {}) as { processed?: number[]; failed?: { id: number; message: string }[]; skipped?: number[]; dhero_book_failed?: string }
+                  if (isMultiOrder) {
+                    const nameOf = (id: number) => lifecycleUnits.find((u) => u.reservationId === id)?.name ?? `#${id}`
+                    const summary = summarizeOrderTransition(data, nameOf)
+                    if (summary.level === 'warning') csToast.warning(summary.text)
+                    else csToast.success(summary.text)
+                  } else {
+                    csToast.success('상태가 변경되었습니다.')
+                  }
+                  if (typeof data.dhero_book_failed === 'string') csToast.warning(data.dhero_book_failed + ' 운송장 정보를 확인해 주세요.')
+                  // 처리 후 형제 목록(각 상품 상태)을 다시 조회해 화면에 남은 이전 상태를 없앤다
+                  rentalSiblingsFetchedForId = null
                   onrefresh()
                 }
                 else csToast.error(actionErrorMessage(result))
@@ -3946,7 +4016,12 @@
           >
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
             <input type="hidden" name="status" value={nextStatus(row.status, row.pickup_method, row.return_method)} />
-            <button type="submit" class="btn-action" disabled={isSubmitting}>
+            <button
+              type="submit"
+              class="btn-action"
+              disabled={isSubmitting}
+              title={isMultiOrder ? `같은 주문의 ${row.order_item_count}개 상품이 함께 처리됩니다${row.status_mixed ? ' (이미 더 진행된 상품은 그대로 둡니다)' : ''}` : undefined}
+            >
               {nextLabel(row.status, row.pickup_method, row.return_method)}
             </button>
           </form>
@@ -4640,6 +4715,9 @@
     font: var(--text-pc-body-14);
     color: var(--cs-text);
   }
+  /* 고객 요청사항 — 여러 줄 입력도 줄바꿈 그대로 보이게(읽기 전용 표시 전용) */
+  .info-row-note { align-items: flex-start; }
+  .info-value-note { white-space: pre-wrap; overflow-wrap: anywhere; }
   .info-note {
     font-size: 11px;
     color: var(--cs-text-light);
@@ -4831,35 +4909,6 @@
     gap: 8px;
     flex-wrap: wrap;
     margin-top: 32px; /* spacing-4xl — cms-uiux.md DetailPanel 레이아웃 표준과 동일 값 */
-  }
-  /* 주문 내 상품별 반출·반납 처리 목록(Migration 618) — 상품명 · 상태 · 다음 단계 버튼 한 줄씩 */
-  .unit-actions {
-    flex-basis: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .unit-action-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    background: var(--cs-surface-gray);
-    border-radius: var(--cms-radius-sm);
-  }
-  .unit-action-name {
-    flex: 1;
-    min-width: 0;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .unit-action-status {
-    flex-shrink: 0;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
   }
   .order-batch-note {
     flex-basis: 100%;

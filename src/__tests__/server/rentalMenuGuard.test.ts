@@ -92,7 +92,7 @@ describe('소스 스캔 — 진입부 첫 문장이 게이트', () => {
   }
 
   const ACTION_PAGES: [string, string[]][] = [
-    ['src/routes/cms/reservation/+page.server.ts', ['approveReservation', 'changeReservation', 'updateStatus', 'clearIssuedContract', 'discardSentContract', 'cancelIssuedContract']],
+    ['src/routes/cms/reservation/+page.server.ts', ['approveReservation', 'changeReservation', 'updateStatus', 'updateOrderStatus', 'clearIssuedContract', 'discardSentContract', 'cancelIssuedContract']],
     ['src/routes/cms/rentals/+page.server.ts', ['sendChatNotify', 'clearIssuedContract']],
   ]
   for (const [page, actions] of ACTION_PAGES) {
@@ -155,10 +155,10 @@ describe('동작 — 게이트 거부 시 즉시 거부, DB 조회 없음', () =
     }
   }
 
-  it('C 서버 액션 8개: 거부 시 fail 403 그대로 반환, 세션·DB 조회 없음', async () => {
+  it('C 서버 액션 9개: 거부 시 fail 403 그대로 반환, 세션·DB 조회 없음', async () => {
     const { fail } = await import('@sveltejs/kit')
     const targets: [string, string[]][] = [
-      ['../../routes/cms/reservation/+page.server', ['approveReservation', 'changeReservation', 'updateStatus', 'clearIssuedContract', 'discardSentContract', 'cancelIssuedContract']],
+      ['../../routes/cms/reservation/+page.server', ['approveReservation', 'changeReservation', 'updateStatus', 'updateOrderStatus', 'clearIssuedContract', 'discardSentContract', 'cancelIssuedContract']],
       ['../../routes/cms/rentals/+page.server', ['sendChatNotify', 'clearIssuedContract']],
     ]
     for (const [path, names] of targets) {

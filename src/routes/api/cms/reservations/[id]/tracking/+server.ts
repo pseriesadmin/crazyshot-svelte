@@ -13,6 +13,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { getTrackingApplicability } from '$lib/server/trackingApplicability'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -36,7 +37,13 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (resErr || !data) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
   const r = data as { tracking_number: string | null; courier_code: string | null }
-  return json({ tracking_number: r.tracking_number ?? null, courier_code: r.courier_code ?? null })
+  // 운송장은 수령방식이 배송형일 때만 의미가 있다(2026-10-27) — 화면이 이 값으로 입력 영역을 숨긴다. 알 수 없으면(null) 필드를 생략해 화면이 fail-open 한다.
+  const applicable = await getTrackingApplicability(admin, reservationId)
+  return json({
+    tracking_number: r.tracking_number ?? null,
+    courier_code: r.courier_code ?? null,
+    ...(applicable === null ? {} : { tracking_applicable: applicable }),
+  })
 }
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -62,6 +69,27 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     }
   }
 
+  // 직전에 저장돼 있던 번호(2026-10-27) — 고객 안내(채팅·푸시·문자) 중복 발송 방지용.
+  // 조회에 실패하면 알 수 없는 상태(undefined)로 두고 기존처럼 안내를 보낸다(안내 누락이 중복보다 위험 — fail-open).
+  const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  let previousNumber: string | null | undefined = undefined
+  try {
+    const { data: prev } = await admin
+      .from('rental_reservations')
+      .select('tracking_number')
+      .eq('id', reservationId)
+      .maybeSingle()
+    if (prev) previousNumber = ((prev as { tracking_number: string | null }).tracking_number ?? '').trim() || null
+  } catch (e) {
+    console.error(`[tracking/previous-lookup] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+  }
+
+  // 서버 방어(2026-10-27, Stephen 지시): 수령방식이 배송형이 아닌 예약(방문·무인보관함·퀵서비스·방식 없음)에는 운송장 번호를 저장할 수 없다 —
+  // 잘못된 고객 안내(tracking_notify)와 두발히어로 취소·동기화 경로 유입을 막는다. 번호를 비우는 저장(정리)은 허용하고, 판정을 못 읽으면(null) 기존처럼 저장한다(fail-open).
+  if (trackingNumber !== null && (await getTrackingApplicability(admin, reservationId)) === false) {
+    throw error(400, '이 예약의 수령 방식은 배송이 아니라 운송장 번호를 등록할 수 없습니다.')
+  }
+
   // locals.supabase 사용 필수 — update_reservation_tracking RPC 내부의 is_cms_user()가
   // auth.uid() 기반이라 관리자의 실세션으로 호출해야 통과됨
   // (service_role 호출 시 auth.uid()=null → is_cms_user() false → EXCEPTION 발생)
@@ -78,20 +106,23 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
   // RSV-B-B4: 운송장 등록 완료 안내 — 채팅카드 + 브라우저 푸시(fail-soft, 저장 자체는 이미 성공)
   // service-operations.md §15: 채팅카드(RPC)와 브라우저 푸시는 별개 시스템이라 둘 다 명시 호출 필요.
-  const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-  try {
-    await admin.rpc('send_rental_chat_notification', {
-      p_reservation_id: reservationId,
-      p_notify_type:    'tracking_notify',
-    })
-  } catch (e) {
-    console.error(`[tracking/chat-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
-  }
-  try {
-    await sendReservationLifecyclePush(admin, reservationId, 'tracking_notify')
-  } catch (e) {
-    console.error(`[tracking/push-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+  // 안내는 "새 번호가 등록되거나 바뀐 경우"에만 보낸다 — 번호를 비운 저장, 같은 번호 재저장은 저장만 하고 안내하지 않는다(2026-10-27, Stephen 지시).
+  const shouldNotify = trackingNumber !== null && previousNumber !== trackingNumber
+  if (shouldNotify) {
+    try {
+      await admin.rpc('send_rental_chat_notification', {
+        p_reservation_id: reservationId,
+        p_notify_type:    'tracking_notify',
+      })
+    } catch (e) {
+      console.error(`[tracking/chat-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+    }
+    try {
+      await sendReservationLifecyclePush(admin, reservationId, 'tracking_notify')
+    } catch (e) {
+      console.error(`[tracking/push-notify] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+    }
   }
 
-  return json({ success: true, tracking_number: trackingNumber, courier_code: courierCode })
+  return json({ success: true, tracking_number: trackingNumber, courier_code: courierCode, notified: shouldNotify })
 }

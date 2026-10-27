@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
  * 고객 반납정보 제출(return-submit)·관리자 대리 등록(return-entries)이 update_reservation_status RPC 를 직접 호출해 이를 우회했다.
  * 공용 헬퍼 registerDheroReturn 이 updateStatus 분기와 같은 규칙으로 처리한다.
  *
- * 규칙: 반납방식이 is_bulk_delivery 이고 운송장이 있을 때만 호출 / 이미 반품 접수(dhero_return_book_id)가 있으면 중복 접수 안 함 /
+ * 규칙: 반납방식이 is_dhero_integration 이고 운송장이 있을 때만 호출 / 이미 반품 접수(dhero_return_book_id)가 있으면 중복 접수 안 함 /
  *       실패해도 throw 하지 않고 결과(failed)로 반환(제출·등록은 성공 처리).
  */
 
@@ -20,8 +20,8 @@ vi.mock('$lib/server/getReservationForDhero', () => ({
 }))
 
 const mockIsBulk = vi.fn()
-vi.mock('$lib/server/isBulkDeliveryMethod', () => ({
-  isBulkDeliveryMethod: (...args: unknown[]) => mockIsBulk(...args),
+vi.mock('$lib/server/isDheroIntegrationMethod', () => ({
+  isDheroIntegrationMethod: (...args: unknown[]) => mockIsBulk(...args),
 }))
 
 const mockRegisterReturn = vi.fn()

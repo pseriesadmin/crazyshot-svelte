@@ -7,18 +7,23 @@ import type { Actions, PageServerLoad } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
+import { notifyTrackingRegistered } from '$lib/server/notifyTrackingRegistered'
 import { requestIdentityDocRegistration } from '$lib/server/identityDocRequest'
 import { getDocGateStatus, type DocGateStatus, type DocGateRow } from '$lib/utils/docApproval'
 import { clearIssuedContractContent, discardSentContract, cancelIssuedContract } from '$lib/server/clearIssuedContractHelper'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { createDelivery, cancelDelivery, registerReturn, DheroApiError, DHERO_STATUS_LABEL } from '$lib/server/dhero'
+import { liveDheroBookings } from '$lib/utils/dheroLabels'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
-import { isBulkDeliveryMethod } from '$lib/server/isBulkDeliveryMethod'
+import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
+import { pickDeliveryMemo } from '$lib/server/dheroMemo'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { tossPaymentCancel } from '$lib/server/tossPaymentCancel'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult } from '$lib/server/contractAutoIssue'
+import { listOrderReservationIds, joinProductNames } from '$lib/server/dheroOrderUnits'
+import { planOrderTransition, ORDER_LIFECYCLE_TARGETS, type OrderUnit } from '$lib/utils/orderStatusTransition'
 
 export interface RentalListRow {
   /** 고객이 취소했고 관리자 취소확인 전("예약취소" 배지·헤더 [예약취소]=취소확인) — /cms/rentals 로더가 부착 */
@@ -104,6 +109,430 @@ export interface RentalListRow {
 // 이 경로의 폼 액션(approveReservation·updateStatus·changeReservation 등)은 패널이 절대 주소로 호출하므로 그대로 둔다.
 export const load: PageServerLoad = async ({ url }) => {
   throw redirect(303, `/cms/rentals${url.search}`)
+}
+
+// ── 상태 전환 공용 로직 (2026-10-27, ④ 주문 단위 단일 처리 버튼) ─────────────────────────────────────────────
+// 기존 updateStatus 본문을 함수로 옮겨 단건 처리(updateStatus)와 주문 단위 처리(updateOrderStatus)가 같은 규칙을 쓰게 한다.
+// 단건 호출의 동작은 이전과 같다(옵션 없이 호출). 주문 단위 처리는 상품별 전환만 이 함수로 하고 고객 알림·두발히어로 호출은 주문당 1회로 묶는다.
+function makeStatusAdmin() { return createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) }
+type StatusAdmin = ReturnType<typeof makeStatusAdmin>
+interface StatusCtx { admin: StatusAdmin; session: { user: { id: string } }; cmsRole: string }
+interface UpdateStatusOpts { skipNotify?: boolean; skipDhero?: boolean }
+
+/** 상태 전환 시 자동 발송하는 고객 알림 대응표 (rental-lifecycle.md AUTO_NOTIFY) */
+const AUTO_NOTIFY: Partial<Record<string, string>> = {
+  shipped:          'shipment_notify',
+  in_use:           'rental_confirm',
+  return_requested: 'return_registration',
+  cancelled:        'reservation_cancelled',
+  damage_claimed:   'damage_claimed',
+}
+
+/**
+ * shipped·return_requested·cancelled 전이 시 두발히어로 API 자동 호출(fail-soft — 상태 전이에 영향 없음).
+ * reservationIds 가 여러 개면(주문 단위 처리) 접수·반품 접수는 주문당 1회만 호출하고, 받은 접수번호·반품번호를 모든 예약에 저장한다.
+ * 1개면 이전 단건 동작과 같다. 연동 대상 판정은 isDheroIntegrationMethod(전용 스위치)다.
+ */
+async function triggerDheroForTransition(
+  admin: StatusAdmin,
+  reservationIds: number[],
+  newStatus: string,
+): Promise<{ dheroCancelFailed: boolean; dheroBookFailedMsg: string | null }> {
+  let dheroCancelFailed = false
+  let dheroBookFailedMsg: string | null = null
+  if (reservationIds.length === 0) return { dheroCancelFailed, dheroBookFailedMsg }
+  if (!(newStatus === 'shipped' || newStatus === 'return_requested' || newStatus === 'cancelled')) return { dheroCancelFailed, dheroBookFailedMsg }
+
+  const reservationId = reservationIds[0]
+  try {
+    // 예약 정보 JOIN 조회 — user_profiles/user_shipping_addresses/products 포함(공유 모듈 getReservationForDhero)
+    const res = await getReservationForDhero(admin, reservationId)
+
+    if (res) {
+      // 같은 주문의 나머지 상품 정보(상품명 합치기·반품 운송장 찾기) — 주문 단위 처리일 때만
+      const others = reservationIds.length > 1
+        ? (await Promise.all(reservationIds.slice(1).map((id) => getReservationForDhero(admin, id).catch(() => null)))).filter((r): r is NonNullable<typeof r> => r != null)
+        : []
+
+      if (newStatus === 'shipped') {
+        const isDheroOn = await isDheroIntegrationMethod(admin, res.pickupMethod)
+        // 이미 운송장이 있는 주문은 다시 접수하지 않는다 — 중복 배송 접수 방지(2026-10-27).
+        //  · 두발히어로 접수번호(관리자가 '두발히어로 배송접수'를 먼저 눌렀음) → 정상이라 조용히 건너뜀
+        //  · 다른 택배사 운송장(직접 입력) → 건너뛰되 관리자에게 알림(접수가 안 된 것을 모르고 지나가지 않도록)
+        //  · 두발히어로 쪽에서 이미 취소된 접수(dhero_meta.canceledAt — 동기화·상태 조회가 기록)는 '접수됨'으로 보지 않는다 → 새 번호(`예약코드-N`)로 재접수
+        const booked = liveDheroBookings([res, ...others])
+        const alreadyBooked = booked.length > 0
+        const foreignBooked = booked.find((u) => u.courierCode !== '두발히어로')
+        if (isDheroOn && foreignBooked) {
+          dheroBookFailedMsg = `이미 등록된 ${foreignBooked.courierCode ?? '다른 택배사'} 운송장이 있어 두발히어로 배송 접수를 건너뛰었습니다. 두발히어로로 접수하려면 운송장을 비운 뒤 '두발히어로 배송접수'를 눌러주세요.`
+        }
+        if (isDheroOn && !alreadyBooked) {
+          try {
+            // 주소·우편번호가 없으면 두발히어로가 접수를 거절하므로 호출 전에 사유를 명확히 알린다
+            // (실패가 조용히 삼켜져 운송장이 안 생기던 결함 — 2026-10-12)
+            if (!res.address || !res.postalCode) {
+              dheroBookFailedMsg = !res.address
+                ? '배송지 주소가 없어 두발히어로 배송 접수를 하지 못했습니다.'
+                : '배송지 우편번호가 없어 두발히어로 배송 접수를 하지 못했습니다.'
+              throw new Error(dheroBookFailedMsg)
+            }
+            const deliveryRes = await createDelivery({
+              receiverName:              res.customerName,
+              receiverMobile:            res.customerPhone,
+              receiverAddress:           res.address,
+              receiverAddressDetail:     res.addressDetail,
+              receiverAddressPostalCode: res.postalCode,
+              productName:               joinProductNames([res.productName, ...others.map((o) => o.productName)]),
+              orderIdFromCorp:           res.reservationCode ?? String(reservationId),
+              memoFromCustomer:          pickDeliveryMemo(res),
+              frontdoorPassword:         res.frontdoorPassword ?? undefined,
+            })
+            for (const id of reservationIds) {
+              await admin.rpc('update_reservation_dhero_shipment', {
+                p_reservation_id:  id,
+                p_tracking_number: deliveryRes.bookId,
+                p_courier_code:    '두발히어로',
+                p_status:          DHERO_STATUS_LABEL[0] ?? '배송접수',
+                p_status_code:     0,
+                p_dong_group:      deliveryRes.dongGroup ?? null,
+                p_meta:            deliveryRes as Record<string, unknown>,
+                p_return_book_id:  null,
+              })
+            }
+            // 운송장(접수번호) 저장 직후 고객에게 택배사·운송장 번호 안내(주문당 1회, fail-soft, 2026-10-27)
+            await notifyTrackingRegistered(admin as never, reservationId)
+            // placePageUrl이 있으면 고객 채팅으로 수령위치 등록 안내 전달(주문당 1회, fail-soft)
+            // service-operations.md §11: find_or_create_general_chat_session 경유는 RPC 내부에서 처리
+            // service-operations.md §15: push.ts CUSTOMER_LIFECYCLE_PUSH_COPY에 dhero_place_guide 등록 완료
+            if (deliveryRes.placePageUrl) {
+              try {
+                await admin.rpc('send_rental_chat_notification', {
+                  p_reservation_id: reservationId,
+                  p_notify_type:    'dhero_place_guide',
+                  p_action_url:     deliveryRes.placePageUrl,
+                })
+                await sendReservationLifecyclePush(admin, reservationId, 'dhero_place_guide')
+              } catch (notifyErr) {
+                console.error('[dhero/place_guide notify] fail-soft:', notifyErr instanceof Error ? notifyErr.message : notifyErr)
+              }
+            }
+          } catch (e) {
+            if (!dheroBookFailedMsg) {
+              dheroBookFailedMsg = e instanceof DheroApiError
+                ? `두발히어로 배송 접수에 실패했습니다: ${e.message}`
+                : '두발히어로 배송 접수에 실패했습니다.'
+            }
+            console.error('[dhero/shipped] fail-soft:', e instanceof Error ? e.message : e)
+          }
+        }
+      } else if (newStatus === 'return_requested') {
+        const isDheroOn = await isDheroIntegrationMethod(admin, res.returnMethod)
+        const trackingNumber = res.trackingNumber ?? others.find((o) => o.trackingNumber)?.trackingNumber ?? null
+        if (isDheroOn && trackingNumber) {
+          try {
+            const returnRes = await registerReturn(trackingNumber)
+            // 안내서: 2xx 여도 success=false 일 수 있다(reason 에 사유) — 반품번호를 저장하지 않고 관리자에게 알린다(알려진 이슈 #9)
+            if (returnRes.success === false) {
+              const reason = typeof returnRes.reason === 'string' && returnRes.reason ? `: ${returnRes.reason}` : ''
+              dheroBookFailedMsg = `두발히어로가 반품 접수를 받아들이지 않았습니다${reason}`
+              console.error(`[dhero/return_requested] 반품 접수 거절(success=false)${reason}`)
+            } else {
+              for (const id of reservationIds) {
+                await admin.rpc('update_reservation_dhero_shipment', {
+                  p_reservation_id:  id,
+                  p_tracking_number: trackingNumber,
+                  p_courier_code:    '두발히어로',
+                  p_status:          DHERO_STATUS_LABEL[0] ?? '반품접수',
+                  p_status_code:     0,
+                  p_dong_group:      returnRes.dongGroup ?? null,
+                  p_meta:            returnRes as Record<string, unknown>,
+                  p_return_book_id:  returnRes.bookId,
+                })
+              }
+            }
+          } catch (e) {
+            dheroBookFailedMsg = e instanceof DheroApiError
+              ? `두발히어로 반품 접수에 실패했습니다: ${e.message}`
+              : '두발히어로 반품 접수에 실패했습니다.'
+            console.error('[dhero/return_requested] fail-soft:', e instanceof Error ? e.message : e)
+          }
+        }
+      } else if (newStatus === 'cancelled') {
+        const trackingNumber = res.trackingNumber
+        if (trackingNumber) {
+          try {
+            await cancelDelivery(trackingNumber)
+          } catch (e) {
+            if (e instanceof DheroApiError && e.statusCode === 412) {
+              dheroCancelFailed = true
+            } else {
+              console.error('[dhero/cancelled] fail-soft:', e instanceof Error ? e.message : e)
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // 예약 조회 자체 실패도 fail-soft — 상태전이는 이미 성공
+    console.error('[dhero] reservation lookup fail-soft:', e instanceof Error ? e.message : e)
+  }
+  return { dheroCancelFailed, dheroBookFailedMsg }
+}
+
+async function updateStatusCore(ctx: StatusCtx, reservationId: number, newStatus: string, opts: UpdateStatusOpts = {}) {
+  const { admin, session, cmsRole } = ctx
+  // 계약완료(confirmed)로의 직접 전환은 이 액션으로 하지 않는다(Stephen 2026-10-15) — 서명·결제 없이 신청대기를 확정하는 경로를 서버에서 막는다.
+  // 계약완료는 고객의 전자계약 서명 + 결제가 모두 끝났을 때만 try_confirm_reservation이 자동 전환한다(service-operations.md §9).
+  // (confirmed 이후 단계 전환 shipped·in_use 등은 영향 없음 — 이 값으로 들어오는 정상 화면 호출은 없다)
+  // 완료(completed)도 이 액션으로 직접 전환하지 않는다(2026-10-17) — 반납 검수 승인(검수 탭 [반납 검수 승인])을 거쳐야 하며 DB 트리거도 같은 규칙을 집행한다.
+  if (newStatus === 'completed') {
+    return fail(400, { message: '완료 처리는 검수 탭의 [반납 검수 승인]으로 진행해 주세요.' })
+  }
+  if (newStatus === 'confirmed') {
+    return fail(400, { message: '계약완료는 고객의 전자계약 서명과 결제가 모두 끝나야 자동으로 전환돼요. 직접 변경할 수 없습니다.' })
+  }
+
+  // cancelled 분기 — Defect 1·2 수정 (2026-09-14)
+  // Defect 1: 이전 코드는 cancel_reservation_payment(순수 SQL RPC)만 호출해
+  //   Toss 실결제 취소가 누락됨. 결제가 있으면 반드시 Toss API 먼저 호출 후 RPC.
+  //   결제 없는 경우(PAYMENT_NOT_FOUND)는 Toss 건너뛰고 RPC 직행.
+  // Defect 2: hasSettingsAccess 게이트 누락 — partner도 전액 환불+계약 취소 가능한 상태였음.
+  //   manager/superadmin: Toss + cancel_reservation_payment (환불+형제+계약 일괄 취소)
+  //   partner:            update_reservation_status만 (상태 전환 전용, 환불·계약 취소 없음)
+  let cancelledSiblingIds: number[] = []
+  if (newStatus === 'cancelled') {
+    if (hasSettingsAccess(cmsRole)) {
+      // ── manager/superadmin 경로: Toss 환불 → cancel_reservation_payment ──
+
+      // rental.change_cancel 세부 권한 체크 — 역할 게이트(manager+) 통과 후 계정 오버레이 검증
+      const { data: permDataUS } = await admin
+        .from('cms_menu_permissions')
+        .select('menu_key, allowed')
+        .eq('user_id', session.user.id)
+      const menuOverridesUS = (permDataUS ?? []) as CmsMenuPermissionOverride[]
+      if (!hasMenuAccess(cmsRole, menuOverridesUS, 'rental.change_cancel')) {
+        return fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
+      }
+
+      // 1. payment_key 조회 (changeReservation 액션과 동일한 2단계 패턴)
+      let paymentKey: string | null = null
+      const { data: ptDirect } = await admin
+        .from('payment_transactions')
+        .select('payment_key, status')
+        .eq('reservation_id', reservationId)
+        .eq('status', 'done')
+        .maybeSingle()
+      paymentKey = (ptDirect as { payment_key?: string | null } | null)?.payment_key ?? null
+
+      if (!paymentKey) {
+        const { data: orderItem } = await admin
+          .from('order_items')
+          .select('order_id')
+          .eq('reservation_id', reservationId)
+          .maybeSingle()
+        const orderId = (orderItem as { order_id?: number | null } | null)?.order_id
+        if (orderId != null) {
+          const { data: siblingItems } = await admin
+            .from('order_items')
+            .select('reservation_id')
+            .eq('order_id', orderId)
+          const siblingIds = ((siblingItems ?? []) as { reservation_id: number | null }[])
+            .map((r) => r.reservation_id)
+            .filter((v): v is number => v != null)
+          if (siblingIds.length > 0) {
+            const { data: sibPt } = await admin
+              .from('payment_transactions')
+              .select('payment_key, status')
+              .in('reservation_id', siblingIds)
+              .eq('status', 'done')
+              .maybeSingle()
+            paymentKey = (sibPt as { payment_key?: string | null } | null)?.payment_key ?? null
+          }
+        }
+      }
+
+      // 2. 결제 있는 경우: Toss 취소 먼저 → 성공 후 RPC
+      //    결제 없는 경우: Toss 건너뛰고 RPC 직행 (cancel_reservation_payment가 PAYMENT_NOT_FOUND 처리)
+      let pgCancelledAt: string | undefined
+      if (paymentKey) {
+        const tossResult = await tossPaymentCancel(paymentKey, '관리자 예약 취소')
+        if (!tossResult.ok) return fail(400, { message: tossResult.error ?? '결제 취소에 실패했습니다.' })
+        pgCancelledAt = tossResult.pgCancelledAt
+
+        // pg_cancelled_at 기록 — fail-soft (payment_transactions.cancelled_at은 RPC가 기록,
+        // pg_cancelled_at(PG 실제 취소 시각)만 보강)
+        if (pgCancelledAt) {
+          try {
+            await admin
+              .from('payment_transactions')
+              .update({ pg_cancelled_at: pgCancelledAt })
+              .eq('payment_key', paymentKey)
+          } catch { /* fail-soft */ }
+        }
+      }
+
+      // 3. cancel_reservation_payment RPC (rpcRetryWithFailSoftLog: 3회 재시도 + fail-soft)
+      type CrResult = { success: boolean; error?: string; cancelled_reservation_ids?: number[] }
+      const { rpcResult: cr, failed: cancelFailed, failureReason: cancelFailReason } = await rpcRetryWithFailSoftLog<CrResult>({
+        admin,
+        rpcName: 'cancel_reservation_payment',
+        rpcParams: {
+          p_reservation_id: reservationId,
+          p_admin_id:       session.user.id,
+          p_cancel_reason:  '관리자 예약 취소',
+        },
+        isSuccess: (r) => r !== null && (r.success !== false || r.error === 'PAYMENT_NOT_FOUND'),
+        paymentKey,
+        reservationId,
+        contextLabel: '관리자 예약취소 DB 반영',
+      })
+      if (cancelFailed) {
+        return fail(500, { message: `DB 반영 실패: ${cancelFailReason}. Toss 취소는 이미 완료됐습니다.` })
+      }
+      if (!cr) return fail(500, { message: '예약 취소 처리 실패' })
+
+      // 4. 취소된 형제 예약 ID 수집 (배치 알림용)
+      //    EC-1(결제 있음): cancelled_reservation_ids 반환
+      //    EC-2(PAYMENT_NOT_FOUND): 반환 없음 → order_items 조회로 별도 수집
+      if (cr.success && cr.cancelled_reservation_ids?.length) {
+        cancelledSiblingIds = cr.cancelled_reservation_ids
+      } else {
+        // PAYMENT_NOT_FOUND 또는 단건 — order_items에서 형제 수집
+        try {
+          const { data: oiForBatch } = await admin
+            .from('order_items')
+            .select('order_id')
+            .eq('reservation_id', reservationId)
+            .maybeSingle()
+          const batchOrderId = (oiForBatch as { order_id?: number | null } | null)?.order_id
+          if (batchOrderId != null) {
+            const { data: batchSibs } = await admin
+              .from('order_items')
+              .select('reservation_id')
+              .eq('order_id', batchOrderId)
+            cancelledSiblingIds = ((batchSibs ?? []) as { reservation_id: number | null }[])
+              .map((r) => r.reservation_id)
+              .filter((v): v is number => v != null)
+          }
+        } catch { /* fail-soft */ }
+        if (!cancelledSiblingIds.length) cancelledSiblingIds = [reservationId]
+      }
+
+    } else {
+      // ── partner 경로: 상태 전환만 (환불·계약 취소 없음) ──
+      // order_items에서 형제 예약 전체를 수집해 각각 update_reservation_status 호출
+      let siblingIds: number[] = [reservationId]
+      try {
+        const { data: oiRow } = await admin
+          .from('order_items')
+          .select('order_id')
+          .eq('reservation_id', reservationId)
+          .maybeSingle()
+        const oiOrderId = (oiRow as { order_id?: number | null } | null)?.order_id
+        if (oiOrderId != null) {
+          const { data: siblings } = await admin
+            .from('order_items')
+            .select('reservation_id')
+            .eq('order_id', oiOrderId)
+          const mapped = ((siblings ?? []) as { reservation_id: number | null }[])
+            .map((r) => r.reservation_id)
+            .filter((v): v is number => v != null)
+          if (mapped.length > 0) siblingIds = mapped
+        }
+      } catch { /* fail-soft — 최소한 self는 처리 */ }
+
+      for (const rid of siblingIds) {
+        const { data: statusResult, error: statusError } = await admin.rpc('update_reservation_status', {
+          p_reservation_id: rid,
+          p_new_status:     'cancelled',
+        })
+        if (statusError) {
+          // 요청 예약만 hard fail, 이미 terminal인 형제는 graceful skip
+          if (rid === reservationId) return fail(500, { message: statusError.message })
+          continue
+        }
+        const sr = statusResult as { ok: boolean; error?: string } | null
+        if (!sr?.ok && rid === reservationId) {
+          return fail(400, { message: sr?.error ?? '예약 취소 처리 실패' })
+        }
+      }
+      cancelledSiblingIds = siblingIds
+    }
+  } else {
+    const { data: result, error } = await admin.rpc('update_reservation_status', {
+      p_reservation_id: reservationId,
+      p_new_status:     newStatus,
+    })
+    if (error) return fail(500, { message: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+  }
+
+  // 대여 액션 로그 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
+  // note='manual'로 수동 CMS 조작임을 표시 (QR 경로 note='qr_scan'과 구분 — EC-4)
+  try {
+    await admin.rpc('log_rental_action', {
+      p_reservation_id: reservationId,
+      p_action_type:    newStatus,
+      p_admin_id:       session.user.id,
+      p_note:           'manual',
+    })
+  } catch { /* 로그 실패는 무시 */ }
+
+  // 정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
+  // QR 반납 경로(rentalQrTransition.ts)도 동일하게 배선됨(log_rental_action과 동일 이중 배선)
+  // ⛔ 대여완료 포인트·"대여 완료" 알림은 더 이상 returned 시점에 나가지 않는다(2026-10-17, Migration #724) —
+  //    관리자의 반납 검수 승인(lib/server/inspection.ts approveInspection)에서만 지급·발송한다.
+  //    정시반납 적립은 호출 시점(오늘)을 반납 시점으로 보는 로직이라 returned 시점에 그대로 둔다.
+  if (newStatus === 'returned') {
+    try {
+      await awardOnTimeReturnPoints(admin, reservationId)
+    } catch { /* 포인트 적립 실패는 무시 */ }
+  }
+
+  // 상태 전환별 채팅 알림 자동 발송(대응표 AUTO_NOTIFY 는 모듈 상수) — 주문 단위 처리(opts.skipNotify)에서는 호출 측이 주문당 1회만 보낸다
+  // fail-soft(2026-09-08 수정) — 이 블록이 예외를 던지면 상태전이(이미 위에서 성공)는
+  // DB에 반영됐음에도 액션 응답 직렬화가 깨져 클라이언트 use:enhance 콜백이 끝내 호출되지
+  // 않고 "거부"/"예약 취소" 등 버튼이 무한로딩에 빠지는 결함이 실사용 중 발견됨(reservation
+  // id 139) — log_rental_action(위 173행)과 동일한 fail-soft 원칙을 적용해 해소.
+  const notifyType = opts.skipNotify ? undefined : AUTO_NOTIFY[newStatus]
+  if (notifyType) {
+    // cancelled + 형제 예약 2개 이상: send_rental_chat_notification_batch로 일괄 발송
+    // 그 외: 단건 send_rental_chat_notification
+    try {
+      if (newStatus === 'cancelled' && cancelledSiblingIds.length > 1) {
+        await admin.rpc('send_rental_chat_notification_batch', {
+          p_reservation_ids: cancelledSiblingIds,
+          p_notify_type:     notifyType,
+        })
+      } else {
+        await admin.rpc('send_rental_chat_notification', {
+          p_reservation_id: reservationId,
+          p_notify_type: notifyType,
+        })
+      }
+    } catch { /* 채팅 알림 발송 실패는 무시 */ }
+    // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
+    try {
+      await sendReservationLifecyclePush(admin, reservationId, notifyType)
+    } catch { /* 푸시 알림 발송 실패는 무시 */ }
+  }
+
+  // ── 두발히어로 fail-soft 트리거 — 공용 함수(triggerDheroForTransition) 호출. 주문 단위 처리(opts.skipDhero)에서는 호출 측이 주문당 1회만 호출한다 ──
+  let dheroCancelFailed = false
+  let dheroBookFailedMsg: string | null = null
+  if (!opts.skipDhero) {
+    const dh = await triggerDheroForTransition(admin, [reservationId], newStatus)
+    dheroCancelFailed = dh.dheroCancelFailed
+    dheroBookFailedMsg = dh.dheroBookFailedMsg
+  }
+  // ── dhero 트리거 끝 ────────────────────────────────────────────────────
+
+  return {
+    ok: true,
+    ...(dheroCancelFailed ? { dhero_cancel_failed: true } : {}),
+    ...(dheroBookFailedMsg ? { dhero_book_failed: dheroBookFailedMsg } : {}),
+  }
 }
 
 export const actions: Actions = {
@@ -386,375 +815,84 @@ export const actions: Actions = {
     const cmsRole = await getCmsRoleForAction(locals)
     if (!cmsRole) return fail(403, { message: '권한 없음' })
 
-    const admin     = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    const admin     = makeStatusAdmin()
     const data      = await request.formData()
     const reservationId = Number(data.get('reservation_id'))
     const newStatus     = data.get('status') as string
 
-    // 계약완료(confirmed)로의 직접 전환은 이 액션으로 하지 않는다(Stephen 2026-10-15) — 서명·결제 없이 신청대기를 확정하는 경로를 서버에서 막는다.
-    // 계약완료는 고객의 전자계약 서명 + 결제가 모두 끝났을 때만 try_confirm_reservation이 자동 전환한다(service-operations.md §9).
-    // (confirmed 이후 단계 전환 shipped·in_use 등은 영향 없음 — 이 값으로 들어오는 정상 화면 호출은 없다)
-    // 완료(completed)도 이 액션으로 직접 전환하지 않는다(2026-10-17) — 반납 검수 승인(검수 탭 [반납 검수 승인])을 거쳐야 하며 DB 트리거도 같은 규칙을 집행한다.
-    if (newStatus === 'completed') {
-      return fail(400, { message: '완료 처리는 검수 탭의 [반납 검수 승인]으로 진행해 주세요.' })
-    }
-    if (newStatus === 'confirmed') {
-      return fail(400, { message: '계약완료는 고객의 전자계약 서명과 결제가 모두 끝나야 자동으로 전환돼요. 직접 변경할 수 없습니다.' })
-    }
+    return updateStatusCore({ admin, session, cmsRole }, reservationId, newStatus)
+  },
 
-    // cancelled 분기 — Defect 1·2 수정 (2026-09-14)
-    // Defect 1: 이전 코드는 cancel_reservation_payment(순수 SQL RPC)만 호출해
-    //   Toss 실결제 취소가 누락됨. 결제가 있으면 반드시 Toss API 먼저 호출 후 RPC.
-    //   결제 없는 경우(PAYMENT_NOT_FOUND)는 Toss 건너뛰고 RPC 직행.
-    // Defect 2: hasSettingsAccess 게이트 누락 — partner도 전액 환불+계약 취소 가능한 상태였음.
-    //   manager/superadmin: Toss + cancel_reservation_payment (환불+형제+계약 일괄 취소)
-    //   partner:            update_reservation_status만 (상태 전환 전용, 환불·계약 취소 없음)
-    let cancelledSiblingIds: number[] = []
-    if (newStatus === 'cancelled') {
-      if (hasSettingsAccess(cmsRole)) {
-        // ── manager/superadmin 경로: Toss 환불 → cancel_reservation_payment ──
+  // ④ 주문 단위 단일 처리 버튼(2026-10-27, Stephen 확정 "기본값대로 진행") — 같은 주문의 상품들을 패널 하단 버튼 하나로 다음 단계로 처리한다.
+  //  · 대상 = 같은 주문 중 "가장 덜 진행된 단계"의 상품(planOrderTransition) — 더 진행된 상품은 건드리지 않고 건너뜀으로 알린다
+  //  · 상품별 전환은 updateStatusCore(단건과 같은 규칙) — 일부 실패해도 성공한 상품은 유지하고 실패한 상품을 알린다(롤백 없음)
+  //  · 고객 알림(채팅·푸시)은 주문당 1회(대표 예약 기준), 두발히어로 접수·반품 접수는 주문당 1회(상품명을 합쳐 한 건, 접수번호는 상품 전부에 저장)
+  //  · 허용 목표 단계: shipped·in_use·return_requested·returned — 완료(검수 승인)·취소·계약완료는 각자의 경로로만 간다
+  updateOrderStatus: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole) return fail(403, { message: '권한 없음' })
 
-        // rental.change_cancel 세부 권한 체크 — 역할 게이트(manager+) 통과 후 계정 오버레이 검증
-        const { data: permDataUS } = await admin
-          .from('cms_menu_permissions')
-          .select('menu_key, allowed')
-          .eq('user_id', session.user.id)
-        const menuOverridesUS = (permDataUS ?? []) as CmsMenuPermissionOverride[]
-        if (!hasMenuAccess(cmsRole, menuOverridesUS, 'rental.change_cancel')) {
-          return fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
-        }
-
-        // 1. payment_key 조회 (changeReservation 액션과 동일한 2단계 패턴)
-        let paymentKey: string | null = null
-        const { data: ptDirect } = await admin
-          .from('payment_transactions')
-          .select('payment_key, status')
-          .eq('reservation_id', reservationId)
-          .eq('status', 'done')
-          .maybeSingle()
-        paymentKey = (ptDirect as { payment_key?: string | null } | null)?.payment_key ?? null
-
-        if (!paymentKey) {
-          const { data: orderItem } = await admin
-            .from('order_items')
-            .select('order_id')
-            .eq('reservation_id', reservationId)
-            .maybeSingle()
-          const orderId = (orderItem as { order_id?: number | null } | null)?.order_id
-          if (orderId != null) {
-            const { data: siblingItems } = await admin
-              .from('order_items')
-              .select('reservation_id')
-              .eq('order_id', orderId)
-            const siblingIds = ((siblingItems ?? []) as { reservation_id: number | null }[])
-              .map((r) => r.reservation_id)
-              .filter((v): v is number => v != null)
-            if (siblingIds.length > 0) {
-              const { data: sibPt } = await admin
-                .from('payment_transactions')
-                .select('payment_key, status')
-                .in('reservation_id', siblingIds)
-                .eq('status', 'done')
-                .maybeSingle()
-              paymentKey = (sibPt as { payment_key?: string | null } | null)?.payment_key ?? null
-            }
-          }
-        }
-
-        // 2. 결제 있는 경우: Toss 취소 먼저 → 성공 후 RPC
-        //    결제 없는 경우: Toss 건너뛰고 RPC 직행 (cancel_reservation_payment가 PAYMENT_NOT_FOUND 처리)
-        let pgCancelledAt: string | undefined
-        if (paymentKey) {
-          const tossResult = await tossPaymentCancel(paymentKey, '관리자 예약 취소')
-          if (!tossResult.ok) return fail(400, { message: tossResult.error ?? '결제 취소에 실패했습니다.' })
-          pgCancelledAt = tossResult.pgCancelledAt
-
-          // pg_cancelled_at 기록 — fail-soft (payment_transactions.cancelled_at은 RPC가 기록,
-          // pg_cancelled_at(PG 실제 취소 시각)만 보강)
-          if (pgCancelledAt) {
-            try {
-              await admin
-                .from('payment_transactions')
-                .update({ pg_cancelled_at: pgCancelledAt })
-                .eq('payment_key', paymentKey)
-            } catch { /* fail-soft */ }
-          }
-        }
-
-        // 3. cancel_reservation_payment RPC (rpcRetryWithFailSoftLog: 3회 재시도 + fail-soft)
-        type CrResult = { success: boolean; error?: string; cancelled_reservation_ids?: number[] }
-        const { rpcResult: cr, failed: cancelFailed, failureReason: cancelFailReason } = await rpcRetryWithFailSoftLog<CrResult>({
-          admin,
-          rpcName: 'cancel_reservation_payment',
-          rpcParams: {
-            p_reservation_id: reservationId,
-            p_admin_id:       session.user.id,
-            p_cancel_reason:  '관리자 예약 취소',
-          },
-          isSuccess: (r) => r !== null && (r.success !== false || r.error === 'PAYMENT_NOT_FOUND'),
-          paymentKey,
-          reservationId,
-          contextLabel: '관리자 예약취소 DB 반영',
-        })
-        if (cancelFailed) {
-          return fail(500, { message: `DB 반영 실패: ${cancelFailReason}. Toss 취소는 이미 완료됐습니다.` })
-        }
-        if (!cr) return fail(500, { message: '예약 취소 처리 실패' })
-
-        // 4. 취소된 형제 예약 ID 수집 (배치 알림용)
-        //    EC-1(결제 있음): cancelled_reservation_ids 반환
-        //    EC-2(PAYMENT_NOT_FOUND): 반환 없음 → order_items 조회로 별도 수집
-        if (cr.success && cr.cancelled_reservation_ids?.length) {
-          cancelledSiblingIds = cr.cancelled_reservation_ids
-        } else {
-          // PAYMENT_NOT_FOUND 또는 단건 — order_items에서 형제 수집
-          try {
-            const { data: oiForBatch } = await admin
-              .from('order_items')
-              .select('order_id')
-              .eq('reservation_id', reservationId)
-              .maybeSingle()
-            const batchOrderId = (oiForBatch as { order_id?: number | null } | null)?.order_id
-            if (batchOrderId != null) {
-              const { data: batchSibs } = await admin
-                .from('order_items')
-                .select('reservation_id')
-                .eq('order_id', batchOrderId)
-              cancelledSiblingIds = ((batchSibs ?? []) as { reservation_id: number | null }[])
-                .map((r) => r.reservation_id)
-                .filter((v): v is number => v != null)
-            }
-          } catch { /* fail-soft */ }
-          if (!cancelledSiblingIds.length) cancelledSiblingIds = [reservationId]
-        }
-
-      } else {
-        // ── partner 경로: 상태 전환만 (환불·계약 취소 없음) ──
-        // order_items에서 형제 예약 전체를 수집해 각각 update_reservation_status 호출
-        let siblingIds: number[] = [reservationId]
-        try {
-          const { data: oiRow } = await admin
-            .from('order_items')
-            .select('order_id')
-            .eq('reservation_id', reservationId)
-            .maybeSingle()
-          const oiOrderId = (oiRow as { order_id?: number | null } | null)?.order_id
-          if (oiOrderId != null) {
-            const { data: siblings } = await admin
-              .from('order_items')
-              .select('reservation_id')
-              .eq('order_id', oiOrderId)
-            const mapped = ((siblings ?? []) as { reservation_id: number | null }[])
-              .map((r) => r.reservation_id)
-              .filter((v): v is number => v != null)
-            if (mapped.length > 0) siblingIds = mapped
-          }
-        } catch { /* fail-soft — 최소한 self는 처리 */ }
-
-        for (const rid of siblingIds) {
-          const { data: statusResult, error: statusError } = await admin.rpc('update_reservation_status', {
-            p_reservation_id: rid,
-            p_new_status:     'cancelled',
-          })
-          if (statusError) {
-            // 요청 예약만 hard fail, 이미 terminal인 형제는 graceful skip
-            if (rid === reservationId) return fail(500, { message: statusError.message })
-            continue
-          }
-          const sr = statusResult as { ok: boolean; error?: string } | null
-          if (!sr?.ok && rid === reservationId) {
-            return fail(400, { message: sr?.error ?? '예약 취소 처리 실패' })
-          }
-        }
-        cancelledSiblingIds = siblingIds
-      }
-    } else {
-      const { data: result, error } = await admin.rpc('update_reservation_status', {
-        p_reservation_id: reservationId,
-        p_new_status:     newStatus,
-      })
-      if (error) return fail(500, { message: error.message })
-      const res = result as { ok: boolean; error?: string } | null
-      if (!res?.ok) return fail(400, { message: res?.error ?? '처리 실패' })
+    const admin = makeStatusAdmin()
+    const data = await request.formData()
+    const reservationId = Number(data.get('reservation_id'))
+    const newStatus = String(data.get('status') ?? '')
+    if (!Number.isInteger(reservationId) || reservationId <= 0) return fail(400, { message: '예약 정보가 올바르지 않습니다.' })
+    if (!(ORDER_LIFECYCLE_TARGETS as readonly string[]).includes(newStatus)) {
+      return fail(400, { message: '이 단계는 주문 일괄 처리로 변경할 수 없습니다. 완료·취소·계약완료는 각자의 처리 화면에서 진행해 주세요.' })
     }
 
-    // 대여 액션 로그 기록 — 실패해도 메인 처리에 영향 없음 (fail-soft)
-    // note='manual'로 수동 CMS 조작임을 표시 (QR 경로 note='qr_scan'과 구분 — EC-4)
-    try {
-      await admin.rpc('log_rental_action', {
-        p_reservation_id: reservationId,
-        p_action_type:    newStatus,
-        p_admin_id:       session.user.id,
-        p_note:           'manual',
-      })
-    } catch { /* 로그 실패는 무시 */ }
+    // 같은 주문의 예약(상품) 목록 — 주문에 묶이지 않은 예약은 자기 자신만
+    const ids = await listOrderReservationIds(admin, reservationId)
 
-    // 정시반납 포인트 자동적립 — returned 전이 시에만, fail-soft(공용 헬퍼가 내부 처리)
-    // QR 반납 경로(rentalQrTransition.ts)도 동일하게 배선됨(log_rental_action과 동일 이중 배선)
-    // ⛔ 대여완료 포인트·"대여 완료" 알림은 더 이상 returned 시점에 나가지 않는다(2026-10-17, Migration #724) —
-    //    관리자의 반납 검수 승인(lib/server/inspection.ts approveInspection)에서만 지급·발송한다.
-    //    정시반납 적립은 호출 시점(오늘)을 반납 시점으로 보는 로직이라 returned 시점에 그대로 둔다.
-    if (newStatus === 'returned') {
-      try {
-        await awardOnTimeReturnPoints(admin, reservationId)
-      } catch { /* 포인트 적립 실패는 무시 */ }
+    const { data: unitRows, error: unitErr } = await admin
+      .from('rental_reservations')
+      .select('id, status, pickup_method, return_method')
+      .in('id', ids)
+    if (unitErr || !unitRows || unitRows.length === 0) return fail(404, { message: '예약을 찾을 수 없습니다.' })
+
+    const plan = planOrderTransition(unitRows as OrderUnit[], newStatus)
+    if (plan.targetIds.length === 0) {
+      return fail(400, { message: '처리할 수 있는 상품이 없습니다. 화면을 새로고침해 현재 단계를 확인해 주세요.' })
     }
 
-    // 상태 전환별 채팅 알림 자동 발송
-    // cancelled·damage_claimed 추가(2026-08-18 검수 발견 — 상태만 바뀌고 고객 알림이 전혀
-    // 없던 공백. HOLD 30분 자동만료는 release_reservation_hold RPC 내부에서 별도 발송)
-    const AUTO_NOTIFY: Partial<Record<string, string>> = {
-      shipped:          'shipment_notify',
-      in_use:           'rental_confirm',
-      return_requested: 'return_registration',
-      cancelled:        'reservation_cancelled',
-      damage_claimed:   'damage_claimed',
+    const ctx: StatusCtx = { admin, session, cmsRole }
+    const processed: number[] = []
+    const failed: { id: number; message: string }[] = []
+    for (const id of plan.targetIds) {
+      const r = await updateStatusCore(ctx, id, newStatus, { skipNotify: true, skipDhero: true })
+      const ok = r != null && typeof r === 'object' && 'ok' in r && (r as { ok?: boolean }).ok === true
+      if (ok) processed.push(id)
+      else failed.push({ id, message: ((r as { data?: { message?: string } } | null)?.data?.message) ?? '처리 실패' })
     }
-    // fail-soft(2026-09-08 수정) — 이 블록이 예외를 던지면 상태전이(이미 위에서 성공)는
-    // DB에 반영됐음에도 액션 응답 직렬화가 깨져 클라이언트 use:enhance 콜백이 끝내 호출되지
-    // 않고 "거부"/"예약 취소" 등 버튼이 무한로딩에 빠지는 결함이 실사용 중 발견됨(reservation
-    // id 139) — log_rental_action(위 173행)과 동일한 fail-soft 원칙을 적용해 해소.
+    if (processed.length === 0) {
+      return fail(500, { message: failed[0]?.message ?? '처리 실패', failed })
+    }
+
+    // 고객 알림 — 주문당 1회(대표 예약 기준, 채팅과 푸시는 독립이라 각각 fail-soft)
+    const rep = processed.includes(reservationId) ? reservationId : processed[0]
     const notifyType = AUTO_NOTIFY[newStatus]
     if (notifyType) {
-      // cancelled + 형제 예약 2개 이상: send_rental_chat_notification_batch로 일괄 발송
-      // 그 외: 단건 send_rental_chat_notification
       try {
-        if (newStatus === 'cancelled' && cancelledSiblingIds.length > 1) {
-          await admin.rpc('send_rental_chat_notification_batch', {
-            p_reservation_ids: cancelledSiblingIds,
-            p_notify_type:     notifyType,
-          })
-        } else {
-          await admin.rpc('send_rental_chat_notification', {
-            p_reservation_id: reservationId,
-            p_notify_type: notifyType,
-          })
-        }
+        await admin.rpc('send_rental_chat_notification', { p_reservation_id: rep, p_notify_type: notifyType })
       } catch { /* 채팅 알림 발송 실패는 무시 */ }
-      // 상태 전환 푸시 알림 병행 발송 (채팅과 독립 — 실패해도 위 처리에 영향 없음)
       try {
-        await sendReservationLifecyclePush(admin, reservationId, notifyType)
+        await sendReservationLifecyclePush(admin, rep, notifyType)
       } catch { /* 푸시 알림 발송 실패는 무시 */ }
     }
 
-    // ── 두발히어로 fail-soft 트리거 ─────────────────────────────────────────
-    // shipped·return_requested·cancelled 전이 시 두발히어로 API 자동 호출.
-    // API 실패는 예약 상태전이(이미 위에서 성공)에 영향을 주지 않는다 — 완전 격리.
-    //
-    // CRITICAL-1 수정 (2026-08-25): 기존 rental_reservations 단일 select에서
-    // 존재하지 않는 컬럼(customer_name/addr 등) 조회로 42703 오류 → resRow=null →
-    // 트리거 전체 스킵되던 버그를 getReservationForDhero() 공유 함수로 교체하여 수정.
-    let dheroCancelFailed = false
-    let dheroBookFailedMsg: string | null = null
-    if (newStatus === 'shipped' || newStatus === 'return_requested' || newStatus === 'cancelled') {
-      try {
-        // 예약 정보 JOIN 조회 — user_profiles/user_shipping_addresses/products 포함
-        // (rental_reservations에 고객명·주소·상품명이 직접 없음, 공유 모듈 사용)
-        const res = await getReservationForDhero(admin, reservationId)
-
-        if (res) {
-          if (newStatus === 'shipped') {
-            const isBulk = await isBulkDeliveryMethod(admin, res.pickupMethod)
-            if (isBulk) {
-              try {
-                // 주소·우편번호가 없으면 두발히어로가 접수를 거절하므로 호출 전에 사유를 명확히 알린다
-                // (실패가 조용히 삼켜져 운송장이 안 생기던 결함 — 2026-10-12)
-                if (!res.address || !res.postalCode) {
-                  dheroBookFailedMsg = !res.address
-                    ? '배송지 주소가 없어 두발히어로 배송 접수를 하지 못했습니다.'
-                    : '배송지 우편번호가 없어 두발히어로 배송 접수를 하지 못했습니다.'
-                  throw new Error(dheroBookFailedMsg)
-                }
-                const deliveryRes = await createDelivery({
-                  receiverName:              res.customerName,
-                  receiverMobile:            res.customerPhone,
-                  receiverAddress:           res.address,
-                  receiverAddressDetail:     res.addressDetail,
-                  receiverAddressPostalCode: res.postalCode,
-                  productName:               res.productName,
-                  orderIdFromCorp:           res.reservationCode ?? String(reservationId),
-                  memoFromCustomer:          res.notes ?? undefined,
-                })
-                await admin.rpc('update_reservation_dhero_shipment', {
-                  p_reservation_id:  reservationId,
-                  p_tracking_number: deliveryRes.bookId,
-                  p_courier_code:    '두발히어로',
-                  p_status:          DHERO_STATUS_LABEL[0] ?? '배송접수',
-                  p_status_code:     0,
-                  p_dong_group:      deliveryRes.dongGroup ?? null,
-                  p_meta:            deliveryRes as Record<string, unknown>,
-                  p_return_book_id:  null,
-                })
-                // placePageUrl이 있으면 고객 채팅으로 수령위치 등록 안내 전달 (fail-soft)
-                // service-operations.md §11: find_or_create_general_chat_session 경유는 RPC 내부에서 처리
-                // service-operations.md §15: push.ts CUSTOMER_LIFECYCLE_PUSH_COPY에 dhero_place_guide 등록 완료
-                if (deliveryRes.placePageUrl) {
-                  try {
-                    await admin.rpc('send_rental_chat_notification', {
-                      p_reservation_id: reservationId,
-                      p_notify_type:    'dhero_place_guide',
-                      p_action_url:     deliveryRes.placePageUrl,
-                    })
-                    await sendReservationLifecyclePush(admin, reservationId, 'dhero_place_guide')
-                  } catch (notifyErr) {
-                    console.error('[dhero/place_guide notify] fail-soft:', notifyErr instanceof Error ? notifyErr.message : notifyErr)
-                  }
-                }
-              } catch (e) {
-                if (!dheroBookFailedMsg) {
-                  dheroBookFailedMsg = e instanceof DheroApiError
-                    ? `두발히어로 배송 접수에 실패했습니다: ${e.message}`
-                    : '두발히어로 배송 접수에 실패했습니다.'
-                }
-                console.error('[dhero/shipped] fail-soft:', e instanceof Error ? e.message : e)
-              }
-            }
-          } else if (newStatus === 'return_requested') {
-            const isBulk = await isBulkDeliveryMethod(admin, res.returnMethod)
-            const trackingNumber = res.trackingNumber
-            if (isBulk && trackingNumber) {
-              try {
-                const returnRes = await registerReturn(trackingNumber)
-                await admin.rpc('update_reservation_dhero_shipment', {
-                  p_reservation_id:  reservationId,
-                  p_tracking_number: trackingNumber,
-                  p_courier_code:    '두발히어로',
-                  p_status:          DHERO_STATUS_LABEL[0] ?? '반품접수',
-                  p_status_code:     0,
-                  p_dong_group:      returnRes.dongGroup ?? null,
-                  p_meta:            returnRes as Record<string, unknown>,
-                  p_return_book_id:  returnRes.bookId,
-                })
-              } catch (e) {
-                console.error('[dhero/return_requested] fail-soft:', e instanceof Error ? e.message : e)
-              }
-            }
-          } else if (newStatus === 'cancelled') {
-            const trackingNumber = res.trackingNumber
-            if (trackingNumber) {
-              try {
-                await cancelDelivery(trackingNumber)
-              } catch (e) {
-                if (e instanceof DheroApiError && e.statusCode === 412) {
-                  dheroCancelFailed = true
-                } else {
-                  console.error('[dhero/cancelled] fail-soft:', e instanceof Error ? e.message : e)
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // 예약 조회 자체 실패도 fail-soft — 상태전이는 이미 성공
-        console.error('[dhero] reservation lookup fail-soft:', e instanceof Error ? e.message : e)
-      }
-    }
-    // ── dhero 트리거 끝 ────────────────────────────────────────────────────
+    // 두발히어로 — 주문당 1회(성공한 상품 기준, fail-soft)
+    const dh = await triggerDheroForTransition(admin, processed, newStatus)
 
     return {
       ok: true,
-      ...(dheroCancelFailed ? { dhero_cancel_failed: true } : {}),
-      ...(dheroBookFailedMsg ? { dhero_book_failed: dheroBookFailedMsg } : {}),
+      processed,
+      ...(failed.length > 0 ? { failed } : {}),
+      ...(plan.skippedIds.length > 0 ? { skipped: plan.skippedIds } : {}),
+      ...(dh.dheroBookFailedMsg ? { dhero_book_failed: dh.dheroBookFailedMsg } : {}),
     }
   },
 

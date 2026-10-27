@@ -27,6 +27,7 @@ export interface DheroReservationInfo {
   pickupMethod:      string | null
   returnMethod:      string | null
   trackingNumber:    string | null
+  courierCode:       string | null  // 운송장 택배사('두발히어로'면 두발히어로 접수번호) — 출고 처리의 재접수 방지 판정용
   reservationCode:   string | null
   dheroStatus:       string | null
   dheroStatusCode:   number | null
@@ -40,7 +41,10 @@ export interface DheroReservationInfo {
   addressDetail:     string
   postalCode:        string
   productName:       string
-  notes:             string | null  // 고객 요청사항 (memoFromCustomer 매핑용)
+  notes:             string | null  // 옛 요청사항 컬럼(운영 5건뿐) — 새 요청은 pickupRequestNote·returnRequestNote
+  pickupRequestNote: string | null  // 장바구니 '요청 사항'(수령용, Migration #476) — 두발히어로 배송 접수 memoFromCustomer 의 원천
+  returnRequestNote: string | null  // 장바구니 '요청 사항'(반납용)
+  frontdoorPassword: string | null  // 수령 주소 공동현관 출입번호(장바구니 전용 칸, Migration #774) — 두발히어로 frontdoorPassword(운송장 미인쇄)로 전달
 }
 
 /**
@@ -55,7 +59,7 @@ export async function getReservationForDhero(
   // rental_reservations 기본 정보 — 실제 존재하는 컬럼만 (customer_name 등은 여기 없음)
   const { data: resRow, error: resError } = await admin
     .from('rental_reservations')
-    .select('id, status, pickup_method, return_method, tracking_number, reservation_code, user_id, product_id, dhero_status, dhero_status_code, dhero_synced_at, dhero_meta, dhero_dong_group, dhero_return_book_id, notes, pickup_address_road, pickup_address_detail, pickup_postal_code')
+    .select('id, status, pickup_method, return_method, tracking_number, courier_code, reservation_code, user_id, product_id, dhero_status, dhero_status_code, dhero_synced_at, dhero_meta, dhero_dong_group, dhero_return_book_id, notes, pickup_request_note, return_request_note, pickup_address_road, pickup_address_detail, pickup_postal_code')
     .eq('id', reservationId)
     .maybeSingle()
 
@@ -69,6 +73,19 @@ export async function getReservationForDhero(
   if (!resRow) return null
 
   const r = resRow as Record<string, unknown>
+
+  // 공동현관 출입번호(Migration #774) — 핵심 조회에서 분리한 fail-soft 단건 조회.
+  // 컬럼이 아직 없는 환경(DB 적용 전 코드 배포)에서도 조회 오류가 예약 조회 전체를 null 로 만들어 접수·상태 조회·반품 접수가 멈추지 않게 한다.
+  let frontdoorPassword: string | null = null
+  try {
+    const { data: fd } = await admin
+      .from('rental_reservations')
+      .select('pickup_frontdoor_password')
+      .eq('id', reservationId)
+      .maybeSingle()
+    const v = (fd as { pickup_frontdoor_password?: unknown } | null)?.pickup_frontdoor_password
+    frontdoorPassword = typeof v === 'string' && v.trim() !== '' ? v : null
+  } catch { /* fail-soft — 출입번호만 비어 접수된다 */ }
 
   // 고객 정보 (user_profiles JOIN)
   const { data: profile } = await admin
@@ -120,6 +137,7 @@ export async function getReservationForDhero(
     pickupMethod:      r.pickup_method as string | null,
     returnMethod:      r.return_method as string | null,
     trackingNumber:    r.tracking_number as string | null,
+    courierCode:       (r.courier_code as string | null | undefined) ?? null,
     reservationCode:   r.reservation_code as string | null,
     dheroStatus:       r.dhero_status as string | null,
     dheroStatusCode:   r.dhero_status_code as number | null,
@@ -134,5 +152,8 @@ export async function getReservationForDhero(
     postalCode:        ((addr as Record<string, unknown> | null)?.postal_code as string) ?? '',
     productName:       ((product as Record<string, unknown> | null)?.name as string) ?? '',
     notes:             (r.notes as string | null) ?? null,
+    pickupRequestNote: (r.pickup_request_note as string | null | undefined) ?? null,
+    returnRequestNote: (r.return_request_note as string | null | undefined) ?? null,
+    frontdoorPassword,
   }
 }

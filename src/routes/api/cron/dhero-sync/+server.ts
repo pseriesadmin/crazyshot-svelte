@@ -14,8 +14,8 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import {
   getDeliveryByBookId,
   isDheroTerminalStatus,
-  DHERO_STATUS_LABEL,
 } from '$lib/server/dhero'
+import { dheroStatusLabel } from '$lib/utils/dheroLabels'
 import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
 import type { RequestHandler } from './$types'
 
@@ -89,7 +89,7 @@ export const GET: RequestHandler = async ({ request }) => {
         p_reservation_id:  reservationId,
         p_tracking_number: bookId,
         p_courier_code:    '두발히어로',
-        p_status:          DHERO_STATUS_LABEL[status.status] ?? String(status.status),
+        p_status:          dheroStatusLabel(status),
         p_status_code:     status.status,
         p_dong_group:      r.dhero_dong_group ?? null,
         p_meta:            status as Record<string, unknown>,
@@ -142,7 +142,7 @@ export const GET: RequestHandler = async ({ request }) => {
         p_reservation_id:  reservationId,
         p_tracking_number: r.tracking_number as string | null ?? returnBookId,
         p_courier_code:    '두발히어로',
-        p_status:          DHERO_STATUS_LABEL[returnStatus.status] ?? String(returnStatus.status),
+        p_status:          dheroStatusLabel(returnStatus),
         p_status_code:     returnStatus.status,
         p_dong_group:      r.dhero_dong_group as string | null ?? null,
         p_meta:            returnStatus as Record<string, unknown>,
