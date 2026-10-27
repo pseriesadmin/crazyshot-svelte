@@ -12,6 +12,8 @@ import { resolve } from 'node:path'
  *
  * 규칙: 반납방식이 is_dhero_integration 이고 운송장이 있을 때만 호출 / 이미 반품 접수(dhero_return_book_id)가 있으면 중복 접수 안 함 /
  *       실패해도 throw 하지 않고 결과(failed)로 반환(제출·등록은 성공 처리).
+ *
+ * 2026-10-27 추가: 형제 단위 중복 방어 — 같은 주문·같은 접수번호의 형제가 이미 반품 접수됐으면 API 재호출 없이 형제 반품번호를 저장한다.
  */
 
 const mockGetReservation = vi.fn()
@@ -37,6 +39,12 @@ vi.mock('$lib/server/dhero', () => ({
   },
 }))
 
+// 형제 단위 조회 헬퍼 mock (dheroOrderUnits)
+const mockListSameBookIds = vi.fn()
+vi.mock('$lib/server/dheroOrderUnits', () => ({
+  listSameBookReservationIds: (...args: unknown[]) => mockListSameBookIds(...args),
+}))
+
 const { registerDheroReturn, DHERO_RETURN_TIMEOUT_MS } = await import('../../lib/server/registerDheroReturn')
 const { DheroApiError } = await import('../../lib/server/dhero')
 
@@ -44,15 +52,42 @@ function resInfo(over: Record<string, unknown> = {}) {
   return { reservationId: 7, returnMethod: 'delivery', trackingNumber: 'BK123', dheroReturnBookId: null, ...over }
 }
 
-function makeAdmin(rpcResult: { error: { message: string } | null } = { error: null }) {
+/**
+ * makeAdmin — admin 클라이언트 mock 빌더
+ *
+ * @param rpcResult        rpc() 반환값 (기본: { error: null })
+ * @param siblingRow       rental_reservations 형제 쿼리 결과(dhero_return_book_id 조회).
+ *                         null 이면 형제 반품 접수 없음 → 단독 접수 흐름. 기본값 null.
+ * @param siblingQueryError maybeSingle() 에서 반환할 Supabase 오류. 설정 시 data=null, error=this.
+ */
+function makeAdmin(
+  rpcResult: { error: { message: string } | null } = { error: null },
+  siblingRow: { dhero_return_book_id: string } | null = null,
+  siblingQueryError: { message: string } | null = null,
+) {
   const rpc = vi.fn().mockResolvedValue(rpcResult)
-  return { admin: { rpc, from: vi.fn() }, rpc }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const chain: any = {}
+  chain.select = vi.fn().mockReturnValue(chain)
+  chain.in = vi.fn().mockReturnValue(chain)
+  chain.not = vi.fn().mockReturnValue(chain)
+  chain.limit = vi.fn().mockReturnValue(chain)
+  chain.maybeSingle = vi.fn().mockResolvedValue(
+    siblingQueryError
+      ? { data: null, error: siblingQueryError }
+      : { data: siblingRow, error: null },
+  )
+  const from = vi.fn().mockReturnValue(chain)
+  return { admin: { rpc, from }, rpc }
 }
 
 beforeEach(() => {
   mockGetReservation.mockReset()
   mockIsBulk.mockReset()
   mockRegisterReturn.mockReset()
+  mockListSameBookIds.mockReset()
+  // 기본값: 형제 없음(자신만 반환) — 기존 테스트는 sibling 경로를 거치지 않는다
+  mockListSameBookIds.mockResolvedValue([7])
 })
 
 describe('registerDheroReturn', () => {
@@ -180,6 +215,99 @@ describe('registerDheroReturn', () => {
     const r = await registerDheroReturn(admin, 7)
 
     expect(r.outcome).toBe('failed')
+  })
+
+  // ── 형제 단위 중복 방어 (2026-10-27) ─────────────────────────────────────
+  // 같은 주문·같은 접수번호의 형제 예약이 이미 반품 접수됐으면 두발히어로 API 를
+  // 다시 호출하지 않고 형제 반품번호를 자신에게도 저장해야 한다.
+
+  it('같은 접수번호 형제가 이미 반품 접수됐으면 — API 재호출 없이 형제 반품번호를 저장한다', async () => {
+    // 이 예약(id=7)과 형제(id=8)가 같은 접수번호(BK123)를 공유.
+    // 형제(8)는 이미 dhero_return_book_id = 'BK123-R'을 가진다.
+    mockGetReservation.mockResolvedValue(resInfo()) // 자신은 미접수
+    mockIsBulk.mockResolvedValue(true)
+    // 형제 조회: [7, 8] 반환 → 7 이외에 8이 있음
+    mockListSameBookIds.mockResolvedValue([7, 8])
+    // makeAdmin: siblingRow 에 형제 반품번호
+    const { admin, rpc } = makeAdmin({ error: null }, { dhero_return_book_id: 'BK123-R' })
+
+    const r = await registerDheroReturn(admin, 7)
+
+    // 두발히어로 API 미호출 — 형제 번호 재사용
+    expect(mockRegisterReturn).not.toHaveBeenCalled()
+    // 형제 반품번호를 자신에게 저장
+    expect(rpc).toHaveBeenCalledWith('update_reservation_dhero_shipment', expect.objectContaining({
+      p_reservation_id: 7,
+      p_return_book_id: 'BK123-R',
+    }))
+    expect(r.outcome).toBe('registered')
+  })
+
+  it('형제 반품번호 저장 시 현재 dhero 상태값(상태 코드·동 그룹·메타)을 덮어쓰지 않는다', async () => {
+    // 이미 크론이 한 번 실행돼 dheroStatus·dheroStatusCode·dheroDongGroup·dheroMeta 가 저장된 상태.
+    // 형제 반품번호를 저장할 때 이 값들을 그대로 넘겨야 한다(null·{}로 덮어쓰기 금지).
+    const currentDhero = {
+      dheroStatus: '배송완료',
+      dheroStatusCode: 5,
+      dheroDongGroup: 'DONG-G1',
+      dheroMeta: { bookId: 'BK123', status: 5, someKey: 'val' },
+    }
+    mockGetReservation.mockResolvedValue(resInfo(currentDhero))
+    mockIsBulk.mockResolvedValue(true)
+    mockListSameBookIds.mockResolvedValue([7, 8])
+    const { admin, rpc } = makeAdmin({ error: null }, { dhero_return_book_id: 'BK123-R' })
+
+    await registerDheroReturn(admin, 7)
+
+    const rpcCall = rpc.mock.calls.find(
+      (c: unknown[]) => c[0] === 'update_reservation_dhero_shipment'
+    )
+    const args = rpcCall?.[1] as Record<string, unknown>
+    // 기존 상태 값이 그대로 전달돼야 한다
+    expect(args?.p_status).toBe('배송완료')
+    expect(args?.p_status_code).toBe(5)
+    expect(args?.p_dong_group).toBe('DONG-G1')
+    expect(args?.p_meta).toEqual({ bookId: 'BK123', status: 5, someKey: 'val' })
+  })
+
+  it('형제 maybeSingle 조회에서 DB 오류가 반환되면 API를 정상 호출한다(fail-soft)', async () => {
+    // DB 에서 { data: null, error: {...} } 가 오면 형제 없음으로 처리해야 한다.
+    // 주석: dheroOrderUnits.ts 의 listSameBookReservationIds 가 tracking_number 동일 필터를
+    //        수행하며, dheroOrderLevelManual.test.ts 에서 'BOOK-1' vs 'OTHER' 로 검증됨.
+    mockGetReservation.mockResolvedValue(resInfo())
+    mockIsBulk.mockResolvedValue(true)
+    mockListSameBookIds.mockResolvedValue([7, 8])
+    // maybeSingle DB 오류 — siblingQueryError 인자로 전달
+    const { admin, rpc } = makeAdmin({ error: null }, null, { message: 'db error during sibling lookup' })
+    mockRegisterReturn.mockResolvedValue({ bookId: 'BK123-NEW-R', dongGroup: null })
+
+    const r = await registerDheroReturn(admin, 7)
+
+    // DB 오류는 null 로 처리 → 두발히어로 API 정상 호출
+    expect(mockRegisterReturn).toHaveBeenCalledWith('BK123')
+    expect(rpc).toHaveBeenCalledWith('update_reservation_dhero_shipment', expect.objectContaining({
+      p_return_book_id: 'BK123-NEW-R',
+    }))
+    expect(r.outcome).toBe('registered')
+  })
+
+  it('형제가 있어도 반품 접수가 없으면 두발히어로 API를 정상 호출한다', async () => {
+    // 형제(8)가 있지만 아직 dhero_return_book_id 가 없음
+    mockGetReservation.mockResolvedValue(resInfo())
+    mockIsBulk.mockResolvedValue(true)
+    mockListSameBookIds.mockResolvedValue([7, 8])
+    // siblingRow = null → 형제 반품 접수 없음
+    const { admin, rpc } = makeAdmin({ error: null }, null)
+    mockRegisterReturn.mockResolvedValue({ bookId: 'BK123-NEW-R', dongGroup: null })
+
+    const r = await registerDheroReturn(admin, 7)
+
+    // 두발히어로 API 정상 호출
+    expect(mockRegisterReturn).toHaveBeenCalledWith('BK123')
+    expect(rpc).toHaveBeenCalledWith('update_reservation_dhero_shipment', expect.objectContaining({
+      p_return_book_id: 'BK123-NEW-R',
+    }))
+    expect(r.outcome).toBe('registered')
   })
 })
 

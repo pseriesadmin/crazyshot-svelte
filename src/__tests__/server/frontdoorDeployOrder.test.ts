@@ -92,19 +92,28 @@ describe('request-notes — 출입번호 조회 분리', () => {
     vi.doMock('$env/static/private', () => ({ SUPABASE_SERVICE_ROLE_KEY: 'k' }))
     vi.doMock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'https://t.supabase.co' }))
     vi.doMock('@sveltejs/kit', () => ({ json: (data: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, async json() { return data } }) }))
+    // P3-4: listOrderReservationIds 를 단건 반환으로 mock
+    vi.doMock('$lib/server/dheroOrderUnits', () => ({
+      listOrderReservationIds: async (_: unknown, id: number) => [id],
+    }))
     vi.doMock('@supabase/supabase-js', () => ({
       createClient: () => ({
-        from: () => {
+        from: (table: string) => {
           let cols = ''
           const chain: Record<string, unknown> = {}
           chain.select = (c: string) => { cols = c; return chain }
           chain.eq = () => chain
+          // P3-4: 주 조회는 .in() — 상품명 조회(products)는 빈 배열, 예약 조회는 notes 행 반환
+          chain.in = async () => {
+            if (table === 'products') return { data: [], error: null }
+            return { data: [{ id: 5, notes: null, pickup_request_note: '경비실', return_request_note: null, product_id: null }], error: null }
+          }
           chain.maybeSingle = async () => {
             if (cols.includes('pickup_frontdoor_password')) {
               if (state.frontdoorThrows) throw new Error('column does not exist')
               return { data: { pickup_frontdoor_password: ' #0418* ' }, error: null }
             }
-            return { data: { notes: null, pickup_request_note: '경비실', return_request_note: null }, error: null }
+            return { data: null, error: null }
           }
           return chain
         },

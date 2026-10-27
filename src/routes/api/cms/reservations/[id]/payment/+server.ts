@@ -9,6 +9,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
+import { isDheroBooking } from '$lib/server/dheroOrderUnits'
 import { rpcRetryWithFailSoftLog } from '$lib/server/rpcRetryWithFailSoftLog'
 import { findOrderPaymentTransaction } from '$lib/server/findOrderPaymentTransaction'
 
@@ -137,15 +138,16 @@ export const PUT: RequestHandler = async ({ params, locals, request }) => {
     } catch (e) {
       console.error(`[refund/push-notify] fail-soft [${rsvId}]:`, e instanceof Error ? e.message : e)
     }
-    // 두발히어로 취소 — tracking_number 있을 때만 (배송 접수된 경우)
+    // 두발히어로 취소 — tracking_number + courier_code 있을 때만 (P3-2: isDheroBooking 가드)
     try {
       const { data: rsvRow } = await admin
         .from('rental_reservations')
-        .select('tracking_number')
+        .select('tracking_number, courier_code')
         .eq('id', rsvId)
         .maybeSingle()
       const trackingNumber = (rsvRow as { tracking_number?: string | null } | null)?.tracking_number
-      if (trackingNumber) {
+      const courierCode = (rsvRow as { courier_code?: string | null } | null)?.courier_code
+      if (trackingNumber && isDheroBooking(courierCode)) {
         try {
           await cancelDelivery(trackingNumber)
         } catch (e) {

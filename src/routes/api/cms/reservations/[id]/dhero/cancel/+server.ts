@@ -15,7 +15,8 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { cancelDelivery, DheroApiError } from '$lib/server/dhero'
-import { listSameBookReservationIds } from '$lib/server/dheroOrderUnits'
+import { listSameBookReservationIds, isDheroBooking } from '$lib/server/dheroOrderUnits'
+import { isAlreadyCanceledError } from '$lib/server/dheroCancelErrors'
 import type { RequestHandler } from './$types'
 
 export const PUT: RequestHandler = async ({ params, locals }) => {
@@ -32,16 +33,22 @@ export const PUT: RequestHandler = async ({ params, locals }) => {
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-  // tracking_number 조회
+  // tracking_number + courier_code 조회
   const { data: resRow } = await admin
     .from('rental_reservations')
-    .select('tracking_number')
+    .select('tracking_number, courier_code')
     .eq('id', reservationId)
     .maybeSingle()
 
   const trackingNumber = (resRow as Record<string, unknown> | null)?.tracking_number as string | null
   if (!trackingNumber) {
     return json({ error: '운송장 번호가 없습니다. 배송접수 후 취소가 가능합니다.' }, { status: 422 })
+  }
+
+  // courier_code 가드: 두발히어로가 아닌 타 택배사 운송장이면 API 호출 없이 건너뜀 (P3-2)
+  const courierCode = (resRow as Record<string, unknown> | null)?.courier_code as string | null | undefined
+  if (!isDheroBooking(courierCode)) {
+    return json({ ok: true, dhero_skipped: true })
   }
 
   try {
@@ -59,7 +66,21 @@ export const PUT: RequestHandler = async ({ params, locals }) => {
     return json({ ok: true })
   } catch (e) {
     if (e instanceof DheroApiError) {
+      if (e.statusCode === 412 && isAlreadyCanceledError(e)) {
+        // (a) 이미 취소된 배송 — 성공에 준하게 처리 (dhero-delivery-api.md §5)
+        // 두발히어로 쪽에서 이미 취소된 것이므로 tracking_number 초기화(재접수 가능 상태로 복원).
+        // fail-soft: 초기화 실패 시에도 ok:true 유지 (취소 자체는 이미 완료 상태)
+        try {
+          for (const id of await listSameBookReservationIds(admin, reservationId, trackingNumber)) {
+            await admin.rpc('clear_reservation_tracking_number', { p_reservation_id: id })
+          }
+        } catch (rpcErr) {
+          console.error('[dhero/cancel] already-canceled tracking_number 초기화 RPC 실패(fail-soft):', rpcErr instanceof Error ? rpcErr.message : rpcErr)
+        }
+        return json({ ok: true, already_canceled: true })
+      }
       if (e.statusCode === 412) {
+        // (b) 취소 불가 상태(배송 출발·완료 등) 또는 메시지 불명확 → fail-safe: 취소불가로 처리
         return json({
           ok: false,
           dhero_cancel_failed: true,

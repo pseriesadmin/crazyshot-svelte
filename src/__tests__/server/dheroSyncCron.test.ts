@@ -194,6 +194,138 @@ describe('cron dhero-sync — 자동전이 연동', () => {
     )
   })
 
+  it('C-4b — 취소됐지만 dhero_return_book_id가 있는 건은 반납 leg 동기화가 필요하므로 제외하지 않는다', async () => {
+    // 발송이 취소됐더라도 반납 접수(dhero_return_book_id)가 붙은 건은
+    // 반납 leg 상태 동기화가 필요해서 pickupTargets 에서 제외하면 안 된다.
+    const canceledWithReturn = {
+      id: 108,
+      tracking_number: 'BOOK-108',
+      dhero_return_book_id: 'RETURN-108',
+      dhero_status_code: 0,
+      dhero_dong_group: null,
+      dhero_meta: { canceledAt: '2026-10-27 15:34:52' },
+      status: 'return_requested',
+      pickup_method: 'crazydelivery',
+      return_method: 'crazydelivery',
+    }
+    setupFromMocks([canceledWithReturn])
+    mockGetDeliveryByBookId.mockResolvedValue({ status: 0, bookId: 'BOOK-108' })
+    mockAdminRpc.mockResolvedValue({ data: null, error: null })
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', { headers: { authorization: 'Bearer test-cron-secret' } })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    await GET({ request } as Parameters<typeof GET>[0])
+
+    // dhero_return_book_id 가 있으므로 canceledAt 필터를 적용하지 않는다 — API 는 호출된다
+    expect(mockGetDeliveryByBookId).toHaveBeenCalledWith('BOOK-108')
+  })
+
+  it('C-4c — dhero_meta가 null인 예약은 취소 건으로 보지 않는다', async () => {
+    // dhero_meta가 아예 null 인 예약(한 번도 동기화되지 않은 건)을 취소로 잘못 판정해서는 안 된다.
+    const neverSynced = {
+      id: 107,
+      tracking_number: 'BOOK-107',
+      dhero_return_book_id: null,
+      dhero_status_code: null,
+      dhero_dong_group: null,
+      dhero_meta: null,
+      status: 'shipped',
+      pickup_method: 'crazydelivery',
+      return_method: 'crazydelivery',
+    }
+    setupFromMocks([neverSynced])
+    mockGetDeliveryByBookId.mockResolvedValue({ status: 2, bookId: 'BOOK-107' })
+    mockAdminRpc.mockResolvedValue({ data: null, error: null })
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', { headers: { authorization: 'Bearer test-cron-secret' } })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    await GET({ request } as Parameters<typeof GET>[0])
+
+    // dhero_meta가 null 이라 canceledAt이 없다 → 정상 조회됨
+    expect(mockGetDeliveryByBookId).toHaveBeenCalledWith('BOOK-107')
+  })
+
+  it('C-4 — 취소된 접수(canceledAt이 dhero_meta에 기록됨)는 후속 크론에서 조회하지 않는다', async () => {
+    // 이미 이전 크론 실행에서 취소 라벨이 dhero_meta.canceledAt 과 함께 저장된 상태.
+    // dhero_status_code 는 0(취소도 코드가 0) — isDheroTerminalStatus(0)=false 라 기존엔 계속 조회.
+    // 이번 수정으로 canceledAt 이 있으면 pickupTargets 에서 제외되어야 한다.
+    const canceledRow = {
+      id: 109,
+      tracking_number: 'BOOK-109',
+      dhero_return_book_id: null,
+      dhero_status_code: 0,
+      dhero_dong_group: null,
+      dhero_meta: { canceledAt: '2026-10-27 15:34:52', canceledReason: '(고객사취소) 테스트' },
+      status: 'confirmed',
+      pickup_method: 'crazydelivery',
+      return_method: 'crazydelivery',
+    }
+    setupFromMocks([canceledRow])
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', { headers: { authorization: 'Bearer test-cron-secret' } })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    const resp = await GET({ request } as Parameters<typeof GET>[0])
+    await resp.json()
+
+    // 취소된 접수는 두발히어로 API를 다시 호출하지 않는다
+    expect(mockGetDeliveryByBookId).not.toHaveBeenCalled()
+    // 자동전이도 시도하지 않는다
+    expect(mockMaybeAutoAdvance).not.toHaveBeenCalled()
+  })
+
+  it('P3-2 — courier_code = "CJ대한통운" 예약은 pickupTargets 필터에서 제외되어 두발히어로 API 호출 없음', async () => {
+    // 타 택배사 운송장은 두발히어로 동기화 대상이 아님 (isDheroBooking 가드)
+    setupFromMocks([{
+      id: 200,
+      tracking_number: 'CJ-1234567890',
+      courier_code: 'CJ대한통운',
+      dhero_return_book_id: null,
+      dhero_status_code: null,
+      dhero_dong_group: null,
+      dhero_meta: null,
+      status: 'shipped',
+      pickup_method: 'delivery',
+      return_method: 'delivery',
+    }])
+    mockAdminRpc.mockResolvedValue({ data: null, error: null })
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', {
+      headers: { authorization: 'Bearer test-cron-secret' },
+    })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    const resp = await GET({ request } as Parameters<typeof GET>[0])
+    const body = await resp.json()
+
+    expect(body.ok).toBe(true)
+    expect(mockGetDeliveryByBookId).not.toHaveBeenCalled()
+  })
+
+  it('P3-2 — courier_code = null 예약은 두발히어로 API 호출 (하위호환)', async () => {
+    // courier_code 컬럼이 없거나 null인 구형 예약은 두발히어로로 간주
+    setupFromMocks([{
+      id: 201,
+      tracking_number: 'DHERO-OLD-100',
+      courier_code: null,
+      dhero_return_book_id: null,
+      dhero_status_code: null,
+      dhero_dong_group: null,
+      dhero_meta: null,
+      status: 'shipped',
+      pickup_method: 'crazydelivery',
+      return_method: 'crazydelivery',
+    }])
+    mockGetDeliveryByBookId.mockResolvedValue({ status: 1, bookId: 'DHERO-OLD-100' })
+    mockAdminRpc.mockResolvedValue({ data: null, error: null })
+
+    const request = new Request('https://test.com/api/cron/dhero-sync', {
+      headers: { authorization: 'Bearer test-cron-secret' },
+    })
+    const { GET } = await import('../../routes/api/cron/dhero-sync/+server')
+    await GET({ request } as Parameters<typeof GET>[0])
+
+    expect(mockGetDeliveryByBookId).toHaveBeenCalledWith('DHERO-OLD-100')
+  })
+
   it('C-3 — EC-3: return_book_id 배송완료인데 예약 status가 in_use → maybeAutoAdvance 호출되지만 내부에서 스킵', async () => {
     const reservation = {
       id: 103,
