@@ -69,8 +69,8 @@ vi.mock('$lib/server/getReservationForDhero', () => ({
   getReservationForDhero: (...args: unknown[]) => mockGetReservationForDhero(...args),
 }))
 
-vi.mock('$lib/server/isBulkDeliveryMethod', () => ({
-  isBulkDeliveryMethod: vi.fn().mockResolvedValue(false),
+vi.mock('$lib/server/isDheroIntegrationMethod', () => ({
+  isDheroIntegrationMethod: vi.fn().mockResolvedValue(false),
 }))
 
 vi.mock('$lib/server/push', () => ({
