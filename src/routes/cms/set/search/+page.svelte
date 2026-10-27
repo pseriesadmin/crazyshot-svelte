@@ -157,11 +157,18 @@
             />
             <span class="param-def">{g.def.fuzzy}</span>
           </label>
-          <label class="param-row">
+          <div class="param-row">
             <span class="param-name">앞부분 일치 허용<small>prefix</small></span>
-            <input type="checkbox" class="param-check" checked={g.group.prefix} onchange={(e) => (g.group.prefix = e.currentTarget.checked)} />
+            <button
+              type="button"
+              class="combo-btn"
+              class:combo-active={g.group.prefix}
+              aria-pressed={g.group.prefix}
+              aria-label={g.group.prefix ? '앞부분 일치 허용 켜짐' : '앞부분 일치 허용 꺼짐'}
+              onclick={() => (g.group.prefix = !g.group.prefix)}
+            >{g.group.prefix ? 'ON' : 'OFF'}</button>
             <span class="param-def">{g.def.prefix ? '켜짐' : '꺼짐'}</span>
-          </label>
+          </div>
         </div>
       {/each}
 
@@ -182,16 +189,30 @@
           />
           <span class="param-def">{data.defaults.semantic.weight}</span>
         </label>
-        <label class="param-row">
+        <div class="param-row">
           <span class="param-name">크레이지챗 추천에 사용<small>semantic.recommend</small></span>
-          <input type="checkbox" class="param-check" checked={draft.semantic.recommend} onchange={(e) => (draft.semantic.recommend = e.currentTarget.checked)} />
+          <button
+            type="button"
+            class="combo-btn"
+            class:combo-active={draft.semantic.recommend}
+            aria-pressed={draft.semantic.recommend}
+            aria-label={draft.semantic.recommend ? '크레이지챗 추천에 사용 켜짐' : '크레이지챗 추천에 사용 꺼짐'}
+            onclick={() => (draft.semantic.recommend = !draft.semantic.recommend)}
+          >{draft.semantic.recommend ? 'ON' : 'OFF'}</button>
           <span class="param-def">{data.defaults.semantic.recommend ? '켜짐' : '꺼짐'}</span>
-        </label>
-        <label class="param-row">
+        </div>
+        <div class="param-row">
           <span class="param-name">관찰 기록(응답은 안 바뀜)<small>semantic.shadow</small></span>
-          <input type="checkbox" class="param-check" checked={draft.semantic.shadow} onchange={(e) => (draft.semantic.shadow = e.currentTarget.checked)} />
+          <button
+            type="button"
+            class="combo-btn"
+            class:combo-active={draft.semantic.shadow}
+            aria-pressed={draft.semantic.shadow}
+            aria-label={draft.semantic.shadow ? '관찰 기록 켜짐' : '관찰 기록 꺼짐'}
+            onclick={() => (draft.semantic.shadow = !draft.semantic.shadow)}
+          >{draft.semantic.shadow ? 'ON' : 'OFF'}</button>
           <span class="param-def">{data.defaults.semantic.shadow ? '켜짐' : '꺼짐'}</span>
-        </label>
+        </div>
       </div>
 
       <div class="foot-row">
@@ -270,7 +291,32 @@
     background: var(--cs-white); font: var(--text-pc-body-14); color: var(--cs-text);
   }
   .param-input.invalid { border-color: var(--cs-red-badge); }
-  .param-check { width: 20px; height: 20px; justify-self: start; }
+  /* cms-uiux.md §14 콤보 버튼(combo-btn) — ON/OFF 텍스트 토글(체크박스 신규 작성 금지) */
+  .combo-btn {
+    justify-self: start;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--cms-radius-md);
+    border: 1px solid rgba(16, 11, 50, 0.15);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    white-space: nowrap;
+  }
+  .combo-btn:hover:not(:disabled) {
+    border-color: rgba(59, 47, 138, 0.35);
+    color: var(--cs-text);
+  }
+  .combo-btn.combo-active {
+    background: var(--cs-purple);
+    border-color: var(--cs-purple);
+    color: #fff;
+  }
+  .combo-btn.combo-active:disabled { opacity: 1; cursor: default; }
+  .combo-btn:disabled:not(.combo-active) { opacity: 0.38; cursor: not-allowed; }
 
   .foot-row { display: flex; gap: 10px; align-items: center; margin-top: 24px; }
   .reason-input {
