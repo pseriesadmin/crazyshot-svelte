@@ -221,20 +221,21 @@
     }
   }
 
-  /* 더보기 버튼 — front-uiux §5 보조 버튼 크기 값(모바일 높이 44·좌우 20·30px 반경, 가로 100%) + 옅은 퍼플 면(2026-10-27 Stephen 지시: BG --cs-purple-op10, 글자 --cs-purple-dark(짙은 퍼플), 호버는 배경만 --cs-purple-pale, 글자 크기는 모바일 14px(--text-m-script-14B)·PC 16px로 모바일이 한 단계 작게) */
+  /* 더보기 버튼 — front-uiux §5 보조 버튼 값에서 높이만 30% 줄임(좌우 20·30px 반경, 가로 100%) + 옅은 퍼플 면(2026-10-27 Stephen 지시: BG --cs-lilac(더 옅게), 글자 --cs-purple-dark(짙은 퍼플), 호버는 배경만 한 단계 진한 --cs-purple-op10, 높이 30% 축소(모바일 31·PC 35), 글자 크기는 모바일 14px(--text-m-script-14B)·PC 16px로 모바일이 한 단계 작게) */
   .more-wrap {
     display: flex;
     justify-content: center;
     margin-top: 40px;
   }
   .more-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 100%;
-    height: 44px;
+    height: 31px;                /* 기존 44px × 0.7(30% 축소, 2026-10-27 Stephen 지시) */
     padding: 0 20px;
-    background: var(--cs-purple-op10);
+    background: var(--cs-lilac);
     color: var(--cs-purple-dark);
     border: none;
     border-radius: var(--radius-xl);
@@ -243,19 +244,26 @@
     transition: background 0.15s;
     white-space: nowrap;
   }
-  .more-btn:hover { background: var(--cs-purple-pale); }
+  .more-btn:hover { background: var(--cs-purple-op10); }
   .more-btn:disabled { color: var(--cs-text-light); cursor: not-allowed; }
-  .more-btn:disabled:hover { background: var(--cs-purple-op10); }
+  .more-btn:disabled:hover { background: var(--cs-lilac); }
+  /* 눈에 보이는 높이만 줄이고 눌리는 영역은 터치 타겟 44px(front-uiux §7) 이상 유지 — 보이지 않는 영역을 위아래로 넓힌다 */
+  .more-btn::after {
+    content: '';
+    position: absolute;
+    inset: -7px 0;               /* 31px + 14px = 45px */
+  }
 
   @media (min-width: 768px) {
-    /* PC — 높이 50·좌우 30·PC 타이포(16px), 가로폭은 320px로 제한하고 가운데 정렬 */
+    /* PC — 높이 35(기존 50 × 0.7)·좌우 30·PC 타이포(16px), 가로폭은 320px로 제한하고 가운데 정렬 */
     .more-wrap { margin-top: 60px; }
     .more-btn {
       max-width: 320px;
-      height: 50px;
+      height: 35px;              /* 기존 50px × 0.7 */
       padding: 0 30px;
       font: var(--text-pc-title-16);
     }
+    .more-btn::after { inset: -5px 0; }  /* 35px + 10px = 45px */
   }
 
   /* PC — 검색 결과 없음: 모바일(×0.60) 값을 원래 크기로 복원 */

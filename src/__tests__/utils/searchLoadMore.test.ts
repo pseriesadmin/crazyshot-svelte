@@ -220,14 +220,26 @@ describe('검색 화면 배선 (소스 고정)', () => {
     expect(btn).not.toContain('더보기')
   })
 
-  it('버튼 배경은 옅은 퍼플 토큰(--cs-purple-op10), 글자는 짙은 퍼플 토큰(--cs-purple-dark), 호버는 배경색만 --cs-purple-pale로 바꾼다 — 보더·그림자·하드코딩 hex 없음', () => {
+  it('버튼 배경은 더 옅은 퍼플 토큰(--cs-lilac), 글자는 짙은 퍼플 토큰(--cs-purple-dark), 호버는 한 단계 진한 --cs-purple-op10으로 배경색만 바꾼다 — 보더·그림자·하드코딩 hex 없음', () => {
     const css = grid.slice(grid.indexOf('.more-btn {'), grid.indexOf('/* PC — 검색 결과 없음'))
-    expect(css).toMatch(/\.more-btn\s*\{[^}]*background:\s*var\(--cs-purple-op10\)/)
+    expect(css).toMatch(/\.more-btn\s*\{[^}]*background:\s*var\(--cs-lilac\)/)
     expect(css).toMatch(/\.more-btn\s*\{[^}]*color:\s*var\(--cs-purple-dark\)/)
-    expect(css).toMatch(/\.more-btn:hover\s*\{\s*background:\s*var\(--cs-purple-pale\);?\s*\}/)
+    expect(css).toMatch(/\.more-btn:hover\s*\{\s*background:\s*var\(--cs-purple-op10\);?\s*\}/)
+    expect(css).toMatch(/\.more-btn:disabled:hover\s*\{\s*background:\s*var\(--cs-lilac\);?\s*\}/)
     expect(css).toMatch(/\.more-btn\s*\{[^}]*border:\s*none/)
     expect(css).not.toMatch(/box-shadow|outline/)
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,6}\b/)
+  })
+
+  it('버튼 높이는 기존(모바일 44·PC 50)에서 30% 줄인 모바일 31px·PC 35px이고, 터치 영역은 ::after로 44px 이상 유지한다', () => {
+    const css = grid.slice(grid.indexOf('.more-btn {'), grid.indexOf('/* PC — 검색 결과 없음'))
+    const base = css.slice(css.indexOf('.more-btn {'), css.indexOf('}', css.indexOf('.more-btn {')))
+    expect(base).toMatch(/height:\s*31px/)
+    const pc = css.slice(css.indexOf('@media (min-width: 768px)'))
+    expect(pc).toMatch(/\.more-btn\s*\{[^}]*height:\s*35px/)
+    // 눈에 보이는 높이만 줄이고 눌리는 영역은 지침(터치 타겟 44px)대로 — 보이지 않는 ::after로 위아래를 넓힌다
+    expect(css).toMatch(/\.more-btn::after\s*\{[^}]*position:\s*absolute/)
+    expect(css).toMatch(/\.more-btn\s*\{[^}]*position:\s*relative/)
   })
 
   it('글자 크기는 PC보다 모바일이 한 단계 작다 — 모바일 --text-m-script-14B(14px), PC(768px+) --text-pc-title-16(16px)', () => {
