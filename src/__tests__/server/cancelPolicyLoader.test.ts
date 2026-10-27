@@ -54,8 +54,27 @@ describe('cancelPolicyLoader — 취소 판정 조회', () => {
       { id: 1, status: 'confirmed', tracking_number: null, start_date: '2026-10-05', pickup_method: 'delivery' },
       { id: 2, status: 'confirmed', tracking_number: null, start_date: '2026-10-05', pickup_method: 'visit' },
     ], now)
-    expect(kinds.get('1')).toBe('after_deadline') // 택배: 10/3 19시 마감
+    expect(kinds.get('1')).toBe('free')           // 택배(배송형, 2026-10-26 정책): 배송 당일 09시 전까지 free — 옛 2일 전 19시 마감은 취소에 적용하지 않음
     expect(kinds.get('2')).toBe('free')           // 방문: 10/4 19시 마감
+    // 배송 당일 09시 이후는 inquiry(취소문의), 방문은 기존처럼 마감 후 after_deadline
+    const later = await loadCancelKinds(client, [
+      { id: 1, status: 'confirmed', tracking_number: 'T1', start_date: '2026-10-05', pickup_method: 'delivery' },
+      { id: 2, status: 'confirmed', tracking_number: null, start_date: '2026-10-05', pickup_method: 'visit' },
+    ], kst(2026, 10, 5, 9, 0))
+    expect(later.get('1')).toBe('inquiry')
+    expect(later.get('2')).toBe('after_start')
+  })
+
+  it('배송형 + 운송장 등록: 09시 전에는 취소 가능(free), 비배송형 운송장은 기존대로 unavailable', async () => {
+    const client = fakeClient({ methods: METHODS, itemsByReservation: [], itemsByOrder: [], siblings: [] })
+    const kinds = await loadCancelKinds(client, [
+      { id: 1, status: 'confirmed', tracking_number: 'T1', start_date: '2026-10-29', pickup_method: 'delivery' },
+      { id: 2, status: 'confirmed', tracking_number: 'T2', start_date: '2026-10-29', pickup_method: 'visit' },
+      { id: 3, status: 'shipped', tracking_number: 'T3', start_date: '2026-10-29', pickup_method: 'delivery' },
+    ], kst(2026, 10, 28, 12, 0))
+    expect(kinds.get('1')).toBe('free')
+    expect(kinds.get('2')).toBe('unavailable')
+    expect(kinds.get('3')).toBe('inquiry')
   })
 
   it('형제 예약이 이미 대여 시작(after_start)이면 주문 전체가 취소 불가 — 본인 예약은 아직 먼 미래여도', async () => {
@@ -82,6 +101,34 @@ describe('cancelPolicyLoader — 취소 판정 조회', () => {
       { id: 1, status: 'confirmed', tracking_number: null, start_date: '2099-12-31', pickup_method: 'visit' },
     ], kst(2026, 9, 30, 12))
     expect(kinds.get('1')).toBe('free')
+  })
+
+  // 2026-10-27 — ACTIVE 에 shipped 추가: 반출된 형제 예약이 있으면 같은 주문의 다른 예약 취소도 막힌다(의도된 동작)
+  it('비배송형 shipped 형제 → unavailable 이 주문 전체로 번진다(본인은 먼 미래 confirmed 여도)', async () => {
+    const client = fakeClient({
+      methods: METHODS,
+      itemsByReservation: [{ reservation_id: 1, order_id: 10 }],
+      itemsByOrder: [{ reservation_id: 1, order_id: 10 }, { reservation_id: 2, order_id: 10 }],
+      siblings: [{ id: 2, status: 'shipped', tracking_number: null, start_date: '2026-09-30', pickup_method: 'visit' }],
+    })
+    const kinds = await loadCancelKinds(client, [
+      { id: 1, status: 'confirmed', tracking_number: null, start_date: '2099-12-31', pickup_method: 'visit' },
+    ], kst(2026, 9, 30, 12))
+    expect(kinds.get('1')).toBe('unavailable')
+  })
+
+  it('배송형 shipped 형제 → inquiry, 본인이 free 여도 주문 전체는 inquiry (취소문의)', async () => {
+    const client = fakeClient({
+      methods: METHODS,
+      itemsByReservation: [{ reservation_id: 1, order_id: 10 }],
+      itemsByOrder: [{ reservation_id: 1, order_id: 10 }, { reservation_id: 2, order_id: 10 }],
+      siblings: [{ id: 2, status: 'shipped', tracking_number: 'T-1', start_date: '2099-12-31', pickup_method: 'delivery' }],
+    })
+    const kinds = await loadCancelKinds(client, [
+      { id: 1, status: 'confirmed', tracking_number: null, start_date: '2099-12-31', pickup_method: 'delivery' },
+    ], kst(2026, 9, 30, 12))
+    expect(kinds.get('1')).toBe('inquiry')
+    expect(await loadOrderSiblingKinds(client, 10, 1, kst(2026, 9, 30, 12))).toEqual(['inquiry'])
   })
 
   it('loadOrderSiblingKinds: 형제의 판정 목록(본인 제외) 반환', async () => {

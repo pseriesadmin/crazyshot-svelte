@@ -103,6 +103,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     trackingNumber: reservation.tracking_number,
     startDate: reservation.start_date,
     rule: ruleFromMethodRow(methodRow),
+    isDeliveryType: methodRow?.is_delivery_type === true,
     nowMs,
   })
   const siblingKinds = orderId != null && ownKind === 'free' && reservation.status === 'confirmed'
@@ -111,12 +112,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const cancelKind = worstCancelKind([ownKind, ...siblingKinds])
 
   if (cancelKind !== 'free') {
-    const error = cancelKind === 'after_start'
+    const error = cancelKind === 'inquiry'
+      ? '배송 당일 오전 9시가 지나 바로 취소할 수 없습니다.\n[취소문의]로 담당자에게 문의해주세요.'
+      : cancelKind === 'after_start'
       ? '대여가 시작된 예약은 바로 취소할 수 없습니다.\n고객센터 채팅으로 문의해주세요.'
       : cancelKind === 'after_deadline'
         ? '수령 신청 마감이 지나 바로 취소할 수 없습니다.\n고객센터 채팅으로 문의해주세요.'
         : '현재는 예약신청취소가 어렵습니다.\n고객센터 채팅으로 문의해주세요.'
-    return json({ ok: false, error }, { status: 403 })
+    return json({ ok: false, code: cancelKind === 'inquiry' ? 'use_inquiry' : undefined, error }, { status: 403 })
   }
 
   // 고객 취소 표식(fail-soft) — 마이페이지에서 "취소중"(관리자 취소확인 대기)으로 표시하기 위함.

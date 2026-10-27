@@ -1,8 +1,11 @@
 import { redirect } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
 import { groupRentalsByOrder, type RentalGroupItem } from '$lib/utils/groupRentalsByOrder'
+import { buildJourneyStepDetails } from '$lib/utils/journeyStepInfo'
+import { liveDheroBookings } from '$lib/utils/dheroLabels'
 import { loadPaymentReceipts, pickCardPayment, type CardPaymentInfo } from '$lib/server/account/loadPaymentReceipts'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
 import { env } from '$env/dynamic/private'
@@ -31,6 +34,10 @@ export interface MyRental {
   // 같은 주문(장바구니 1건)의 상품 목록 — 카드 1장에 모두 표시(2026-10-26)
   items:                  RentalGroupItem[]
   returnTargetId:         string
+  /** 택배사(운송장 등록 시) — 단계 배지 설명용 */
+  courier_code:           string | null
+  /** 단계 배지를 눌렀을 때 배지 아래에 보여줄 설명(상태 안내문 + 실제 정보) */
+  journeyDetails:         Record<string, string[] | undefined>
   /** 카드 영수증·취소내역 버튼 정보 — 결제 행이 없으면(신청대기 등) null */
   payment:                CardPaymentInfo | null
   cancelKind:             CancelKind
@@ -46,11 +53,13 @@ export interface MyRental {
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
+  // 익명(채팅 게스트) 세션은 가입 전 계정이라 예약이 없다 — 빈 목록 대신 로그인으로 보낸다(문자·알림 링크를 게스트 세션 브라우저로 열 때, 2026-10-27)
+  if (!isRealMemberSession(session)) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
   if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_meta, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
     .eq('user_id', session.user.id)
     // 취소중(고객이 취소했고 관리자 확인 전) 예약도 목록에 남긴다 — 관리자가 취소확인하면 /account/cancel로 이동
     .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
@@ -60,6 +69,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   if (error) {
     return { rentals: [] as MyRental[] }
   }
+
+  // 두발히어로 쪽에서 취소된 접수번호는 고객에게 운송장으로 보여주지 않는다(취소돼도 번호는 남아 있음 — CMS 재접수 시 새 번호로 바뀜, 2026-10-27)
+  const liveBookingIds = new Set(
+    liveDheroBookings(((data ?? []) as Array<Record<string, unknown>>).map(r => ({
+      id: String(r.id),
+      trackingNumber: (r.tracking_number as string | null) ?? null,
+      courierCode: (r.courier_code as string | null) ?? null,
+      dheroMeta: (r.dhero_meta as Record<string, unknown> | null) ?? null,
+    }))).map(u => u.id),
+  )
 
   // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
   await applyParentFieldsToRowProducts(data ?? [], ['name', 'category'])
@@ -98,7 +117,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     for (const x of (subs ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
   }
 
-  const rows: Array<Omit<MyRental, 'items' | 'returnTargetId' | 'payment'>> = (data ?? []).map((r: Record<string, unknown>) => {
+  const rows: Array<Omit<MyRental, 'items' | 'returnTargetId' | 'payment' | 'journeyDetails'>> = (data ?? []).map((r: Record<string, unknown>) => {
     const product = (r.products as { name: string; category: string } | null) ?? null
     const status = contractStatus.get(String(r.id))
     return {
@@ -114,7 +133,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       product_category:       product?.category ?? null,
       has_signed_contract:    status?.signed ?? false,
       pending_contract_token: status?.pendingToken ?? null,
-      tracking_number:        r.tracking_number as string | null,
+      tracking_number:        liveBookingIds.has(String(r.id)) ? (r.tracking_number as string | null) : null,
+      courier_code:           liveBookingIds.has(String(r.id)) ? ((r.courier_code as string | null) ?? null) : null,
       returnSubmittable:      RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null,
       returnSubmitted:        submittedIds.has(String(r.id)),
       cancelKind: cancelKinds.get(String(r.id)) ?? 'unavailable',
@@ -131,7 +151,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const payments = serviceRoleKey
     ? await loadPaymentReceipts(createClient(getSupabaseUrl(), serviceRoleKey), session.user.id, reservationIds)
     : new Map<string, CardPaymentInfo>()
-  const rentals: MyRental[] = grouped.map(g => ({ ...g, payment: pickCardPayment(g.items.map(i => i.id), payments) }))
+  const rowById = new Map(rows.map(r => [String(r.id), r]))
+  const rentals: MyRental[] = grouped.map(g => {
+    // 운송장은 같은 주문의 구성원 중 등록된 첫 번째 값을 쓴다(두발히어로 접수는 주문 단위)
+    const tracked = g.items.map(i => rowById.get(String(i.id))).find(r => !!r?.tracking_number)
+    return {
+      ...g,
+      payment: pickCardPayment(g.items.map(i => i.id), payments),
+      journeyDetails: buildJourneyStepDetails({
+        status: g.status, start_date: g.start_date, end_date: g.end_date, created_at: g.created_at, return_time: g.return_time,
+        tracking_number: tracked?.tracking_number ?? g.tracking_number, courier_code: tracked?.courier_code ?? g.courier_code,
+      }),
+    }
+  })
 
   return { rentals }
 }

@@ -1,6 +1,7 @@
 // GET /account/rental/[id] — hold 예약 상세 확인 화면 (본인 소유 예약만)
 // 소유권 검증 패턴: contract/+page.server.ts와 동일 — 없으면 /account/rental로 redirect
 import { redirect } from '@sveltejs/kit'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -38,6 +39,8 @@ export interface ReservationAmount {
 
 export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
+  // 익명(채팅 게스트) 세션은 가입 전 계정이라 로그인으로 보낸다(빈 화면 방지, 2026-10-27)
+  if (!isRealMemberSession(session)) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
   if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // 소유권 확인은 RLS 클라이언트로 — user_id 불일치 시 조회 자체가 안 됨

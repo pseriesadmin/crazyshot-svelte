@@ -80,6 +80,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
       { status: 409 },
     )
   }
+  // 배송형 09시 이후는 취소 요청이 아니라 [취소문의] 대상 (2026-10-26)
+  if (kind === 'inquiry') {
+    return json(
+      { ok: false, code: 'use_inquiry', error: '배송 당일 오전 9시가 지나 [취소문의]로 접수해주세요.' },
+      { status: 409 },
+    )
+  }
   // 마감 전(free)·마감 후(after_deadline) 모두 요청 접수 — 대여 시작 후·운송장 등록은 고객센터 문의
   if (kind !== 'free' && kind !== 'after_deadline') {
     return json(

@@ -45,6 +45,8 @@ export type ActionCardType =
   | 'identity_approved'
   // 예약 취소 요청 (고객 발신, 마감 후~대여 시작 전 — 고객·관리자 양쪽 채팅에 동시 노출, 관리자가 수동 처리)
   | 'cancel_request'
+  // 예약 취소 문의 (고객 발신, 배송형 배송 당일 09시 이후·반출 후 — 고객 CTA 는 대여 정보, 관리자 CTA 는 예약 패널)
+  | 'cancel_inquiry'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 

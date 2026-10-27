@@ -11,10 +11,11 @@
     returnDay?: 'before' | 'reached'   // 고객 화면 전용(2026-10-22): 대여중일 때만 의미 — before=대여중이 현재·반납중 칸은 비활성(기존 표시), reached=반납 안내 시각 도달(칸 이름이 '반납일'로 바뀌며 현재 단계). 고객이 반납 제출하면 상태가 반납중이 되어 이름만 '반납중'으로 바뀜
     fluid?: boolean                    // slim 과 함께 — 고객 화면용: 컨테이너 폭에 맞춰 원형 배지·간격이 줄어든다(34~46px). 기본 false(CMS 헤더는 고정 48px)
     slim?: boolean                     // 패널 헤더용 슬림형 — 한 줄(점+라벨 가로 배치), 현재 단계 점에 옅은 퍼플 물결 모션 반복(2026-10-22). 기본 false
+    details?: Record<string, string[] | undefined>  // 고객 화면 전용(2026-10-26): 단계별(status 키) 설명 텍스트 — 주어지면 해당 단계 배지를 눌러 선택할 수 있고, 선택한 단계의 텍스트가 배지 줄 아래에 나온다. 미지정 시 기존과 동일(비선택)
     children?: Snippet    // bg 박스 안, 단계 표시 아래에 넣을 추가 콘텐츠(선택 — CMS 취소·환불 사유 입력 등, 미지정 시 기존과 동일)
   }
 
-  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, slim = false, fluid = false, returnDay }: Props = $props()
+  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, slim = false, fluid = false, returnDay, details }: Props = $props()
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
@@ -51,6 +52,23 @@
   }
 
   let isCancelled = $derived(status === 'cancelled' || status === 'damage_claimed')
+
+  // 단계 배지 선택 → 배지 줄 아래 설명 텍스트(details 가 있을 때만). 같은 배지를 다시 누르면 닫힌다.
+  let selectedKey = $state<string | null>(null)
+  const infoId = `journey-info-${Math.random().toString(36).slice(2, 8)}`
+  function stepKey(step: { status: string }): string {
+    // '반납일'로 이름이 바뀐 칸(returnDay=reached)도 데이터 키는 return_requested
+    return step.status
+  }
+  function isSelectable(step: { status: string }): boolean {
+    return !!details && !!details[stepKey(step)] && step.status !== 'cart'
+  }
+  function toggleStep(step: { status: string }): void {
+    if (!isSelectable(step)) return
+    const k = stepKey(step)
+    selectedKey = selectedKey === k ? null : k
+  }
+  let selectedLines = $derived(details && selectedKey ? (details[selectedKey] ?? []) : [])
 
   // 모바일 아코디언 등 늦게 렌더링/확장되는 컨테이너에 들어갈 때 overflow-x 스크롤 위치가
   // 0이 아닌 상태로 초기화되어 좌측이 잘려 보이는 문제 방지 — 항상 맨 왼쪽(신청 단계)부터 보이도록 고정
@@ -107,13 +125,27 @@
           class:done={i < currentStepIndex}
           class:active={i === currentStepIndex}
           class:last={i === displaySteps.length - 1}
+          class:selected={isSelectable(step) && selectedKey === stepKey(step)}
           style="--i: {i}"
         >
           {#if slim}
             <!-- 슬림형: 원형 배지(기존 점의 4배) 안에 상태 텍스트를 넣는다 -->
-            <div class="step-circle" aria-label={step.label}>
-              <span class="step-circle-text">{#each badgeLines(step.label) as line}<span>{line}</span>{/each}</span>
-            </div>
+            {#if isSelectable(step)}
+              <button
+                type="button"
+                class="step-circle selectable"
+                aria-label={step.label}
+                aria-pressed={selectedKey === stepKey(step)}
+                aria-controls={infoId}
+                onclick={() => toggleStep(step)}
+              >
+                <span class="step-circle-text">{#each badgeLines(step.label) as line}<span>{line}</span>{/each}</span>
+              </button>
+            {:else}
+              <div class="step-circle" aria-label={step.label}>
+                <span class="step-circle-text">{#each badgeLines(step.label) as line}<span>{line}</span>{/each}</span>
+              </div>
+            {/if}
           {:else}
             <div class="step-dot-wrap">
               <div class="step-dot"></div>
@@ -137,6 +169,14 @@
       {/each}
     {/if}
   </div>
+  {#if details && selectedKey && selectedLines.length > 0}
+    <!-- 선택한 단계 설명 — 배지 줄 아래에 텍스트로 노출 -->
+    <div class="step-info" id={infoId} role="status" aria-live="polite">
+      {#each selectedLines as line, li}
+        <p class:step-info-lead={li === 0}>{line}</p>
+      {/each}
+    </div>
+  {/if}
   {#if children}
     <div class="stepper-extra">{@render children()}</div>
   {/if}
@@ -193,6 +233,24 @@
     mask-image: none;
   }
   /* children 슬롯 — 박스 안 단계 표시 아래 */
+  /* 단계 배지 선택 → 설명 텍스트(고객 화면) — 배경만으로 구분, 테두리·그림자 없음 */
+  .step-circle.selectable { cursor: pointer; padding: 0; font: inherit; }
+  .journey-stepper .step-item.selected .step-circle { background: var(--cs-purple-pale); color: var(--cs-purple-dark); }
+  .journey-stepper .step-item.selected.done .step-circle { background: var(--cs-purple-dark); color: var(--cs-white); }
+  .step-info {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 15px;
+    background: var(--cs-white);
+    font-family: var(--font-kr);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--cs-text-mid);
+    word-break: keep-all;
+  }
+  .step-info p { margin: 0; }
+  .step-info p + p { margin-top: 2px; }
+  .step-info-lead { font-weight: 700; color: var(--cs-text); }
   .stepper-extra { margin-top: 16px; }
   .stepper-extra:empty { display: none; }
   .step-item {

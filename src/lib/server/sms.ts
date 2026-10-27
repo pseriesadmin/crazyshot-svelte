@@ -129,6 +129,8 @@ export interface SendLifecycleSmsParams {
   force?: boolean
   /** CMS에서 편집한 안내문장(변수 치환 완료본, 접두어 제외). 있으면 기본 문구 대신 `[크레이지샷] ` + 이 문장을 쓴다. */
   customMessage?: string | null
+  /** 반출·운송장 알림의 "택배사/운송장 번호" 줄(기본 문구일 때만 본문 뒤에 붙인다. 편집 문장은 변수로 직접 넣는다) */
+  trackingText?: string
 }
 
 const SITE_URL = 'https://crazyshot.kr'
@@ -183,7 +185,7 @@ export async function sendLifecycleSms(
   admin: SupabaseClient,
   params: SendLifecycleSmsParams,
 ): Promise<{ sent: boolean; reason: string }> {
-  const { phone, userId, notifyType, productName, reservationId, linkOverride, force, customMessage } = params
+  const { phone, userId, notifyType, productName, reservationId, linkOverride, force, customMessage, trackingText } = params
 
   // 개발 환경: 실제 발송 없이 건너뜀(로컬에서 실번호로 문자가 나가는 사고 방지)
   if (dev) return { sent: false, reason: 'dev' }
@@ -226,6 +228,7 @@ export async function sendLifecycleSms(
 
     const link = toAbsoluteUrl(linkOverride ?? defaultLinkPath(notifyType, reservationId))
     let message = customMessage ? `${SMS_BRAND_PREFIX}${customMessage}` : msgFn(productName, link)
+    if (!customMessage && trackingText) message = `${message}\n${trackingText}`
     if (!message.includes('http')) message = `${message}\n${link}`
 
     const phoneMasked = phone.length >= 8

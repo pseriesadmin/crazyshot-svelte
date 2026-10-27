@@ -1,4 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit'
+import { isRealMemberSession } from '$lib/utils/authGuard'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
 import { loadUserCoupons } from '$lib/server/account/loadUserCoupons'
@@ -7,6 +8,8 @@ import { loadPointTransactions } from '$lib/server/account/loadPointTransactions
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
 import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from '$lib/server/cancelPolicyLoader'
 import { groupRentalsByOrder } from '$lib/utils/groupRentalsByOrder'
+import { buildJourneyStepDetails } from '$lib/utils/journeyStepInfo'
+import { liveDheroBookings } from '$lib/utils/dheroLabels'
 import { loadPaymentReceipts, pickCardPayment } from '$lib/server/account/loadPaymentReceipts'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
@@ -54,6 +57,8 @@ interface AccountProfile {
 export const load: PageServerLoad = async ({ locals, depends, url }) => {
   depends('app:rental-status')
   const { session } = await locals.safeGetSession()
+  // 익명(채팅 게스트) 세션은 가입 전 계정이라 로그인으로 보낸다(빈 화면 방지, 2026-10-27)
+  if (!isRealMemberSession(session)) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
   if (!session) throw redirect(303, `/auth/login?redirect=${encodeURIComponent(url.pathname)}`)
 
   // relative_days("첫 확인일로부터 N일") 쿠폰: 이 화면에서 쿠폰 목록을 열어보는 시점을
@@ -96,7 +101,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     // PC 패널용: 대여 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+      .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_meta, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
       .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
       .order('submitted_at', { ascending: false })
@@ -161,6 +166,18 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
 
   // 같은 주문의 예약은 PC 대여 패널에서도 카드 1장으로 묶는다(주문 1건 = 카드 1장)
   const rentalOrderIds = await loadReservationOrderIds(locals.supabase, rentalReservationIds)
+
+  // 단계 배지 설명용 — 예약 id → 운송장·택배사
+  // 두발히어로에서 취소된 접수번호는 운송장으로 보여주지 않는다(/account/rental 과 같은 기준, 2026-10-27)
+  const liveBookingIds = new Set(
+    liveDheroBookings(((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => ({
+      id: String(r.id),
+      trackingNumber: (r.tracking_number as string | null) ?? null,
+      courierCode: (r.courier_code as string | null) ?? null,
+      dheroMeta: (r.dhero_meta as Record<string, unknown> | null) ?? null,
+    }))).map(u => u.id),
+  )
+  const rentalTrackingById = new Map(((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => [String(r.id), liveBookingIds.has(String(r.id)) ? { tracking_number: (r.tracking_number as string | null) ?? null, courier_code: (r.courier_code as string | null) ?? null } : { tracking_number: null, courier_code: null }]))
 
   // 카드 영수증·취소내역 버튼 정보(결제 행이 있는 예약만) — 서버 전용 서비스 롤, 최소 정보만 내려감
   const cancelRows = (cancelsRes.data ?? []) as Array<{ id: string }>
@@ -228,7 +245,8 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
         product_category:       product?.category ?? null,
         has_signed_contract:    status?.signed ?? false,
         pending_contract_token: status?.pendingToken ?? null,
-        tracking_number:        r.tracking_number as string | null,
+        tracking_number:        liveBookingIds.has(String(r.id)) ? (r.tracking_number as string | null) : null,
+        courier_code:           liveBookingIds.has(String(r.id)) ? ((r.courier_code as string | null) ?? null) : null,
         returnSubmittable:      false,
         returnSubmitted:        false,
         cancelKind: rentalCancelKinds.get(String(r.id)) ?? 'unavailable',
@@ -236,7 +254,18 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
         cancelling: (r.status === 'cancelled' && !!r.customer_cancelled_at && !r.cancel_confirmed_at) || (r.status !== 'cancelled' && !!r.cancel_requested_at),
         canCancel: (rentalCancelKinds.get(String(r.id)) ?? 'unavailable') === 'free',
       }
-    }), rentalOrderIds).map(g => ({ ...g, payment: pickCardPayment(g.items.map(i => i.id), cardPayments) })),
+    }), rentalOrderIds).map(g => {
+      // 운송장은 같은 주문의 구성원 중 등록된 첫 번째 값을 쓴다
+      const tracked = g.items.map(i => rentalTrackingById.get(String(i.id))).find(t => !!t?.tracking_number)
+      return {
+        ...g,
+        payment: pickCardPayment(g.items.map(i => i.id), cardPayments),
+        journeyDetails: buildJourneyStepDetails({
+          status: g.status, start_date: g.start_date, end_date: g.end_date, created_at: g.created_at, return_time: g.return_time,
+          tracking_number: tracked?.tracking_number ?? g.tracking_number, courier_code: tracked?.courier_code ?? g.courier_code,
+        }),
+      }
+    }),
     cancels: ((cancelsRes.data ?? []) as Array<{
       id: string; status: string; reservation_code: string
       start_date: string | null; end_date: string | null; created_at: string

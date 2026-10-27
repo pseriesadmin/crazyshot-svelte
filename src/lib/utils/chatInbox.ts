@@ -9,6 +9,7 @@ export const CHAT_INBOX_EVENT_CARD_TYPES = ['contract_signed'] as const
 const EVENT_CARD_LABEL: Record<string, string> = {
   contract_signed: '전자계약 서명 완료',
   cancel_request: '예약 취소 요청',
+  cancel_inquiry: '예약 취소 문의',
 }
 
 /**
@@ -92,13 +93,14 @@ export function buildChatInboxItems(
     if (!s) continue
     const cardType = m.action_payload?.type
     if (m.sender_type === 'user') {
-      const isCancelRequest = cardType === 'cancel_request'
+      const eventLabel = cardType === 'cancel_request' ? EVENT_CARD_LABEL.cancel_request
+        : cardType === 'cancel_inquiry' ? EVENT_CARD_LABEL.cancel_inquiry : null
       items.push({
         session_id: sessionId,
         user_id: s.user_id,
         message_id: m.id,
         kind: 'reply',
-        label: isCancelRequest ? EVENT_CARD_LABEL.cancel_request : waitAfterLast.has(sessionId) ? WAIT_LABEL : null,
+        label: eventLabel ?? (waitAfterLast.has(sessionId) ? WAIT_LABEL : null),
         preview: inboxPreview(m.content) || fallbackPreview(m),
         created_at: m.created_at,
       })

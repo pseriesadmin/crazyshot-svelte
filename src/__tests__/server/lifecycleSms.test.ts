@@ -290,4 +290,23 @@ describe('sendLifecycleSms — 예약·대여 라이프사이클 SMS 동시 발�
     expect(result.reason).toBe('no_copy')
     expect(mockSend).not.toHaveBeenCalled()
   })
+  // 반출·운송장 알림 문자에 택배사·운송장 번호 (2026-10-27)
+  describe('운송장 줄(trackingText)', () => {
+    const TEXT = '택배사: 두발히어로\n운송장 번호: T-1'
+    it('TT-1 기본 문구 뒤·링크 앞에 운송장 줄이 붙는다', async () => {
+      await sendLifecycleSms(adminMock as never, { ...BASE_PARAMS, notifyType: 'tracking_notify', trackingText: TEXT })
+      const sent = (mockSend.mock.calls[0][0] as { text: string }).text
+      expect(sent).toContain('택배사: 두발히어로\n운송장 번호: T-1')
+      expect(sent.indexOf('운송장 번호: T-1')).toBeLessThan(sent.indexOf('https://crazyshot.kr/account/rental'))
+    })
+    it('TT-2 운송장 줄이 없으면 기존 문구 그대로', async () => {
+      await sendLifecycleSms(adminMock as never, { ...BASE_PARAMS, notifyType: 'tracking_notify' })
+      expect((mockSend.mock.calls[0][0] as { text: string }).text).not.toContain('운송장 번호:')
+    })
+    it('TT-3 편집 문장(customMessage)에는 중복으로 붙이지 않는다', async () => {
+      await sendLifecycleSms(adminMock as never, { ...BASE_PARAMS, notifyType: 'tracking_notify', customMessage: 'FX3 운송장 번호: T-1', trackingText: TEXT })
+      const sent = (mockSend.mock.calls[0][0] as { text: string }).text
+      expect(sent.match(/운송장 번호/g)).toHaveLength(1)
+    })
+  })
 })

@@ -114,3 +114,79 @@ export async function submitCancelRequest(
 
   return { ok: true }
 }
+
+/**
+ * submitCancelInquiry — 배송형 예약의 배송 당일 09시 이후 "취소문의" 접수 (2026-10-26, Stephen 확정)
+ *
+ * 예약·결제·취소 표식은 전혀 바꾸지 않고 고객 채팅 세션에 고객 발신 'cancel_inquiry' 카드만 남긴다(고객·관리자 양쪽 노출).
+ * 고객 화면 CTA 는 대여 정보(/account/rental), 관리자 화면 CTA 는 예약 패널(payload.action_url → resolve)이다.
+ * 같은 예약의 24시간 안 중복 문의는 새 카드를 만들지 않고 duplicate 로 응답한다.
+ * ⛔ 소유권·문의 가능 구간(inquiry 판정) 검증은 호출부 책임.
+ */
+const INQUIRY_DEDUP_MS = 24 * 3_600_000
+
+export async function submitCancelInquiry(
+  admin: SupabaseClient,
+  userId: string,
+  reservation: CancelRequestReservation,
+  nowMs: number = Date.now(),
+): Promise<CancelRequestResult> {
+  const reservationId = reservation.id
+
+  const { data: existing } = await admin
+    .from('chat_messages')
+    .select('id')
+    .eq('message_type', 'action_card')
+    .eq('action_payload->>type', 'cancel_inquiry')
+    .eq('action_payload->>reservation_id', String(reservationId))
+    .gte('created_at', new Date(nowMs - INQUIRY_DEDUP_MS).toISOString())
+    .limit(1)
+  if (Array.isArray(existing) && existing.length > 0) return { ok: true, duplicate: true }
+
+  const { data: chatSessionId, error: sessionErr } = await admin.rpc('find_or_create_general_chat_session', {
+    p_user_id: userId,
+    p_reservation_id: reservationId,
+  })
+  if (sessionErr || !chatSessionId) {
+    console.error('[cancel-inquiry] find_or_create_general_chat_session 실패:', sessionErr?.message)
+    return { ok: false, error: '취소문의 접수 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }
+  }
+
+  const productName = reservation.productName ?? '예약 상품'
+  const period = reservation.start_date && reservation.end_date
+    ? `${reservation.start_date.slice(0, 10)} ~ ${reservation.end_date.slice(0, 10)}`
+    : undefined
+  const cmsLink = `/cms/rentals?status=&selected=${reservationId}`
+
+  const { error: insertErr } = await admin.from('chat_messages').insert({
+    session_id: chatSessionId,
+    sender_type: 'user',
+    message_type: 'action_card',
+    content: `[취소 문의] ${productName} 예약의 취소를 문의했습니다.`,
+    action_payload: {
+      type: 'cancel_inquiry',
+      reservation_id: String(reservationId),
+      reservation_no: reservation.reservation_code ?? undefined,
+      product_name: productName,
+      rental_period: period,
+      action_url: cmsLink,
+      button_label: '취소문의 확인',
+    },
+  })
+  if (insertErr) {
+    console.error('[cancel-inquiry] chat_messages 삽입 실패:', insertErr.message)
+    return { ok: false, error: '취소문의 접수 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }
+  }
+
+  try {
+    await sendPushToAdmins('urgent_chat_message', {
+      title: '예약 취소 문의가 접수됐어요',
+      body: `${reservation.reservation_code ? `${reservation.reservation_code} ` : ''}${productName} — 상담 세션에서 확인해주세요.`,
+      link: cmsLink,
+    })
+  } catch {
+    // 푸시 실패는 무시
+  }
+
+  return { ok: true }
+}
