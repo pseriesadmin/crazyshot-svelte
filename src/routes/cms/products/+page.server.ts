@@ -24,6 +24,7 @@ import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHome
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
 import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
 import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
+import { findParentIdsByDetailText } from '$lib/server/products/searchByDetailText'
 import { resolveParentProductFields, PARENT_DISPLAY_FIELDS, PARENT_CONTENT_FIELDS, PARENT_POLICY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
@@ -442,6 +443,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       codeMatchIds = Array.from(new Set([...codeMatchIds, ...compactIds]))
     } catch (e) {
       console.error('[cms/products] 공백 무시 검색 오류:', e)
+    }
+    // 상세설명·구성품·사양(JSONB 칸)은 ilike로 못 찾으므로 서버 비교로 매칭 id를 합친다 — 실패해도 기본 검색은 그대로
+    try {
+      const detailIds = await findParentIdsByDetailText(admin, q)
+      codeMatchIds = Array.from(new Set([...codeMatchIds, ...detailIds]))
+    } catch (e) {
+      console.error('[cms/products] 상세설명·구성품·사양 검색 오류:', e)
     }
   }
   let nlsearchFallbackIds: string[] = [...codeMatchIds]
