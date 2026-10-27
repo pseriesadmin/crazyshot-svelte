@@ -206,11 +206,36 @@ describe('검색 화면 배선 (소스 고정)', () => {
     expect(grid).toMatch(/@media \(min-width: 768px\)[\s\S]*\.more-btn\s*\{[^}]*max-width:/)
   })
 
-  it('헤더 건수는 보이는 개수가 아니라 전체 건수(더 있으면 +)를 보여주고, 버튼에는 현재/전체를 적는다', () => {
+  it('헤더 건수는 보이는 개수가 아니라 전체 건수(더 있으면 +)를 보여준다', () => {
     expect(page).toContain('formatResultTotal(')
     expect(page).toContain('totalLabel=')
     expect(grid).toContain('{totalLabel ?? products.length}')
-    expect(grid).toContain('더보기 ({products.length}/{totalLabel})')
+  })
+
+  it("버튼 글자는 'more'(2026-10-27 Stephen 지시)이고 버튼 안에는 수량('현재/전체')을 표시하지 않는다", () => {
+    const btn = grid.slice(grid.indexOf('class="more-btn"'), grid.indexOf('</button>', grid.indexOf('class="more-btn"')))
+    expect(btn).toContain('more')
+    expect(btn).not.toContain('products.length')
+    expect(btn).not.toContain('totalLabel')
+    expect(btn).not.toContain('더보기')
+  })
+
+  it('버튼 배경은 옅은 퍼플 토큰(--cs-purple-op10), 글자는 짙은 퍼플 토큰(--cs-purple-dark), 호버는 배경색만 --cs-purple-pale로 바꾼다 — 보더·그림자·하드코딩 hex 없음', () => {
+    const css = grid.slice(grid.indexOf('.more-btn {'), grid.indexOf('/* PC — 검색 결과 없음'))
+    expect(css).toMatch(/\.more-btn\s*\{[^}]*background:\s*var\(--cs-purple-op10\)/)
+    expect(css).toMatch(/\.more-btn\s*\{[^}]*color:\s*var\(--cs-purple-dark\)/)
+    expect(css).toMatch(/\.more-btn:hover\s*\{\s*background:\s*var\(--cs-purple-pale\);?\s*\}/)
+    expect(css).toMatch(/\.more-btn\s*\{[^}]*border:\s*none/)
+    expect(css).not.toMatch(/box-shadow|outline/)
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,6}\b/)
+  })
+
+  it('글자 크기는 PC보다 모바일이 한 단계 작다 — 모바일 --text-m-script-14B(14px), PC(768px+) --text-pc-title-16(16px)', () => {
+    const css = grid.slice(grid.indexOf('.more-btn {'), grid.indexOf('/* PC — 검색 결과 없음'))
+    const base = css.slice(css.indexOf('.more-btn {'), css.indexOf('}', css.indexOf('.more-btn {')))
+    expect(base).toMatch(/font:\s*var\(--text-m-script-14B\)/)
+    const pc = css.slice(css.indexOf('@media (min-width: 768px)'))
+    expect(pc).toMatch(/\.more-btn\s*\{[^}]*font:\s*var\(--text-pc-title-16\)/)
   })
 
   it('더보기 버튼은 더 볼 결과가 있을 때만 그린다(없으면 onLoadMore를 내려주지 않고, 그리드는 onLoadMore가 있을 때만 버튼을 그린다)', () => {
