@@ -80,7 +80,7 @@ vi.mock('$lib/server/dhero', () => ({
   DheroNetworkError: class DheroNetworkError extends Error {},
 }))
 vi.mock('$lib/server/getReservationForDhero', () => ({ getReservationForDhero: vi.fn() }))
-vi.mock('$lib/server/isBulkDeliveryMethod', () => ({ isBulkDeliveryMethod: vi.fn() }))
+vi.mock('$lib/server/isDheroIntegrationMethod', () => ({ isDheroIntegrationMethod: vi.fn() }))
 vi.mock('$lib/server/push', () => ({ sendReservationLifecyclePush: vi.fn().mockResolvedValue(undefined) }))
 const mockResolvePlan = vi.fn()
 vi.mock('$lib/server/reservationApprovalNotify', () => ({
