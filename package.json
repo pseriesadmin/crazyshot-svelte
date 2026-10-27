@@ -25,6 +25,10 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:rpc-errors": "node scripts/check-rpc-error-handling.mjs",
     "check:rpc-errors:ci": "node scripts/check-rpc-error-handling.mjs --fail-on-violation",
+    "scan:qa": "node scripts/harness-scan.mjs --profile qa",
+    "scan:security": "node scripts/harness-scan.mjs --profile security",
+    "scan:all": "node scripts/harness-scan.mjs --all --profile all",
+    "scan:eval": "vitest run src/__tests__/security/harnessScanEval.test.ts src/__tests__/security/harnessScanGate.test.ts",
     "postinstall": "patch-package",
     "test:e2e": "playwright test"
   },
