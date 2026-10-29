@@ -49,6 +49,8 @@ export type SelectedProduct = {
   image_urls: string[]
   /** 순서 보존 배열 [{key,value}] 또는 레거시 객체(읽기 호환) — keyValueList.ts */
   specifications: KeyValueItem[] | Record<string, string> | null
+  /** 상품설명서(PDF) 목록 — 부모 기준(자식 선택 시 부모 값). 읽을 때 normalizeManualFiles */
+  manual_files?: unknown
   is_active: boolean
   created_at: string
   qr_payload: string | null
@@ -155,7 +157,7 @@ export async function loadSelectedProductDetail(
       spParentId
         ? admin
             .from('products')
-            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, is_bundle_product, content_blocks, keywords, components, specifications')
+            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, is_bundle_product, content_blocks, keywords, components, specifications, manual_files')
             .eq('id', spParentId)
             .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
             .single()
@@ -198,6 +200,7 @@ export async function loadSelectedProductDetail(
       bundle_links:        bundleLinksData ?? [],
       bundleLinksError:    !!bundleLinksErr,
       content_blocks:      src.content_blocks,
+      manual_files:        src.manual_files ?? [],
       keywords:            src.keywords,
       components:          src.components,
       specifications:      (src.specifications as KeyValueItem[] | Record<string, string> | null) ?? null,

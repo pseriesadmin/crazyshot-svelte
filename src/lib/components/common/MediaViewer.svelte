@@ -599,7 +599,7 @@
       {#if current}
         {#if isPdf}
           <div class="mv-pdf">
-            <PdfViewer src={current.url} title={displayName} downloadUrl={downloadable ? current.url : undefined} downloadFilename={fileNameOf(current)} />
+            <PdfViewer src={current.url} docLabel="문서" title={displayName} downloadUrl={downloadable ? current.url : undefined} downloadFilename={fileNameOf(current)} />
           </div>
         {:else if isVideo}
           {#key current.videoId}

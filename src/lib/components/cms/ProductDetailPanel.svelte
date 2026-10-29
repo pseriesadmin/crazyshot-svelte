@@ -13,6 +13,8 @@
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import ProductManualsEditor from '$lib/components/cms/ProductManualsEditor.svelte'
+  import { normalizeManualFiles, type ProductManualFile } from '$lib/utils/productManuals'
   import { productSearchOrFilter } from '$lib/utils/similarNameSuggest'
   import { buildProductQrPayload, renderQrToCanvas, downloadQrWithLabel } from '$lib/utils/qrIssue'
   import { normalizeKeyValueList, serializeKeyValueList } from '$lib/utils/keyValueList'
@@ -70,6 +72,7 @@
     assets?: AssetDetail[]
     content_blocks?: unknown
     keywords?: unknown
+    manual_files?: unknown
     option_links?: unknown
     bundle_links?: unknown
     bundleLinksError?: boolean
@@ -1122,6 +1125,37 @@
     }
   }
 
+  // ── 상품설명서(PDF) 목록 — 올리기·변경·삭제가 끝날 때마다 바로 저장(이미지 탭과 같은 자동 저장) ──
+  const manualFiles = $derived(normalizeManualFiles(product.manual_files))
+  let isSavingManuals = $state(false)
+  async function saveManuals(next: ProductManualFile[]): Promise<void> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
+    // 파일은 이미 저장소에 올라간 뒤라, 다른 탭 저장이 끝나기를 잠시 기다렸다가 저장한다(그냥 돌려보내면 올린 파일이 목록 없이 고아로 남음)
+    for (let i = 0; i < 40 && isAnySaving; i++) await new Promise((r) => setTimeout(r, 250))
+    if (isAnySaving) { csToast.warning('다른 저장이 오래 걸리고 있어요. 잠시 후 파일을 다시 추가해 주세요.'); return }
+    const savedProductId = product.id
+    isSavingManuals = true
+    try {
+      const fd = new FormData()
+      fd.append('product_id', savedProductId)
+      fd.append('section_type', 'manuals')
+      fd.append('manual_files', JSON.stringify(next))
+      const res = await fetch('?/updateSection', { method: 'POST', body: fd })
+      const result = deserialize(await res.text()) as { type: string; data?: { error?: string } }
+      if (result.type !== 'success') {
+        csToast.error(result.data?.error ?? '상품설명서 저장에 실패했습니다.')
+        return
+      }
+      await invalidateAll()
+      onsectionsaved?.(savedProductId)
+      csToast.success('상품설명서가 저장됐습니다.')
+    } catch {
+      csToast.error('상품설명서 저장에 실패했습니다.')
+    } finally {
+      isSavingManuals = false
+    }
+  }
+
   // ── 옵션상품 (option_links) ──────────────────────────────────
   interface OptionLink {
     option_product_id: string
@@ -1392,7 +1426,7 @@
   // PANEL-CLOSE-1 누락분 수정(2026-09-28): 상품설명(content) 탭의 isSavingContent가 이
   // 통합 플래그에서 빠져 있었다 — 상품설명 저장 중에 다른 탭을 저장하면(또는 그 반대) 여전히
   // invalidateAll() 중복 호출 경합이 가능한 상태였다.
-  const isAnySaving = $derived(isSaving || isSavingOptions || isSavingBundles || isSavingContent || isAutoSaving)
+  const isAnySaving = $derived(isSaving || isSavingOptions || isSavingBundles || isSavingContent || isSavingManuals || isAutoSaving)
   const isDirtyBundles = $derived.by(() => {
     const toKey = (bundles: BundleLink[]) =>
       JSON.stringify(bundles.map((b) => b.bundle_product_id))
@@ -2528,6 +2562,21 @@
             />
           </div>
         {/key}
+        <!-- 상품설명서(PDF) — 편집기 아래 목록. 파일 변경·추가·삭제·PDF 보기 -->
+        <div class="manuals-box">
+          <div class="section-header">
+            <span class="section-title">상품설명서 (PDF)</span>
+            {#if isSavingManuals}<span class="img-status saving">저장 중...</span>{/if}
+          </div>
+          <ProductManualsEditor
+            files={manualFiles}
+            productId={product.id}
+            readonly={isChildProduct}
+            disabled={isAnySaving}
+            variant="panel"
+            onchange={saveManuals}
+          />
+        </div>
       </div>
     {/if}
 
@@ -3851,6 +3900,7 @@
 
   /* 자식 상품 읽기 전용 안내 배너 */
   /* 새 콘텐츠 에디터(RichContentEditor) 래퍼 — 구독 설명 탭과 동일. overflow:clip은 내부 sticky 툴바를 유지하면서 모서리만 자른다 */
+  .manuals-box { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
   .content-editor-box {
     border: 1px solid var(--cs-lilac);
     border-radius: var(--radius-sm);

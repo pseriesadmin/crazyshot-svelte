@@ -50,6 +50,10 @@
     onError?: (message: string) => void
     /** 도구줄 오른쪽 추가 동작 */
     extraActions?: Snippet
+    /** 불러오는 중·실패 안내에 쓰는 문서 이름(기본 '계약서' — 계약서 외 PDF(상품설명서 등)는 '문서' 등으로 지정) */
+    docLabel?: string
+    /** 밝은 톤 — 짙은 남색 대신 옅은 퍼플 배경(상품설명서 모달용). 기본 꺼짐(계약서 뷰어는 기존 어두운 톤 그대로) */
+    light?: boolean
   }
 
   let {
@@ -62,6 +66,8 @@
     onLoaded,
     onError,
     extraActions,
+    docLabel = '계약서',
+    light = false,
   }: Props = $props()
 
   const PAGE_PADDING = 12 // 쪽 좌우 여백(px) — 가로 맞춤 계산에 사용
@@ -182,7 +188,7 @@
       } catch (e) {
         if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return
         // 우리가 만든 안내 문구만 그대로 보이고, pdf.js·브라우저가 던진 영어 오류 문구는 고객에게 노출하지 않는다
-        errorMessage = e instanceof ViewerLoadError ? e.message : '계약서를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'
+        errorMessage = e instanceof ViewerLoadError ? e.message : `${docLabel}를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.`
         status = 'error'
         untrack(() => onError?.(errorMessage))
       }
@@ -212,6 +218,8 @@
   const rendered = new Map<number, string>()
   const tasks = new Map<number, RenderTask>()
   const thumbRendered = new Map<number, string>()
+  /** 썸네일별 진행 중인 그리기 — 회전·재요청 때 이전 그리기를 취소해 옛 방향 그림이 새 그림을 덮어쓰지 않게 한다 */
+  const thumbTasks = new Map<number, RenderTask>()
   let pageObserver: IntersectionObserver | null = null
   let thumbObserver: IntersectionObserver | null = null
 
@@ -267,7 +275,10 @@
     if (thumbRendered.get(n) === key) return
     const holder = sidebarEl.querySelector<HTMLElement>(`[data-thumb="${n}"] .pv-thumb-canvas`)
     if (!holder) return
+    thumbTasks.get(n)?.cancel()
+    thumbTasks.delete(n)
     const page = await doc.getPage(n)
+    if (`${rotation}` !== key) return // 기다리는 사이 회전이 바뀌었으면 이 요청은 버린다(새 회전으로 다시 요청됨)
     const base = baseSizes[n - 1]
     const viewport = page.getViewport({
       scale: thumbnailScale(base ? (swapAxes ? base.h : base.w) : 0, THUMB_WIDTH),
@@ -286,9 +297,14 @@
     canvas.style.height = `${Math.floor(viewport.height)}px`
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const task = page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined })
+    thumbTasks.set(n, task)
     try {
-      await page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined }).promise
-      thumbRendered.set(n, key)
+      await task.promise
+      if (thumbTasks.get(n) === task) {
+        thumbTasks.delete(n)
+        thumbRendered.set(n, key)
+      }
     } catch (e) {
       if (!(e instanceof Error && e.name === 'RenderingCancelledException')) throw e
     }
@@ -336,6 +352,8 @@
     const keepPage = untrack(() => currentPage)
     rendered.clear()
     thumbRendered.clear()
+    for (const t of thumbTasks.values()) t.cancel() // 회전·배율이 바뀌면 그리는 중이던 썸네일도 취소
+    thumbTasks.clear()
     if (reflowTimer) clearTimeout(reflowTimer)
     reflowTimer = setTimeout(async () => {
       await tick()
@@ -372,6 +390,7 @@
       pageObserver?.disconnect()
       thumbObserver?.disconnect()
       for (const t of tasks.values()) t.cancel()
+      for (const t of thumbTasks.values()) t.cancel()
     }
   })
 
@@ -455,7 +474,7 @@
   }
 </script>
 
-<div class="pv" role="region" aria-label={title}>
+<div class="pv" class:pv--light={light} role="region" aria-label={title}>
   <!-- 도구줄: 브라우저 기본 PDF 뷰어와 같은 배치 -->
   <div class="pv-toolbar">
     <div class="pv-group pv-group-left">
@@ -561,7 +580,7 @@
       {#if status === 'empty'}
         <p class="pv-message" role="status">{emptyMessage}</p>
       {:else if status === 'loading'}
-        <p class="pv-message" role="status">계약서를 불러오는 중이에요…</p>
+        <p class="pv-message" role="status">{docLabel}를 불러오는 중이에요…</p>
       {:else if status === 'error'}
         <div class="pv-message" role="alert">
           <p>{errorMessage}</p>
@@ -707,6 +726,31 @@
     font: var(--text-pc-body-14);
   }
   .pv-link { color: var(--cs-white); font-weight: 700; text-decoration: underline; }
+
+  /* ── 밝은 톤(light) — 옅은 퍼플 바탕 위에 옅은 퍼플 라운드 도구줄·라운드 본문 영역으로 구역을 나눈다. 상품설명서 모달 전용, 기본(계약서 뷰어)은 위의 어두운 톤 그대로 ── */
+  .pv--light { background: var(--cs-lilac); color: var(--cs-text); }
+  .pv--light .pv-toolbar {
+    margin: 0 12px 8px;
+    border-radius: var(--radius-lg);
+    background: var(--cs-purple-op10);
+  }
+  .pv--light .pv-title { display: none; } /* 파일 이름은 모달 머리줄에 이미 있다 */
+  .pv--light .pv-body { gap: 8px; padding: 0 12px 12px; }
+  .pv--light .pv-sidebar { background: transparent; padding: 0 4px 0 0; }
+  .pv--light .pv-scroll { background: var(--cs-purple-op10); border-radius: var(--radius-lg); }
+  .pv--light .pv-zoom,
+  .pv--light .pv-icon-btn { color: var(--cs-text); }
+  .pv--light .pv-icon-btn:hover:not(:disabled) { background: var(--cs-white); }
+  .pv--light .pv-icon-btn.active { background: transparent; color: var(--cs-text); } /* 켜짐 상태 강조 없음 — 마우스를 올릴 때만 흰 원 */
+  .pv--light .pv-icon-btn.active:hover:not(:disabled) { background: var(--cs-white); }
+  .pv--light .pv-page-input { background: var(--cs-white); color: var(--cs-text); }
+  .pv--light .pv-page-total,
+  .pv--light .pv-message { color: var(--cs-text-mid); }
+  .pv--light .pv-divider { background: var(--cs-white); }
+  .pv--light .pv-thumb { color: var(--cs-text); }
+  .pv--light .pv-thumb:hover { background: var(--cs-purple-op10); }
+  .pv--light .pv-thumb.active { background: var(--cs-purple-op10); }
+  .pv--light .pv-link { color: var(--cs-purple); }
 
   /* ── 모바일: 쪽 목록·파일명·가로 맞춤은 숨기고 핵심 동작만 남긴다 ── */
   @media (max-width: 640px) {

@@ -9,6 +9,8 @@ import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCod
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
 import { extractContentBlocksText } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
+import { parseManualFilesInput } from '$lib/utils/productManuals'
+import { manualPathInUse, adoptTempManualFiles, persistAdoptedManualFiles } from '$lib/server/products/manualFileFinalize'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -213,7 +215,19 @@ export const actions: Actions = {
     }
     keywords = keywords.filter(Boolean).slice(0, 10)
 
+    // 상품설명서(PDF) — 등록 화면에서 올린 임시(temp/) 파일만 허용, 개수·크기·경로는 서버가 다시 검사
+    const manualsParsed = parseManualFilesInput(form.get('manual_files') as string | null, { productId: null, existing: [] })
+    if (!manualsParsed.ok) return fail(400, { error: manualsParsed.error })
+    const manual_files = manualsParsed.files
+
     const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+
+    // 다른 상품이 이미 쓰는 임시 경로는 끌어다 쓸 수 없다(두 상품이 한 파일을 공유하면 한쪽 삭제가 다른 쪽을 깨뜨린다)
+    for (const mf of manual_files) {
+      const inUse = await manualPathInUse(admin, mf.path)
+      if (inUse === null) return fail(500, { error: '상품설명서 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.' })
+      if (inUse) return fail(400, { error: '이미 다른 상품에서 사용 중인 상품설명서 파일입니다. 파일을 다시 올려주세요.' })
+    }
 
     const { data: existing } = await admin
       .from('products')
@@ -294,6 +308,7 @@ export const actions: Actions = {
         sale_only: saleOnly,
         content_blocks,
         keywords,
+        manual_files,
         allowed_period_ids: allowedPeriodIds,
         allowed_method_ids: allowedMethodIds,
         allowed_pickup_ids: allowedPickupIds,
@@ -310,6 +325,13 @@ export const actions: Actions = {
     const regWarnings: string[] = []
     const { error: qrError } = await admin.from('products').update({ qr_payload: qrPayload }).eq('id', product.id)
     if (qrError) regWarnings.push('qr')
+
+    // 상품설명서(PDF) — 임시(temp/) 폴더 파일을 상품 폴더로 이관(실패 시 temp 경로 유지, 등록은 계속)
+    if (manual_files.length > 0) {
+      const adopted = await adoptTempManualFiles(admin, product.id, manual_files)
+      // 이관 결과 저장 — 실패 시 한 번 재시도, 그래도 실패하면 옮긴 파일을 되돌려 링크가 깨지지 않게 하고 경고만 표시
+      if (!(await persistAdoptedManualFiles(admin, product.id, adopted))) regWarnings.push('manuals')
+    }
 
     // 품번(product_code) 자동 발행 — generate_product_code RPC (SECURITY DEFINER)
     let comboCodeId: string | null = null

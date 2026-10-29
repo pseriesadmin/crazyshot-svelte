@@ -20,6 +20,7 @@ import { buildComboCategoryCode, getRootCode } from '$lib/utils/comboCategoryCod
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { normalizeKeyValueList, serializeKeyValueList, type KeyValueItem } from '$lib/utils/keyValueList'
+import { normalizeManualFiles, parseManualFilesInput, removedManualPaths, PRODUCT_MANUAL_BUCKET } from '$lib/utils/productManuals'
 import { removeProductFromHomeCuration } from '$lib/server/removeProductFromHomeCuration'
 import { findParentIdsByProductCode } from '$lib/server/products/searchByProductCode'
 import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
@@ -982,7 +983,7 @@ export const actions: Actions = {
 
     // 재고 단위(자식) 상품은 images 외 모든 section 저장 차단 — 대표(부모) 기준 조회이므로
     // 자식에 저장된 데이터는 고객 화면에 반영되지 않으며 데이터 불일치 사고로 이어짐
-    const childBlockedSections = ['basic', 'slug', 'pricing', 'content', 'components', 'specs', 'options', 'bundles', 'rental']
+    const childBlockedSections = ['basic', 'slug', 'pricing', 'content', 'manuals', 'components', 'specs', 'options', 'bundles', 'rental']
     if (childBlockedSections.includes(sectionType)) {
       const { data: childCheck } = await admin
         .from('products')
@@ -1221,6 +1222,26 @@ export const actions: Actions = {
       // §C-2: 상품설명 저장 시 이중언어 병기 패턴 학습 훅 (fire-and-forget)
       // blocksStr는 Tiptap JSON 원문 — 문자열에 포함된 "한글(영문)" 패턴도 추출 대상
       registerCrossLingualCandidatesFromParts([keywords.join(' '), blocksStr]).catch(() => {})
+    }
+
+    if (sectionType === 'manuals') {
+      // 상품설명서(PDF) 목록 저장 — 경로 소유·개수·크기를 서버가 다시 검사하고, 목록에서 빠진 파일은 저장소에서도 지운다
+      const { data: cur } = await admin.from('products').select('manual_files').eq('id', productId).maybeSingle()
+      const existing = normalizeManualFiles((cur as { manual_files: unknown } | null)?.manual_files)
+      const parsed = parseManualFilesInput(form.get('manual_files') as string | null, { productId, existing })
+      if (!parsed.ok) return fail(400, { error: parsed.error })
+
+      const { error: updateError } = await admin
+        .from('products')
+        .update({ manual_files: parsed.files })
+        .eq('id', productId)
+      if (updateError) return fail(500, { error: '상품설명서 저장에 실패했습니다.' })
+
+      const removed = removedManualPaths(existing, parsed.files)
+      if (removed.length > 0) {
+        // 저장은 이미 끝났다 — 파일 정리 실패는 화면에 영향 없음(고아 파일만 남음)
+        await admin.storage.from(PRODUCT_MANUAL_BUCKET).remove(removed).catch(() => {})
+      }
     }
 
     if (sectionType === 'options') {

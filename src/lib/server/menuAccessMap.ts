@@ -223,6 +223,13 @@ export const MENU_GUARDED_SHARED_ENDPOINTS: { menuKeys: string[]; dirs: string[]
       'src/routes/api/cms/product-history', // 이력관리 화면 + 모바일 QR 이력 기록(모바일은 예약대여현황 권한을 따름) + 상품 상세 이력 탭
     ],
   },
+  {
+    phase: '1d',
+    menuKeys: ['products.list', 'products.new'],
+    dirs: [
+      'src/routes/api/cms/product-manuals', // 상품설명서(PDF) 업로드 서명 — 상품 등록 화면 + 상품목록 패널 '상품설명' 탭(2026-10-29)
+    ],
+  },
 ]
 
 /**
