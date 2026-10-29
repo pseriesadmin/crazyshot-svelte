@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { goto, preloadData } from '$app/navigation'
+  import { PRODUCTS_META_DESCRIPTION, PRODUCTS_PAGE_TITLE } from '$lib/utils/pageMeta'
+  import SeoHead from '$lib/components/common/SeoHead.svelte'
   import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
   import { fly, fade } from 'svelte/transition'
   import type { PageData } from './$types'
@@ -383,8 +385,11 @@
   let activeModal = $state<'categories' | 'hero' | 'grid' | 'md_picks' | null>(null)
 </script>
 
+<SeoHead title={PRODUCTS_PAGE_TITLE} description={PRODUCTS_META_DESCRIPTION} path="/products" />
+
 <svelte:head>
-  <title>상품 전체보기 — CRAZYSHOT</title>
+  <title>{PRODUCTS_PAGE_TITLE}</title>
+  <meta name="description" content={PRODUCTS_META_DESCRIPTION} />
 </svelte:head>
 
 <div class="products-page">

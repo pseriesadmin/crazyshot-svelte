@@ -2,6 +2,7 @@
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
+  import { buildPageTitle } from '$lib/utils/pageMeta'
   import type { PageData } from './$types'
 
   interface Props { data: PageData }
@@ -26,6 +27,10 @@
     return `/products/${p.slug ?? p.id}`
   }
 </script>
+
+<svelte:head>
+  <title>{buildPageTitle(data.group.title, '하입팩')}</title>
+</svelte:head>
 
 <div class="theme-page">
   <div class="theme-page-inner">

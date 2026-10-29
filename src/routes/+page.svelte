@@ -1,5 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { HOME_META_DESCRIPTION, HOME_PAGE_TITLE } from '$lib/utils/pageMeta'
+  import SeoHead from '$lib/components/common/SeoHead.svelte'
   import { untrack } from 'svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HomeBannerModal from '$lib/components/home/admin/HomeBannerModal.svelte'
@@ -230,8 +232,11 @@
   }
 </script>
 
+<SeoHead title={HOME_PAGE_TITLE} description={HOME_META_DESCRIPTION} path="/" />
+
 <svelte:head>
-  <title>CRAZYSHOT — 비대면 AI 검수 렌탈 플랫폼</title>
+  <title>{HOME_PAGE_TITLE}</title>
+  <meta name="description" content={HOME_META_DESCRIPTION} />
   <!-- 홈 모바일(≤640px)에서만 전역 푸터(+layout.svelte .site-footer, 전역 규칙으로 모바일 숨김)를 다시 노출(2026-09-29).
        <svelte:head> 스타일은 홈 화면을 벗어나면 제거되므로 다른 화면의 모바일 푸터 숨김에는 영향 없음.
        하단 고정 탭바(70px)에 푸터 끝이 가리지 않도록 하단 패딩 확보 -->

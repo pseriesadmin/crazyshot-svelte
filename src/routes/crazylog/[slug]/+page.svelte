@@ -10,6 +10,7 @@
 	import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 	import { makeEmptyTextBlock, type ContentBlock } from '$lib/types/content-editor'
 	import { csToast } from '$lib/utils/toast'
+	import { buildPageTitle } from '$lib/utils/pageMeta'
 
 	const LOG_TYPES = [
 		'상품리뷰',
@@ -263,6 +264,7 @@
 </script>
 
 <svelte:head>
+  <title>{buildPageTitle(data.existingPost ? '크레이지로그 수정' : '크레이지로그 쓰기')}</title>
   <style>
     @media (max-width: 767px) {
       body.crazylog-write .gnb-mobile-wrap,
