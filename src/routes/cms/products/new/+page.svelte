@@ -19,6 +19,8 @@
   import type { MappingGroupSimple, MappingItemSimple, TaxonomyCodeSimple, RentalPeriodSimple, RentalMethodSimple, PickupPointSimple, CategoryOptionSimple } from './+page.server'
   import { sortByTier } from '$lib/utils/comboCategoryCode'
   import { serializeKeyValueList } from '$lib/utils/keyValueList'
+  import ProductManualsEditor from '$lib/components/cms/ProductManualsEditor.svelte'
+  import type { ProductManualFile } from '$lib/utils/productManuals'
 
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
@@ -589,6 +591,8 @@
 
   let specs = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
   let components = $state<{ key: string; value: string }[]>([{ key: '', value: '' }])
+  // 상품설명서(PDF) — 올린 파일 목록(등록 시 함께 저장, 파일은 임시 폴더 temp/{tempId} 에 둔다)
+  let manualFiles = $state<ProductManualFile[]>([])
 
   let result = $derived(form as FormResult)
 
@@ -791,6 +795,7 @@
     <input type="hidden" name="specifications" value={serializeSpecs()} />
     <input type="hidden" name="components" value={serializeComponents()} />
     <input type="hidden" name="image_urls" value={serializeImages()} />
+    <input type="hidden" name="manual_files" value={JSON.stringify(manualFiles)} />
     <input type="hidden" name="is_active" value={isActive.toString()} />
     <input type="hidden" name="option_only" value={optionOnly.toString()} />
     <input type="hidden" name="is_bundle_product" value={isBundlePackage.toString()} />
@@ -1143,6 +1148,17 @@
           {/each}
           <button type="button" class="add-btn" onclick={addSpec}>+ 스펙 항목 추가</button>
         </div>
+      </div>
+
+      <!-- 상품설명서 (PDF) -->
+      <div class="field-row field-row-separated">
+        <span class="field-label">상품설명서 (PDF)</span>
+        <ProductManualsEditor
+          files={manualFiles}
+          {tempId}
+          variant="form"
+          onchange={(next) => { manualFiles = next }}
+        />
       </div>
     </section>
 

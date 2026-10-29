@@ -23,6 +23,9 @@
   import { csToast } from '$lib/utils/toast';
   import { toggleWish } from '$lib/utils/wishlist';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
+  import PdfModal from '$lib/components/common/PdfModal.svelte';
+  import { getSupabaseUrl } from '$lib/env/supabasePublic';
+  import { normalizeManualFiles, manualPublicUrl } from '$lib/utils/productManuals';
   import { resolveLeadRule, isPickupDateBlocked, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
 
   /** 실서비스 DB products 행 (가격·status 등 런타임 컬럼 포함) */
@@ -783,8 +786,32 @@
     return list.length > 0 ? list.map((i) => [i.key, i.value] as [string, string]) : null;
   });
 
+  // 상품설명서(PDF) — CMS 에서 등록한 파일을 정보 탭에 목록으로 보여주고, 누르면 공통 PDF 뷰어로 연다
+  const manualFiles = $derived(normalizeManualFiles((product as unknown as { manual_files?: unknown }).manual_files));
+  let manualViewerOpen = $state(false);
+  let manualViewerIndex = $state(0);
+  const manualViewerFile = $derived(manualViewerOpen ? (manualFiles[manualViewerIndex] ?? null) : null);
+  function openManual(i: number): void {
+    manualViewerIndex = i;
+    manualViewerOpen = true;
+  }
+
   const pageTitle = $derived(product?.name ? `${product.name} — CRAZYSHOT` : '상품상세 — CRAZYSHOT');
+  /** 검색·AI용 설명 — 상품마다 이름·분류·캡션·요금으로 만든다(2026-10-27) */
+  const pageDescription = $derived(
+    buildProductMetaDescription({
+      name: product?.name,
+      brand: product?.brand,
+      categoryLabel: data.categoryLabel,
+      caption: product?.product_caption,
+      priceDay: product?.base_price_daily,
+      saleOnly: product?.sale_only,
+      salePrice: product?.sale_price,
+    }),
+  );
 </script>
+
+<SeoHead title={pageTitle} description={pageDescription} path={`/products/${product.slug ?? product.id}`} image={imageUrls[0] ?? null} />
 
 <svelte:head>
   <title>{pageTitle}</title>
@@ -1186,8 +1213,22 @@
             </div>
           {:else if product.description}
             <div class="product-desc">{product.description}</div>
-          {:else if !productComponents}
+          {:else if !productComponents && manualFiles.length === 0}
             <p class="tab-empty">상품 설명이 없습니다.</p>
+          {/if}
+          {#if manualFiles.length > 0}
+            <section class="manual-section">
+              <ul class="manual-list">
+                {#each manualFiles as f, i (f.path)}
+                  <li>
+                    <button type="button" class="manual-item" onclick={() => openManual(i)} aria-label={`${f.name} 상품설명서 보기`}>
+                      <span class="manual-badge" aria-hidden="true">설명서</span>
+                      <span class="manual-name">{f.name}</span>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </section>
           {/if}
         </div>
       {:else if activeTab === 'spec'}
@@ -1243,6 +1284,16 @@
     <div class="gradient-bar" aria-hidden="true"></div>
   </div>
 </section>
+
+{#if manualViewerFile}
+  <PdfModal
+    src={manualPublicUrl(manualViewerFile.path, getSupabaseUrl())}
+    title={manualViewerFile.name}
+    downloadUrl={manualPublicUrl(manualViewerFile.path, getSupabaseUrl())}
+    downloadFilename={manualViewerFile.name}
+    onclose={() => (manualViewerOpen = false)}
+  />
+{/if}
 
 <!-- ④ Shotlog -->
 <section class="shotlog-section">
@@ -1866,6 +1917,10 @@
     padding: 30px 0 var(--layout-section-gap);
     background: var(--cs-lilac);
   }
+  /* 모바일: 정보 탭 하단과 다음 섹션(Shotlog) 사이 분리감 확보 — 기존 50px 에 50% 추가(75px). PC 는 그대로 */
+  @media (max-width: 640px) {
+    .tab-content { padding-bottom: calc(var(--layout-section-gap) * 1.5); }
+  }
   /* ── Brand label */
   .product-brand {
     font: var(--text-m-script-12);
@@ -1990,6 +2045,31 @@
     .comp-item { padding: 12px 0; }
     .comp-item-key { font: var(--text-pc-body-14); }
     .comp-item-val { font: var(--text-pc-body-14); font-weight: 400; color: var(--cs-text-mid); }
+  }
+
+  /* ── 상품설명서(PDF) 섹션 (정보 탭) — 눌러서 PDF 뷰어로 연다 */
+  .manual-section { margin-top: 57px; } /* 설명 본문과의 간격 — 모바일 = PC(95px) × 0.60 (front-uiux §24 비율 기준) */
+  .manual-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .manual-item {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
+    padding: 8px 16px; border: none; border-radius: var(--radius-md);
+    background: var(--cs-purple-op10); color: var(--cs-text); text-align: left; cursor: pointer;
+    transition: background 0.15s;
+  }
+  /* 호버: 기본(--cs-purple-op10)과 --cs-purple-pale 의 중간 단계 — 한 칸만 살짝 짙어지게 */
+  .manual-item:hover { background: color-mix(in srgb, var(--cs-purple-op10) 50%, var(--cs-purple-pale)); }
+  .manual-badge {
+    flex-shrink: 0; padding: 3px 8px; border-radius: var(--radius-sm);
+    background: var(--cs-white); color: var(--cs-purple); font: var(--text-m-script-14B);
+  }
+  .manual-name {
+    flex: 1; min-width: 0; font: var(--text-m-body-16B); color: var(--cs-text-dark);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  @media (min-width: 768px) {
+    .manual-section { margin-top: 95px; } /* PC 기준값 (63px 에서 +50%) */
+    .manual-name { font: var(--text-pc-title-16); line-height: 1.6; } /* PC: 한 단계 큰 16px Bold (줄 높이 200% 는 줄이 커져 1.6 으로) */
+    .manual-badge { font: var(--text-pc-script-12); font-weight: 700; }
   }
 
   .tab-heading {
