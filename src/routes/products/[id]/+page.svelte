@@ -2,6 +2,8 @@
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { goto } from '$app/navigation';
+  import { buildProductMetaDescription } from '$lib/utils/pageMeta';
+  import SeoHead from '$lib/components/common/SeoHead.svelte';
   import { supabase } from '$lib/services/supabase';
   import { trackProductView, trackCartAdd } from '$lib/analytics/behaviorTracker';
   import ProductHero from '$lib/components/products/ProductHero.svelte';
@@ -815,6 +817,7 @@
 
 <svelte:head>
   <title>{pageTitle}</title>
+  <meta name="description" content={pageDescription} />
 </svelte:head>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
