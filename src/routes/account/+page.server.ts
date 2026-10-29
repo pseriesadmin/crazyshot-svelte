@@ -10,6 +10,7 @@ import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from
 import { groupRentalsByOrder } from '$lib/utils/groupRentalsByOrder'
 import { buildJourneyStepDetails } from '$lib/utils/journeyStepInfo'
 import { liveDheroBookings } from '$lib/utils/dheroLabels'
+import { dheroStageForReservation } from '$lib/server/dheroStageForReservation'
 import { loadPaymentReceipts, pickCardPayment } from '$lib/server/account/loadPaymentReceipts'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
@@ -101,7 +102,7 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
     // PC 패널용: 대여 목록
     locals.supabase
       .from('rental_reservations')
-      .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_meta, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+      .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_status_code, dhero_meta, dhero_return_book_id, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
       .eq('user_id', session.user.id)
       .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
       .order('submitted_at', { ascending: false })
@@ -177,7 +178,20 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
       dheroMeta: (r.dhero_meta as Record<string, unknown> | null) ?? null,
     }))).map(u => u.id),
   )
-  const rentalTrackingById = new Map(((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => [String(r.id), liveBookingIds.has(String(r.id)) ? { tracking_number: (r.tracking_number as string | null) ?? null, courier_code: (r.courier_code as string | null) ?? null } : { tracking_number: null, courier_code: null }]))
+  const rentalTrackingById = new Map(((rentalsRes.data ?? []) as Array<Record<string, unknown>>).map(r => [
+    String(r.id),
+    liveBookingIds.has(String(r.id))
+      ? {
+          id:                     String(r.id),
+          tracking_number:        (r.tracking_number as string | null) ?? null,
+          courier_code:           (r.courier_code as string | null) ?? null,
+          dhero_status_code:      (r.dhero_status_code as number | null) ?? null,
+          dhero_meta:             (r.dhero_meta as { bookId?: unknown; canceledAt?: unknown; accidentAt?: unknown } | null) ?? null,
+          dhero_return_book_id:   (r.dhero_return_book_id as string | null) ?? null,
+          status:                 (r.status as string),
+        }
+      : { id: String(r.id), tracking_number: null, courier_code: null, dhero_status_code: null, dhero_meta: null, dhero_return_book_id: null, status: (r.status as string) },
+  ]))
 
   // 카드 영수증·취소내역 버튼 정보(결제 행이 있는 예약만) — 서버 전용 서비스 롤, 최소 정보만 내려감
   const cancelRows = (cancelsRes.data ?? []) as Array<{ id: string }>
@@ -259,6 +273,15 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
       const tracked = g.items.map(i => rentalTrackingById.get(String(i.id))).find(t => !!t?.tracking_number)
       return {
         ...g,
+        dheroStage: tracked ? dheroStageForReservation({
+          id:                tracked.id,
+          trackingNumber:    tracked.tracking_number,
+          courierCode:       tracked.courier_code,
+          dheroStatusCode:   tracked.dhero_status_code,
+          dheroMeta:         tracked.dhero_meta,
+          dheroReturnBookId: tracked.dhero_return_book_id,
+          cardStatus:        g.status,
+        }) : null,
         payment: pickCardPayment(g.items.map(i => i.id), cardPayments),
         journeyDetails: buildJourneyStepDetails({
           status: g.status, start_date: g.start_date, end_date: g.end_date, created_at: g.created_at, return_time: g.return_time,

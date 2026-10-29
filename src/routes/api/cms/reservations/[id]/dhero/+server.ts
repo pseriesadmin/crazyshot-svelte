@@ -18,6 +18,7 @@ import {
   createDelivery,
   DHERO_STATUS_LABEL,
   DheroApiError,
+  type DheroDeliveryStatus,
 } from '$lib/server/dhero'
 import { dheroStatusLabel, liveDheroBookings } from '$lib/utils/dheroLabels'
 import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
@@ -25,6 +26,7 @@ import { isDheroIntegrationMethod } from '$lib/server/isDheroIntegrationMethod'
 import { getReservationForDhero } from '$lib/server/getReservationForDhero'
 import { pickDeliveryMemo } from '$lib/server/dheroMemo'
 import { notifyTrackingRegistered } from '$lib/server/notifyTrackingRegistered'
+import { fetchReturnLegForDisplay } from '$lib/server/dheroReturnLegDisplay'
 import { listOrderReservationIds, joinProductNames, isDheroBooking } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
@@ -35,8 +37,69 @@ function parseId(raw: string): number | null {
   return Number.isInteger(n) && n > 0 ? n : null
 }
 
+/** 패널이 반납중 단계 계산에 쓰는 필드만 — 기사 이름·연락처·링크 등은 응답에 싣지 않는다 */
+interface ReturnLegForPanel {
+  bookId:      string
+  status:      number
+  statusText:  string | null
+  canceledAt:  string | null
+  accidentAt:  string | null
+}
+
+function pickReturnLegForPanel(s: DheroDeliveryStatus): ReturnLegForPanel {
+  return {
+    bookId:     s.bookId,
+    status:     s.status,
+    statusText: typeof s.statusText === 'string' ? s.statusText : null,
+    canceledAt: typeof s.canceledAt === 'string' ? s.canceledAt : null,
+    accidentAt: typeof s.accidentAt === 'string' ? s.accidentAt : null,
+  }
+}
+
 // getReservationForDhero는 $lib/server/getReservationForDhero에서 공유 사용
 // (cms/reservation/+page.server.ts의 updateStatus 자동 트리거와 동일 JOIN 패턴 — CRITICAL-1 수정)
+
+type DheroAdminClient = Parameters<typeof maybeAutoAdvanceOnDheroDelivered>[0] & {
+  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<unknown>
+}
+
+// 반납 leg 조회·저장·전이 (fail-soft). 반출 leg 조회 성패와 무관하게 수행한다 — 반출 조회가 일시 실패해도
+// 반납중 단계 표시는 유지되도록 반출 try 블록 밖에 둔다. 조회는 8초 상한(fetchReturnLegForDisplay)이 걸려 패널 응답을 오래 붙잡지 않는다.
+async function loadReturnLeg(
+  admin: DheroAdminClient,
+  reservationId: number,
+  res: NonNullable<Awaited<ReturnType<typeof getReservationForDhero>>>,
+): Promise<ReturnLegForPanel | null> {
+  if (!res.dheroReturnBookId) return null
+  const returnStatus = await fetchReturnLegForDisplay(res.dheroReturnBookId, res.courierCode)
+  if (!returnStatus) return null
+  try {
+    await admin.rpc('update_reservation_dhero_shipment', {
+      p_reservation_id:  reservationId,
+      p_tracking_number: res.trackingNumber,
+      p_courier_code:    '두발히어로',
+      p_status:          dheroStatusLabel(returnStatus),
+      p_status_code:     returnStatus.status,
+      p_dong_group:      res.dheroDongGroup,
+      p_meta:            returnStatus as Record<string, unknown>,
+      p_return_book_id:  res.dheroReturnBookId,
+    })
+    await maybeAutoAdvanceOnDheroDelivered(
+      admin,
+      reservationId,
+      'return',
+      returnStatus.status,
+      res.pickupMethod,
+      res.returnMethod,
+      res.status,
+    )
+  } catch (returnErr) {
+    // 저장·전이 실패는 표시에 영향 없음 — 조회한 값은 그대로 보여준다
+    console.error(`[dhero GET] 반납 leg 저장 fail-soft (id=${reservationId}):`,
+      returnErr instanceof Error ? returnErr.message : returnErr)
+  }
+  return pickReturnLegForPanel(returnStatus)
+}
 
 // ── GET: 배송상태 조회 ─────────────────────────────────────────────────────────
 
@@ -91,42 +154,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       res.status,
     )
 
-    // 반납 leg: dhero_return_book_id가 있으면 반납 배송상태도 조회·전이 (fail-soft)
-    if (res.dheroReturnBookId) {
-      try {
-        const returnStatus = await getDeliveryByBookId(res.dheroReturnBookId)
-        await admin.rpc('update_reservation_dhero_shipment', {
-          p_reservation_id:  reservationId,
-          p_tracking_number: res.trackingNumber,
-          p_courier_code:    '두발히어로',
-          p_status:          dheroStatusLabel(returnStatus),
-          p_status_code:     returnStatus.status,
-          p_dong_group:      res.dheroDongGroup,
-          p_meta:            returnStatus as Record<string, unknown>,
-          p_return_book_id:  res.dheroReturnBookId,
-        })
-        await maybeAutoAdvanceOnDheroDelivered(
-          admin,
-          reservationId,
-          'return',
-          returnStatus.status,
-          res.pickupMethod,
-          res.returnMethod,
-          res.status,
-        )
-      } catch (returnErr) {
-        // 반납 leg 조회 실패는 pickup leg 결과에 영향 없음
-        console.error(`[dhero GET] 반납 leg fail-soft (id=${reservationId}):`,
-          returnErr instanceof Error ? returnErr.message : returnErr)
-      }
-    }
-
-    return json({ dhero: status, reservation: resPublic, is_dhero_integration: isDheroIntegration })
+    const returnDhero = await loadReturnLeg(admin, reservationId, res)
+    return json({ dhero: status, returnDhero, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   } catch (e) {
     const dheroError = e instanceof DheroApiError
       ? { message: e.message, statusCode: e.statusCode }
       : { message: e instanceof Error ? e.message : '알 수 없는 오류' }
-    return json({ dhero: null, dhero_error: dheroError, reservation: resPublic, is_dhero_integration: isDheroIntegration })
+    const returnDhero = await loadReturnLeg(admin, reservationId, res)
+    return json({ dhero: null, dhero_error: dheroError, returnDhero, reservation: resPublic, is_dhero_integration: isDheroIntegration })
   }
 }
 

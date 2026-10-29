@@ -98,7 +98,7 @@
       {/if}
 
       <div class="stepper-wrap">
-        <RentalJourneyStepper slim fluid status={res.status} returnDay={returnDayState(res.status, res.end_date, res.return_method, res.return_time)} />
+        <RentalJourneyStepper slim fluid status={res.status} returnDay={returnDayState(res.status, res.end_date, res.return_method, res.return_time)} dheroStage={res.dheroStage} />
       </div>
     </div>
 
