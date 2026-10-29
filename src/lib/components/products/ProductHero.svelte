@@ -1,3 +1,11 @@
+<script module lang="ts">
+  /** 가로 스크롤 위치 → 이미지 번호(한 장 폭 단위 반올림, 처음·끝으로 고정). 폭·개수가 비정상이면 0 */
+  export function slideIndexFromScroll(scrollLeft: number, width: number, count: number): number {
+    if (!Number.isFinite(scrollLeft) || !Number.isFinite(width) || width <= 0 || count <= 0) return 0
+    return Math.min(count - 1, Math.max(0, Math.round(scrollLeft / width)))
+  }
+</script>
+
 <script lang="ts">
   import { goto } from '$app/navigation'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
@@ -27,6 +35,44 @@
   const iconCategories = $derived(categories.filter((c) => c.icon_url));
 
   let activeThumb = $state(0);
+
+  // 모바일 좌우 스와이프 — 점을 눌러 이동하는 동안(programmaticTarget)에는 지나가는 칸 때문에 점이 깜빡이지 않게 스크롤 반영을 멈춘다
+  // 1×1 투명 GIF — 첫 슬라이드 <picture>의 대체 이미지(모바일이 아닐 때 네트워크 요청 없이 자리만 채움)
+  const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+  // 모바일 '이미지 전체 보기' — 기본은 cover(꽉 채움), 켜면 세로 800px는 유지한 채 이미지를 줄여 전체를 보여준다(모든 이미지 공통)
+  let fitAll = $state(false);
+
+  let track = $state<HTMLElement | null>(null);
+  let programmaticTarget: number | null = null;
+
+  function onTrackScroll() {
+    if (!track) return;
+    const idx = slideIndexFromScroll(track.scrollLeft, track.clientWidth, imageUrls.length);
+    if (programmaticTarget !== null) {
+      if (idx === programmaticTarget) programmaticTarget = null;
+      return;
+    }
+    if (idx !== activeThumb) activeThumb = idx;
+  }
+
+  // 사용자가 손으로 트랙을 잡으면 점 이동 중 보호를 풀고 곧바로 스와이프를 따라간다
+  $effect(() => {
+    if (!track) return;
+    const el = track;
+    const release = () => { programmaticTarget = null; };
+    el.addEventListener('pointerdown', release, { passive: true });
+    return () => el.removeEventListener('pointerdown', release);
+  });
+
+  // 점·썸네일로 활성 이미지가 바뀌면 트랙도 그 위치로(이미 그 위치면 건드리지 않음)
+  $effect(() => {
+    const target = activeThumb;
+    if (!track || !track.clientWidth) return;
+    if (slideIndexFromScroll(track.scrollLeft, track.clientWidth, imageUrls.length) === target) return;
+    programmaticTarget = target;
+    track.scrollTo({ left: target * track.clientWidth, behavior: 'smooth' });
+  });
 
   function getCloudinaryUrl(publicId: string, w: number, h: number): string {
     return `https://res.cloudinary.com/crazyshot/image/upload/w_${w},h_${h},c_fill,f_auto,q_auto/${publicId}.jpg`;
@@ -68,6 +114,23 @@
     {/if}
   </div>
 
+  <!-- 모바일(≤640px) 좌우 스와이프 트랙 — PC는 위 hero-bg + 썸네일 -->
+  <div class="hero-track" class:fit-all={fitAll} bind:this={track} onscroll={onTrackScroll}>
+    {#each imageUrls as _, i}
+      <div class="hero-slide">
+        {#if i === 0}
+          <!-- 첫 장은 즉시 로딩이 필요한 모바일에서만 요청 — PC는 숨겨진 트랙이 hero-bg와 같은 이미지를 한 번 더 받지 않도록 조건부 소스 + 투명 대체 이미지 -->
+          <picture>
+            <source media="(max-width: 640px)" srcset={getBgImage(0)} />
+            <img src={TRANSPARENT_PIXEL} alt="{productName} 이미지 {i + 1}" draggable="false" />
+          </picture>
+        {:else}
+          <img src={getBgImage(i)} alt="{productName} 이미지 {i + 1}" loading="lazy" draggable="false" />
+        {/if}
+      </div>
+    {/each}
+  </div>
+
   <!-- GNB: Mobile floating pill -->
   <SubGnb title={displayCategoryLabel} floating />
 
@@ -107,6 +170,28 @@
 
   <!-- Bottom: Mobile dots / PC thumbnails -->
   <div class="hero-bottom">
+    <!-- 모바일 이미지 전체 보기 전환 — 아이콘은 이미지 뷰어(MediaViewer) '크기 맞춤' 버튼과 동일 -->
+    {#if imageUrls.length > 0}
+      <button
+        type="button"
+        class="fit-toggle"
+        class:active={fitAll}
+        onclick={() => (fitAll = !fitAll)}
+        aria-label={fitAll ? '이미지 꽉 채워 보기' : '이미지 전체 보기'}
+        title={fitAll ? '이미지 꽉 채워 보기' : '이미지 전체 보기'}
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          {#if fitAll}
+            <!-- 줄어든 상태 — 누르면 다시 꽉 채우므로 이미지 뷰어 '크기 맞춤' 아이콘(화살촉 바깥쪽) -->
+            <path d="M10.5 3H15v4.5M7.5 15H3v-4.5M15 3l-4.8 4.8M3 15l4.8-4.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          {:else}
+            <!-- 꽉 찬 상태 — 누르면 줄여서 전체를 보여주므로 반전 형태(화살촉 안쪽) -->
+            <path d="M15 7.5h-4.5V3M3 10.5h4.5V15M10.5 7.5L15 3M7.5 10.5L3 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          {/if}
+        </svg>
+      </button>
+    {/if}
+
     <!-- Mobile dot indicator -->
     {#if imageUrls.length > 0}
       <div class="dots-mobile">
@@ -176,6 +261,49 @@
     top: -0.66%;
     max-width: none;
     object-fit: cover;
+  }
+
+  /* 모바일 좌우 스와이프 트랙 — 한 장씩 멈춤(스냅), 이미지는 기존과 동일하게 cover·세로 800px 유지 */
+  .hero-track {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    background: var(--cs-purple-op10);
+  }
+  .hero-track::-webkit-scrollbar { display: none; }
+  .hero-slide {
+    flex: 0 0 100%;
+    height: 100%;
+    scroll-snap-align: center;
+    scroll-snap-stop: always;
+    background: var(--cs-purple-op10);
+  }
+  .hero-slide picture { display: contents; }
+  .hero-slide img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 20%;
+  }
+  /* 전체 보기 — 세로 800px는 그대로, 이미지를 영역 안에 전부 들어오도록 가운데에 맞춤(남는 곳은 슬라이드 배경색) */
+  .hero-track.fit-all .hero-slide img {
+    object-fit: contain;
+    object-position: center;
+  }
+  @media (max-width: 640px) {
+    .hero-track { display: flex; }
+    /* 트랙이 이미지를 그리므로 모바일에서는 단일 배경을 숨김(PC는 그대로 사용) */
+    .hero-bg { display: none; }
+    /* 하단 영역이 화면 폭 전체를 덮어 스와이프를 막지 않도록 — 점 버튼만 눌림 */
+    .hero-bottom { pointer-events: none; }
   }
 
   /* GNB Mobile */
@@ -349,6 +477,29 @@
     margin-top: auto;
   }
 
+  /* 이미지 전체 보기 전환(모바일 전용) — 이미지 뷰어 .mv-btn 크기·아이콘(44px 원형) + 하단 점과 같은 반투명 흰 면(30%, 켜짐도 동일 — 켜짐은 아이콘 색만 어둡게), hover는 배경색만 */
+  .fit-toggle {
+    position: absolute;
+    left: 25px;
+    bottom: 20px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.3);
+    color: var(--cs-white);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    transition: background 0.12s, color 0.12s;
+  }
+  .fit-toggle:hover { background: rgba(255,255,255,0.5); }
+  .fit-toggle.active { color: var(--cs-text-mid); }
+  @media (min-width: 641px) { .fit-toggle { display: none; } }
+
   /* Mobile dots */
   .dots-mobile {
     display: flex;
@@ -372,6 +523,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    pointer-events: auto;
   }
   .dot::after {
     content: '';
