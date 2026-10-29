@@ -11,6 +11,7 @@
 
   import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import { formatKstDateDash } from '$lib/utils/kstDate'
 
   interface Props {
     open: boolean
@@ -248,7 +249,7 @@
           name: data.user?.name ?? nameInput,
           email: data.user?.email ?? '',
           grade: data.user?.grade ?? 'NONE',
-          signupAt: data.user?.signupAt ? String(data.user.signupAt).slice(0, 10) : '',
+          signupAt: formatKstDateDash(data.user?.signupAt),
           purchaseCount: data.user?.purchaseCount ?? 0,
           points: data.user?.points ?? 0,
         }
