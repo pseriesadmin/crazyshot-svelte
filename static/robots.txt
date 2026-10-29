@@ -1,0 +1,25 @@
+# crazyshot.kr — 공개 페이지(홈·상품·하입팩·크레이지로그·멤버십·도움말)는 검색엔진과 AI 검색 크롤러 모두에게 허용한다.
+# 로그인·장바구니·결제·마이페이지·계약·CMS·API 등 비공개·거래·내부 경로는 모든 크롤러에게 차단한다.
+User-agent: *
+Disallow: /cms/
+Disallow: /api/
+Disallow: /account/
+Disallow: /auth/
+Disallow: /cart
+Disallow: /checkout
+Disallow: /payment
+Disallow: /pay/
+Disallow: /contract/
+Disallow: /contract-verify
+Disallow: /chat
+Disallow: /subscribe/
+Disallow: /qr/
+Disallow: /issue-report
+Disallow: /dev-e2e/
+# 검색 결과 페이지만 차단 — 접두 일치(/products/search)로 쓰면 slug가 search로 시작하는 상품(/products/search-…)까지 막힌다
+Disallow: /products/search$
+Disallow: /products/search?
+Disallow: /products/search/
+Disallow: /crazylog/new
+
+Sitemap: https://crazyshot.kr/sitemap.xml

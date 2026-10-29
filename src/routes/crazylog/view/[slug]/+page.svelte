@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { buildPageTitle } from '$lib/utils/pageMeta'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { supabase } from '$lib/services/supabase'
@@ -243,6 +244,7 @@
 </script>
 
 <svelte:head>
+  <title>{buildPageTitle(post?.title, '크레이지로그')}</title>
   <style>
     body.crazylog-view .gnb-mobile-wrap { display: none !important; }
     @media (max-width: 1023px) {

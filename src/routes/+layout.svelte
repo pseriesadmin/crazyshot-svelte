@@ -19,6 +19,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { csToast } from '$lib/utils/toast';
 	import { supabase } from '$lib/services/supabase';
+	import { isNoindexPath } from '$lib/utils/seoMeta';
 	import type { PageData } from './$types';
 
 	interface Props { data: PageData }
@@ -131,7 +132,15 @@
 		};
 	});
 
+	// 로그인·장바구니·결제·마이페이지·계약·CMS 등 비공개·거래·내부 페이지는 검색 결과에 나오지 않게 한다(robots.txt 차단과 이중 방어)
+	const noindex = $derived(isNoindexPath(page.url.pathname));
 </script>
+
+<svelte:head>
+	{#if noindex}
+		<meta name="robots" content="noindex, nofollow" />
+	{/if}
+</svelte:head>
 
 <PushNotificationInit />
 <!-- 뷰포트 진단 패널 — ?viewportdebug=1 일 때만 마운트(iOS Safari 상하 영역 원인 확인용 임시 도구, 평소에는 실행되지 않음) -->
