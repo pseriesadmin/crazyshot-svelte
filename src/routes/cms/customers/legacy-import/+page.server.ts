@@ -5,7 +5,8 @@ import { createClient } from '@supabase/supabase-js'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
-import { parseCsv, groupByPhone, type CsvRow, type PhoneGroup } from '$lib/server/legacyCsvImport'
+import { parseCsv, groupByPhone, parseBirth, type CsvRow, type PhoneGroup } from '$lib/server/legacyCsvImport'
+import { kstLocalToIso } from '$lib/utils/kstDate'
 import type { Actions, PageServerLoad } from './$types'
 
 // parseCsv/groupByPhone/CsvRow/PhoneGroup는 $lib/server/legacyCsvImport.ts로 이관됨
@@ -13,6 +14,12 @@ import type { Actions, PageServerLoad } from './$types'
 // "Invalid export 'parseCsv'" 500 에러로 이 화면이 한 번도 로드된 적 없었던 결함 수정).
 // 타입은 아래에서 그대로 재노출(export type — 런타임 export가 아니라 SvelteKit 제약과 무관).
 export type { CsvRow, PhoneGroup }
+
+/** 확정 등록 시 서버가 다시 거는 입력 상한 (sp3 검수 반영, 2026-10-29) */
+const MAX_PURCHASE_AMOUNT = 1_000_000_000_000
+const MAX_MEMO_LENGTH = 10_000
+const MAX_GROUPS = 5_000
+const MAX_PURCHASE_COUNT = 100_000
 
 /** 확정 등록 시 서버 액션 결과 */
 export interface ImportResult {
@@ -46,6 +53,7 @@ export const load: PageServerLoad = async ({ parent }) => {
   const { data: pendingStaging } = await admin
     .from('legacy_member_staging')
     .select('id, full_name, phone, email, legacy_source, legacy_signup_at, legacy_purchase_count, imported_at')
+    .is('claimed_at', null) // 인증 완료 표시만 남은(메모 보관 실패로 보존된) 행은 대기 목록에서 숨긴다
     .order('imported_at', { ascending: false })
     .limit(500)
 
@@ -108,9 +116,14 @@ export const actions: Actions = {
       return fail(400, { error: '그룹 데이터 파싱 오류' })
     }
 
+    if (!Array.isArray(groups)) return fail(400, { error: '그룹 데이터 형식 오류' })
+    if (groups.length > MAX_GROUPS) {
+      return fail(400, { error: `한 번에 등록할 수 있는 묶음은 최대 ${MAX_GROUPS.toLocaleString('ko-KR')}개입니다. 나누어 올려주세요.` })
+    }
+
     // EC-5: 그룹 크기 ≥2인 그룹에서 representEmail 미선택 검증
     for (const g of groups) {
-      if (g.excluded) continue
+      if (g.excluded || !Array.isArray(g.rows)) continue
       if (g.rows.length >= 2 && !g.representEmail) {
         return fail(400, {
           error: `대표 이메일을 선택해주세요 (전화번호: ${g.phone ?? '없음'})`,
@@ -124,6 +137,10 @@ export const actions: Actions = {
 
     for (const group of groups) {
       if (group.excluded) continue
+      if (!Array.isArray(group.rows) || group.rows.length === 0) {
+        results.push({ email: '(행 없음)', status: 'skipped', reason: '묶음에 계정 행이 없음' })
+        continue
+      }
 
       const email = group.representEmail
       if (!email) {
@@ -135,7 +152,8 @@ export const actions: Actions = {
       // 대표 행 정보 (이메일 기준으로 매칭)
       const repRow = group.rows.find((r) => r.email === email) ?? group.rows[0]
       const phone = group.phone ?? null
-      const signupAtTs = repRow.signupAt ? new Date(repRow.signupAt).toISOString() : null
+      // CSV 의 가입 시각은 한국시간 — 서버 시간대(Vercel=UTC)와 무관하게 한국시간으로 해석해 저장(잘못된 날짜는 null, 등록은 계속)
+      const signupAtTs = kstLocalToIso(repRow.signupAt)
 
       // EC-1(재정의): 이미 정식 가입(또는 인증완료로 승격)된 계정이면 스킵 — 데이터 절대 보존
       const { data: existingProfile } = await admin
@@ -160,13 +178,25 @@ export const actions: Actions = {
         continue
       }
 
+      // 클라이언트가 보낸 값이므로 서버에서 다시 검증한다 — 구매금액: 숫자·양수·상한 1조(DB bigint 보호), 메모: 최대 1만 자,
+      // 생년월일: 실제 존재하는 YYYY-MM-DD 만(대표 행 → 묶음 내 첫 값 순)
+      const rawAmount = Number(group.totalPurchaseAmount)
+      const purchaseAmount = Number.isFinite(rawAmount) && rawAmount > 0 ? Math.min(Math.floor(rawAmount), MAX_PURCHASE_AMOUNT) : 0
+      const rawCount = Number(group.totalPurchaseCount)
+      const purchaseCount = Number.isFinite(rawCount) && rawCount > 0 ? Math.min(Math.floor(rawCount), MAX_PURCHASE_COUNT) : 0
+      const memo = typeof group.memo === 'string' && group.memo.trim() ? group.memo.slice(0, MAX_MEMO_LENGTH) : null
+      const birthDate = parseBirth(repRow.birthDate) ?? group.rows.map((r) => parseBirth(r.birthDate)).find((b) => b !== null) ?? null
+
       const { error: insertErr } = await admin.from('legacy_member_staging').insert({
         full_name: repRow.name,
         phone,
         email,
         legacy_source: repRow.source,
         legacy_signup_at: signupAtTs,
-        legacy_purchase_count: group.totalPurchaseCount,
+        legacy_purchase_count: purchaseCount,
+        legacy_purchase_amount: purchaseAmount,
+        legacy_memo: memo,
+        birth_date: birthDate,
         imported_at: now,
       })
 

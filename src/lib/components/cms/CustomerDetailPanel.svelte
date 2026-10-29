@@ -3,6 +3,7 @@
   import type { SubmitFunction } from '@sveltejs/kit'
   import { invalidateAll } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
+  import { formatKstDateDash } from '$lib/utils/kstDate'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
   import { supabase } from '$lib/services/supabase'
@@ -48,6 +49,7 @@
     legacy_source?: string | null
     legacy_signup_at?: string | null
     legacy_purchase_count?: number | null
+    legacy_purchase_amount?: number | null
     // 회원 가입 이력 없는 관리대상(managed_persons) 행 여부 — Migration #686
     is_managed_person?: boolean
     // 사전 등록 관리대상과 가입 정보 일치(Migration #708) — pending이면 관리자 확인 대기
@@ -227,6 +229,28 @@
       .then((r) => (r.ok ? r.json() : null))
       .then((j: { retention: RetentionInfo | null } | null) => { if (!cancelled) retention = j?.retention ?? null })
       .catch(() => { if (!cancelled) retention = null })
+    return () => { cancelled = true }
+  })
+  // 이전 서비스 정보(이전 회원 인증으로 만들어진 계정) — 가입 방식·가입일·구매횟수·구매금액·관리자 메모. 메모는 서버 전용 테이블이라 API 로만 읽는다
+  interface LegacyInfo {
+    legacy_source: string | null
+    legacy_signup_at: string | null
+    legacy_purchase_count: number
+    legacy_purchase_amount: number
+    memos: { memo: string; created_at: string }[]
+  }
+  let legacyInfo = $state<LegacyInfo | null>(null)
+  const LEGACY_SOURCE_LABEL: Record<string, string> = {
+    kakao: '카카오', naver: '네이버', google: '구글', apple: '애플', facebook: '페이스북', line: '라인', email: '이메일', csv: 'CSV',
+  }
+  $effect(() => {
+    const id = row.user_id
+    if (!id || !row.legacy_claimed_at) { legacyInfo = null; return }
+    let cancelled = false
+    fetch(`/api/cms/customers/${encodeURIComponent(id)}/legacy-info`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { info: LegacyInfo | null } | null) => { if (!cancelled) legacyInfo = j?.info ?? null })
+      .catch(() => { if (!cancelled) legacyInfo = null })
     return () => { cancelled = true }
   })
   /** 포인트이력 하위탭 — earn: 포인트 적립 + 쿠폰 발급 / spend: 포인트 사용·차감 + 쿠폰 사용 */
@@ -1306,6 +1330,26 @@
         </div>
       {/if}
 
+      <!-- 이전 서비스 정보 — 이전 회원 인증으로 만든 계정만(읽기 전용) -->
+      {#if legacyInfo}
+        <div class="legacy-info-section">
+          <span class="section-title">이전 서비스 정보</span>
+          <div class="info-grid">
+            <div class="info-row"><span class="info-label">가입 방식</span><span class="info-val">{LEGACY_SOURCE_LABEL[legacyInfo.legacy_source ?? ''] ?? legacyInfo.legacy_source ?? '-'}</span></div>
+            <div class="info-row"><span class="info-label">이전 가입일</span><span class="info-val">{formatKstDateDash(legacyInfo.legacy_signup_at) || '-'}</span></div>
+            <div class="info-row"><span class="info-label">이전 구매</span><span class="info-val">{legacyInfo.legacy_purchase_count}회 · {legacyInfo.legacy_purchase_amount.toLocaleString('ko-KR')}원</span></div>
+          </div>
+          {#if legacyInfo.memos.length > 0}
+            <div class="legacy-memo-list">
+              <span class="info-label">관리자 메모 (이전 서비스)</span>
+              {#each legacyInfo.memos as m}
+                <p class="legacy-memo">{m.memo}</p>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <!-- 비밀번호 설정 링크 — 정식 회원 계정만(관리대상 모드·탈회 완전삭제 제외). 서버가 manager 이상·관리자 계정 제외를 다시 검증한다 -->
       {#if mode === 'member' && row.withdrawal_status !== 'purged'}
         <div class="recovery-link-section">
@@ -2121,6 +2165,18 @@
   }
 
   /* 기본정보 */
+  /* 이전 서비스 정보 블록 — 면(fill) 위주 */
+  .legacy-info-section {
+    display: flex; flex-direction: column; gap: 8px;
+    background: var(--cs-surface-gray); border-radius: var(--cms-radius-sm);
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .legacy-info-section .info-row { border-bottom: none; padding: 4px 0; }
+  .legacy-memo-list { display: flex; flex-direction: column; gap: 6px; }
+  .legacy-memo {
+    margin: 0; padding: 8px 12px; background: var(--cs-white); border-radius: var(--cms-radius-sm);
+    font: var(--text-pc-body-14); color: var(--cs-text); white-space: pre-wrap; word-break: break-word;
+  }
   .info-grid { display: flex; flex-direction: column; gap: 8px; }
   .info-row {
     display: flex;

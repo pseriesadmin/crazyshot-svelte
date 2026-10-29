@@ -172,6 +172,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/customers/[id]/doc-request',
       'src/routes/api/cms/customers/[id]/recovery-link', // 고객 비밀번호 설정 링크 발행(manager 이상, 2026-10-23)
       'src/routes/api/cms/customers/[id]/retention', // 익명 전환 고객의 법정 보존 만료 도래 상태(manager 이상, 2026-10-24)
+      'src/routes/api/cms/customers/[id]/legacy-info', // 이전 서비스 정보·관리자 메모(manager 이상, 2026-10-29)
       'src/routes/cms/customers/addresses', // 고객 상세 패널 탭 조회
       'src/routes/cms/customers/chat-sessions', // 고객 상세 패널 탭 조회
       'src/routes/cms/customers/credit-audit', // 고객 상세 패널 탭 조회

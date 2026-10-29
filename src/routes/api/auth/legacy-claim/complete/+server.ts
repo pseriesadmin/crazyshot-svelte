@@ -153,6 +153,10 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
       legacy_signup_at: member.legacy_signup_at,
       legacy_purchase_count: member.legacy_purchase_count,
       legacy_claimed_at: claimedAt,
+      // 이전 서비스 구매금액(참고용) — 옛 대기 행(마이그레이션 전)에는 값이 없을 수 있어 0 으로 처리
+      legacy_purchase_amount: typeof member.legacy_purchase_amount === 'number' && member.legacy_purchase_amount > 0 ? member.legacy_purchase_amount : 0,
+      // 생년월일은 값이 있을 때만 옮긴다(이 계정은 방금 새로 만든 것이라 기존 입력값이 없다 — 값이 없으면 칸을 건드리지 않음)
+      ...(typeof member.birth_date === 'string' && member.birth_date ? { birth_date: member.birth_date } : {}),
       // 회원등급 전원 NONE 고정 — 실데이터 근거 없음(절대금지 항목)
       // membership_grade: 'NONE' ← handle_new_user 기본값 그대로 유지
     } as Record<string, unknown>)
@@ -166,6 +170,21 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
       return json({ ok: false, error: '이 휴대폰 번호로 이미 가입된 계정이 있어요. 로그인하거나 "비밀번호 찾기"를 이용해 주세요.', code: 'phone_registered' }, { status: 409 })
     }
     return json({ ok: false, error: '계정 설정 중 오류가 발생했습니다.' }, { status: 500 })
+  }
+
+  // 이전 서비스 관리자 메모 — 고객 프로필이 아니라 서버 전용 메모 테이블에 보관(CMS 전용). 실패해도 고객 인증은 막지 않는다(로그만 남김)
+  let memoSaveFailed = false
+  const legacyMemo = typeof member.legacy_memo === 'string' ? member.legacy_memo.trim() : ''
+  if (legacyMemo) {
+    const { error: noteErr } = await admin.from('legacy_member_notes').insert({
+      user_id: userId,
+      memo: legacyMemo,
+      source: (member.legacy_source as string | null) ?? null,
+    })
+    if (noteErr) {
+      memoSaveFailed = true
+      console.error('[legacy-claim/complete][MEMO_SAVE_FAILED] 관리자 메모 보관 실패 — 대기 행을 보존했으니 수동 이전 필요:', member.staging_id, userId, noteErr.message)
+    }
   }
 
   // 6. signInWithPassword로 세션 발급
@@ -196,14 +215,20 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
   }
 
 
-  // 5. 스테이징 원본 행 삭제 — 로그인(6)까지 성공한 뒤에만 지운다 (개인정보 최소보유 — 실 계정에 이미 반영됐으므로 완전 삭제)
-  const { error: deleteStagingErr } = await admin
-    .from('legacy_member_staging')
-    .delete()
-    .eq('id', member.staging_id as string)
-  if (deleteStagingErr) {
-    // 계정은 이미 정상 생성됨 — 로그만 남기고 진행(수동 정리 대상으로 추적)
-    console.error('[legacy-claim/complete] staging 행 삭제 실패(수동 정리 필요):', member.staging_id, deleteStagingErr.message)
+  // 5. 스테이징 원본 행 정리 — 로그인(6)까지 성공한 뒤에만 한다(개인정보 최소보유 — 실 계정에 이미 반영됐으므로 삭제).
+  //    단 관리자 메모 보관이 실패했으면 메모 원본이 이 행에만 남아 있으므로 삭제하지 않고 인증 완료 표시(claimed_at)만 해 다시 인증 대상이 되지 않게 보존한다(수동 복구용)
+  if (memoSaveFailed) {
+    const { error: keepErr } = await admin.from('legacy_member_staging').update({ claimed_at: claimedAt }).eq('id', member.staging_id as string)
+    if (keepErr) console.error('[legacy-claim/complete] staging 행 보존 표시 실패(수동 확인 필요):', member.staging_id, keepErr.message)
+  } else {
+    const { error: deleteStagingErr } = await admin
+      .from('legacy_member_staging')
+      .delete()
+      .eq('id', member.staging_id as string)
+    if (deleteStagingErr) {
+      // 계정은 이미 정상 생성됨 — 로그만 남기고 진행(수동 정리 대상으로 추적)
+      console.error('[legacy-claim/complete] staging 행 삭제 실패(수동 정리 필요):', member.staging_id, deleteStagingErr.message)
+    }
   }
 
   // 7. claimed_at 기록 (토큰 재사용 차단)

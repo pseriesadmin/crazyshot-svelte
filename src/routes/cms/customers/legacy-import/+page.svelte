@@ -128,8 +128,9 @@
     <div class="step-card">
       <h2 class="step-title">1단계 — CSV 데이터 입력</h2>
       <p class="step-desc">
-        컬럼 순서: <code>이름 / 전화번호 / 이메일 / 가입일 / 구매횟수 / 출처(kakao|naver|csv)</code>
-        <br />탭 또는 쉼표로 구분. 첫 행이 헤더이면 자동 건너뜀.
+        이전 서비스에서 내려받은 <strong>원본 CSV를 그대로</strong> 붙여 넣으세요. 머리글의 이름(이름·연락처·이메일·가입일·구매횟수·구매금액·관리자 메모·회원 그룹·소셜 ID)으로 항목을 찾아
+        가입 방식(카카오·네이버·구글·이메일), 구매금액, 관리자 메모까지 함께 등록합니다. 회원 그룹이 "관리그룹"인 운영진 계정은 기본으로 제외됩니다.
+        <br />머리글이 없으면 예전 순서: <code>이름 / 전화번호 / 이메일 / 가입일 / 구매횟수 / 출처(kakao|naver|csv)</code>. 탭 또는 쉼표로 구분.
       </p>
 
       <form
@@ -187,6 +188,9 @@
               {/if}
               <span class="group-count">{group.rows.length}개 계정</span>
               <span class="group-purchase">구매횟수 합계: {group.totalPurchaseCount}</span>
+              <span class="group-purchase">구매금액 합계: {(group.totalPurchaseAmount ?? 0).toLocaleString('ko-KR')}원</span>
+              {#if group.memo}<span class="group-purchase">관리자 메모 있음</span>{/if}
+              {#if group.staff}<span class="badge-warn">운영진 계정 — 기본 제외</span>{/if}
             </div>
             <label class="exclude-toggle">
               <input
@@ -214,7 +218,7 @@
                       disabled={!row.email}
                     />
                     <span class="email-val">{row.email ?? '(이메일 없음)'}</span>
-                    <span class="row-meta">{row.name} / {row.source} / 가입 {row.signupAt ?? '불명'} / {row.purchaseCount}회</span>
+                    <span class="row-meta">{row.name} / {row.source} / 가입 {row.signupAt ?? '불명'} / {row.purchaseCount}회 / {(row.purchaseAmount ?? 0).toLocaleString('ko-KR')}원</span>
                   </label>
                 {/each}
               </div>
@@ -222,7 +226,7 @@
               <!-- 단일 행 그룹 — 자동 대표 이메일 -->
               <div class="single-row-info">
                 <span class="email-val">{group.rows[0]?.email ?? '(이메일 없음)'}</span>
-                <span class="row-meta">{group.rows[0]?.name} / {group.rows[0]?.source} / 가입 {group.rows[0]?.signupAt ?? '불명'} / {group.rows[0]?.purchaseCount}회</span>
+                <span class="row-meta">{group.rows[0]?.name} / {group.rows[0]?.source} / 가입 {group.rows[0]?.signupAt ?? '불명'} / {group.rows[0]?.purchaseCount}회 / {(group.rows[0]?.purchaseAmount ?? 0).toLocaleString('ko-KR')}원</span>
               </div>
             {/if}
           {:else}
