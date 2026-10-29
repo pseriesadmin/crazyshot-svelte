@@ -6,6 +6,8 @@ import { loadCancelKinds, loadCancelRequestedIds, loadReservationOrderIds } from
 import { groupRentalsByOrder, type RentalGroupItem } from '$lib/utils/groupRentalsByOrder'
 import { buildJourneyStepDetails } from '$lib/utils/journeyStepInfo'
 import { liveDheroBookings } from '$lib/utils/dheroLabels'
+import type { DheroStageInfo } from '$lib/utils/dheroJourneyStage'
+import { dheroStageForReservation } from '$lib/server/dheroStageForReservation'
 import { loadPaymentReceipts, pickCardPayment, type CardPaymentInfo } from '$lib/server/account/loadPaymentReceipts'
 import type { CancelKind } from '$lib/utils/canCancelReservation'
 import { env } from '$env/dynamic/private'
@@ -36,6 +38,8 @@ export interface MyRental {
   returnTargetId:         string
   /** 택배사(운송장 등록 시) — 단계 배지 설명용 */
   courier_code:           string | null
+  /** 두발히어로 배송 5단계 진행 정보 — RentalJourneyStepper dheroStage prop에 전달 */
+  dheroStage:             DheroStageInfo | null
   /** 단계 배지를 눌렀을 때 배지 아래에 보여줄 설명(상태 안내문 + 실제 정보) */
   journeyDetails:         Record<string, string[] | undefined>
   /** 카드 영수증·취소내역 버튼 정보 — 결제 행이 없으면(신청대기 등) null */
@@ -59,7 +63,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_meta, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_status_code, dhero_meta, dhero_return_book_id, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
     .eq('user_id', session.user.id)
     // 취소중(고객이 취소했고 관리자 확인 전) 예약도 목록에 남긴다 — 관리자가 취소확인하면 /account/cancel로 이동
     .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
@@ -78,6 +82,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       courierCode: (r.courier_code as string | null) ?? null,
       dheroMeta: (r.dhero_meta as Record<string, unknown> | null) ?? null,
     }))).map(u => u.id),
+  )
+
+  // 두발히어로 raw 필드 맵 — 그룹 레벨에서 cardStatus(g.status)로 재계산 시 사용 (MINOR-3)
+  const rawDheroById = new Map(
+    ((data ?? []) as Array<Record<string, unknown>>)
+      .filter(r => liveBookingIds.has(String(r.id)))
+      .map(r => [String(r.id), {
+        id:                String(r.id),
+        trackingNumber:    (r.tracking_number as string | null) ?? null,
+        courierCode:       (r.courier_code as string | null) ?? null,
+        dheroStatusCode:   (r.dhero_status_code as number | null) ?? null,
+        dheroMeta:         (r.dhero_meta as { bookId?: unknown; canceledAt?: unknown; accidentAt?: unknown } | null) ?? null,
+        dheroReturnBookId: (r.dhero_return_book_id as string | null) ?? null,
+      }] as const),
   )
 
   // 자식 재고의 이름·분류는 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-B)
@@ -120,6 +138,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const rows: Array<Omit<MyRental, 'items' | 'returnTargetId' | 'payment' | 'journeyDetails'>> = (data ?? []).map((r: Record<string, unknown>) => {
     const product = (r.products as { name: string; category: string } | null) ?? null
     const status = contractStatus.get(String(r.id))
+    const isLive = liveBookingIds.has(String(r.id))
     return {
       id:                     r.id as string,
       status:                 r.status as string,
@@ -133,8 +152,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       product_category:       product?.category ?? null,
       has_signed_contract:    status?.signed ?? false,
       pending_contract_token: status?.pendingToken ?? null,
-      tracking_number:        liveBookingIds.has(String(r.id)) ? (r.tracking_number as string | null) : null,
-      courier_code:           liveBookingIds.has(String(r.id)) ? ((r.courier_code as string | null) ?? null) : null,
+      tracking_number:        isLive ? (r.tracking_number as string | null) : null,
+      courier_code:           isLive ? ((r.courier_code as string | null) ?? null) : null,
+      dheroStage:             null, // 그룹 레벨에서 cardStatus(g.status) 기준으로 재계산 (MINOR-3)
       returnSubmittable:      RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null,
       returnSubmitted:        submittedIds.has(String(r.id)),
       cancelKind: cancelKinds.get(String(r.id)) ?? 'unavailable',
@@ -155,8 +175,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const rentals: MyRental[] = grouped.map(g => {
     // 운송장은 같은 주문의 구성원 중 등록된 첫 번째 값을 쓴다(두발히어로 접수는 주문 단위)
     const tracked = g.items.map(i => rowById.get(String(i.id))).find(r => !!r?.tracking_number)
+    // dheroStage: g.status(카드 대표 상태)로 재계산 — row-level r.status 사용 금지 (MINOR-3)
+    const trackedRaw = tracked ? rawDheroById.get(String(tracked.id)) : undefined
     return {
       ...g,
+      dheroStage: trackedRaw ? dheroStageForReservation({ ...trackedRaw, cardStatus: g.status }) : null,
       payment: pickCardPayment(g.items.map(i => i.id), payments),
       journeyDetails: buildJourneyStepDetails({
         status: g.status, start_date: g.start_date, end_date: g.end_date, created_at: g.created_at, return_time: g.return_time,

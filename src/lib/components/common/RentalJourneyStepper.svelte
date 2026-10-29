@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte'
+  import { DHERO_STAGE_LABELS, type DheroStageInfo, type DheroTone } from '$lib/utils/dheroJourneyStage'
 
   interface Props {
     status: string
@@ -13,9 +14,11 @@
     slim?: boolean                     // 패널 헤더용 슬림형 — 한 줄(점+라벨 가로 배치), 현재 단계 점에 옅은 퍼플 물결 모션 반복(2026-10-22). 기본 false
     details?: Record<string, string[] | undefined>  // 고객 화면 전용(2026-10-26): 단계별(status 키) 설명 텍스트 — 주어지면 해당 단계 배지를 눌러 선택할 수 있고, 선택한 단계의 텍스트가 배지 줄 아래에 나온다. 미지정 시 기존과 동일(비선택)
     children?: Snippet    // bg 박스 안, 단계 표시 아래에 넣을 추가 콘텐츠(선택 — CMS 취소·환불 사유 입력 등, 미지정 시 기존과 동일)
+    /** 두발히어로 배송 5단계 진행 정보 — 지정 시 반출중(shipped) 배지를 클릭 가능 토글로 변환해 5단계를 펼친다(slim 모드만) */
+    dheroStage?: DheroStageInfo | null
   }
 
-  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, slim = false, fluid = false, returnDay, details }: Props = $props()
+  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, slim = false, fluid = false, returnDay, details, dheroStage = null }: Props = $props()
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
@@ -53,6 +56,88 @@
 
   let isCancelled = $derived(status === 'cancelled' || status === 'damage_claimed')
 
+  // 두발히어로 배송 5단계 펼침/접힘 상태
+  let isDheroExpanded = $state(false)
+  // 퇴장 애니메이션 진행 중 — 서브배지가 DOM 에 있지만 dhero-leaving 클래스로 퇴장 모션 재생
+  let isDheroLeaving = $state(false)
+  // 퇴장 타이머 — m-1: unmount/prop 변경 시 clearTimeout 해제
+  let dheroLeaveTimer = $state<ReturnType<typeof setTimeout> | null>(null)
+
+  // status 또는 dheroStage prop 이 실제로 바뀔 때만 펼침 상태 초기화 (m-3: 값 비교 — invalidateAll로 새 객체가 와도 값이 같으면 펼침 상태 유지)
+  let _prevStatus = $state('')
+  let _prevDheroKey = $state('')
+  $effect(() => {
+    const newStatus = status
+    const newKey = `${dheroStage?.index ?? -1}/${dheroStage?.label ?? ''}/${dheroStage?.tone ?? ''}`
+    if (newStatus !== _prevStatus || newKey !== _prevDheroKey) {
+      _prevStatus = newStatus
+      _prevDheroKey = newKey
+      isDheroExpanded = false
+      isDheroLeaving = false
+      if (dheroLeaveTimer !== null) { clearTimeout(dheroLeaveTimer); dheroLeaveTimer = null }
+    }
+  })
+
+  // m-1: 컴포넌트 언마운트 시 퇴장 타이머 정리
+  $effect(() => {
+    return () => {
+      if (dheroLeaveTimer !== null) clearTimeout(dheroLeaveTimer)
+    }
+  })
+
+  /** 서브배지를 퇴장 애니메이션과 함께 접힘 처리 (M4) */
+  function collapseDhero(): void {
+    // m-1: 이미 진행 중인 타이머가 있으면 먼저 취소
+    if (dheroLeaveTimer !== null) { clearTimeout(dheroLeaveTimer); dheroLeaveTimer = null }
+    const reducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true
+    if (reducedMotion) {
+      isDheroExpanded = false
+      isDheroLeaving = false
+      return
+    }
+    isDheroLeaving = true
+    dheroLeaveTimer = setTimeout(() => {
+      isDheroExpanded = false
+      isDheroLeaving = false
+      dheroLeaveTimer = null
+    }, 180)
+  }
+
+  // 렌더 단계 목록 — isDheroExpanded 또는 isDheroLeaving 시 현재 status 스텝을 5개 서브스텝으로 교체
+  interface DheroSubStep { status: string; label: string; isDheroSub: true; dheroIndex: number; tone?: DheroTone }
+  type RenderStep = { status: string; label: string; isDheroSub?: undefined } | DheroSubStep
+
+  // dhero 펼침은 shipped 또는 return_requested 상태에서 활성
+  let dheroActive = $derived(dheroStage !== null && (status === 'shipped' || status === 'return_requested'))
+
+  let renderSteps = $derived<RenderStep[]>(
+    (isDheroExpanded || isDheroLeaving) && dheroActive
+      ? displaySteps.flatMap((s): RenderStep[] =>
+          s.status === status
+            ? (DHERO_STAGE_LABELS as readonly string[]).map((label, idx): RenderStep => ({
+                status: `dhero_${idx}`,
+                // 현재 단계 서브배지는 dheroStage.label(세부 라벨) 사용 (M2)
+                label: idx === dheroStage!.index ? dheroStage!.label : label,
+                isDheroSub: true,
+                dheroIndex: idx,
+                // 현재 단계 서브배지에만 tone 전달 (M2)
+                tone: idx === dheroStage!.index ? dheroStage!.tone : undefined,
+              }))
+            : [s]
+        )
+      : (displaySteps as RenderStep[])
+  )
+
+  // 렌더 단계 기준 현재 인덱스 (dhero 펼침 시 현재 status 기준 위치 + dheroStage.index)
+  let renderCurrentIndex = $derived(
+    isDheroExpanded && dheroActive
+      ? (() => {
+          const base = displaySteps.findIndex(s => s.status === status)
+          return base >= 0 ? base + dheroStage!.index : currentStepIndex
+        })()
+      : currentStepIndex
+  )
+
   // 단계 배지 선택 → 배지 줄 아래 설명 텍스트(details 가 있을 때만). 같은 배지를 다시 누르면 닫힌다.
   let selectedKey = $state<string | null>(null)
   const infoId = `journey-info-${Math.random().toString(36).slice(2, 8)}`
@@ -79,6 +164,7 @@
     status
     void returnDay // 대여중 → '반납일' 전환·steps 변경으로 현재 단계 위치가 바뀌어도 다시 가운데로 맞춘다(sp3 MINOR-3)
     void steps
+    void isDheroExpanded // dhero 펼침/접힘으로 현재 단계 배지 위치가 바뀔 때도 다시 가운데로
     if (!stepperEl) return
     const el = stepperEl
     if (!fluid && !slim) { el.scrollLeft = 0; return } // slim(CMS 헤더)도 좁은 패널에서 현재 단계를 가운데로 맞춘다(2026-10-23)
@@ -109,7 +195,7 @@
   {#if productName}
     <p class="stepper-product-name">{productName}</p>
   {/if}
-  <div class="stepper-scroll" style="--n: {displaySteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
+  <div class="stepper-scroll" style="--n: {renderSteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
     {#if isCancelled}
       <div class="journey-cancelled">
         <span class="cancelled-icon">✕</span>
@@ -118,19 +204,51 @@
         </span>
       </div>
     {:else}
-      {#each displaySteps as step, i}
+      {#each renderSteps as step, i}
         <div
           class="step-item"
           role="listitem"
-          class:done={i < currentStepIndex}
-          class:active={i === currentStepIndex}
-          class:last={i === displaySteps.length - 1}
+          class:done={i < renderCurrentIndex}
+          class:active={i === renderCurrentIndex}
+          class:last={i === renderSteps.length - 1}
           class:selected={isSelectable(step) && selectedKey === stepKey(step)}
+          class:dhero-step={!!step.isDheroSub}
           style="--i: {i}"
         >
           {#if slim}
             <!-- 슬림형: 원형 배지(기존 점의 4배) 안에 상태 텍스트를 넣는다 -->
-            {#if isSelectable(step)}
+            {#if step.status === status && dheroActive}
+              <!-- 두발히어로 배송(반출중) 또는 회수(반납중) 접힘 토글 — 해당 단계 배지 뒤에 ghost 원이 겹쳐 보이는 효과 -->
+              <div class="dhero-stack-wrap">
+                <button
+                  type="button"
+                  class="step-circle dhero-toggle"
+                  aria-label={`두발히어로 ${status === 'return_requested' ? '반납' : '배송'} 단계 펼치기${dheroStage ? ` (현재: ${dheroStage.label})` : ''}`}
+                  aria-expanded={isDheroExpanded}
+                  data-tone={dheroStage?.tone}
+                  onclick={() => {
+                    isDheroExpanded = true
+                    // M1: details 가 있으면 함께 열기 — dheroStage 없을 때와 동일한 details 동작 유지
+                    if (isSelectable(step)) selectedKey = stepKey(step)
+                  }}
+                >
+                  <span class="step-circle-text">{#each badgeLines(step.label) as line}<span>{line}</span>{/each}</span>
+                </button>
+              </div>
+            {:else if step.isDheroSub}
+              <!-- 두발히어로 배송 펼침 서브스텝 — 클릭 시 퇴장 애니메이션 후 접힘 -->
+              <button
+                type="button"
+                class="step-circle dhero-sub-circle"
+                class:dhero-leaving={isDheroLeaving}
+                aria-label={`${step.label} — 두발히어로 ${status === 'return_requested' ? '반납' : '배송'} 단계 접기`}
+                data-tone={step.tone}
+                onclick={() => { collapseDhero(); selectedKey = null }}
+                style="--si: {step.dheroIndex}"
+              >
+                <span class="step-circle-text">{#each badgeLines(step.label) as line}<span>{line}</span>{/each}</span>
+              </button>
+            {:else if isSelectable(step)}
               <button
                 type="button"
                 class="step-circle selectable"
@@ -153,9 +271,9 @@
             <span class="step-label">{step.label}</span>
           {/if}
         </div>
-        {#if i < displaySteps.length - 1}
-          <div class="step-connector" class:done={i < currentStepIndex} style="--i: {i}">
-            {#if slim && i === currentStepIndex}
+        {#if i < renderSteps.length - 1}
+          <div class="step-connector" class:done={i < renderCurrentIndex} style="--i: {i}">
+            {#if slim && i === renderCurrentIndex}
               <!-- 현재 단계 오른쪽 화살표 — 화살표 모양 마스크 안에서 옅은 퍼플 줄무늬가 왼쪽→오른쪽으로 반복해서 흐른다.
                    transform 만 움직여 합성기에서 처리한다(이전 SVG SMIL·그라데이션 방식은 매 프레임 다시 그려 버벅임의 원인, 2026-10-22 성능). 고유 id 도 필요 없다. -->
               <span class="wave-arrow" aria-hidden="true"><span class="wave-strip"></span></span>
@@ -464,6 +582,85 @@
     .step-item.active.last .step-circle { animation: none; background: var(--cs-purple); color: var(--cs-white); } /* 동작 줄이기: 마지막 단계는 모션 없이 바로 활성 배경 */
     .step-item.active .step-circle::before, .step-item.active .step-circle::after { display: none; }
     .wave-strip { animation: none; transform: translateX(-25%); }
+    .step-circle.dhero-sub-circle { animation: none; }
+    .step-circle.dhero-sub-circle.dhero-leaving { animation: none; }
+  }
+
+  /* ── 두발히어로 배송 5단계 펼침/접힘 (slim 모드 전용, 2026-10-28) ── */
+
+  /* dhero 서브스텝 step-item 진입 모션 비활성 — 개별 배지에 dhero-in 적용 */
+  .step-item.dhero-step { animation: none; }
+
+  /* ghost 겹침 효과 — 반출중 배지 뒤에 2개의 희미한 원이 겹쳐 보여 클릭 가능함을 암시 */
+  /* isolation: isolate — 자체 stacking context 를 만들어 ::before/::after(z-index:-1/-2)가
+     조상 stacking context(step-item animation) 에 의해 가려지지 않도록 봉인 (M4) */
+  .dhero-stack-wrap {
+    position: relative;
+    isolation: isolate;
+  }
+  .dhero-stack-wrap::before,
+  .dhero-stack-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--cs-lilac);
+    border: 2px solid transparent;
+    pointer-events: none;
+  }
+  /* 겹침 배지는 불투명 면 2장 — 반투명(0.45·0.25)은 패널 회색 배경(--cs-surface-gray)과 거의 같아져 보이지 않았다(2026-10-28 화면 확인).
+     가까운 장은 더 진한 퍼플 톤(--cs-purple-op10), 먼 장은 --cs-lilac 로 구분해 부채처럼 펼쳐 보이게 한다 */
+  .dhero-stack-wrap::before { background: var(--cs-purple-op10); transform: translate(6px, 3px); z-index: -1; }
+  .dhero-stack-wrap::after  { background: var(--cs-lilac); transform: translate(12px, 6px); z-index: -2; }
+
+  /* 두발히어로 토글 버튼 기본 */
+  .step-circle.dhero-toggle {
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+  }
+  /* warn tone — 활성 상태에서 노란 계열 강조 (M3: 하드코딩 색 → 토큰) */
+  /* 읽은 절: front-uiux.md §1 lines 37-75 (색 토큰), app.css lines 100-103 (--cs-bg-warning 등) */
+  .step-item.active .step-circle.dhero-toggle[data-tone="warn"] {
+    background: var(--cs-bg-warning);   /* app.css:102 — #fff8e6 */
+    color: var(--cs-text-warning);      /* app.css:103 — #a66000 */
+  }
+  /* danger tone — 활성 상태에서 붉은 계열 강조 (M3: 토큰 교체) */
+  .step-item.active .step-circle.dhero-toggle[data-tone="danger"] {
+    background: var(--cs-bg-error);     /* app.css:100 — #fff0f0 */
+    color: var(--cs-error);             /* app.css:91  — #E53935 */
+  }
+
+  /* 펼침 서브스텝 배지 — 클릭하면 접힘, stagger 애니메이션 */
+  .step-circle.dhero-sub-circle {
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    animation: dhero-in 0.32s ease backwards;
+    animation-delay: calc(var(--si, 0) * 40ms);
+  }
+  /* 서브배지 tone 스타일 (M2 + M3) */
+  .step-item.active .step-circle.dhero-sub-circle[data-tone="warn"] {
+    background: var(--cs-bg-warning);
+    color: var(--cs-text-warning);
+  }
+  .step-item.active .step-circle.dhero-sub-circle[data-tone="danger"] {
+    background: var(--cs-bg-error);
+    color: var(--cs-error);
+  }
+  /* 퇴장 애니메이션 — 접힘 시 서브배지가 겹침 위치로 모이며 사라짐 (M4) */
+  .step-circle.dhero-sub-circle.dhero-leaving {
+    animation: dhero-out 0.18s ease forwards;
+    /* 역방향 stagger: 뒤쪽 배지부터 사라짐 */
+    animation-delay: calc((4 - var(--si, 0)) * 20ms);
+  }
+  @keyframes dhero-in {
+    from { opacity: 0; transform: scale(0.7) translateY(6px); }
+    to   { opacity: 1; transform: scale(1)   translateY(0); }
+  }
+  @keyframes dhero-out {
+    from { opacity: 1; transform: scale(1)   translateY(0); }
+    to   { opacity: 0; transform: scale(0.7) translateY(4px); }
   }
 
   /* 취소 상태 */

@@ -6,6 +6,8 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { loadRentalContractStatus } from '$lib/server/account/loadRentalContractStatus'
+import type { DheroStageInfo } from '$lib/utils/dheroJourneyStage'
+import { dheroStageForReservation } from '$lib/server/dheroStageForReservation'
 import type { PageServerLoad } from './$types'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
@@ -22,6 +24,8 @@ export interface ReservationDetail {
   product_name:       string | null
   product_category:   string | null
   has_signed_contract: boolean
+  /** 두발히어로 배송 5단계 진행 정보 — RentalJourneyStepper dheroStage prop에 전달 */
+  dheroStage:         DheroStageInfo | null
 }
 
 export interface ReservationOption {
@@ -46,7 +50,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   // 소유권 확인은 RLS 클라이언트로 — user_id 불일치 시 조회 자체가 안 됨
   const { data: raw } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, pickup_method, return_method, pickup_time, return_time, tracking_number, courier_code, dhero_status_code, dhero_meta, dhero_return_book_id, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
     .eq('id', params.id)
     .eq('user_id', session.user.id)
     .maybeSingle()
@@ -84,6 +88,11 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     return_method: string | null
     pickup_time: string | null
     return_time: string | null
+    tracking_number: string | null
+    courier_code: string | null
+    dhero_status_code: number | null
+    dhero_meta: { bookId?: unknown; canceledAt?: unknown; accidentAt?: unknown } | null
+    dhero_return_book_id: string | null
     products: { name: string; category: string } | null
   }
 
@@ -108,6 +117,15 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     product_name:        typedRaw.products?.name ?? null,
     product_category:    typedRaw.products?.category ?? null,
     has_signed_contract: cs?.signed ?? false,
+    dheroStage: dheroStageForReservation({
+      id:                String(typedRaw.id),
+      trackingNumber:    typedRaw.tracking_number,
+      courierCode:       typedRaw.courier_code,
+      dheroStatusCode:   typedRaw.dhero_status_code,
+      dheroMeta:         typedRaw.dhero_meta,
+      dheroReturnBookId: typedRaw.dhero_return_book_id,
+      cardStatus:        typedRaw.status,
+    }),
   }
 
   const options: ReservationOption[] = (optionRows ?? []).map((o: Record<string, unknown>) => ({

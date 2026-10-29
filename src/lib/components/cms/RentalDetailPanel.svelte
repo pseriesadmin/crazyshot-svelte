@@ -36,6 +36,7 @@
     return typeof msg === 'string' && msg ? msg : '처리 중 오류가 발생했습니다.'
   }
   import { DHERO_STATUS_LABEL, isDheroCanceled } from '$lib/utils/dheroLabels'
+  import { dheroJourneyStage } from '$lib/utils/dheroJourneyStage'
   import ReservationProductFinderModal from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import type { FinderSelectedProduct } from '$lib/components/cms/ReservationProductFinderModal.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
@@ -1970,6 +1971,7 @@
   let dheroLoading       = $state(false)
   let isDheroMethod      = $state(false)  // 두발히어로 연동 대상 방식(is_dhero_integration, Migration #772)
   let dheroData          = $state<DheroInfo | null>(null)
+  let returnDheroData    = $state<DheroInfo | null>(null)  // 반납 leg 조회 결과 (보완 1)
   let dheroError         = $state<string | null>(null)
   let dheroCourierCode   = $state<string | null>(null)  // dhero GET 응답의 courier_code (P3 Issue #4)
   let dheroBookLoading   = $state(false)  // 배송접수 POST 진행 중
@@ -1980,6 +1982,23 @@
   let dheroReturnError   = $state<string | null>(null)
   // 두발히어로 쪽에서 취소된 접수 — 취소 정보를 보여주고 재접수(새 접수번호)를 허용한다(2026-10-27)
   let dheroCanceled      = $derived(isDheroCanceled(dheroData))
+  // get_rental_list RPC는 courier_code·dhero_meta를 반환하지 않으므로 비동기로 받아온 값을 조합한다
+  // dheroCourierCode = dhero GET에서 받은 d.reservation.courierCode (저장된 값)
+  // m-2(보완 4): trackingCourierCode(입력바인딩, 미저장) 를 fallback 으로 쓰지 않는다 — 저장된 값만 신뢰
+  //
+  // 보완 1: return_requested 상태일 때 반납 leg 데이터(returnDheroData)를 사용
+  //   - returnDheroData.bookId === dhero_return_book_id → 검증 통과 → 올바른 단계 표시
+  //   - returnDheroData가 null(아직 GET 결과 없음)이면 dheroData 로 폴백 → 기존 접수(index 0) 유지
+  //   - 상태 코드의 row.dhero_status_code 폴백은 조회 전·조회 실패 때 DB에 저장된 마지막 값을 보여주기 위한 것이며,
+  //     dheroJourneyStage 가 meta.bookId ≠ 반납번호이면 index 0 으로 고정하므로 반출 leg 값이 반납 단계로 오판되지 않는다
+  let cmsJourneyDheroStage = $derived(dheroJourneyStage({
+    courierCode:     dheroCourierCode,  // m-2 보완 4: 저장된 값만 사용 (trackingCourierCode 폴백 제거)
+    dheroStatusCode: row.status === 'return_requested'
+      ? (returnDheroData?.status ?? row.dhero_status_code ?? null)
+      : (row.dhero_status_code ?? null),
+    dheroMeta:       row.status === 'return_requested' ? returnDheroData : dheroData,
+    ...(row.status === 'return_requested' ? { returnBookId: row.dhero_return_book_id ?? null } : {}),
+  }))
 
   $effect(() => {
     if (activeTab !== 'rental') return
@@ -1990,6 +2009,7 @@
     const id = row.reservation_id
     dheroFetchedForId = id
     dheroData         = null
+    returnDheroData   = null
     dheroError        = null
     isDheroMethod     = false
     dheroCourierCode  = null
@@ -1997,10 +2017,11 @@
 
     fetch(`/api/cms/reservations/${id}/dhero`)
       .then(r => r.json())
-      .then((d: { dhero: DheroInfo | null; is_dhero_integration?: boolean; dhero_error?: { message: string }; reservation?: { courierCode?: string | null } }) => {
+      .then((d: { dhero: DheroInfo | null; returnDhero?: DheroInfo | null; is_dhero_integration?: boolean; dhero_error?: { message: string }; reservation?: { courierCode?: string | null } }) => {
         if (dheroFetchedForId === id) {
           isDheroMethod    = d.is_dhero_integration ?? false
           dheroData       = d.dhero ?? null
+          returnDheroData  = d.returnDhero ?? null  // 보완 1: 반납 leg 조회 결과
           dheroError      = d.dhero_error?.message ?? null
           dheroCourierCode = d.reservation?.courierCode ?? null
           dheroLoading    = false
@@ -2016,8 +2037,9 @@
   async function refreshDheroStatus(): Promise<void> {
     dheroFetchedForId = null  // 재-fetch 강제
     // 다음 $effect 실행을 위해 상태 초기화
-    dheroData       = null
-    dheroError      = null
+    dheroData        = null
+    returnDheroData  = null
+    dheroError       = null
     dheroCourierCode = null
   }
 
@@ -2464,7 +2486,7 @@
   <!-- 대여 여정 — 패널 공통 헤더 영역(모든 탭에서 보임). 취소 건은 취소·환불 사유 박스가 있는 대여정보 탭의 기존 스텝퍼를 쓴다 -->
   {#if showHeaderJourney}
     <div class="panel-journey">
-      <RentalJourneyStepper status={journeyStatus} steps={journeySteps} slim />
+      <RentalJourneyStepper status={journeyStatus} steps={journeySteps} slim dheroStage={cmsJourneyDheroStage} />
     </div>
   {/if}
 

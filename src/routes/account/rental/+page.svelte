@@ -301,7 +301,7 @@
             </div>
 
             <div class="stepper-wrap">
-              <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} />
+              <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} />
             </div>
 
             {#if rental.cancelling}

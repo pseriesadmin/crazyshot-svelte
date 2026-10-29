@@ -5,6 +5,7 @@
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { goto, invalidateAll } from '$app/navigation'
   import { returnDayState } from '$lib/utils/returnNoticeTime'
+  import type { DheroStageInfo } from '$lib/utils/dheroJourneyStage'
 
   interface RentalItem {
     id: string
@@ -30,6 +31,8 @@
     cancelRequested?: boolean
     cancelling?: boolean
     tracking_number?: string | null
+    /** 두발히어로 배송 5단계 진행 정보 — RentalJourneyStepper dheroStage prop에 전달 */
+    dheroStage?: DheroStageInfo | null
   }
 
   interface Props {
@@ -282,7 +285,7 @@
           </div>
 
           <div class="stepper-wrap">
-            <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} />
+            <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} />
           </div>
 
           {#if rental.cancelling}
