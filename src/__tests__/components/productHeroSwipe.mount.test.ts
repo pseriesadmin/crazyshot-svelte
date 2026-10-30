@@ -279,19 +279,19 @@ describe('이미지 전체 보기 전환 버튼', () => {
 })
 
 describe('전환 버튼 CSS 고정 (소스)', () => {
-  it('44px 원형, 하단 점과 같은 반투명 흰 면(30%)은 켜짐에서도 그대로 — 평소는 흰 아이콘, 켜짐은 어두운 아이콘', () => {
+  it('44px 원형, 옅은 그레이 면(--cs-text-light 30%)은 켜짐에서도 그대로 — 평소·켜짐 모두 흰 아이콘', () => {
     expect(SRC).toMatch(/\.fit-toggle\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s)
     expect(SRC).toMatch(/\.fit-toggle\s*\{[^}]*border-radius:\s*50%/)
-    expect(SRC).toMatch(/\.fit-toggle\s*\{[^}]*background:\s*rgba\(255,\s*255,\s*255,\s*0\.3\)/)
+    expect(SRC).toMatch(/\.fit-toggle\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--cs-text-light\)\s*30%,\s*transparent\)/)
     expect(SRC).toMatch(/\.fit-toggle\s*\{[^}]*color:\s*var\(--cs-white\)/)
-    expect(SRC).toMatch(/\.fit-toggle\.active\s*\{[^}]*color:\s*var\(--cs-text-mid\)/)
-    // 켜짐 상태도 배경은 반투명 — 불투명에 가까운 흰색(0.9 등)으로 바꾸지 않고, 켜짐에서도 호버 배경이 먹도록 배경을 덮어쓰지 않는다
+    expect(SRC).toMatch(/\.fit-toggle\.active\s*\{[^}]*color:\s*var\(--cs-white\)/)
+    // 켜짐 상태도 배경은 같은 옅은 그레이 — 흰색(0.9 등)으로 바꾸지 않고, 켜짐에서도 호버 배경이 먹도록 배경을 덮어쓰지 않는다
     const active = SRC.slice(SRC.indexOf('.fit-toggle.active {'), SRC.indexOf('}', SRC.indexOf('.fit-toggle.active {')))
     expect(active).not.toMatch(/background/)
     expect(SRC).not.toMatch(/\.fit-toggle[^{]*\{[^}]*rgba\(255,\s*255,\s*255,\s*0\.9\)/)
   })
   it('호버는 배경색만 바꾼다 — 테두리·outline·그림자 없음', () => {
-    expect(SRC).toMatch(/\.fit-toggle:hover\s*\{[^}]*background:\s*rgba\(255,\s*255,\s*255,\s*0\.5\)/)
+    expect(SRC).toMatch(/\.fit-toggle:hover\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--cs-text-light\)\s*50%,\s*transparent\)/)
     const block = SRC.slice(SRC.indexOf('.fit-toggle {'), SRC.indexOf('.fit-toggle.active'))
     expect(block).not.toMatch(/box-shadow|outline\s*:\s*(?!none)\S|border\s*:\s*(?!none)\S/)
     expect(block).toMatch(/border:\s*none/)

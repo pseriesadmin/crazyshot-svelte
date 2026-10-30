@@ -477,7 +477,7 @@
     margin-top: auto;
   }
 
-  /* 이미지 전체 보기 전환(모바일 전용) — 이미지 뷰어 .mv-btn 크기·아이콘(44px 원형) + 하단 점과 같은 반투명 흰 면(30%, 켜짐도 동일 — 켜짐은 아이콘 색만 어둡게), hover는 배경색만 */
+  /* 이미지 전체 보기 전환(모바일 전용) — 이미지 뷰어 .mv-btn 크기·아이콘(44px 원형) + 옅은 그레이 면(--cs-text-light 30% 투명도, 켜짐도 동일 — 아이콘도 흰색 동일), hover는 배경색만 */
   .fit-toggle {
     position: absolute;
     left: 25px;
@@ -487,7 +487,7 @@
     padding: 0;
     border: none;
     border-radius: 50%;
-    background: rgba(255,255,255,0.3);
+    background: color-mix(in srgb, var(--cs-text-light) 30%, transparent);
     color: var(--cs-white);
     cursor: pointer;
     display: flex;
@@ -496,8 +496,8 @@
     pointer-events: auto;
     transition: background 0.12s, color 0.12s;
   }
-  .fit-toggle:hover { background: rgba(255,255,255,0.5); }
-  .fit-toggle.active { color: var(--cs-text-mid); }
+  .fit-toggle:hover { background: color-mix(in srgb, var(--cs-text-light) 50%, transparent); }
+  .fit-toggle.active { color: var(--cs-white); }
   @media (min-width: 641px) { .fit-toggle { display: none; } }
 
   /* Mobile dots */
