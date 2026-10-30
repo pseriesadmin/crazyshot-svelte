@@ -264,6 +264,18 @@
     sheet = null
   }
 
+  // 목록 창은 화면 고정(fixed)이라 문서를 스크롤하면 누른 버튼에서 떨어진 채 남는다 — 스크롤이 일어나면(목록 안 스크롤 제외) 닫는다
+  $effect(() => {
+    if (!sheet) return
+    const onScroll = (e: Event): void => {
+      const target = e.target as { closest?: (sel: string) => Element | null } | null
+      if (target?.closest?.('.dt-sheet')) return
+      sheet = null
+    }
+    window.addEventListener('scroll', onScroll, true)
+    return () => window.removeEventListener('scroll', onScroll, true)
+  })
+
   function onKeyDownWindow(e: KeyboardEvent) {
     if (e.key === 'Escape' && sheet) sheet = null
   }

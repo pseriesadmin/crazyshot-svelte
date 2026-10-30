@@ -9,6 +9,11 @@
    */
 
   import { enhance, deserialize } from '$app/forms'
+  import { beforeNavigate } from '$app/navigation'
+  import { tick, untrack } from 'svelte'
+  import { askConfirm, registerUnsavedProbe, UNSAVED_SHEET_MESSAGE } from '$lib/utils/contractUnsavedGuard'
+  import { saveSheetDraft, loadSheetDraft, clearSheetDraft, type SheetDraft } from '$lib/utils/contractSheetDraft'
+  import { saveModeDraft, loadModeDraft, clearModeDraft, type ModeDraft } from '$lib/utils/contractModeDraft'
   import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { csToast } from '$lib/utils/toast'
@@ -19,6 +24,8 @@
   import ContractFlowEditor from '$lib/modules/doc-editor/adapters/crazyshot/ContractFlowEditor.svelte'
   import ContractFlowPanel from '$lib/modules/doc-editor/adapters/crazyshot/ContractFlowPanel.svelte'
   import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
+  import ContractFileSaveMenu from '$lib/components/cms/contract-editor/ContractFileSaveMenu.svelte'
+  import type { ExportInput } from '$lib/utils/docExport/exportContract'
   import ContractCanvasEditor from '$lib/components/cms/contract-editor/ContractCanvasEditor.svelte'
   import ContractSpreadsheetEditor from '$lib/components/cms/contract-editor/ContractSpreadsheetEditor.svelte'
   import { isTiptapDocBlock, isCanvasDocument, hasSignatureField, isSpreadsheetDocument, isHtmlDocument } from '$lib/types/contract-document'
@@ -34,9 +41,13 @@
     onsaved?:  (id: string) => void
     /** 자동발행 표준양식 지정/해제가 저장된 뒤(목록·패널 데이터 새로고침용) */
     onautoissuechange?: () => void
+    /** 저장된 양식과 다른 형식의 파일을 가져올 때 — 그 파일로 새 양식 작성을 시작한다(기존 양식은 그대로 둔다) */
+    onStartNewFromImport?: (file: File) => void
+    /** 새 양식 화면이 열리자마자 가져오기 창을 띄울 파일(위 콜백으로 넘어온 파일) */
+    initialImportFile?: File | null
   }
 
-  let { template = null, onclose, onsaved, onautoissuechange }: Props = $props()
+  let { template = null, onclose, onsaved, onautoissuechange, onStartNewFromImport, initialImportFile = null }: Props = $props()
 
   // --------------------------------------------------------------------------
   // 에디터 컴포넌트 참조
@@ -95,6 +106,40 @@
     insertEditorContent:(content: JSONContent) => void
     getEditorJSON:      () => JSONContent | null
   } | null = $state(null)
+
+  // --------------------------------------------------------------------------
+  // 문서형 "실제 내용 변경" 판정 — 에디터는 편집하지 않아도 알림(onchange)을 낼 수 있다
+  // (예: 표로 끝나는 문서에 포커스만 줘도 끝에 빈 문단이 붙는다). 알림만 믿으면 수정이 없는데도
+  // "저장 전 변경"으로 감지되므로, 열린 시점의 내용과 비교한다(끝의 빈 문단은 차이로 치지 않는다).
+  // --------------------------------------------------------------------------
+  let flowBaseline: string | null = null
+  /** 가져온 문서처럼 "기준과 같아 보여도 저장 전"인 상태 — 저장되거나 양식이 바뀌면 해제 */
+  let flowForceDirty = false
+
+  function flowSignature(): string | null {
+    const json = editorRef?.getEditorJSON()
+    if (!json) return null
+    const content = Array.isArray(json.content) ? [...json.content] : []
+    while (content.length > 0) {
+      const last = content[content.length - 1]
+      if (last.type === 'paragraph' && !(last.content && last.content.length > 0)) content.pop()
+      else break
+    }
+    return JSON.stringify({ ...json, content })
+  }
+
+  /** 에디터 변경 알림 처리 — 열린 시점과 실제로 달라졌을 때만 변경으로 표시 */
+  function onFlowEditorChange(): void {
+    const now = flowSignature()
+    flowContentDirty = flowForceDirty || flowBaseline === null || now === null ? true : now !== flowBaseline
+    if (flowContentDirty) scheduleDraftSave()
+  }
+
+  // 에디터가 마운트되면 그 시점의 내용을 기준으로 잡는다
+  $effect(() => {
+    if (!editorRef) return
+    void tick().then(() => { if (flowBaseline === null) flowBaseline = flowSignature() })
+  })
 
   // --------------------------------------------------------------------------
   // content_blocks 포맷 감지 — $derived.by()로 template prop 변경에 대응
@@ -263,6 +308,9 @@
     origHtmlPrivacyTermsText    = nextHtmlPrivacyTermsText
     spreadsheetContentDirty     = false
     flowContentDirty            = false
+    flowForceDirty              = false
+    flowBaseline                = untrack(() => flowSignature())  // 저장 직후 등 같은 에디터가 유지되는 경우의 새 기준(마운트 전이면 null → 위 effect가 채움)
+    leaveConfirmed              = false
   })
 
   const isSpreadsheetDirty = $derived(
@@ -325,18 +373,75 @@
     '.xls',
     '.hwp',
     '.hwpx',
+    // PDF는 문서형으로 바꾸지 않고 고정 캔버스형(배경 + 서명 좌표 배치)으로 보낸다
+    '.pdf',
+    'application/pdf',
     // .doc(구형 Word)는 직접 변환을 지원하지 않는다 — 선택은 허용하고 .docx 재저장 안내만 띄운다(onImportFileChange)
     '.doc',
     'application/msword',
   ].join(',')
   const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 
+  /** 스프레드시트형은 엑셀 파일만 가져온다(다른 형식은 문서형으로 모드가 바뀌어 표가 사라진다) */
+  const SPREADSHEET_IMPORT_ACCEPT = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    '.xlsx',
+    '.xls',
+    '.pdf',
+    'application/pdf',
+  ].join(',')
+
   let importFileInput = $state<HTMLInputElement | null>(null)
   let importFile       = $state<File | null>(null)
 
   function triggerImport() {
+    // 저장하지 않은 작성 내용이 있으면 파일 선택창을 열지 않고 바로 중단 — 가져오면 그 내용이 덮어써지기 때문
+    if (hasUnsavedWork()) {
+      csToast.warning('작성중인 문서를 저장해주세요.')
+      return
+    }
     importFileInput?.click()
   }
+
+  // PDF 가져오기 → 고정 캔버스형: 캔버스 편집기가 마운트되면 받아 둔 PDF를 배경 페이지로 넣는다
+  let canvasRef: { addBackgroundFile: (file: File) => Promise<void>; save: () => Promise<void> } | null = $state(null)
+  let pendingCanvasFile = $state<File | null>(null)
+
+  function startCanvasFromPdf(file: File): void {
+    authoringMode = 'canvas'
+    pendingCanvasFile = file
+  }
+
+  $effect(() => {
+    if (pendingCanvasFile && canvasRef) {
+      const file = pendingCanvasFile
+      pendingCanvasFile = null
+      void canvasRef.addBackgroundFile(file)
+    }
+  })
+
+  /** 현재 열린 양식의 작성 모드로는 받을 수 없는 형식인가 — 엑셀은 스프레드시트형, 문서·한글 파일은 문서형 전용 */
+  function isOtherModeFile(ext: string): boolean {
+    if (ext === 'pdf') return true   // PDF는 어떤 양식에서든 고정 캔버스형 전용
+    if (authoringMode === 'spreadsheet') return ['docx', 'hwp', 'hwpx'].includes(ext)
+    if (authoringMode === 'flow') return ['xlsx', 'xls'].includes(ext)
+    return false
+  }
+
+  // 새 양식 화면이 "다른 형식 파일로 새로 작성"으로 열린 경우 — 한 번만 가져오기 창을 띄운다
+  let initialImportHandled = false
+  $effect(() => {
+    if (initialImportFile && !initialImportHandled && !template) {
+      initialImportHandled = true
+      if (initialImportFile.name.toLowerCase().endsWith('.pdf')) {
+        startCanvasFromPdf(initialImportFile)
+      } else {
+        importFile = initialImportFile
+        showImport = true
+      }
+    }
+  })
 
   function onImportFileChange(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0]
@@ -348,6 +453,17 @@
       const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
       if (ext === 'doc') {
         csToast.warning('.doc(구형 Word) 파일은 직접 가져올 수 없어요. Word에서 "다른 이름으로 저장 → Word 문서(.docx)"로 저장한 뒤 다시 올려주세요.')
+      } else if (template && onStartNewFromImport && isOtherModeFile(ext)) {
+        // 저장된 양식은 작성 모드를 바꿀 수 없다 — 기존 양식은 그대로 두고, 이 파일로 새 양식 작성을 시작한다
+        csToast.info(ext === 'pdf'
+          ? 'PDF는 고정 캔버스형 새 양식으로 열었어요. 기존 양식은 그대로 있습니다.'
+          : '이 양식과 형식이 달라 새 양식으로 열었어요. 기존 양식은 그대로 있습니다.')
+        onStartNewFromImport(file)
+      } else if (!template && ext === 'pdf') {
+        // 새 양식 작성 중 PDF를 고르면 고정 캔버스형으로 바꿔 배경으로 넣는다(저장 전 작성 내용이 있으면 위 버튼 단계에서 이미 막힘)
+        startCanvasFromPdf(file)
+      } else if (authoringMode === 'spreadsheet' && !['xlsx', 'xls'].includes(ext)) {
+        csToast.error('스프레드시트 양식에는 엑셀(.xlsx) 파일만 가져올 수 있어요.')
       } else if (!['docx', 'xlsx', 'xls', 'hwp', 'hwpx'].includes(ext)) {
         csToast.error('.docx, .xlsx, .hwp, .hwpx 파일만 지원합니다.')
       } else {
@@ -671,6 +787,30 @@
   // --------------------------------------------------------------------------
   // 폼 직렬화 (use:enhance에서 content_blocks를 에디터에서 읽어 주입)
   // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // 파일 저장(헤더 "파일 저장 ▾") — 편집 중인 내용을 .hwp/.hwpx/.docx/.pdf/.html 로 내려받기 (2026-10-29)
+  // 양식 저장(DB)과 별개. flow(문서형)·html(HTML형) 모드만 지원한다. 발행자 서명·직인 이미지는 넣지 않는다(양식 사본).
+  // --------------------------------------------------------------------------
+  function getFileSaveInput(): ExportInput | null {
+    if (authoringMode === 'flow') {
+      return { mode: 'flow', title, flowDoc: editorRef?.getEditorJSON() ?? null }
+    }
+    if (authoringMode === 'html') {
+      const html = applyPrivacyTermsMarker(
+        applyContractTermsMarker(
+          applySpecialNotesMarker(applyIssuerSignatureMarker(DEFAULT_RENTAL_CONTRACT_HTML, null), specs),
+          htmlContractTermsText,
+        ),
+        htmlPrivacyTermsText,
+      )
+      return { mode: 'html', title, htmlDocument: html }
+    }
+    if (authoringMode === 'spreadsheet') {
+      return { mode: 'spreadsheet', title, spreadsheetDoc: spreadsheetEditorRef?.getSpreadsheetDocument() ?? null }
+    }
+    return null
+  }
+
   function serializeBlocks(): string {
     const json = editorRef?.getEditorJSON()
     const blocks: TiptapDocBlock[] = json ? [{ type: 'tiptap-doc', doc: json }] : []
@@ -709,15 +849,34 @@
   function handleImport(result: { type: 'html'; html: string }) {
     if (editorRef) {
       editorRef.setEditorContent(result.html)
+      flowForceDirty = true
+      // setContent 는 변경 알림(onchange)을 내지 않아, 가져온 내용이 "저장 전 변경"으로 감지되지 않았다 — 직접 표시
+      flowContentDirty = true
+      scheduleDraftSave()
     } else if (template && authoringMode !== 'flow') {
       csToast.error(MODE_LOCK_MESSAGE)
     } else {
       // spreadsheet 모드 → flow 전환: 에디터 마운트 후 initialHtml으로 콘텐츠 반영됨
       // (docInit은 $derived이므로 직접 수정 불가 — 대신 mode 전환으로 재마운트 유도)
       authoringMode = 'flow'
+      flowContentDirty = true
+      pendingFlowHtml = result.html   // 에디터가 마운트되면 아래 effect가 내용을 채운다
       csToast.success('문서 가져오기 완료. 에디터를 열어 내용을 확인하세요.')
     }
   }
+
+  /** 에디터가 아직 없을 때(새 양식에서 처음 가져오기) 받아 둔 문서 — 에디터가 준비되면 채운다 */
+  let pendingFlowHtml = $state<string | null>(null)
+  $effect(() => {
+    if (pendingFlowHtml !== null && editorRef) {
+      const html = pendingFlowHtml
+      pendingFlowHtml = null
+      editorRef.setEditorContent(html)
+      flowForceDirty = true
+      flowContentDirty = true
+      scheduleDraftSave()
+    }
+  })
 
   /**
    * xlsx → SpreadsheetDocument 임포트.
@@ -740,6 +899,189 @@
 
   /** 임포트된 SpreadsheetDocument 임시 저장 — key 재마운트 시 initialDoc으로 전달 */
   let _importedSpreadsheetDoc = $state<SpreadsheetDocument | null>(null)
+
+  // --------------------------------------------------------------------------
+  // 스프레드시트 작업 보호 (2026-10-29) — ① 저장하지 않고 나가려 할 때 경고 ② 브라우저 임시저장·복구 안내
+  // 서버로는 아무것도 보내지 않는다(localStorage — contractSheetDraft.ts). 저장 성공·나가기 확정 시 임시저장은 지운다.
+  // --------------------------------------------------------------------------
+  /** 사용자가 "나가기"를 확정했거나 저장이 끝났다 — 이중 경고·임시저장 재기록을 막는다 */
+  let leaveConfirmed = false
+  let draftTimer: ReturnType<typeof setTimeout> | null = null
+  let draftWarned = false
+  /** 복구를 제안할 임시저장(없으면 null) */
+  let draftOffer = $state<SheetDraft | null>(null)
+  /** 문서형·HTML형 복구 제안 */
+  let modeDraftOffer = $state<ModeDraft | null>(null)
+
+  const draftId = (): string => template?.id ?? 'new'
+
+  /** 저장하지 않은 작업이 있는가 — 스프레드시트·문서형·HTML형(캔버스형은 편집기 안에서 따로 저장하므로 제외) */
+  function hasUnsavedWork(): boolean {
+    if (leaveConfirmed) return false
+    if (authoringMode === 'spreadsheet') return isSpreadsheetDirty
+    if (authoringMode === 'flow' || authoringMode === 'html') return isFlowOrHtmlDirty
+    return false
+  }
+
+  function discardUnsavedWork(): void {
+    leaveConfirmed = true
+    if (draftTimer) clearTimeout(draftTimer)
+    draftTimer = null
+    clearSheetDraft(draftId())
+    clearModeDraft(draftId(), 'flow')
+    clearModeDraft(draftId(), 'html')
+  }
+
+  function warnDraftSkipped(kind: 'too-large' | 'unavailable', big: string): void {
+    if (draftWarned) return
+    draftWarned = true
+    csToast.warning(kind === 'too-large' ? big : '이 브라우저에서는 임시저장을 쓸 수 없어요. 작업이 끝나면 꼭 저장해 주세요.')
+  }
+
+  function flushDraft(): void {
+    draftTimer = null
+    if (!hasUnsavedWork()) return
+    // 복구 제안에 답하기 전에는 기존 임시저장을 덮어쓰지 않는다
+    if (authoringMode === 'spreadsheet') {
+      if (draftOffer || !spreadsheetEditorRef) return
+      const result = saveSheetDraft(draftId(), { title, doc: spreadsheetEditorRef.getSpreadsheetDocument() })
+      if (result !== 'ok') warnDraftSkipped(result, '내용이 커서 임시저장을 건너뛰었어요. 작업이 끝나면 꼭 저장해 주세요.')
+    } else if (authoringMode === 'flow') {
+      if (modeDraftOffer) return
+      const flowDoc = editorRef?.getEditorJSON()
+      if (!flowDoc) return
+      const result = saveModeDraft(draftId(), { kind: 'flow', title, specsJson: JSON.stringify(specs), requiresIssuerSignature, flowDoc })
+      if (result !== 'ok') warnDraftSkipped(result, '문서가 커서(그림이 많은 경우) 임시저장을 하지 못했어요. 닫거나 새로고침하면 내용이 사라지니, 작업이 끝나면 꼭 저장해 주세요.')
+    } else if (authoringMode === 'html') {
+      if (modeDraftOffer) return
+      const result = saveModeDraft(draftId(), {
+        kind: 'html', title, specsJson: JSON.stringify(specs), requiresIssuerSignature,
+        html: {
+          signatureUrl: htmlIssuerSignatureUrl, signatureWidth: htmlIssuerSignatureWidth,
+          signatureOffsetX: htmlIssuerSignatureOffsetX, signatureOffsetY: htmlIssuerSignatureOffsetY,
+          contractTerms: htmlContractTermsText, privacyTerms: htmlPrivacyTermsText,
+        },
+      })
+      if (result !== 'ok') warnDraftSkipped(result, '내용이 커서 임시저장을 건너뛰었어요. 작업이 끝나면 꼭 저장해 주세요.')
+    }
+  }
+
+  /** 편집이 있을 때마다 호출 — 잠깐 모아서(1.5초) 한 번에 저장한다 */
+  function scheduleDraftSave(): void {
+    if (draftTimer) clearTimeout(draftTimer)
+    draftTimer = setTimeout(flushDraft, 1500)
+  }
+
+  function restoreDraft(): void {
+    if (!draftOffer) return
+    title = draftOffer.title
+    _importedSpreadsheetDoc = draftOffer.doc
+    spreadsheetMountKey++
+    spreadsheetContentDirty = true
+    draftOffer = null
+  }
+
+  /** 문서형·HTML형 임시저장 복구 — 제목·특약·서명 필수 여부와 본문(문서형) 또는 입력 항목(HTML형)을 되돌린다 */
+  function restoreModeDraft(): void {
+    const d = modeDraftOffer
+    if (!d) return
+    title = d.title
+    requiresIssuerSignature = d.requiresIssuerSignature
+    try {
+      const parsed: unknown = JSON.parse(d.specsJson)
+      if (Array.isArray(parsed)) specs = parsed as { key: string; value: string }[]
+    } catch { /* 특약 복구 실패 — 현재 값 유지 */ }
+    if (d.kind === 'flow' && d.flowDoc) {
+      editorRef?.setEditorContent(d.flowDoc)
+      flowContentDirty = true
+    } else if (d.kind === 'html' && d.html) {
+      htmlIssuerSignatureUrl = d.html.signatureUrl
+      htmlIssuerSignatureWidth = d.html.signatureWidth
+      htmlIssuerSignatureOffsetX = d.html.signatureOffsetX ?? 0
+      htmlIssuerSignatureOffsetY = d.html.signatureOffsetY ?? 0
+      htmlContractTermsText = d.html.contractTerms
+      htmlPrivacyTermsText = d.html.privacyTerms
+    }
+    modeDraftOffer = null
+  }
+
+  function dropModeDraft(): void {
+    if (authoringMode === 'flow' || authoringMode === 'html') clearModeDraft(draftId(), authoringMode)
+    modeDraftOffer = null
+  }
+
+  function dropDraft(): void {
+    clearSheetDraft(draftId())
+    draftOffer = null
+  }
+
+  /** 임시저장 시각 — 한국 시간(KST) 표기 */
+  function formatDraftTime(ts: number): string {
+    return new Date(ts).toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  }
+
+  // 같은 페이지 안의 패널 교체(목록 선택·새 작성·닫기)는 페이지 쪽에서 confirmDiscardUnsaved() 로 막는다
+  $effect(() => registerUnsavedProbe({ isDirty: hasUnsavedWork, discard: discardUnsavedWork }))
+
+  // 그 밖의 이동: 새로고침·탭 닫기('leave'는 브라우저 기본 경고창)·다른 메뉴로 이동
+  beforeNavigate((nav) => {
+    if (!hasUnsavedWork()) return
+    if (nav.type === 'leave') {
+      nav.cancel()
+      return
+    }
+    if (askConfirm(UNSAVED_SHEET_MESSAGE)) discardUnsavedWork()
+    else nav.cancel()
+  })
+
+  // 탭이 숨겨지거나 닫히는 순간(네트워크 끊김 뒤 새로고침 포함) 대기 중인 임시저장을 즉시 기록
+  $effect(() => {
+    const flushNow = (): void => {
+      if (draftTimer) {
+        clearTimeout(draftTimer)
+        flushDraft()
+      }
+    }
+    const onVisibility = (): void => { if (document.visibilityState === 'hidden') flushNow() }
+    window.addEventListener('pagehide', flushNow)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flushNow)
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (draftTimer) clearTimeout(draftTimer)
+    }
+  })
+
+  // 문서형·HTML형: 제목·특약·서명 항목 등이 바뀌면 임시저장을 예약한다(본문 편집은 편집기의 onchange 에서 예약)
+  $effect(() => {
+    void [title, JSON.stringify(specs), requiresIssuerSignature, htmlIssuerSignatureUrl, htmlIssuerSignatureWidth,
+      htmlIssuerSignatureOffsetX, htmlIssuerSignatureOffsetY, htmlContractTermsText, htmlPrivacyTermsText]
+    if ((authoringMode === 'flow' || authoringMode === 'html') && isFlowOrHtmlDirty) untrack(scheduleDraftSave)
+  })
+
+  // 문서형·HTML형 모드가 열릴 때 이 양식의 임시저장이 있으면 복구를 제안한다(DB 저장본보다 새것만)
+  $effect(() => {
+    const mode = authoringMode
+    const id = template?.id ?? 'new'
+    const savedAtDb = template?.updated_at ? Date.parse(template.updated_at) : 0
+    untrack(() => {
+      modeDraftOffer = mode === 'flow' || mode === 'html'
+        ? loadModeDraft(id, mode, { notBefore: Number.isNaN(savedAtDb) ? 0 : savedAtDb })
+        : null
+    })
+  })
+
+  // 스프레드시트 모드가 열릴 때 이 양식의 임시저장이 있으면 복구를 제안한다(DB 저장본보다 새것만)
+  $effect(() => {
+    const mode = authoringMode
+    const id = template?.id ?? 'new'
+    const savedAtDb = template?.updated_at ? Date.parse(template.updated_at) : 0
+    untrack(() => {
+      draftOffer = mode === 'spreadsheet' ? loadSheetDraft(id, { notBefore: Number.isNaN(savedAtDb) ? 0 : savedAtDb }) : null
+    })
+  })
 
   // --------------------------------------------------------------------------
   // spreadsheet 모드 저장 — fetch로 직접 action에 POST
@@ -765,6 +1107,7 @@
       if (result.type === 'success') {
         csToast.success(template ? '수정되었습니다.' : '등록되었습니다.')
         const id = (result.data as { id?: string })?.id ?? template?.id ?? ''
+        discardUnsavedWork() // 저장 완료 — 이탈 경고·임시저장 해제
         // ⛔ 2026-08-28 발견 — invalidateAll()을 여기서 한 번 호출하고, 곧이어 호출하는
         // onsaved(id)(부모 +page.svelte의 onSaved)에서 또 한 번 중복 호출하고 있었다.
         // 저장 자체는 이미 성공했는데, 성공 토스트가 뜬 "이후"에 실행되는 이 중복
@@ -854,10 +1197,10 @@
   <div class="panel-header">
     <span class="panel-title">{template ? '계약서 양식 수정' : '계약서 양식 등록'}</span>
     <div class="panel-header-actions">
-      {#if authoringMode === 'flow'}
+      {#if authoringMode === 'flow' || authoringMode === 'spreadsheet'}
         <input
           type="file"
-          accept={CONTRACT_IMPORT_ACCEPT}
+          accept={authoringMode === 'spreadsheet' ? SPREADSHEET_IMPORT_ACCEPT : CONTRACT_IMPORT_ACCEPT}
           style="display:none"
           bind:this={importFileInput}
           onchange={onImportFileChange}
@@ -870,11 +1213,26 @@
           title="외부 문서 가져오기"
         >문서 가져오기</button>
       {/if}
-      {#if onclose}
+      {#if authoringMode === 'flow' || authoringMode === 'html' || authoringMode === 'spreadsheet'}
+        <ContractFileSaveMenu mode={authoringMode} getInput={getFileSaveInput} />
+      {/if}
+      <!-- 새로 작성의 첫 화면(작성 방식 선택)에는 닫을 대상이 없어 ✕ 를 두지 않는다(2026-10-29) — 방식을 고른 뒤 또는 기존 양식 편집 중에만 표시 -->
+      {#if onclose && (template || authoringMode !== null)}
         <button type="button" class="close-btn" onclick={onclose} aria-label="닫기">✕</button>
       {/if}
     </div>
   </div>
+
+  {#if modeDraftOffer}
+    <!-- 문서형·HTML형 임시저장 복구 안내(스프레드시트형과 같은 방식) -->
+    <div class="draft-banner" role="status">
+      <span class="draft-text">저장하지 않은 작업이 {formatDraftTime(modeDraftOffer.savedAt)}에 임시저장돼 있어요. 복구할까요?</span>
+      <div class="draft-actions">
+        <button type="button" class="btn-import draft-btn" onclick={restoreModeDraft}>복구</button>
+        <button type="button" class="btn-import draft-btn" onclick={dropModeDraft}>삭제</button>
+      </div>
+    </div>
+  {/if}
 
   <form
     id="tpl-form"
@@ -900,6 +1258,7 @@
         if (result.type === 'success') {
           csToast.success(template ? '수정되었습니다.' : '등록되었습니다.')
           const id = (result.data as { id?: string })?.id ?? template?.id ?? ''
+          discardUnsavedWork() // 저장 완료 — 이탈 경고·임시저장 해제
           if (onsaved) {
             onsaved(id)
           } else {
@@ -1133,6 +1492,14 @@
               <span class="mode-name">HTML형 (고정 서식)</span>
               <span class="mode-desc">Excel 기반 고정 HTML 서식을 사용합니다. 고객정보·상품목록 등 변수가 자동으로 치환됩니다. 특약 조항만 직접 입력하세요.</span>
             </button>
+            <button
+              type="button"
+              class="mode-btn"
+              onclick={() => { authoringMode = 'spreadsheet' }}
+            >
+              <span class="mode-name">스프레드시트형 (엑셀형)</span>
+              <span class="mode-desc">엑셀처럼 표를 직접 작성하거나 .xlsx 파일을 가져와 편집합니다. 셀에 변수를 넣고 .xlsx로 저장할 수 있습니다.</span>
+            </button>
           </div>
         </div>
       {:else if authoringMode === 'canvas'}
@@ -1140,22 +1507,33 @@
         <div class="canvas-editor-wrap">
           {#key template?.id ?? '__new__'}
             <ContractCanvasEditor
+              bind:this={canvasRef}
               initialDoc={canvasDocInit}
               title={title}
               specifications={specs}
               onUploadPage={uploadCanvasBackground}
               onSave={handleCanvasSave}
+              showSaveButton={false}
             />
           {/key}
         </div>
       {:else if authoringMode === 'spreadsheet'}
         <!-- spreadsheet 모드: ContractSpreadsheetEditor + 필드 패널 2단 레이아웃 -->
         <div class="spreadsheet-editor-wrap">
+          {#if draftOffer}
+            <div class="draft-banner" role="status">
+              <span class="draft-text">저장하지 않은 작업이 {formatDraftTime(draftOffer.savedAt)}에 임시저장돼 있어요. 복구할까요?</span>
+              <div class="draft-actions">
+                <button type="button" class="btn-import draft-btn" onclick={restoreDraft}>복구</button>
+                <button type="button" class="btn-import draft-btn" onclick={dropDraft}>삭제</button>
+              </div>
+            </div>
+          {/if}
           {#key spreadsheetMountKey}
             <ContractSpreadsheetEditor
               bind:this={spreadsheetEditorRef}
               initialDoc={_importedSpreadsheetDoc ?? spreadsheetDocInit}
-              onchange={() => { spreadsheetContentDirty = true }}
+              onchange={() => { spreadsheetContentDirty = true; scheduleDraftSave() }}
               onUploadImage={uploadCanvasBackground}
             />
           {/key}
@@ -1163,7 +1541,7 @@
         <div class="panel-col" class:collapsed={!fieldPanelOpen}>
           <div class="panel-col-head">
             <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
-              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+              <ChevronIcon direction={fieldPanelOpen ? 'right' : 'left'} size={6} color="currentColor" />
             </button>
           </div>
           <ContractFieldPanel
@@ -1271,7 +1649,7 @@
         <div class="panel-col" class:collapsed={!fieldPanelOpen}>
           <div class="panel-col-head">
             <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
-              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+              <ChevronIcon direction={fieldPanelOpen ? 'right' : 'left'} size={6} color="currentColor" />
             </button>
           </div>
           <ContractFieldPanel
@@ -1294,14 +1672,14 @@
                 bind:this={editorRef}
                 initialContent={docInit.initialContent}
                 initialHtml={docInit.initialHtml}
-                onchange={() => { flowContentDirty = true }}
+                onchange={onFlowEditorChange}
               />
             {/key}
           </div>
           <div class="panel-col" class:collapsed={!fieldPanelOpen}>
           <div class="panel-col-head">
             <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
-              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+              <ChevronIcon direction={fieldPanelOpen ? 'right' : 'left'} size={6} color="currentColor" />
             </button>
           </div>
             <ContractFlowPanel
@@ -1317,14 +1695,14 @@
                 bind:this={editorRef}
                 initialContent={docInit.initialContent}
                 initialHtml={docInit.initialHtml}
-                onchange={() => { flowContentDirty = true }}
+                onchange={onFlowEditorChange}
               />
             {/key}
           </div>
           <div class="panel-col" class:collapsed={!fieldPanelOpen}>
           <div class="panel-col-head">
             <button type="button" class="close-btn" onclick={toggleFieldPanel} aria-expanded={fieldPanelOpen} aria-label={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'} title={fieldPanelOpen ? '변수 패널 닫기' : '변수 패널 펼치기'}>
-              {#if fieldPanelOpen}✕{:else}<ChevronIcon direction="left" size={10} color="currentColor" />{/if}
+              <ChevronIcon direction={fieldPanelOpen ? 'right' : 'left'} size={6} color="currentColor" />
             </button>
           </div>
             <ContractFieldPanel
@@ -1377,8 +1755,15 @@
   -->
   <div class="panel-actions">
     {#if authoringMode === 'canvas'}
-      <!-- canvas 모드: 에디터 내 저장 버튼 사용 — 외부 저장 버튼 숨김 -->
-      <span class="canvas-save-hint">저장은 캔버스 에디터 내 저장 버튼을 사용하세요.</span>
+      <!-- canvas 모드: 다른 작성 모드와 같은 하단 저장 줄을 쓰고, 실제 저장(서명 필드 검증 포함)은 캔버스 편집기의 save()가 맡는다 -->
+      <button
+        type="button"
+        class="btn-panel-lg"
+        disabled={saving}
+        onclick={() => void canvasRef?.save()}
+      >
+        {saving ? '저장 중...' : template ? '수정 저장' : '양식 등록'}
+      </button>
     {:else if authoringMode === 'spreadsheet'}
       <!--
         spreadsheet 모드: fetch 기반 저장
@@ -1431,6 +1816,7 @@
     onreselect={triggerImport}
     onImport={handleImport}
     onImportSpreadsheet={handleImportSpreadsheet}
+    onUploadImage={uploadCanvasBackground}
   />
 {/if}
 
@@ -1464,19 +1850,19 @@
   }
 
   .btn-import {
-    height: 28px;
-    padding: 0 10px;
-    border: 1px solid rgba(59, 47, 138, 0.3);
+    min-width: 134px; /* '파일 저장'(.fsm-btn)과 같은 가로폭 */
+    padding: 8px 10px;
+    border: none;
     border-radius: var(--cms-radius-sm);
-    background: transparent;
-    font: var(--text-pc-script-12);
+    background: var(--cs-lilac);
+    font: var(--text-pc-body-14);
+    line-height: 1.2; /* 토큰의 200% 줄높이는 상하 패딩과 겹쳐 버튼이 과하게 커진다 */
     color: var(--cs-purple);
     cursor: pointer;
-    transition: background 0.1s, border-color 0.1s;
+    transition: background 0.1s;
   }
   .btn-import:hover {
-    background: rgba(59, 47, 138, 0.06);
-    border-color: var(--cs-purple);
+    background: var(--cs-purple-op10);
   }
 
   .close-btn {
@@ -1638,7 +2024,7 @@
   .panel-col.collapsed {
     width: 36px;
   }
-  .panel-col.collapsed > :global(:not(.panel-col-head)) { display: none; }  /* 자식 컴포넌트(ContractFieldPanel)의 루트는 이 컴포넌트 범위 밖이라 :global 필요 */
+  .panel-col.collapsed > :global(:not(.panel-col-head)) { display: none !important; }  /* !important: 통합 문서 편집기 래퍼(.cs-doc-editor-host)가 인라인 style="display: contents"를 써서, 없으면 접힌 뒤에도 자식이 36px 폭에 눌려 세로로 보인다 */  /* 자식 컴포넌트(ContractFieldPanel)의 루트는 이 컴포넌트 범위 밖이라 :global 필요 */
   .panel-col.collapsed .panel-col-head { justify-content: center; padding: 4px 0; border-bottom: none; }
   .panel-col { transition: width 0.2s ease; }
   .panel-col {
@@ -1808,6 +2194,8 @@
   }
   .mode-buttons {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 16px;
   }
   .mode-btn {
@@ -1853,13 +2241,6 @@
     min-height: 0;
   }
 
-  /* canvas 모드 저장 안내 힌트 */
-  .canvas-save-hint {
-    margin-left: auto;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-  }
-
   /* spreadsheet 에디터 래퍼 */
   .spreadsheet-editor-wrap {
     flex: 1;
@@ -1867,6 +2248,28 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+  /* 임시저장 복구 안내 — 버튼은 '문서 가져오기'(.btn-import)와 같은 면 중심 스타일을 그대로 쓴다 */
+  .draft-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--cs-surface-gray);
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .draft-text {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+  .draft-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .btn-import.draft-btn {
+    min-width: 72px;
   }
   .spreadsheet-editor-wrap :global(.cse-wrap) {
     flex: 1;

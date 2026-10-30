@@ -8,6 +8,10 @@
   import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import ContractFlowEditor from '$lib/modules/doc-editor/adapters/crazyshot/ContractFlowEditor.svelte'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
+  import ContractImportModal from '$lib/components/cms/contract-editor/ContractImportModal.svelte'
+  import ContractFileSaveMenu from '$lib/components/cms/contract-editor/ContractFileSaveMenu.svelte'
+  import type { ExportInput } from '$lib/utils/docExport/exportContract'
+  import { DEFAULT_RENTAL_CONTRACT_HTML } from '$lib/components/cms/contract-editor/templates/defaultRentalContractHtml'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
   import type { ContentBlock } from '$lib/types/content-editor'
 
@@ -35,6 +39,40 @@
         { type: 'paragraph' },
       ],
     },
+  }
+
+  // ── 파일 저장 메뉴 검증(?editor=filesave[&mode=html]) — 변수·표가 든 양식을 .hwp/.hwpx/.docx/.html 로 내려받는다(PDF 는 서버·로그인이 필요해 제외) ──
+  const fileSaveInput: ExportInput = $derived(
+    page.url.searchParams.get('mode') === 'html'
+      ? { mode: 'html', title: 'e2e HTML형 양식', htmlDocument: DEFAULT_RENTAL_CONTRACT_HTML }
+      : {
+          mode: 'flow',
+          title: 'e2e 문서형 양식',
+          flowDoc: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: '임차인 ' }, { type: 'mergeField', attrs: { variable: '고객이름', label: '고객이름' } }] },
+              {
+                type: 'table',
+                content: [
+                  { type: 'tableRow', content: [
+                    { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'text', text: '상품명' }] }] },
+                    { type: 'tableCell', content: [{ type: 'paragraph', content: [{ type: 'mergeField', attrs: { variable: '상품명', label: '상품명' } }] }] },
+                  ] },
+                ],
+              },
+            ],
+          },
+        },
+  )
+
+  // ── 가져오기 모달 검증(?editor=import) — 파일 선택창 없이 이 화면의 입력으로 .hwp/.hwpx 를 모달에 넣는다 ──
+  let importFile = $state<File | null>(null)
+  let importedHtml = $state('')
+  function onImportFileChange(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    importedHtml = ''
+    importFile = input.files?.[0] ?? null
   }
 
   // ── 공통 뷰어 단독 검증(?editor=viewer[&kinds=mixed][&ro=1]) ──
@@ -78,6 +116,24 @@
         onDelete={readonlyViewer ? undefined : (i) => { log.deletes += 1; vItems = vItems.filter((_, k) => k !== i); return true }}
         onSave={readonlyViewer ? undefined : () => { log.saves += 1; return true }}
       />
+    {/if}
+  {:else if which === 'filesave'}
+    <div id="e2e-filesave" style="display:flex;justify-content:flex-end;padding:12px">
+      <ContractFileSaveMenu mode={fileSaveInput.mode} getInput={() => fileSaveInput} />
+    </div>
+  {:else if which === 'import'}
+    <div id="e2e-import" style="padding:12px">
+      <input id="e2e-import-file" type="file" accept=".hwp,.hwpx" onchange={onImportFileChange} aria-label="한글 파일 선택" />
+      <pre id="e2e-imported" data-len={importedHtml.length}>{importedHtml}</pre>
+    </div>
+    {#if importFile}
+      {#key importFile}
+        <ContractImportModal
+          initialFile={importFile}
+          onclose={() => { importFile = null }}
+          onImport={(r) => { importedHtml = r.html }}
+        />
+      {/key}
     {/if}
   {:else if which === 'rich'}
     <RichContentEditor bind:blocks bind:keywords showKeywords={false} variant="cms" />

@@ -186,6 +186,19 @@ export interface SpreadsheetSheet {
   rows: string[][]
   merges: SheetMergeRange[]
   colWidths: (number | null)[]
+  /**
+   * 수식 — 칸 주소("C1") → 입력한 수식 원문("=A1+B1"). 칸의 값(rows)에는 계산된 결과가 들어 있어 고객 계약서·내보내기는 그 값을 쓴다.
+   * 편집기를 다시 열 때만 이 수식을 칸에 되돌려 계산 상태를 이어간다 (2026-10-29 추가)
+   */
+  formulas?: Record<string, string>
+  /** 수식 칸의 표시 형식 코드(칸 주소 → 엑셀 서식, 예: 'yyyy.mm.dd') — 수식 결과(날짜·숫자)를 보이는 글자로 바꿀 때 쓴다 (2026-10-29) */
+  numFmts?: Record<string, string>
+  /** 숨김 시트 — 편집기에는 보이지만 고객 계약서·웹/PDF 저장에서는 빠진다(엑셀의 숨김 시트) (2026-10-29) */
+  hidden?: boolean
+  /** 틀 고정(엑셀의 창 고정) — 위쪽 N행·왼쪽 N열. 편집기는 열 고정만 화면에 반영하고, 값은 그대로 보존·엑셀로 내보낸다 (2026-10-29) */
+  freeze?: { rows: number; cols: number }
+  /** 행별 높이(px, null=편집기 기본). 없으면 전부 기본 — 구버전 데이터와 호환 (2026-10-29 추가) */
+  rowHeights?: (number | null)[]
   cellFormatting: XlsxCellFormatting[][]
   /**
    * 다중 상품 반복 영역 (Stage 2 신규).

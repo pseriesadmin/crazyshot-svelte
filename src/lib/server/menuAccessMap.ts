@@ -101,6 +101,11 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/chat/crazychat/assist/[runId]/rollback',
     ],
   },
+  // 계약서 양식 화면(rental.contracts, 매니저 이상 메뉴) 전용 — 편집 중인 양식을 PDF 파일로 내려받기(2026-10-29)
+  'rental.contracts': {
+    phase: '2-A',
+    dirs: ['src/routes/api/cms/contract-templates/export-pdf'],
+  },
   // 1c — 예약대여현황: 예약 상세 패널 API 전부 + QR 전이 + 대시보드 간트 데이터. 패널(RentalDetailPanel)이 대시보드·채팅·모바일에도
   // 마운트되지만 "공유 패널 API는 예약대여현황 단독"으로 확정(Stephen 2026-10-03) — 대시보드 권한(모든 계정 기본 허용)으로 통과시키면 OFF가 무력화됨
   'rental.reservation': {

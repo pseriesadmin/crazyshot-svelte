@@ -16,7 +16,7 @@
 
 import type { SpreadsheetDocument, SpreadsheetSheet } from '$lib/types/contract-document'
 import type { XlsxCellFormatting } from '$lib/types/sheet-format'
-import { hasImageOverlay, splitCellImageOverlay } from '$lib/types/sheet-format'
+import { hasImageOverlay, splitCellImageOverlay, splitCellLink } from '$lib/types/sheet-format'
 import { computeMergeLayout } from '$lib/utils/docImport/xlsxImport'
 import { fitColumnWidthsToTarget } from '$lib/utils/docImport/fitColumnWidths'
 
@@ -80,15 +80,26 @@ function isValidTextAlign(value: string): boolean {
 }
 
 /**
- * jspreadsheet 글꼴 툴바가 실제로 제공하는 3개 값만 허용(2026-08-29 추가 — "Default" 선택
- * 시엔 애초에 빈 문자열이 저장되므로 이 필드 자체가 채워지지 않음, node_modules/jspreadsheet-ce
- * 직접 확인). "Courier New"처럼 값 안에 공백이 들어가는 폰트명도 있어 전체 문자열 allowlist로
- * 고정 매칭 — 임의 폰트명 인젝션 방지.
+ * 글꼴 이름 허용 규칙(2026-10-29 완화) — 이전에는 jspreadsheet 글꼴 툴바의 3개 값(Verdana/Arial/Courier New)만 허용했으나,
+ * 엑셀 가져오기가 원본 글꼴(돋움·맑은 고딕 등)을 옮기게 되면서 글자·숫자·공백·`_.-` 로만 된 40자 이하 이름을 허용한다.
+ * 따옴표·콜론·세미콜론·괄호가 없어 스타일 문자열 주입이 불가능하다.
  */
-const CSS_FONT_FAMILY = /^(Verdana|Arial|Courier New)$/i
+const CSS_FONT_FAMILY = /^[\p{L}\p{N} _.-]{1,40}$/u
 
 function isValidFontFamily(value: string): boolean {
   return CSS_FONT_FAMILY.test(value.trim())
+}
+
+/** 기울임 — 'italic' 하나만 허용(2026-10-29 추가) */
+function isValidFontStyle(value: string): boolean {
+  return value.trim().toLowerCase() === 'italic'
+}
+
+/** 밑줄·취소선 — 'underline' / 'line-through' / 두 개 조합만 허용(2026-10-29 추가) */
+const CSS_TEXT_DECORATION = /^(underline|line-through|underline line-through)$/i
+
+function isValidTextDecoration(value: string): boolean {
+  return CSS_TEXT_DECORATION.test(value.trim())
 }
 
 /** jspreadsheet 세로정렬 툴바가 실제로 저장하는 3개 값만 허용(2026-08-29 추가) */
@@ -152,6 +163,12 @@ function cellFormattingToStyle(fmt: XlsxCellFormatting): string {
   if (fmt.fontFamily && isValidFontFamily(fmt.fontFamily)) {
     parts.push(`font-family:${fmt.fontFamily}`)
   }
+  if (fmt.fontStyle && isValidFontStyle(fmt.fontStyle)) {
+    parts.push('font-style:italic')
+  }
+  if (fmt.textDecoration && isValidTextDecoration(fmt.textDecoration)) {
+    parts.push(`text-decoration:${fmt.textDecoration}`)
+  }
   if (fmt.textAlign && isValidTextAlign(fmt.textAlign)) {
     parts.push(`text-align:${fmt.textAlign}`)
   }
@@ -204,7 +221,8 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
   // <tbody> — 각 행·셀 렌더링
   const tbodyParts: string[] = ['<tbody>']
   rows.forEach((row, rowIdx) => {
-    tbodyParts.push('<tr>')
+    const rowPx = sheet.rowHeights?.[rowIdx]
+    tbodyParts.push(typeof rowPx === 'number' && rowPx > 0 && rowPx <= 2000 ? `<tr style="height:${Math.round(rowPx)}px">` : '<tr>')
     row.forEach((cellText, colIdx) => {
       const key = `${rowIdx}:${colIdx}`
       if (coveredCells.has(key)) return // 병합에 덮인 셀: 스킵
@@ -264,7 +282,13 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
       if (styleStr) attrs.push(`style="${styleStr}"`)
 
       const attrStr = attrs.length > 0 ? ' ' + attrs.join(' ') : ''
-      const cellHtml = escapeHtml(displayText) + overlayHtml + overlaySpacerHtml
+      // 하이퍼링크 — 표식을 떼고 보이는 글자만 <a> 로 감싼다(http/https/mailto 만, 새 창·opener 차단)
+      const link = splitCellLink(displayText)
+      const shownText = escapeHtml(link.text)
+      const textHtml = link.url
+        ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer nofollow">${shownText}</a>`
+        : shownText
+      const cellHtml = textHtml + overlayHtml + overlaySpacerHtml
       tbodyParts.push(`<td${attrStr}>${cellHtml}</td>`)
     })
     tbodyParts.push('</tr>')
@@ -289,11 +313,13 @@ function renderSheetToTable(sheet: SpreadsheetSheet): string {
  * 배경색·테두리색은 #RRGGBB 형식만 인라인 스타일로 허용 (그 외 값은 무시).
  */
 export function renderSpreadsheetToHtml(doc: SpreadsheetDocument): string {
-  if (doc.sheets.length === 0) return ''
+  // 숨김 시트는 고객 화면·내보내기에서 뺀다
+  const visibleSheets = doc.sheets.filter((s) => !s.hidden)
+  if (visibleSheets.length === 0) return ''
 
   const sheetParts: string[] = []
 
-  doc.sheets.forEach((sheet, idx) => {
+  visibleSheets.forEach((sheet, idx) => {
     const pageBreak = idx > 0 ? ' style="page-break-before:always"' : ''
     const safeName = escapeHtml(sheet.name)
     const tableHtml = renderSheetToTable(sheet)

@@ -375,7 +375,7 @@
     </section>
   {:else}
     <div class="no-selection">
-      <span class="no-sel-icon">←</span>
+      <span class="no-sel-icon">→</span>
       <p>캔버스에서 필드를 클릭하면<br />속성이 여기에 표시됩니다.</p>
     </div>
   {/if}
@@ -383,10 +383,10 @@
 
 <style>
   .palette {
-    width: 220px;
-    min-width: 220px;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
     background: var(--cs-surface-gray, #f6f6f6);
-    border-right: 1px solid var(--cs-lilac, #ECEBF4);
     display: flex;
     flex-direction: column;
     gap: 0;

@@ -20,16 +20,32 @@
     worksheetConfigToSheet,
     cssToFormatting,
     computeUniformStyleCorrections,
+    trimSheetToUsedRange,
+    gridDimensionsToFill,
+    decorationTokens,
+    toggleDecoration,
+    type DecorationToken,
     type JssWorksheetInstance,
   } from './spreadsheetWidgetAdapter'
   import type { SpreadsheetDocument, SpreadsheetSheet } from '$lib/types/contract-document'
   import {
     hasImageOverlay,
     splitCellImageOverlay,
+    splitCellLink,
+    LINK_CELL_PREFIX,
     toImageOverlayMarker,
+    cellAddress,
     DEFAULT_IMAGE_OVERLAY_WIDTH,
   } from '$lib/types/sheet-format'
   import { csToast } from '$lib/utils/toast'
+  import {
+    computeWorkbook,
+    isFormulaRaw,
+    adjustFormulaForEdit,
+    adjustAddress,
+    type FormulaSheetInput,
+    type StructuralEdit,
+  } from '$lib/utils/sheetFormula'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { renderSpreadsheetToHtml } from '$lib/utils/spreadsheetRender'
@@ -113,6 +129,23 @@
   // ─────────────────────────────────────────────────────────────────────────────
 
   let containerEl: HTMLDivElement | undefined = $state(undefined)
+  /** 시트별 수식 칸 표시 형식(칸 주소 → 엑셀 서식 코드) — 행·열이 밀리면 키도 함께 옮긴다 */
+  let sheetNumFmts: Array<Record<string, string>> = []
+  /** 위젯이 만들어지기 전(생성자 안에서 칸이 처음 그려지는 동안)의 계산 입력 — 첫 렌더 때 수식 칸 값을 구하는 데 쓴다 */
+  let initialEngineInput: FormulaSheetInput[] | null = null
+  /** 수식 입력줄(칸 주소 + fx + 입력란) — 초기화 뒤 라이브러리 툴바 바로 아래로 옮겨 온다 */
+  let formulaBarEl: HTMLDivElement | undefined = $state(undefined)
+  /** 선택한 칸 주소("C3") 또는 범위("A1:B2") */
+  let barAddr = $state('')
+  /** 입력줄에 보이는 글자 — 수식이면 "=…" 원문, 아니면 칸 값 */
+  let barText = $state('')
+  /** 칸 값 끝의 링크·이미지 표식 — 입력줄에는 보이지 않고, 저장할 때 그대로 다시 붙인다 */
+  let barMarkers = ''
+  /** 입력 시작 때의 글자(Esc 로 되돌리기) */
+  let barBase = ''
+  let barFocused = false
+  /** 시트 탭을 담는 고정 영역(스크롤 박스 밖, 표 아래) — jspreadsheet 가 만든 탭 막대를 이리로 옮겨 온다 */
+  let tabsHostEl: HTMLDivElement | undefined = $state(undefined)
   let initialized = $state(false)
   let initError = $state<string | null>(null)
 
@@ -166,6 +199,9 @@
 
   /** 시트 인덱스별 반복 영역 — SpreadsheetSheet.repeatRegion과 동기화 */
   let sheetRepeatRegions = $state<Array<{ startRow: number; endRow: number } | undefined>>([])
+
+  /** 시트 인덱스별 숨김 여부(엑셀의 숨김 시트) — 고객 계약서·웹/PDF 저장에서 빠진다 */
+  let sheetHidden = $state<Array<boolean | undefined>>([])
 
   /** 현재 활성 시트 인덱스 — onselection 콜백에서 갱신(반복 영역 버튼 표시에 사용) */
   let activeSheetIndexState = $state(0)
@@ -606,14 +642,37 @@
     y: number,
     instance: unknown,
   ): void {
-    if (!hasImageOverlay(value)) return
+    // 수식 칸 — 우리 계산 엔진의 결과를 보여 준다(라이브러리 자체 수식 해석은 꺼 둠). 칸 값은 "=…" 원문 그대로 둔다
+    if (isFormulaRaw(value) && !hasImageOverlay(value)) {
+      const shown = formulaDisplay(instance, x, y)
+      if (shown !== null) {
+        cell.textContent = shown
+        cell.classList.add('cse-formula-cell')
+        return
+      }
+    }
+    // 링크만 있는 칸(이미지 없음) — 보이는 글자만 남기고 링크 모양(파란 밑줄)·주소 툴팁
+    if (!hasImageOverlay(value)) {
+      if (typeof value !== 'string' || !value.includes(LINK_CELL_PREFIX)) return
+      const link = splitCellLink(value)
+      if (!link.url) return
+      cell.textContent = link.text
+      cell.classList.add('cse-link-cell')
+      cell.title = link.url
+      return
+    }
     const { text, imageUrl, width, offsetX, offsetY } = splitCellImageOverlay(value)
     if (!imageUrl) return
     if (!isWorksheetLike(instance)) return
     const ws = instance
     const cellKey = `${x},${y}`
 
-    cell.textContent = text
+    const linkInText = splitCellLink(text)
+    cell.textContent = linkInText.text
+    if (linkInText.url) {
+      cell.classList.add('cse-link-cell')
+      cell.title = linkInText.url
+    }
     cell.style.position = 'relative'
     cell.style.overflow = 'visible'
 
@@ -624,7 +683,7 @@
     wrap.style.top = '50%'
     wrap.style.left = '50%'
     wrap.style.transform = `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px))`
-    wrap.style.zIndex = '5'
+    wrap.style.zIndex = '3'   // 스크롤 때 고정 툴바(5)·수식 줄(4)·머리글(4) 아래로 지나가도록 그보다 낮게
 
     const img = document.createElement('img')
     img.src = imageUrl
@@ -866,6 +925,218 @@
   // 부모 컴포넌트: bind:this={spreadsheetEditorRef} 후 spreadsheetEditorRef.getSpreadsheetDocument()
   // ─────────────────────────────────────────────────────────────────────────────
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 수식 계산 연결 (2026-10-29) — 시트 간 참조를 포함한 통합 문서 전체를 우리 엔진(utils/sheetFormula)으로 계산한다.
+  // 칸 값에는 "=…" 원문이 그대로 들어 있고(이동·되돌리기·입력줄 표시가 자연스럽게 동작), 화면에는 계산 결과를 그려 준다.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function sheetNameAt(i: number): string {
+    return initialDoc?.sheets[i]?.name ?? `Sheet${i + 1}`
+  }
+
+  /** 지금 모든 시트의 칸 원문(수식 포함)을 엔진 입력으로 */
+  function engineInput(): FormulaSheetInput[] {
+    if (spreadsheetParent) {
+      return spreadsheetParent.worksheets.map((w, i) => ({
+        name: sheetNameAt(i),
+        raw: isWorksheetLike(w) ? w.getData().map((row) => row.map((v) => (v == null ? '' : String(v)))) : [],
+        numFmts: sheetNumFmts[i],
+      }))
+    }
+    return initialEngineInput ?? []
+  }
+
+  /** 위젯 인스턴스가 몇 번째 시트인지(위젯이 아직 없으면 시트 이름으로) */
+  function sheetIndexOf(instance: unknown): number {
+    if (spreadsheetParent) {
+      const k = spreadsheetParent.worksheets.indexOf(instance as never)
+      if (k >= 0) return k
+    }
+    const opts = (instance as { options?: { worksheetName?: string } } | null)?.options
+    const label = opts?.worksheetName
+    if (label === undefined) return -1
+    return initialEngineInput ? initialEngineInput.findIndex((s) => label === s.name || label === `${s.name} (숨김)`) : -1
+  }
+
+  /** 수식 칸 하나에 보일 글자(계산 불가면 null — 라이브러리 기본 표시를 쓴다) */
+  function formulaDisplay(instance: unknown, x: number, y: number): string | null {
+    const i = sheetIndexOf(instance)
+    if (i < 0) return null
+    const results = computeWorkbook(engineInput())
+    return results[i]?.get(cellAddress(y, x)) ?? null
+  }
+
+  function sheetTd(sheetIdx: number, x: number, y: number): HTMLElement | null {
+    const pane = containerEl?.querySelectorAll(':scope > .jtabs-content > div')[sheetIdx]
+    return pane?.querySelector<HTMLElement>(`tbody td[data-x="${x}"][data-y="${y}"]`) ?? null
+  }
+
+  let formulaRefreshQueued = false
+  /** 어떤 칸이 바뀌면 그 칸을 참조하는 (다른 시트 포함) 수식 칸의 화면 글자를 다시 맞춘다 */
+  function refreshFormulaCells(): void {
+    if (formulaRefreshQueued) return
+    formulaRefreshQueued = true
+    queueMicrotask(() => {
+      formulaRefreshQueued = false
+      if (!spreadsheetParent) return
+      const results = computeWorkbook(engineInput())
+      results.forEach((map, i) => {
+        for (const [addr, text] of map) {
+          const m = /^([A-Z]+)(\d+)$/.exec(addr)
+          if (!m) continue
+          const x = [...m[1]].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1
+          const td = sheetTd(i, x, parseInt(m[2], 10) - 1)
+          if (td && td.textContent !== text && !td.querySelector('img')) td.textContent = text
+        }
+      })
+    })
+  }
+
+  /** 행·열 삽입/삭제 뒤: 모든 시트의 수식 참조를 새 위치에 맞게 고치고, 표시 형식 키도 따라 옮긴다 */
+  function onStructuralEdit(instance: unknown, axis: 'row' | 'col', op: 'insert' | 'delete', indexes: number[]): void {
+    if (!spreadsheetParent || indexes.length === 0) return
+    const i = spreadsheetParent.worksheets.indexOf(instance as never)
+    if (i < 0) return
+    const sorted = [...indexes].sort((a, b) => a - b)
+    const edit: StructuralEdit = { sheet: sheetNameAt(i), axis, op, at: sorted[0], count: sorted.length }
+    const fixes: Array<{ w: JssWorksheetInstance; x: number; y: number; value: string }> = []
+    spreadsheetParent.worksheets.forEach((w, j) => {
+      if (!isWorksheetLike(w)) return
+      // 구조가 바뀐 시트 자신의 수식은 라이브러리가 이미 참조를 옮겨 놓는다(실측: 우리가 또 옮기면 두 번 밀린다) — 다른 시트의 수식만 보정한다
+      if (j === i) return
+      w.getData().forEach((row, y) =>
+        row.forEach((v, x) => {
+          if (!isFormulaRaw(v)) return
+          const next = adjustFormulaForEdit(v, sheetNameAt(j), edit)
+          if (next !== v) fixes.push({ w, x, y, value: next })
+        }),
+      )
+    })
+    for (const f of fixes) f.w.setValueFromCoords(f.x, f.y, f.value)
+    const moved: Record<string, string> = {}
+    for (const [addr, code] of Object.entries(sheetNumFmts[i] ?? {})) {
+      const next = adjustAddress(addr, edit)
+      if (next !== null) moved[next] = code
+    }
+    sheetNumFmts[i] = moved
+    refreshFormulaCells()
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 수식 입력줄 (2026-10-29, Stephen 요청) — 선택한 칸의 주소와 입력 원문(수식이면 "=…")을 보여 주고, 여기서 고쳐 쓸 수 있다.
+  // 칸 값 끝의 링크·이미지 표식은 입력줄에서 숨기고 저장할 때 그대로 다시 붙인다.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** 선택한 칸(또는 범위)의 주소·입력 원문을 입력줄에 반영 — 입력줄에서 입력 중이면 덮어쓰지 않는다 */
+  function refreshFormulaBar(): void {
+    if (barFocused || readonly) return
+    const cell = resolveActiveCell()
+    if (!cell) {
+      barAddr = ''
+      barText = ''
+      barMarkers = ''
+      return
+    }
+    const rawValue = cell.ws.getValueFromCoords(cell.x, cell.y)
+    const full = rawValue == null ? '' : String(rawValue)
+    const afterImage = hasImageOverlay(full) ? splitCellImageOverlay(full).text : full
+    const link = splitCellLink(afterImage)
+    barText = link.text
+    barMarkers = full.slice(link.text.length)
+    const col = lastSelectedColRange
+    const row = lastSelectedRowRange
+    const start = cellAddress(cell.y, cell.x)
+    // 병합된 칸 하나를 고른 경우(선택 범위 == 그 병합 영역)에는 엑셀처럼 왼쪽 위 주소 하나만 보여 준다
+    const x1 = col ? Math.min(col.x1, col.x2) : cell.x
+    const x2 = col ? Math.max(col.x1, col.x2) : cell.x
+    const y1 = row ? Math.min(row.y1, row.y2) : cell.y
+    const y2 = row ? Math.max(row.y1, row.y2) : cell.y
+    const mergeSpan = cell.ws.getMerge?.()[cellAddress(y1, x1)]
+    const isWholeMerge = !!mergeSpan && x2 - x1 + 1 === mergeSpan[0] && y2 - y1 + 1 === mergeSpan[1]
+    barAddr =
+      col && row && lastSelectedWs === cell.ws && (x2 !== x1 || y2 !== y1) && !isWholeMerge
+        ? `${cellAddress(y1, x1)}:${cellAddress(y2, x2)}`
+        : isWholeMerge
+          ? cellAddress(y1, x1)
+          : start
+    barBase = barText
+  }
+
+  /** 입력줄의 글자를 선택한 칸에 반영한다(바뀐 게 없으면 아무것도 하지 않는다) */
+  function commitFormulaBar(): void {
+    const cell = resolveActiveCell()
+    if (!cell) return
+    const current = cell.ws.getValueFromCoords(cell.x, cell.y)
+    const next = barText + barMarkers
+    if ((current == null ? '' : String(current)) === next) return
+    cell.ws.setValueFromCoords(cell.x, cell.y, next)
+  }
+
+  function onBarFocus(): void {
+    barFocused = true
+    barBase = barText
+  }
+
+  function onBarBlur(): void {
+    barFocused = false
+    commitFormulaBar()
+    refreshFormulaBar()
+  }
+
+  function onBarKeydown(e: KeyboardEvent): void {
+    // 한글 조합 중 Enter 는 확정용이라 저장하지 않는다(IME-SAFE-INPUT)
+    if (e.key === 'Enter' && !e.isComposing) {
+      e.preventDefault()
+      ;(e.currentTarget as HTMLInputElement).blur()
+      containerEl?.focus()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      barText = barBase
+      ;(e.currentTarget as HTMLInputElement).blur()
+    }
+  }
+
+  /** 주소칸에 "C3"를 입력하고 Enter 하면 그 칸으로 이동 */
+  function onAddrKeydown(e: KeyboardEvent): void {
+    if (e.key !== 'Enter' || e.isComposing) return
+    e.preventDefault()
+    const m = /^\s*([A-Za-z]{1,3})(\d{1,6})\s*$/.exec((e.currentTarget as HTMLInputElement).value)
+    const cell = resolveActiveCell()
+    const ws = cell?.ws
+    if (!m || !ws) {
+      refreshFormulaBar()
+      return
+    }
+    const col = [...m[1].toUpperCase()].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1
+    const row = parseInt(m[2], 10) - 1
+    const data = ws.getData()
+    if (row < 0 || row >= data.length || col < 0 || col >= (data[0]?.length ?? 0)) {
+      csToast.warning('시트 안의 칸 주소를 입력해 주세요. (예: C3)')
+      refreshFormulaBar()
+      return
+    }
+    ws.updateSelectionFromCoords(col, row, col, row)
+    containerEl?.focus()
+  }
+
+  /** 활성 시트의 숨김을 전환한다 — 보이는 시트가 하나는 남아야 한다. 탭 이름에 '(숨김)'을 붙이거나 뗀다 */
+  function toggleSheetHidden(): void {
+    // 탭 전환 직후에는 선택 이벤트가 오기 전일 수 있어, 눌린 순간의 실제 활성 시트를 위젯에서 직접 읽는다
+    const i = spreadsheetParent ? spreadsheetParent.getWorksheetActive() : activeSheetIndexState
+    activeSheetIndexState = i
+    if (i < 0 || i >= sheetHidden.length) return
+    const next = !sheetHidden[i]
+    if (next && !sheetHidden.some((h, idx) => idx !== i && !h)) {
+      csToast.warning('모든 시트를 숨길 수는 없어요. 보이는 시트가 하나는 있어야 합니다.')
+      return
+    }
+    sheetHidden[i] = next
+    const header = tabsHostEl?.querySelectorAll<HTMLElement>('.jtabs-headers > div:not(.jtabs-border)')[i]
+    const baseName = initialDoc?.sheets[i]?.name ?? `Sheet${i + 1}`
+    if (header) header.textContent = next ? `${baseName} (숨김)` : baseName
+    onchange?.()
+  }
+
   /**
    * 현재 편집 상태를 SpreadsheetDocument로 반환한다.
    * jspreadsheet-ce 위젯 초기화 전(또는 실패 시)에는 initialDoc 또는 emptyDoc()를 반환.
@@ -876,17 +1147,28 @@
     }
 
     const activeSheetIndex = spreadsheetParent.getWorksheetActive()
+    // 모든 시트의 수식을 한 번에 계산해 저장 값(고객 계약서·내보내기에 쓰이는 값)에 반영한다
+    const computedAll = computeWorkbook(engineInput())
     const sheets: SpreadsheetSheet[] = spreadsheetParent.worksheets.map((ws, i) => {
       const name = initialDoc?.sheets[i]?.name ?? `Sheet${i + 1}`
       if (!isWorksheetLike(ws)) {
         // 위젯 인스턴스를 읽지 못하면 initialDoc 해당 시트로 폴백
         return initialDoc?.sheets[i] ?? emptySheet(name)
       }
-      const sheet = worksheetConfigToSheet(name, ws)
+      const sheet = worksheetConfigToSheet(name, ws, computedAll[i])
+      if (sheet.formulas && sheetNumFmts[i]) {
+        const kept = Object.fromEntries(Object.entries(sheetNumFmts[i]).filter(([a]) => a in (sheet.formulas ?? {})))
+        if (Object.keys(kept).length) sheet.numFmts = kept
+      }
+      // 위젯이 모르는 시트 속성(숨김·틀 고정)은 처음 문서에서 그대로 이어받는다(시트 순서는 편집기에서 바뀌지 않는다)
+      const base = initialDoc?.sheets[i]
+      if (sheetHidden[i] ?? base?.hidden) sheet.hidden = true
+      if (base?.freeze) sheet.freeze = base.freeze
       // repeatRegion은 jspreadsheet-ce가 알지 못하므로 별도 Svelte 상태에서 주입한다
       const repeatRegion = sheetRepeatRegions[i]
       if (repeatRegion !== undefined) sheet.repeatRegion = repeatRegion
-      return sheet
+      // 화면에 깔아 둔 뒤쪽 빈 격자는 저장하지 않는다(2026-10-29)
+      return trimSheetToUsedRange(sheet)
     })
 
     return { sheets, activeSheetIndex }
@@ -956,6 +1238,192 @@
       x1: Math.min(x1, x2), y1: Math.min(y1, y2),
       x2: Math.max(x1, x2), y2: Math.max(y1, y2),
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 툴바 보강 버튼(2026-10-29) — 기울임·밑줄·취소선 / 셀 병합·병합 해제 / 행·열 삽입·삭제
+  // 라이브러리 기본 툴바에는 없거나(서식·행열) 알아보기 어려워(병합) 항목을 직접 정의한다.
+  // 저장(💾)은 계약서 저장이 아니라 CSV 내려받기라 혼동되어 제거한다.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** 선택 범위의 셀 주소("A1") 목록 */
+  function addrsOfRange(r: { x1: number; y1: number; x2: number; y2: number }): string[] {
+    const out: string[] = []
+    for (let y = r.y1; y <= r.y2; y++) {
+      for (let x = r.x1; x <= r.x2; x++) out.push(XLSX.utils.encode_cell({ r: y, c: x }))
+    }
+    return out
+  }
+
+  type JssStyleBatchSetter = {
+    setStyle: (records: Record<string, string>, key: null, value: null, force: boolean) => void
+    getStyle: (cell: string) => string | undefined
+  }
+
+  /**
+   * 선택 범위에 기울임/밑줄/취소선을 켜거나 끈다. 대표 셀(왼쪽 위)이 이미 켜져 있으면 전체를 끄고, 아니면 전체를 켠다 —
+   * 셀마다 결과가 갈리지 않게 한 방향으로 통일한다(라이브러리 기본 토글은 셀마다 반대로 동작하는 결함이 있음).
+   * 밑줄과 취소선은 같은 CSS(text-decoration)를 쓰므로 한쪽을 바꿔도 다른 쪽은 유지한다.
+   */
+  function toggleTextStyle(kind: 'italic' | DecorationToken): void {
+    const range = resolveActiveRange()
+    if (!range) {
+      csToast.error('서식을 적용할 셀을 먼저 선택해주세요.')
+      return
+    }
+    const ws = range.ws as unknown as JssStyleBatchSetter
+    const addrs = addrsOfRange(range)
+    const cssOf = (addr: string): string => ws.getStyle(addr) ?? ''
+    const isOn = (css: string): boolean =>
+      kind === 'italic'
+        ? /(?:^|;)\s*font-style:\s*italic/i.test(css)
+        : decorationTokens(css.match(/(?:^|;)\s*text-decoration(?:-line)?:\s*([^;]+)/i)?.[1] ?? '').split(' ').includes(kind)
+    const turnOn = !isOn(cssOf(addrs[0]))
+
+    const patch: Record<string, string> = {}
+    for (const addr of addrs) {
+      if (kind === 'italic') {
+        patch[addr] = `font-style: ${turnOn ? 'italic' : ''}`
+      } else {
+        const current = cssOf(addr).match(/(?:^|;)\s*text-decoration(?:-line)?:\s*([^;]+)/i)?.[1] ?? ''
+        patch[addr] = `text-decoration: ${toggleDecoration(current, kind, turnOn)}`
+      }
+    }
+    ws.setStyle(patch, null, null, true)
+  }
+
+  type JssMergeOps = {
+    setMerge: (cellName: string, colspan: number, rowspan: number) => void
+    removeMerge: (cellName: string) => void
+    getMerge: () => Record<string, [number, number]>
+    getValueFromCoords: (x: number, y: number) => string | number | boolean | null
+  }
+
+  /** 선택한 여러 셀을 하나로 병합 — 왼쪽 위 셀의 값만 남는다 */
+  function mergeSelectedCells(): void {
+    const range = resolveActiveRange()
+    if (!range) {
+      csToast.error('병합할 셀을 먼저 선택해주세요.')
+      return
+    }
+    const { x1, y1, x2, y2 } = range
+    if (x1 === x2 && y1 === y2) {
+      csToast.warning('병합하려면 두 칸 이상 선택해주세요.')
+      return
+    }
+    const ws = range.ws as unknown as JssMergeOps
+    let filled = 0
+    for (let y = y1; y <= y2; y++) {
+      for (let x = x1; x <= x2; x++) {
+        const v = ws.getValueFromCoords(x, y)
+        if (v !== null && v !== undefined && String(v) !== '') filled++
+      }
+    }
+    if (filled > 1 && !confirm('병합하면 왼쪽 위 칸의 값만 남고 나머지 칸의 값은 지워집니다. 계속할까요?')) return
+    ws.setMerge(XLSX.utils.encode_cell({ r: y1, c: x1 }), x2 - x1 + 1, y2 - y1 + 1)
+  }
+
+  /** 선택 범위와 겹치는 병합을 모두 해제 */
+  function unmergeSelectedCells(): void {
+    const range = resolveActiveRange()
+    if (!range) {
+      csToast.error('병합을 해제할 셀을 먼저 선택해주세요.')
+      return
+    }
+    const ws = range.ws as unknown as JssMergeOps
+    const targets: string[] = []
+    for (const [addr, [colspan, rowspan]] of Object.entries(ws.getMerge() ?? {})) {
+      const { r, c } = XLSX.utils.decode_cell(addr)
+      const overlaps = c <= range.x2 && c + colspan - 1 >= range.x1 && r <= range.y2 && r + rowspan - 1 >= range.y1
+      if (overlaps) targets.push(addr)
+    }
+    if (targets.length === 0) {
+      csToast.warning('선택한 영역에 병합된 셀이 없습니다.')
+      return
+    }
+    for (const addr of targets) ws.removeMerge(addr)
+  }
+
+  type JssRowColOps = {
+    insertRow: (mixed: number, rowNumber: number, insertBefore: number) => unknown
+    insertColumn: (mixed: number, columnNumber: number, insertBefore: boolean) => unknown
+    deleteRow: (rowNumber: number, numOfRows: number) => unknown
+    deleteColumn: (columnNumber: number, numOfColumns: number) => unknown
+  }
+
+  /** 행·열 삽입/삭제 드롭다운 항목 — 순서가 onchange 의 index 와 일치해야 한다 */
+  const ROW_COL_ACTIONS = [
+    '행 위에 삽입',
+    '행 아래에 삽입',
+    '열 왼쪽에 삽입',
+    '열 오른쪽에 삽입',
+    '선택한 행 삭제',
+    '선택한 열 삭제',
+  ] as const
+
+  function runRowColAction(index: number): void {
+    const range = resolveActiveRange()
+    if (!range) {
+      csToast.error('기준이 될 셀을 먼저 선택해주세요.')
+      return
+    }
+    const { x1, y1, x2, y2 } = range
+    const ws = range.ws as unknown as JssRowColOps
+    switch (index) {
+      case 0: ws.insertRow(1, y1, 1); break
+      case 1: ws.insertRow(1, y2, 0); break
+      case 2: ws.insertColumn(1, x1, true); break
+      case 3: ws.insertColumn(1, x2, false); break
+      case 4:
+        if (confirm(`선택한 ${y2 - y1 + 1}개 행을 삭제할까요? (되돌리기로 복구할 수 있어요)`)) ws.deleteRow(y1, y2 - y1 + 1)
+        break
+      case 5:
+        if (confirm(`선택한 ${x2 - x1 + 1}개 열을 삭제할까요? (되돌리기로 복구할 수 있어요)`)) ws.deleteColumn(x1, x2 - x1 + 1)
+        break
+      default: break
+    }
+  }
+
+  /** 라이브러리 기본 툴바 항목 배열에서 저장·병합을 빼고 보강 버튼을 끼워 넣은 새 배열 */
+  function buildToolbarItems(items: unknown[]): unknown[] {
+    const out: unknown[] = []
+    const btn = (content: string, tooltip: string, onclick: () => void): Record<string, unknown> => ({ content, tooltip, onclick })
+    for (const item of items) {
+      const rec = item as Record<string, unknown>
+      const content = rec['content']
+      if (content === 'save') continue // CSV 내려받기 — 계약서 저장과 혼동
+      if (content === 'web') {
+        out.push(
+          btn('merge_type', '선택한 셀 병합', mergeSelectedCells),
+          btn('call_split', '병합 해제', unmergeSelectedCells),
+        )
+        continue
+      }
+      out.push(item)
+      if (content === 'format_bold') {
+        out.push(
+          btn('format_italic', '기울임', () => toggleTextStyle('italic')),
+          btn('format_underlined', '밑줄', () => toggleTextStyle('underline')),
+          btn('strikethrough_s', '취소선', () => toggleTextStyle('line-through')),
+        )
+      }
+      const options = rec['options']
+      if (Array.isArray(options) && options.includes('border_all')) {
+        out.push(
+          { type: 'divisor' },
+          {
+            type: 'select',
+            content: 'table_chart',
+            tooltip: '행·열 삽입/삭제',
+            width: '48px',
+            options: [...ROW_COL_ACTIONS],
+            render: (label: string) => `<span>${label}</span>`,
+            onchange: (_e: unknown, _i: unknown, _item: unknown, _value: unknown, index: number) => runRowColAction(index),
+          },
+        )
+      }
+    }
+    return out
   }
 
   /**
@@ -1457,13 +1925,31 @@
 
       // 반복 영역 초기값 복원 (initialDoc에서 — Stage 3, 2026-08-28)
       sheetRepeatRegions = doc.sheets.map((s) => s.repeatRegion)
+      sheetHidden = doc.sheets.map((s) => !!s.hidden)
+      sheetNumFmts = doc.sheets.map((s) => ({ ...(s.numFmts ?? {}) }))
 
       const worksheetConfigs = doc.sheets.map((sheet) => {
         const config = sheetToWorksheetConfig(sheet)
         return {
           ...config,
+          // 숨김 시트는 탭 이름에 표시(고객 계약서·웹/PDF 저장에서는 빠진다)
+          worksheetName: sheet.hidden ? `${config.worksheetName} (숨김)` : config.worksheetName,
+          // 틀 고정 — 화면에는 열 고정만 반영된다(행 고정은 값만 보존, 엑셀로 내보낼 때 반영)
+          ...(sheet.freeze && sheet.freeze.cols > 0 ? { freezeColumns: sheet.freeze.cols } : {}),
           // 모든 컬럼에 이미지 셀 렌더링 훅 부여 — 어느 셀이든 서명/직인 삽입 대상이 될 수 있음
           columns: config.columns.map((col) => ({ ...col, render: renderCellValue })),
+          // 엑셀·구글 시트처럼 편집 영역 전체를 빈 칸 격자로 채운다(2026-10-29) — 화면용일 뿐이며
+          // 저장할 때 getSpreadsheetDocument()가 뒤쪽 빈 칸을 잘라낸다. 읽기 전용에서는 채우지 않는다.
+          ...(readonly
+            ? {}
+            : {
+                minDimensions: gridDimensionsToFill(
+                  containerEl?.clientWidth || 900,
+                  containerEl?.clientHeight || 450,
+                  sheet.rows[0]?.length ?? 0,
+                  sheet.rows.length,
+                ),
+              }),
           // ⚠️ 2026-08-30 추가 — jspreadsheet-ce는 셀 편집 중 Alt+Enter로 줄바꿈을 넣어주는
           // 기능이 있지만, 소스 확인 결과 wordWrap 옵션(전역 또는 열별)이 켜져 있거나 그 셀의
           // 기존 값이 200자를 넘는 경우에만 동작한다(그 외엔 그냥 Enter처럼 편집을 종료해버림).
@@ -1472,6 +1958,13 @@
           wordWrap: true,
         }
       })
+
+      // 생성자가 칸을 처음 그리는 동안에도 수식 칸의 값을 구할 수 있게 계산 입력을 미리 만들어 둔다
+      initialEngineInput = doc.sheets.map((sheet, k) => ({
+        name: sheet.name,
+        raw: (worksheetConfigs[k].data as unknown[][]).map((row) => row.map((v) => (v == null ? '' : String(v)))),
+        numFmts: sheetNumFmts[k],
+      }))
 
       // ─────────────────────────────────────────────────────────────────────
       // isDirty 변경감지 가드 (2026-08-28) — jspreadsheet(el, opts) 생성자 호출 자체가
@@ -1483,6 +1976,8 @@
       // 편집"과 구분한다.
       // ─────────────────────────────────────────────────────────────────────
       let skipChangeTracking = true
+      // 스크롤로 빈 행을 자동으로 이어 붙이는 동안(oninsertrow 재진입) — 사용자 편집이 아니므로 변경 알림·수식 보정을 건너뛴다
+      let autoGrowing = false
       const notifyChange = () => {
         if (!skipChangeTracking) onchange?.()
       }
@@ -1518,13 +2013,10 @@
                 : Array.isArray(defaultToolbar)
                   ? (defaultToolbar as unknown[])
                   : []
-              for (const item of items) {
-                const itemRec = item as unknown as Record<string, unknown>
-                if (itemRec['content'] === 'web') {
-                  itemRec['content'] = 'merge_type'
-                  itemRec['tooltip'] = '선택한 셀 병합 / 병합 해제'
-                }
-              }
+              // 기본 항목에서 저장(CSV)·병합(web)을 빼고 서식·병합/해제·행열 버튼을 끼워 넣는다(buildToolbarItems)
+              const rebuilt = buildToolbarItems(items)
+              if (Array.isArray(rec.items)) rec.items = rebuilt
+              else items.splice(0, items.length, ...rebuilt)
               return defaultToolbar
             },
         worksheets: worksheetConfigs,
@@ -1540,7 +2032,7 @@
         // 가드 경유) — "무엇이 바뀌었는지"는 구분할 필요 없이 "바뀌었다"는 사실만
         // 부모에 전달하면 충분하다.
         // ─────────────────────────────────────────────────────────────────────
-        onafterchanges: () => notifyChange(),
+        onafterchanges: () => { notifyChange(); refreshFormulaBar(); refreshFormulaCells() },
         // ⛔ 2026-08-29 발견 — jspreadsheet-ce는 생성자가 초기 options.style(저장된 전체
         // 서식)을 일괄 적용할 때도 이 콜백을 그대로 재사용한다(다른 이벤트들과 마찬가지로
         // "사용자 편집"과 "최초 로드" 구분이 없음). normalizeMultiCellBorderEdges는 라이브
@@ -1563,10 +2055,25 @@
         onresizecolumn: () => notifyChange(),
         onresizerow: () => notifyChange(),
         onmerge: () => notifyChange(),
-        oninsertrow: () => { notifyChange(); reapplyRepeatRegionAllSheets() },
-        ondeleterow: () => { notifyChange(); reapplyRepeatRegionAllSheets() },
-        oninsertcolumn: () => notifyChange(),
-        ondeletecolumn: () => notifyChange(),
+        oninsertrow: (instance: unknown, rows: Array<{ row: number }>) => {
+          if (autoGrowing) return
+          onStructuralEdit(instance, 'row', 'insert', rows.map((r) => r.row))
+          notifyChange()
+          reapplyRepeatRegionAllSheets()
+        },
+        ondeleterow: (instance: unknown, removed: number[]) => {
+          onStructuralEdit(instance, 'row', 'delete', removed)
+          notifyChange()
+          reapplyRepeatRegionAllSheets()
+        },
+        oninsertcolumn: (instance: unknown, cols: Array<{ column: number }>) => {
+          onStructuralEdit(instance, 'col', 'insert', cols.map((c) => c.column))
+          notifyChange()
+        },
+        ondeletecolumn: (instance: unknown, removed: number[]) => {
+          onStructuralEdit(instance, 'col', 'delete', removed)
+          notifyChange()
+        },
         onmoverow: () => notifyChange(),
         onmovecolumn: () => notifyChange(),
         onpaste: () => notifyChange(),
@@ -1583,6 +2090,7 @@
             // 반복 영역 지정을 위해 마지막 선택 행 범위를 캐시 (Stage 3, 2026-08-28)
             lastSelectedRowRange = { y1, y2: y2 ?? y1 }
             lastSelectedColRange = { x1, x2: x2 ?? x1 }
+            refreshFormulaBar()
             // 활성 시트 인덱스 갱신 (탭 전환 시에도 onselection이 호출됨)
             if (spreadsheetParent) {
               activeSheetIndexState = spreadsheetParent.getWorksheetActive()
@@ -1635,7 +2143,44 @@
         }
       }
 
+      // 탭 막대를 스크롤 박스 밖 고정 영역(표 아래)으로 옮긴다 — 클릭 동작은 요소에 붙어 있어 그대로 유지된다.
+      // ⚠️ 툴바(.jss_toolbar)는 라이브러리가 "탭 막대 바로 다음 자리"를 기준으로 뒤늦게 끼워 넣으므로, 툴바가 먼저 자리 잡은 뒤에
+      // 옮겨야 한다(먼저 옮기면 툴바가 표 맨 아래로 밀려난다 — 실측 확인). 그때까지는 CSS 로 감춰 둔다.
+      let dockTries = 0
+      const dockTabsBar = (): void => {
+        const host = tabsHostEl
+        const root = containerEl
+        if (!host || !root) return
+        const bar = root.querySelector<HTMLElement>(':scope > .jtabs-headers-container')
+        if (!bar) return
+        const toolbarEl = root.querySelector<HTMLElement>(':scope > .jss_toolbar')
+        if (readonly || toolbarEl || dockTries++ > 100) {
+          host.appendChild(bar)
+          // 수식 입력줄은 툴바 바로 아래(같은 스크롤 상자 안, 위쪽에 고정)에 둔다
+          if (toolbarEl && formulaBarEl) {
+            toolbarEl.after(formulaBarEl)
+            // 고정 위치(수식 줄 top·머리글 top)를 툴바·수식 줄의 실제 높이로 계산한다 — 툴바가 두 줄로 접히거나 글꼴이 달라져도 겹치지 않게
+            const tb = toolbarEl
+            const fb = formulaBarEl
+            const sync = (): void => {
+              root.style.setProperty('--cse-toolbar-h', `${tb.offsetHeight}px`)
+              root.style.setProperty('--cse-head-top', `${tb.offsetHeight + fb.offsetHeight}px`)
+            }
+            sync()
+            if (typeof ResizeObserver !== 'undefined') {
+              const ro = new ResizeObserver(sync)
+              ro.observe(tb)
+              ro.observe(fb)
+              stickyOffsetCleanup = () => ro.disconnect()
+            }
+          }
+          return
+        }
+        setTimeout(dockTabsBar, 50) // rAF 는 숨겨진 탭에서 멈추므로 타이머로 확인한다
+      }
+      dockTabsBar()
       initialized = true
+      refreshFormulaCells() // 다른 시트를 참조하는 수식 칸까지 모든 시트가 그려진 뒤의 값으로 맞춘다
       // 생성자 호출 도중(및 그 직후 마이크로태스크에서) 발생하는 초기 렌더링용
       // 이벤트를 모두 흘려보낸 뒤에야 실제 사용자 편집 감지를 시작한다.
       // 동시에 반복 영역 DOM 밴드도 그리드 완전 렌더링 후에 적용한다(Stage 3, 2026-08-28).
@@ -1651,6 +2196,30 @@
           if (region) applyRepeatRegionDOM(i, region)
         })
       }, 0)
+
+      // 세로 스크롤이 끝에 가까워지면 빈 행을 이어 붙인다(엑셀처럼 끝없이 아래로) — 편집 화면 전용.
+      // 붙은 빈 행은 값이 없어 저장 때 뒤쪽 빈 행 자르기(trimSheetToUsedRange)에서 사라지고, 변경(수정됨)으로도 치지 않는다.
+      if (!readonly && containerEl) {
+        const scroller = containerEl
+        const onGrowScroll = (): void => {
+          if (autoGrowing || !spreadsheetParent) return
+          if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - AUTO_GROW_EDGE_PX) return
+          const ws = spreadsheetParent.worksheets[spreadsheetParent.getWorksheetActive()]
+          if (!isWorksheetLike(ws)) return
+          const total = ws.getData().length
+          if (total >= AUTO_GROW_MAX_ROWS) return
+          autoGrowing = true
+          try {
+            ;(ws as unknown as { insertRow: (n: number) => unknown }).insertRow(Math.min(AUTO_GROW_STEP, AUTO_GROW_MAX_ROWS - total))
+          } catch {
+            /* 행 추가 실패는 무시 — 다음 스크롤에서 다시 시도 */
+          } finally {
+            autoGrowing = false
+          }
+        }
+        scroller.addEventListener('scroll', onGrowScroll, { passive: true })
+        autoGrowCleanup = () => scroller.removeEventListener('scroll', onGrowScroll)
+      }
     } catch (err) {
       initError = err instanceof Error ? err.message : '스프레드시트 에디터 로딩 실패'
     }
@@ -1660,7 +2229,18 @@
   // 정리
   // ─────────────────────────────────────────────────────────────────────────────
 
+  /** 스크롤이 끝에서 이 거리(px) 안으로 오면 행을 더 붙인다 */
+  const AUTO_GROW_EDGE_PX = 160
+  /** 한 번에 붙이는 행 수 */
+  const AUTO_GROW_STEP = 30
+  /** 자동으로 늘어나는 행 수 상한(한 시트) — 브라우저 부담을 막는 안전선. 엑셀 한계(104만)보다 훨씬 작게 둔다 */
+  const AUTO_GROW_MAX_ROWS = 5000
+  let autoGrowCleanup: (() => void) | null = null
+  let stickyOffsetCleanup: (() => void) | null = null
+
   onDestroy(() => {
+    autoGrowCleanup?.()
+    stickyOffsetCleanup?.()
     destroyFn?.()
     spreadsheetParent = null
     borderPaletteFixCleanup?.()
@@ -1808,6 +2388,39 @@
     </div>
   {/if}
   <!--
+    수식 입력줄 — 초기화 뒤 라이브러리 툴바 바로 아래(스크롤 상자 안, 위쪽 고정)로 옮겨진다(dockTabsBar). 읽기 전용에서는 없다.
+  -->
+  {#if !readonly}
+    <div class="cse-formula-bar" bind:this={formulaBarEl}>
+      <input
+        class="cse-name-box"
+        type="text"
+        value={barAddr}
+        aria-label="선택한 칸 주소 (칸 주소를 입력하고 Enter 하면 이동)"
+        title="칸 주소 — 입력 후 Enter 하면 그 칸으로 이동"
+        onkeydown={onAddrKeydown}
+        onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
+        onblur={() => refreshFormulaBar()}
+        maxlength="12"
+        autocomplete="off"
+      />
+      <span class="cse-fx" aria-hidden="true">fx</span>
+      <input
+        class="cse-formula-input"
+        type="text"
+        bind:value={barText}
+        aria-label="선택한 칸의 값 또는 수식 (수식은 = 로 시작)"
+        placeholder={barAddr ? '값 또는 수식 입력 (예: =SUM(A1:B1))' : '칸을 선택하세요'}
+        disabled={!barAddr}
+        onfocus={onBarFocus}
+        onblur={onBarBlur}
+        onkeydown={onBarKeydown}
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
+  {/if}
+  <!--
     컨테이너는 항상 DOM에 존재해야 onMount의 bind:this가 설정된다.
     초기화 완료 전까지 visually-hidden 처리.
   -->
@@ -1816,6 +2429,24 @@
     class="spreadsheet-container"
     class:is-ready={initialized}
   ></div>
+
+  <!--
+    시트 탭 영역(2026-10-29, Stephen 요청) — 탭 막대를 스크롤 박스(.spreadsheet-container) 안에 두면 표와 함께 스크롤돼 사라지므로,
+    초기화 뒤 jspreadsheet 가 만든 탭 막대(.jtabs-headers-container)를 이 고정 영역으로 옮긴다(엑셀·구글 시트처럼 표 아래에 항상 보임).
+    탭 모양은 CMS 콤보버튼 UI(cms-uiux.md §7-12-A, 툴바형 30px)를 따른다.
+  -->
+  <div class="cse-tabs-dock" class:cse-tabs-dock-on={initialized && sheetHidden.length > 1}>
+    <div class="cse-tabs-host" bind:this={tabsHostEl}></div>
+    {#if sheetHidden.length > 1}
+      <!-- 숨긴 시트는 편집기에 남지만 고객 계약서·웹/PDF 저장에서 빠진다 -->
+      <button
+        type="button"
+        class="cse-tab-hide"
+        onclick={toggleSheetHidden}
+        title="현재 시트를 고객 계약서·웹/PDF 저장에서 빼거나 다시 넣습니다"
+      >{sheetHidden[activeSheetIndexState] ? '시트 숨김 해제' : '시트 숨기기'}</button>
+    {/if}
+  </div>
 </div>
 
 {#if viewer}
@@ -1887,6 +2518,109 @@
     line-height: 1.5;
   }
 
+  /* 탭 막대가 아직 표 안에 있는 짧은 순간(툴바 자리 잡기 전)에는 보이지 않게 한다 */
+  .spreadsheet-container > :global(.jtabs-headers-container) {
+    display: none;
+  }
+
+  /* ── 시트 탭 고정 영역 — 표 아래에 항상 보인다. 탭은 CMS 콤보버튼 UI(§7-12-A 툴바형: 30px · 좌우 16px · 12px Bold ·
+     비활성 --cs-lilac 면 · 활성 --cs-purple 면 · 보더 없음 · hover 시 글자색만 purple) ── */
+  .cse-tabs-dock {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--cs-surface-gray);
+    border-top: 1px solid var(--cs-lilac);
+    flex-shrink: 0;
+  }
+  .cse-tabs-dock.cse-tabs-dock-on {
+    display: flex;
+  }
+  .cse-tabs-host {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .cse-tabs-host :global(.jtabs-headers-container) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cse-tabs-host :global(.jtabs-headers) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cse-tabs-host :global(.jtabs-headers > div:not(.jtabs-border)) {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 16px;
+    border: none;
+    border-radius: var(--radius-xl, 30px);
+    background: var(--cs-lilac);
+    color: var(--cs-text);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .cse-tabs-host :global(.jtabs-headers > div.jtabs-selected) {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .cse-tabs-host :global(.jtabs-headers > div:not(.jtabs-border):not(.jtabs-selected):hover) {
+    color: var(--cs-purple);
+  }
+  /* 라이브러리 기본 부속(밑줄 이동 표시·좌우 화살표)은 쓰지 않는다 — 가로 스크롤은 위 .cse-tabs-host 가 맡는다 */
+  .cse-tabs-host :global(.jtabs-border),
+  .cse-tabs-host :global(.jtabs-prev),
+  .cse-tabs-host :global(.jtabs-next) {
+    display: none !important;
+  }
+  .cse-tabs-host :global(.jtabs-controls) {
+    display: flex;
+    margin: 0;
+  }
+  /* 시트 추가(+) — 탭과 같은 높이의 알약 */
+  .cse-tabs-host :global(.jtabs-add) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-xl, 30px);
+    background: var(--cs-lilac);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .cse-tabs-host :global(.jtabs-add)::before {
+    content: '+';
+    font: 700 16px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-purple);
+  }
+  .cse-tabs-host :global(.jtabs-add:hover) {
+    background: var(--cs-purple-op10);
+  }
+  /* 시트 숨기기 — 초소형 라운드 버튼형(§0-10-C): 면 중심·테두리 없음·호버는 배경만 */
+  .cse-tab-hide {
+    flex-shrink: 0;
+    height: 30px;
+    padding: 0 14px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .cse-tab-hide:hover {
+    background: var(--cs-purple-op10);
+  }
+
   /* 스프레드시트 컨테이너 — 초기화 완료 전 숨김 */
   .spreadsheet-container {
     flex: 1;
@@ -1937,6 +2671,11 @@
     position: relative;
   }
 
+  /* 하이퍼링크 칸 — 엑셀의 링크처럼 파란 밑줄(칸 서식의 글자색이 있으면 그쪽이 우선) */
+  .spreadsheet-container :global(td.cse-link-cell) {
+    color: #0563c1;
+    text-decoration: underline;
+  }
   .cse-sig-btn {
     min-height: 28px;
     padding: 4px 10px;
@@ -2358,17 +3097,100 @@
    * 코너 셀(.jss_selectall)은 가로·세로 두 축 모두 고정돼야 하므로 두 규칙이 함께
    * 적용되고, 다른 sticky 요소보다 z-index를 더 높여 항상 최상단에 보이게 한다.
    */
+  /*
+   * 기본 격자선 색 (2026-10-29, Stephen 요청) — 라이브러리 기본 격자선은 #ccc 라서 셀에 지정한 표 테두리(검정 등)와 한눈에 구분되지
+   * 않았다. CMS 토큰 중 더 옅은 회색 `--cs-border`(#E0E0E6)로 바꿔 "서식으로 지정한 테두리"만 또렷하게 보이게 한다.
+   * 이 규칙은 색(border-*-color)만 바꾸며, 셀 서식으로 인라인 지정한 테두리(굵기·종류·색)는 인라인이 우선이라 그대로다.
+   */
+  .spreadsheet-container :global(.jss_worksheet > tbody > tr > td),
+  .spreadsheet-container :global(.jss_worksheet > thead > tr > td) {
+    border-top-color: var(--cs-border);
+    border-left-color: var(--cs-border);
+  }
+  .spreadsheet-container :global(.jss_worksheet) {
+    border-right-color: var(--cs-border);
+    border-bottom-color: var(--cs-border);
+  }
+
+  /* 수식 입력줄 — 툴바(41px) 바로 아래에 고정. 열 머리글 고정 위치는 이 높이(36px)만큼 더 내려간다 */
+  .cse-formula-bar {
+    display: none;
+  }
+  .spreadsheet-container > :global(.cse-formula-bar) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: sticky;
+    top: var(--cse-toolbar-h, 41px);   /* 툴바 실측 높이(위 dockTabsBar 가 갱신), 측정 전 기본값 41px */
+    left: 0;
+    z-index: 4;
+    box-sizing: border-box;
+    width: 100%;
+    height: 36px;
+    padding: 0 10px;
+    background: var(--cs-white);
+    border-bottom: 1px solid var(--cs-lilac);
+  }
+  .spreadsheet-container :global(.cse-name-box) {
+    flex: 0 0 84px;
+    width: 84px;
+    height: 26px;
+    padding: 0 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    text-align: center;
+  }
+  .spreadsheet-container :global(.cse-fx) {
+    flex: 0 0 auto;
+    color: var(--cs-text-mid);
+    font: italic 700 12px/1 'Noto Sans KR', sans-serif;
+  }
+  .spreadsheet-container :global(.cse-formula-input) {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text);
+    font: 500 13px/1 'Noto Sans KR', sans-serif;
+  }
+  .spreadsheet-container :global(.cse-name-box:focus),
+  .spreadsheet-container :global(.cse-formula-input:focus) {
+    outline: 2px solid var(--cs-focus-ring);
+    background: var(--cs-white);
+  }
+  .spreadsheet-container :global(.cse-formula-input:disabled) {
+    opacity: 0.6;
+  }
+
+  /* 선택 영역 모서리 점(채우기 핸들) — 라이브러리 기본 z-index 20이라 스크롤하면 고정 툴바·머리글 위로 지나갔다. 셀 위·고정 줄 아래로 낮춘다 */
+  .spreadsheet-container :global(.jss_corner) {
+    z-index: 1;
+  }
+
+  /* 가로 축(A~Z)·세로 축(행 번호) 머리글 — 본문(16px)보다 한 단계 작은 표준 글자 토큰 + 회색 보조 텍스트 토큰 */
   .spreadsheet-container :global(.jss_worksheet thead td) {
     position: sticky;
-    top: 41px;
+    top: var(--cse-head-top, 77px);   /* 툴바 + 수식 줄 실측 높이, 측정 전 기본값 77px */
     z-index: 3;
     background: var(--cs-surface-gray, #f6f6f6);
+    font: var(--text-pc-body-14);
+    line-height: 1.6;   /* 토큰의 200%는 머리글 줄 높이를 키우므로 기존 높이(1.6)로 되돌린다 */
+    color: var(--cs-text-mid);
   }
   .spreadsheet-container :global(.jss_worksheet tbody td.jss_row) {
     position: sticky;
     left: 0;
     z-index: 2;
     background: var(--cs-surface-gray, #f6f6f6);
+    font: var(--text-pc-body-14);
+    line-height: 1;     /* 행 높이가 커지지 않도록 기존과 같게 */
+    color: var(--cs-text-mid);
   }
   .spreadsheet-container :global(.jss_worksheet thead td.jss_selectall) {
     left: 0;

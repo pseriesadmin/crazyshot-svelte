@@ -21,6 +21,7 @@
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
   import ContractCanvasFieldPalette from './ContractCanvasFieldPalette.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { hasSignatureField } from '$lib/types/contract-document'
   import MediaViewer from '$lib/components/common/MediaViewer.svelte'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
@@ -52,6 +53,8 @@
     onSave?: (payload: ContractCanvasPayload) => Promise<void>
     /** 편집 비활성화 */
     readonly?: boolean
+    /** 툴바의 자체 [저장] 버튼 표시 — 호스트가 하단 저장 줄(다른 작성 모드와 같은 위치)에서 save()를 호출하면 false */
+    showSaveButton?: boolean
   }
 
   let {
@@ -61,6 +64,7 @@
     onUploadPage,
     onSave,
     readonly = false,
+    showSaveButton = true,
   }: Props = $props()
 
   // --------------------------------------------------------------------------
@@ -109,6 +113,17 @@
   // --------------------------------------------------------------------------
   // 페이지 업로드 처리
   // --------------------------------------------------------------------------
+  // 우측 필드 팔레트 접기/펼치기 — 문서형 변수 패널과 같은 아이콘·저장 키(cs-contracts-fieldpanel-open)를 써 한 번 정한 상태가 두 모드에서 같게 유지된다
+  const PALETTE_OPEN_KEY = 'cs-contracts-fieldpanel-open'
+  let paletteOpen = $state(true)
+  $effect(() => {
+    try { if (localStorage.getItem(PALETTE_OPEN_KEY) === '0') paletteOpen = false } catch { /* 저장소 접근 불가 시 기본값 */ }
+  })
+  function togglePalette() {
+    paletteOpen = !paletteOpen
+    try { localStorage.setItem(PALETTE_OPEN_KEY, paletteOpen ? '1' : '0') } catch { /* 저장 실패 무시 */ }
+  }
+
   function triggerPageUpload() {
     pageFileInput?.click()
   }
@@ -119,6 +134,12 @@
     const file   = input.files?.[0]
     if (!file) return
     input.value = ''  // 동일 파일 재선택 허용
+    await addBackgroundFile(file)
+  }
+
+  /** 배경 파일(PNG·JPEG·WebP·PDF) 1개를 배경 페이지로 추가 — 파일 선택창과 "문서 가져오기에서 넘어온 PDF"가 함께 쓴다 */
+  export async function addBackgroundFile(file: File): Promise<void> {
+    if (readonly) return
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
     // accept 속성은 드래그앤드롭·OS 파일선택기의 "모든 파일" 옵션으로 우회될 수 있으므로,
@@ -375,6 +396,11 @@
   // --------------------------------------------------------------------------
   // 저장
   // --------------------------------------------------------------------------
+  /** 저장 실행 — 툴바 버튼과 호스트의 하단 저장 줄이 함께 쓴다 */
+  export async function save(): Promise<void> {
+    await handleSave()
+  }
+
   async function handleSave() {
     if (!onSave) return
     // EC-3: 서명 필드 최소 1개 필수 — 클라이언트 검증 (서버에서도 재검증됨)
@@ -413,15 +439,6 @@
 />
 
 <div class="canvas-editor">
-  <!-- 팔레트 사이드바 -->
-  <ContractCanvasFieldPalette
-    {placingType}
-    {selectedField}
-    onSelectType={(t) => { if (!readonly) placingType = t }}
-    onUpdateField={updateField}
-    onDeleteField={deleteField}
-  />
-
   <!-- 메인 영역 -->
   <div class="main-area">
     <!-- 툴바 -->
@@ -431,7 +448,7 @@
         onclick={triggerPageUpload}
         disabled={readonly || uploading}
       >
-        {uploading ? '업로드 중...' : '+ 배경 추가'}
+        {uploading ? '업로드 중...' : '+ 추가'}
       </button>
       <span class="format-hint">PNG · JPEG · WebP · PDF</span>
       {#if pages.length > 0}
@@ -441,7 +458,7 @@
       {#if placingType}
         <span class="placing-hint">페이지를 클릭해 필드를 배치하세요</span>
       {/if}
-      {#if onSave}
+      {#if onSave && showSaveButton}
         <button
           class="btn-save"
           onclick={handleSave}
@@ -465,10 +482,10 @@
       {#if pages.length === 0}
         <div class="empty-state">
           <p class="empty-title">배경 페이지가 없습니다</p>
-          <p class="empty-sub">상단 "+ 배경 추가" 버튼으로 이미지 또는 PDF를 업로드하세요.</p>
+          <p class="empty-sub">상단 "+ 추가" 버튼으로 이미지 또는 PDF를 업로드하세요.</p>
           <p class="empty-format-hint">지원 형식: PNG · JPEG · WebP · PDF</p>
           <button class="btn-add-page-lg" onclick={triggerPageUpload} disabled={readonly}>
-            + 배경 추가
+            + 추가
           </button>
         </div>
       {:else}
@@ -545,6 +562,25 @@
       {/if}
     </div>
   </div>
+
+  <!-- 팔레트 사이드바 — 문서형 변수 패널(.panel-col)과 같이 우측 배치 -->
+  <div class="palette-col" class:collapsed={!paletteOpen}>
+    <div class="palette-col-head">
+      <button type="button" class="palette-toggle" onclick={togglePalette} aria-expanded={paletteOpen} aria-label={paletteOpen ? '필드 패널 닫기' : '필드 패널 펼치기'} title={paletteOpen ? '필드 패널 닫기' : '필드 패널 펼치기'}>
+        <ChevronIcon direction={paletteOpen ? 'right' : 'left'} size={6} color="currentColor" />
+      </button>
+    </div>
+    <!-- 접을 때는 지우지 않고 숨긴다 — 선택한 필드·자산 목록 상태 유지 -->
+    <div class="palette-body" style:display={paletteOpen ? 'flex' : 'none'}>
+      <ContractCanvasFieldPalette
+        {placingType}
+        {selectedField}
+        onSelectType={(t) => { if (!readonly) placingType = t }}
+        onUpdateField={updateField}
+        onDeleteField={deleteField}
+      />
+    </div>
+  </div>
 </div>
 
 {#if viewer}
@@ -567,6 +603,36 @@
     border-radius: var(--radius-sm, 8px);
     overflow: hidden;
   }
+
+  /* 우측 필드 팔레트 열 — 문서형 변수 패널(.panel-col)과 같은 구성: 상단 접기 버튼 + 본문 */
+  .palette-col {
+    width: 220px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--cs-surface-gray, #f6f6f6);
+    border-left: 1px solid var(--cs-lilac, #ECEBF4);
+    transition: width 0.2s ease;
+  }
+  .palette-col.collapsed { width: 36px; }
+  .palette-col-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--cs-lilac, #ECEBF4);
+  }
+  .palette-col.collapsed .palette-col-head { justify-content: center; padding: 4px 0; border-bottom: none; }
+  .palette-toggle {
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm, 8px);
+    color: var(--cs-text-light, #aaaaaa); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .palette-toggle:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge, #FF3535); }
+  .palette-body { flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
 
   /* 메인 영역 */
   .main-area {
