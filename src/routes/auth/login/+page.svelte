@@ -97,7 +97,14 @@
       const redirectTo = safeReturnPath($page.url.searchParams.get('redirect')) ?? '/'
       goto(redirectTo)
     } catch (err) {
-      errorMsg = err instanceof Error ? err.message : '로그인에 실패했습니다.'
+      // 이메일·비밀번호 불일치(Supabase 'Invalid login credentials')는 화면 문구 대신 표준 토스트로 한글 안내한다(2026-10-30, Stephen 지시)
+      const code = (err as { code?: unknown } | null)?.code
+      if (code === 'invalid_credentials' || (err instanceof Error && err.message === 'Invalid login credentials')) {
+        errorMsg = null
+        csToast.warning('아이디 또는 비밀번호가 맞지 않습니다.')
+      } else {
+        errorMsg = err instanceof Error ? err.message : '로그인에 실패했습니다.'
+      }
     } finally {
       isLoading = false
     }

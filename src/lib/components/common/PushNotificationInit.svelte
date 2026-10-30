@@ -17,12 +17,17 @@
   import { callTypedRpc } from '$lib/utils/rpc'
   import { buildUnifiedPushToastMessage } from '$lib/utils/pushToastMessage'
 
+  // 인앱 브라우저(네이버·카카오톡·인스타그램·페이스북·라인·다음 앱, 안드로이드 웹뷰)는 알림 권한 선택을 저장하지 못하거나 권한 요청 때문에 화면을 다시 불러와,
+  // 로그인 직후 새로고침이 반복되는 CS가 있었다(2026-10-30, 갤럭시·네이버 인앱). 이런 환경에서는 서비스워커 등록·알림 권한 요청을 건너뛴다.
+  const IN_APP_BROWSER_UA = /NAVER\(inapp|KAKAOTALK|Instagram|FBAN|FBAV|FB_IAB|\bLine\/|DaumApps|; wv\)/i
+
   let initialized = false
 
   $effect(() => {
     const userId = $authState.user?.id
     if (!browser || !userId || initialized) return
     if (!('serviceWorker' in navigator) || !('Notification' in window)) return
+    if (IN_APP_BROWSER_UA.test(navigator.userAgent)) return
     initialized = true
 
     let disposeOnMessage: (() => void) | undefined
