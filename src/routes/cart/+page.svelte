@@ -8,6 +8,7 @@
   import { firstCartSubmitBlocker } from '$lib/utils/cartSubmitBlocker';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
+  import { pickupTimeLimits, returnTimeLimits, isTimeWithinLimits } from '$lib/utils/pickupTimeRules';
   import { calcEarnPoints, calcEarnBase } from '$lib/utils/cartEarnPoints';
   import { calcVatForCart, couponDaysLeft } from '$lib/utils/cartCouponPoints';
   import { DEFAULT_POINT_USE_RULES, normalizePointUse, maxUsablePoints, describePointUseRules, type PointUseRules } from '$lib/utils/pointUseRules';
@@ -841,6 +842,13 @@
     if (!bulkOpts.rentalMethod) return false
     return isPickupDateBlocked(pickupDate, leadRuleForMethod(bulkOpts.rentalMethod), Date.now())
   }
+  // 시간 선택 목록에서 막을 시각 범위 — 규칙 정본 $lib/utils/pickupTimeRules.ts (수령: 방식별 시간대·당일 여유시간 / 반납: 방식별 시간대·수령 이전 차단)
+  function timeLimitsFor(props: { type: 'rental' | 'return'; method: DeliveryMethod | null; selectedDate: string; pickupDate?: string; pickupTime?: string }) {
+    return props.type === 'rental'
+      ? pickupTimeLimits(props.method, props.selectedDate, Date.now())
+      : returnTimeLimits(props.method, props.selectedDate, props.pickupDate, props.pickupTime)
+  }
+
   function bulkHandleDate(d: string) {
     if (bulkDate && !bulkReturnDate) {
       if (d >= bulkDate) {
@@ -3202,6 +3210,16 @@
                     csToast.error(leadTimeMessage(leadRuleForMethod(pickupMethodCo)))
                     return
                   }
+                  // 시각 규칙 재검증 — 시간 선택 화면에서도 막지만, 시각을 먼저 고른 뒤 시간이 흐르거나 날짜·방식을 바꾼 경우를 신청 직전에 한 번 더 확인
+                  if (!isTimeWithinLimits(pickupTimeLimits(pickupMethodCo, it.rentalDate, nowTimeCo.getTime()), it.rentalTime)) {
+                    csToast.error('선택할 수 없는 수령 시각입니다. 수령 시각을 다시 선택해주세요.')
+                    return
+                  }
+                  // 수령이 배송(is_delivery_type)이면 반납 시각은 표준값(24:00)으로 저장되므로 방식별 반납 시각 범위(퀵 09:00~09:30 등)를 적용하지 않는다
+                  if (returnMethodCo && !isDeliveryTypeMethod(pickupMethodCo) && !isTimeWithinLimits(returnTimeLimits(returnMethodCo, it.returnDate, it.rentalDate, it.rentalTime), it.returnTime)) {
+                    csToast.error('선택할 수 없는 반납 시각입니다. 반납 시각을 다시 선택해주세요.')
+                    return
+                  }
                 }
                 // 대여 기간 유형 계산(그룹 공유값, products/[id]/+page.svelte L320-322와 동일 판정 기준)
                 // 판매전용(sale_only) 상품은 "구매" 건으로 구별한다(Migration #416).
@@ -3915,7 +3933,7 @@
       </button>
       {#if bulkOpenAcc === 'return_'}
         <div transition:slide={{ duration: 300 }} class="acc-body">
-          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, maxDate: maxReturnDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
+          {@render RentalForm({ type: 'return', calId: 'bulk-return', selectedDate: bulkReturnDate, onDateChange: bulkHandleReturnDate, timeId: 'bulk-return-t', selectedTime: bulkReturnTime, pickupDate: bulkDate, pickupTime: bulkTime, onTimeChange: bulkHandleReturnTime, method: bulkOpts.returnMethod, form: bulkReturnForm, onMethodChange: bulkHandleReturnMethod, onFormChange: bulkHandleReturnForm, hasUserAddress: sdHasUserAddress, hasUserProfileInfo: sdHasUserProfileInfo, userProfileInfo: sdUserProfileInfo, userAddressInfo: sdUserAddressInfo, pickupPoints: visitPickupPoints, minDate: bulkDate, maxDate: maxReturnDate, rangeStart: bulkDate, rangeEnd: bulkReturnDate })}
         </div>
       {:else if bulkReturnDate && bulkReturnTime}
         <!-- "대여 방법"과 동일하게 "반납 방법"도 접혔을 때 이미 선택된 반납일·시간을
@@ -4144,6 +4162,9 @@
   rangeEnd?: string;
   // 판매전용 단독 카트(2026-10-01): 달력·시간 UI만 감추고 방법·고객정보·배송지·요청사항은 그대로 노출
   hideDateTime?: boolean;
+  // 반납 시간 전용 — 반납일이 수령일과 같을 때 수령 시각 이전을 막기 위한 수령일·수령 시각(2026-10-30)
+  pickupDate?: string;
+  pickupTime?: string;
 })}
   {@const sectionLabel = props.type === 'rental' ? '수령 방식' : '반납 방식'}
   {@const dateLabel = props.type === 'rental' ? '수령일' : '반납일'}
@@ -4393,6 +4414,8 @@
             <div class="time-layer" transition:slide={{ duration: 200 }}>
               <TimePickerGrid
                 value={props.selectedTime}
+                disabledBefore={timeLimitsFor(props).disabledBefore}
+                disabledAfter={timeLimitsFor(props).disabledAfter}
                 onselect={(t) => { props.onTimeChange(t); openTimeId = null; }}
               />
             </div>

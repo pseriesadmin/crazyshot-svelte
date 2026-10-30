@@ -6,7 +6,9 @@
  *
  * 규칙 출처 우선순위:
  *   1) CMS 대여방식 안내문구(deadline_time)가 "N일 전 (오전|오후) H시" 또는 "N일 전 HH:MM" 정형이면 그 값
+ *   1-1) "N일 전"이 없고 "당일 … (오전|오후) H시 까지|마감"(또는 "당일 … HH:MM 까지|마감")이면 0일 전·그 시각 — 당일 예약 허용(2026-10-30, 방문 수령)
  *   2) 그 외(자유 문구·빈값)는 기본값 — 배송형(is_delivery_type) 2일, 나머지 1일, 마감 19시
+ * ⚠️ 서버 DB 함수 parse_lead_rule_text(Migration #783)와 같은 규칙이어야 한다 — 한쪽만 고치지 말 것.
  * 자유 문구를 억지로 해석하지 않는다(과거 parseInt로 "오후 7시" 문구가 NaN이 되어 내일이 통째로 막힌 결함 방지).
  */
 
@@ -28,11 +30,31 @@ function addDaysIso(iso: string, n: number): string {
   return new Date(Date.parse(`${iso}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10)
 }
 
-/** CMS 안내문구에서 정형 규칙("N일 전 오후 7시" 등)을 추출한다. 해석 불가면 null. */
+// "당일" 정형 문구 — 시각 바로 뒤에 "까지|마감"이 붙은 경우만 읽는다. "당일"과 시각 사이는 숫자 없는 12글자 이내.
+// (퀵의 "당일 오후 12시부터 오후 8시내에 …" 처럼 '부터'가 붙은 시각을 마감으로 오해하지 않기 위함 — 해석되지 않으면 기본값)
+const SAME_DAY_AMPM_RE = /당일[^\d]{0,12}(오전|오후)\s*(\d{1,2})\s*시\s*(?:까지|마감)/
+const SAME_DAY_HHMM_RE = /당일[^\d]{0,12}(\d{1,2})\s*:\s*\d{2}\s*(?:까지|마감)/
+
+function parseSameDayRuleText(text: string): LeadRule | null {
+  const ampm = text.match(SAME_DAY_AMPM_RE)
+  if (ampm) {
+    const h = parseInt(ampm[2], 10)
+    if (h < 0 || h > 12) return null
+    return { leadDays: 0, cutoffHour: ampm[1] === '오후' ? (h === 12 ? 12 : h + 12) : (h === 12 ? 0 : h) }
+  }
+  const hhmm = text.match(SAME_DAY_HHMM_RE)
+  if (hhmm) {
+    const h = parseInt(hhmm[1], 10)
+    if (h >= 0 && h <= 23) return { leadDays: 0, cutoffHour: h }
+  }
+  return null
+}
+
+/** CMS 안내문구에서 정형 규칙("N일 전 오후 7시", "당일 오후 6시까지" 등)을 추출한다. 해석 불가면 null. */
 export function parseLeadRuleText(text: string | null | undefined): LeadRule | null {
   if (!text) return null
   const daysMatch = text.match(/(\d+)\s*일\s*전/)
-  if (!daysMatch) return null
+  if (!daysMatch) return parseSameDayRuleText(text)
   const leadDays = parseInt(daysMatch[1], 10)
 
   let cutoffHour: number | null = null

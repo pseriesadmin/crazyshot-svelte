@@ -9,9 +9,15 @@
   interface Props {
     value?: string
     onselect: (time: string) => void
+    /** 'HH:MM' — 이 시각보다 앞선 슬롯은 선택 불가(당일 수령 여유 시간·수령 이전 반납 차단, 2026-10-30). 미지정·null이면 제한 없음 */
+    disabledBefore?: string | null
+    /** 'HH:MM' — 이 시각보다 늦은 슬롯은 선택 불가(퀵 수령 22:00·퀵 반납 09:30 등). 미지정·null이면 제한 없음. 규칙 정본: pickupTimeRules.ts */
+    disabledAfter?: string | null
   }
 
-  let { value, onselect }: Props = $props()
+  let { value, onselect, disabledBefore = null, disabledAfter = null }: Props = $props()
+
+  const isPast = (t: string): boolean => (disabledBefore !== null && t < disabledBefore) || (disabledAfter !== null && t > disabledAfter)
 
   // 2026-09-10(Stephen 확정) — 30분 단위 선택 버튼 추가를 위해 분(m) 인자 도입.
   function fmtTime(h: number, m: number = 0): string {
@@ -39,6 +45,8 @@
           class:time-row-locker={isLocker00}
           class:time-row-sel={isSel00 && !isLocker00}
           class:time-row-locker-sel={isSel00 && isLocker00}
+          class:time-row-past={isPast(t00)}
+          disabled={isPast(t00)}
           onclick={() => onselect(t00)}
         >{t00}</button>
         <button
@@ -46,6 +54,8 @@
           class:time-row-locker={isLocker30}
           class:time-row-sel={isSel30 && !isLocker30}
           class:time-row-locker-sel={isSel30 && isLocker30}
+          class:time-row-past={isPast(t30)}
+          disabled={isPast(t30)}
           onclick={() => onselect(t30)}
         >{t30}</button>
       </div>
@@ -66,6 +76,8 @@
           class:time-row-locker={isLocker00}
           class:time-row-sel={isSel00 && !isLocker00}
           class:time-row-locker-sel={isSel00 && isLocker00}
+          class:time-row-past={isPast(t00)}
+          disabled={isPast(t00)}
           onclick={() => onselect(t00)}
         >{t00}</button>
         <button
@@ -73,6 +85,8 @@
           class:time-row-locker={isLocker30}
           class:time-row-sel={isSel30 && !isLocker30}
           class:time-row-locker-sel={isSel30 && isLocker30}
+          class:time-row-past={isPast(t30)}
+          disabled={isPast(t30)}
           onclick={() => onselect(t30)}
         >{t30}</button>
       </div>
@@ -135,6 +149,9 @@
   }
   .time-row-pair .time-row { flex: 1; }
   .time-row:hover { background: var(--cs-purple-op10); }
+  /* 선택 불가 시각(지난 시각·허용 시간대 밖) — 호버·눌림 색 변화 없음 */
+  .time-row.time-row-past,
+  .time-row.time-row-past:hover { background: var(--cs-surface-gray); color: var(--cs-text-placeholder); cursor: not-allowed; }
   .time-row-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
   /* 영업외시간(23:00~08:59) — 무인보관함 인계 대상 시간대 시각적 구분(2026-08-20 확정값) */
   .time-row-locker { background: var(--cs-red-xlight); }

@@ -69,6 +69,55 @@ describe('parseLeadRuleText — CMS 안내문구에서 규칙 추출 (정형 문
   })
 })
 
+describe('parseLeadRuleText — "당일" 정형 문구(방문 수령 당일 예약, 2026-10-30)', () => {
+  it('운영 방문 문구 "당일 예약은 오후 6시까지" → 0일·18시', () => {
+    expect(parseLeadRuleText('당일 예약은 오후 6시까지')).toEqual({ leadDays: 0, cutoffHour: 18 })
+  })
+  it('오전·오후 12시와 마감 표기', () => {
+    expect(parseLeadRuleText('당일 오후 12시 마감')).toEqual({ leadDays: 0, cutoffHour: 12 })
+    expect(parseLeadRuleText('당일 오전 11시까지')).toEqual({ leadDays: 0, cutoffHour: 11 })
+    expect(parseLeadRuleText('당일 오전 12시까지')).toEqual({ leadDays: 0, cutoffHour: 0 })
+  })
+  it('24시간제 "당일 18:00까지"', () => {
+    expect(parseLeadRuleText('당일 18:00까지 신청')).toEqual({ leadDays: 0, cutoffHour: 18 })
+  })
+  it('CMS 에 입력하기로 한 문구: 무인보관함 "당일 예약은 오후 6시까지" → 0일·18시, 퀵 "당일 예약은 오후 7시까지" → 0일·19시', () => {
+    expect(parseLeadRuleText('당일 예약은 오후 6시까지')).toEqual({ leadDays: 0, cutoffHour: 18 })
+    expect(parseLeadRuleText('당일 예약은 오후 7시까지')).toEqual({ leadDays: 0, cutoffHour: 19 })
+  })
+  it('운영 퀵 문구("당일 오후 12시부터 … 오후 8시내에 …")는 해석하지 않는다 — 12시부터를 마감으로 오해하지 않음', () => {
+    expect(parseLeadRuleText('당일 오후 12시부터 오후 8시내에 예약시간 설정 시점 기준으로 최소 3시간 전 부터 가능')).toBeNull()
+  })
+  it('"N일 전"이 있으면 기존 규칙이 우선(택배·무인보관함 불변)', () => {
+    expect(parseLeadRuleText('예약일 2일 전 19:00까지 마감.')).toEqual({ leadDays: 2, cutoffHour: 19 })
+    expect(parseLeadRuleText('예약 대여일 1일 전 오후 7시까지')).toEqual({ leadDays: 1, cutoffHour: 19 })
+    expect(parseLeadRuleText('당일이 아닌 1일 전 오후 7시까지')).toEqual({ leadDays: 1, cutoffHour: 19 })
+  })
+  it('시각이 없거나 숫자가 끼어 멀리 떨어진 "당일"은 해석하지 않는다', () => {
+    expect(parseLeadRuleText('당일 예약 가능')).toBeNull()
+    expect(parseLeadRuleText('당일 3건 한정, 오후 6시까지')).toBeNull()
+  })
+})
+
+describe('당일 규칙(0일·18시)의 수령일 선택 가능 범위 — 마감 전 오늘, 마감 후 내일', () => {
+  const rule = { leadDays: 0, cutoffHour: 18 }
+  it('17:59 → 오늘 선택 가능', () => {
+    const now = kst(2026, 10, 30, 17, 59)
+    expect(minPickupDate(rule, now)).toBe('2026-10-30')
+    expect(isPickupDateBlocked('2026-10-30', rule, now)).toBe(false)
+  })
+  it('18:00 → 오늘은 마감, 내일부터', () => {
+    const now = kst(2026, 10, 30, 18, 0)
+    expect(minPickupDate(rule, now)).toBe('2026-10-31')
+    expect(isPickupDateBlocked('2026-10-30', rule, now)).toBe(true)
+    expect(isPickupDateBlocked('2026-10-31', rule, now)).toBe(false)
+  })
+  it('resolveLeadRule 이 당일 문구를 기본값(1일 전 19시)보다 우선한다', () => {
+    expect(resolveLeadRule({ isDeliveryType: false, deadlineText: '당일 예약은 오후 6시까지' })).toEqual({ leadDays: 0, cutoffHour: 18 })
+    expect(resolveLeadRule({ isDeliveryType: false, deadlineText: '당일 오후 12시부터 오후 8시내에 …' })).toEqual({ leadDays: 1, cutoffHour: 19 })
+  })
+})
+
 describe('resolveLeadRule — 배송형은 기본 2일, 그 외 1일 / 정형 문구가 있으면 우선', () => {
   it('문구 없음: 배송형=2일 19시, 비배송=1일 19시', () => {
     expect(resolveLeadRule({ isDeliveryType: true })).toEqual({ leadDays: 2, cutoffHour: 19 })
@@ -109,5 +158,14 @@ describe('stripServerGuardPrefix', () => {
     expect(stripServerGuardPrefix('RENTAL_PERIOD_EXCEEDED: 최대 대여기간(15일)을 초과했습니다.')).toBe('최대 대여기간(15일)을 초과했습니다.')
     expect(stripServerGuardPrefix('해당 기간에 예약 가능한 재고가 없습니다.')).toBe('해당 기간에 예약 가능한 재고가 없습니다.')
     expect(stripServerGuardPrefix(null)).toBeUndefined()
+  })
+})
+
+describe('퀵서비스 당일 마감 19시 — 수령일 선택 가능 범위와 시각 규칙의 연결', () => {
+  const quick = resolveLeadRule({ isDeliveryType: false, deadlineText: '당일 예약은 오후 7시까지' })
+  it('18:59 → 오늘 선택 가능, 19:00 → 오늘은 마감(내일부터)', () => {
+    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 18, 59))).toBe(false)
+    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 19, 0))).toBe(true)
+    expect(minPickupDate(quick, kst(2026, 10, 30, 19, 0))).toBe('2026-10-31')
   })
 })
