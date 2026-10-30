@@ -3583,3 +3583,97 @@ a.chip:hover, a.chip:active, button.chip:hover, button.chip:active { background:
 [ ] 아코디언 토글 화살표가 13×13 · stroke #3b2f8a · 2px · round로 접힘 ⌄ / 펼침 ⌃(scaleY(-1))인가?
 [ ] 토글 버튼에 aria-expanded가 있고 아이콘은 aria-hidden인가?
 ```
+
+---
+
+## 28. 카드형 레이아웃 강조 모션 — "좌우 기울임 잔향" 표준 ★★★ (2026-10-30 확정, Stephen)
+
+> **"카드 강조 모션 적용해" / "카드 기울임 모션 적용해" 언급 시 → 재도출 없이 아래 값·스크립트를 그대로 적용.**
+> 정본 구현: `src/routes/account/rental/+page.svelte` (`.rental-card--bounce` · `card-tilt` · `bounceId`)
+> 용도: 목록에서 **지금 눈에 띄어야 할 카드 1장**(진행 중·방금 이동해 온 카드 등)을 진입 시 한 번 흔들어 주의를 끈다.
+> ⚠️ 이전 시도 기록: ① 상하·좌우 이동 바운스(translate) → "매우 어색함" 판정 ② 가로 이동 흔들기 → 기울임으로 교체. **회전(rotate)만** 쓴다.
+
+### 28-1. 모션 사양 (이 표의 값을 그대로 사용 — 임의 변경 금지)
+
+| 항목 | 값 |
+|---|---|
+| 동작 | 제자리 **좌우 기울임** 후 진폭이 줄어들며 가라앉는 감쇠 진동(잔향) · **1회** |
+| 회전 중심 | `transform-origin: 50% 50%` (카드 한가운데) |
+| 최대 각도 | **2.5°** (첫 기울임, 2026-10-30 확정 — 처음 5°에서 50% 축소) |
+| 감쇠 | 직전 진폭의 약 **75%** 씩: 2.5 → 2.1 → 1.6 → 1.2 → 0.85 → 0.55 → 0.3 → 0.15° (부호 교대) |
+| 시간 | 총 **0.85s**, 시작 지연 **0.2s**, 첫 기울임은 약 0.06s(전체의 7%)에 도달해 빠르게 친다 |
+| 이징 | `ease-out` |
+| 반복 | `1` (한 번만) |
+| fill-mode | **`backwards`** — ⛔ `both`/`forwards` 금지: 끝난 뒤 `transform: rotate(0deg)`가 남아 position:fixed 자손의 기준 박스가 카드로 바뀐다(ui-mobile.md "CSS transform + position:fixed 충돌") |
+| 모션 줄이기 | `@media (prefers-reduced-motion: reduce) { animation: none }` 필수 |
+| 대상 | 화면당 **카드 1장**만(여러 장 동시 금지 — 강조 의미가 사라짐) |
+
+### 28-2. CSS (복사해서 사용 — 클래스명은 화면에 맞게 바꿔도 값은 유지)
+
+```css
+/* 진입 시 강조 카드 좌우 기울임 — 감쇠 진동 1회 */
+.card--emphasis { animation: card-tilt 0.85s ease-out 0.2s 1 backwards; transform-origin: 50% 50%; }
+@keyframes card-tilt {
+  0%, 100% { transform: rotate(0deg); }
+  7%       { transform: rotate(-2.5deg); }
+  19%      { transform: rotate(2.1deg); }
+  31%      { transform: rotate(-1.6deg); }
+  43%      { transform: rotate(1.2deg); }
+  55%      { transform: rotate(-0.85deg); }
+  67%      { transform: rotate(0.55deg); }
+  79%      { transform: rotate(-0.3deg); }
+  90%      { transform: rotate(0.15deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card--emphasis { animation: none; }
+}
+```
+
+### 28-3. 스크립트 (Svelte 5 — 대상 카드 선정 + 클래스 토글)
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte'
+
+  // 강조 대상 판정 — 화면 성격에 맞게 이 Set 과 조건만 바꾼다(예: 대여 목록 = 진행 중 상태)
+  const EMPHASIS_STATUS = new Set(['hold', 'confirmed', 'shipped', 'in_use', 'return_requested'])
+
+  // ⛔ 반드시 $state(null) 로 시작하고 onMount 에서 채운다 — SSR 렌더에서 클래스를 달면 하이드레이션 시 속성이 어긋난다
+  let emphasisId = $state<string | null>(null)
+
+  onMount(() => {
+    // ① 우선순위: 다른 화면에서 넘어온 지정 카드(?focus=ID)가 있으면 그 카드
+    const focus = new URLSearchParams(window.location.search).get('focus')
+    const focused = focus ? items.find(r => String(r.id) === focus) : undefined
+    // ② 없으면 목록(최신순) 맨 앞의 강조 대상 1장 — 취소 처리 중 카드는 제외
+    const pick = focused ?? items.find(r => EMPHASIS_STATUS.has(r.status) && !r.cancelling)
+    if (pick && EMPHASIS_STATUS.has(pick.status)) emphasisId = String(pick.id)
+  })
+</script>
+
+{#each items as item (item.id)}
+  <div class="card" id="card-{item.id}" class:card--emphasis={emphasisId === String(item.id)}>
+    ...
+  </div>
+{/each}
+```
+
+- 지정 카드로 스크롤 이동을 같이 쓸 때는 `requestAnimationFrame(() => el.scrollIntoView({ block: 'start' }))` 후 모션이 시작되도록 **시작 지연 0.2s를 유지**한다(이동이 끝난 뒤 흔들림). 고정 헤더가 있으면 카드에 `scroll-margin-top: 80px`.
+- `data` 가 바뀌어도(`invalidateAll`) 이미 정해진 `emphasisId` 는 다시 정하지 않는다(모션 재생 방지) — `onMount` 에서 한 번만 계산한다.
+
+### 28-4. 적용·확장 기준
+
+```
+✅ 적용: 흰 카드·리스트 카드처럼 "여러 장 중 지금 눈에 띄어야 할 1장"이 있는 화면
+⛔ 금지: 카드 전체가 항상 같은 중요도인 화면(전부 흔들거나 아무것도 안 흔들거나) · 모달·바텀시트 · 반복 재생(루프) · 클릭 피드백(호버/눌림은 배경색 변경만)
+각도·시간을 화면별로 바꾸지 않는다 — 값 변경은 Stephen 지시가 있을 때 이 절의 표부터 갱신한다.
+```
+
+**GATE C**
+```
+[ ] animation-fill-mode 가 backwards 인가(both/forwards 아님)?
+[ ] prefers-reduced-motion 에서 animation: none 이 있는가?
+[ ] emphasisId 가 $state(null) 로 시작하고 onMount 에서만 채워지는가(SSR 클래스 불일치 없음)?
+[ ] 화면당 카드 1장만 강조되는가?
+[ ] 최대 각도 2.5°·총 0.85s·지연 0.2s 표값을 그대로 썼는가(transform 은 rotate 만 — translate 금지)?
+```
