@@ -161,11 +161,11 @@ describe('stripServerGuardPrefix', () => {
   })
 })
 
-describe('퀵서비스 당일 마감 19시 — 수령일 선택 가능 범위와 시각 규칙의 연결', () => {
-  const quick = resolveLeadRule({ isDeliveryType: false, deadlineText: '당일 예약은 오후 7시까지' })
-  it('18:59 → 오늘 선택 가능, 19:00 → 오늘은 마감(내일부터)', () => {
-    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 18, 59))).toBe(false)
-    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 19, 0))).toBe(true)
-    expect(minPickupDate(quick, kst(2026, 10, 30, 19, 0))).toBe('2026-10-31')
+describe('퀵서비스 당일 신청 마감 18시 — 수령일 선택 가능 범위(문구 "당일 예약은 오후 6시까지")', () => {
+  const quick = resolveLeadRule({ isDeliveryType: false, deadlineText: '당일 예약은 오후 6시까지' })
+  it('17:59 → 오늘 선택 가능, 18:00 → 오늘은 마감(내일부터)', () => {
+    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 17, 59))).toBe(false)
+    expect(isPickupDateBlocked('2026-10-30', quick, kst(2026, 10, 30, 18, 0))).toBe(true)
+    expect(minPickupDate(quick, kst(2026, 10, 30, 18, 0))).toBe('2026-10-31')
   })
 })
