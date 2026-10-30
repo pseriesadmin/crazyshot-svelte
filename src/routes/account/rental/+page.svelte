@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import { returnDayState } from '$lib/utils/returnNoticeTime'
@@ -28,6 +29,20 @@
     $authState.user?.email?.split('@')[0] ??
     'test'
   )
+
+  // 내정보 "최근 예약" 카드에서 넘어온 경우(?focus=예약ID) 해당 대여카드로 바로 이동한다(2026-10-30, Stephen 지시).
+  // 같은 주문 묶음 카드에 속한 예약이면 그 묶음 카드로 간다. 일치하는 카드가 없으면(목록 50건 밖 등) 맨 위에 그대로 둔다.
+  // 진입 시 "지금 진행 중인" 대여카드 1장이 살짝 통통 튄다(2026-10-30, Stephen 지시): ?focus 로 넘어온 카드가 우선, 없으면 목록(최신순) 맨 앞의 진행 중 카드.
+  // 진행 중 = 예약신청·계약완료·반출중·대여중·반납중(종료·취소 제외), 취소중 카드는 제외. 마운트 후에 정해서 서버 렌더와 어긋나지 않게 한다.
+  const IN_PROGRESS = new Set(['hold', 'confirmed', 'shipped', 'in_use', 'return_requested'])
+  let bounceId = $state<string | null>(null)
+  onMount(() => {
+    const focus = new URLSearchParams(window.location.search).get('focus')
+    const target = focus ? data.rentals.find(r => String(r.id) === focus || (r.items ?? []).some(i => String(i.id) === focus)) : undefined
+    if (target) requestAnimationFrame(() => document.getElementById(`rental-card-${target.id}`)?.scrollIntoView({ block: 'start' }))
+    const bounce = target ?? data.rentals.find(r => IN_PROGRESS.has(r.status) && !r.cancelling)
+    if (bounce && IN_PROGRESS.has(bounce.status)) bounceId = String(bounce.id)
+  })
 
   function openReservationChat(rentalId: string): void {
     openChatWithContext({ context_type: 'reservation', context_reservation_id: Number(rentalId) })
@@ -262,7 +277,7 @@
       <div class="list-wrap">
         {#each data.rentals as rental (rental.id)}
           {@const st = STATUS_STYLE[rental.status] ?? STATUS_STYLE['hold']}
-          <div class="rental-card" class:rental-card--cancelling={rental.cancelling}>
+          <div class="rental-card" id="rental-card-{rental.id}" class:rental-card--cancelling={rental.cancelling} class:rental-card--bounce={bounceId === String(rental.id)}>
             <div class="card-head">
               <div class="card-head-left">
                 <span class="code">{rental.reservation_code}</span>
@@ -301,7 +316,7 @@
             </div>
 
             <div class="stepper-wrap">
-              <RentalJourneyStepper slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} />
+              <RentalJourneyStepper plain slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} />
             </div>
 
             {#if rental.cancelling}
@@ -583,9 +598,10 @@
   .list-wrap { display: flex; flex-direction: column; gap: 30px; }
 
   .rental-card {
+    scroll-margin-top: 80px;  /* 고정 헤더(SubGnb)에 가려지지 않게 — ?focus 로 이동 시 */
     background: var(--cs-white);
     border-radius: var(--radius-2xl);   /* PC: 50px */
-    padding: 20px;
+    padding: 20px 20px 30px;  /* 하단 20px → 30px(+50%, 2026-10-30 Stephen 지시) */
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -605,7 +621,7 @@
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 15px;
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-light);  /* 예약코드 옅은 그레이(grey-30, 2026-10-30 Stephen 지시 — 처음 grey-70 에서 한 단계 옅게) */
     letter-spacing: -0.3px;
   }
   .status-chip {
@@ -671,21 +687,29 @@
   .card-dates {
     display: flex;
     align-items: center;
+    justify-content: center;  /* 수평 중앙 정렬(2026-10-30 Stephen 지시) */
     gap: 8px;
+    margin-top: 6px;  /* 상품명 ↔ 대여기간 간격 12px → 18px(+50%, 2026-10-30 Stephen 지시) */
+    /* 매우 옅은 그레이 면(--cs-bg-row-hover #fafafa, 2026-10-30 Stephen 지시) — 안쪽 여백·반경은 스텝퍼 설명 말풍선(.step-info)과 같은 12px 14px / 15px */
+    padding: 12px 14px;
+    background: var(--cs-bg-row-hover);
+    border-radius: var(--radius-md);
   }
   .date-label {
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 12px;
     font-weight: 700;
+    line-height: 1;  /* 라벨·날짜 두 요소의 글자 중심선을 맞추기 위해 줄 높이를 글자 크기로 통일(2026-10-30 Stephen 지시) */
     color: var(--cs-text-mid);
   }
   .date-value {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-size: 13px;
+    font-family: var(--font-en-d-din);  /* 숫자 폰트(D-DIN Exp, 2026-10-30 Stephen 지시) — 대여/반납 날짜 숫자와 동일 토큰 */
+    font-size: 14px;  /* 13px → 14px(+1pt, 2026-10-30 Stephen 지시) */
+    line-height: 1;
     color: var(--cs-text);
   }
 
-  .stepper-wrap { margin-top: 4px; }
+  .stepper-wrap { margin-top: 12px; }  /* 대여기간 ↔ 배지 줄 간격 16px → 24px(+50%, 2026-10-30 Stephen 지시): 카드 gap 12px + 12px */
 
   /* 전자계약 확인 버튼 — 보조 액션(외곽선 스타일), 서명 완료된 예약에만 노출 */
   .contract-btn {
@@ -713,6 +737,7 @@
     flex-direction: column;
     gap: 8px;
   }
+  .stepper-wrap + .card-actions { margin-top: 15px; }  /* 스텝퍼(말풍선) ↔ 버튼 간격 12px → 18px → 27px(각 +50%, 2026-10-30 Stephen 지시) */
   .card-actions-btn {
     display: flex;
     align-items: center;
@@ -734,13 +759,31 @@
   }
   .card-actions-btn.primary:hover  { background: #2d2470; border-color: #2d2470; }
   .card-actions-btn.primary:active { background: #1f1a55; border-color: #1f1a55; }
+  /* 취소 계열 버튼 — 면 채움(USER CTA 레드 규격, front-uiux §5): 평소 red-badge · 호버·눌림 red(더 짙게), 글자 흰색(2026-10-30 Stephen 지시) */
   .card-actions-btn.danger {
-    background: var(--cs-white);
-    border-color: var(--cs-red-badge, #FF3535);
-    color: var(--cs-red-badge, #FF3535);
+    background: var(--cs-red-badge);
+    border-color: var(--cs-red-badge);
+    color: var(--cs-white);
   }
-  .card-actions-btn.danger:hover  { background: rgba(255,53,53,0.06); }
-  .card-actions-btn.danger:active { background: rgba(255,53,53,0.12); }
+  .card-actions-btn.danger:hover  { background: var(--cs-red); border-color: var(--cs-red); }
+  .card-actions-btn.danger:active { background: var(--cs-red); border-color: var(--cs-red); }
+  /* 진입 시 진행 중 카드 좌우 기울임(2026-10-30, Stephen 지시 — 좌우 기울임 빠른 모션 + 잔향): 첫 기울임은 빠르게(약 0.06초에 최대 2.5° — 처음 5°에서 50% 축소, 2026-10-30),
+     이후 진폭이 직전의 약 75%씩 줄어드는 작은 떨림이 길게 이어지며 가라앉는다(감쇠 진동, 1회) */
+  .rental-card--bounce { animation: card-tilt 0.85s ease-out 0.2s 1 backwards; transform-origin: 50% 50%; } /* backwards: 끝난 뒤 transform 을 남기지 않는다(fixed 자손 containing block 방지) */
+  @keyframes card-tilt {
+    0%, 100% { transform: rotate(0deg); }
+    7%       { transform: rotate(-2.5deg); }
+    19%      { transform: rotate(2.1deg); }
+    31%      { transform: rotate(-1.6deg); }
+    43%      { transform: rotate(1.2deg); }
+    55%      { transform: rotate(-0.85deg); }
+    67%      { transform: rotate(0.55deg); }
+    79%      { transform: rotate(-0.3deg); }
+    90%      { transform: rotate(0.15deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rental-card--bounce { animation: none; }
+  }
   .rental-card--cancelling {
     opacity: 0.6;            /* 취소중 카드 — 40% 흐리게(비활성) */
     pointer-events: none;

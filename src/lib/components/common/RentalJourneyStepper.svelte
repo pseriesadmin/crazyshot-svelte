@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte'
+  import { csToast } from '$lib/utils/toast'
   import { DHERO_STAGE_LABELS, type DheroStageInfo, type DheroTone } from '$lib/utils/dheroJourneyStage'
 
   interface Props {
@@ -11,6 +12,7 @@
     cancelledAlign?: 'center' | 'start'  // 취소됨 표시 위치(기본 center — CMS 취소·환불 사유 박스는 start=좌측)
     returnDay?: 'before' | 'reached'   // 고객 화면 전용(2026-10-22): 대여중일 때만 의미 — before=대여중이 현재·반납중 칸은 비활성(기존 표시), reached=반납 안내 시각 도달(칸 이름이 '반납일'로 바뀌며 현재 단계). 고객이 반납 제출하면 상태가 반납중이 되어 이름만 '반납중'으로 바뀜
     fluid?: boolean                    // slim 과 함께 — 고객 화면용: 컨테이너 폭에 맞춰 원형 배지·간격이 줄어든다(34~46px). 기본 false(CMS 헤더는 고정 48px)
+    plain?: boolean                    // 고객 대여카드용(2026-10-30): 회색 박스 배경·라운드·패딩을 없애 카드(흰색) 위에 그대로 놓는다 — 설명 말풍선은 흰 카드와 구분되도록 옅은 회색 면. 기본 false
     slim?: boolean                     // 패널 헤더용 슬림형 — 한 줄(점+라벨 가로 배치), 현재 단계 점에 옅은 퍼플 물결 모션 반복(2026-10-22). 기본 false
     details?: Record<string, string[] | undefined>  // 고객 화면 전용(2026-10-26): 단계별(status 키) 설명 텍스트 — 주어지면 해당 단계 배지를 눌러 선택할 수 있고, 선택한 단계의 텍스트가 배지 줄 아래에 나온다. 미지정 시 기존과 동일(비선택)
     children?: Snippet    // bg 박스 안, 단계 표시 아래에 넣을 추가 콘텐츠(선택 — CMS 취소·환불 사유 입력 등, 미지정 시 기존과 동일)
@@ -18,7 +20,7 @@
     dheroStage?: DheroStageInfo | null
   }
 
-  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, slim = false, fluid = false, returnDay, details, dheroStage = null }: Props = $props()
+  let { status, steps, productName, children, cancelledAlign = 'center', cancelledLabel, compact = false, plain = false, slim = false, fluid = false, returnDay, details, dheroStage = null }: Props = $props()
 
   const ALL_STEPS = [
     { status: 'hold',             label: '예약신청' },
@@ -155,6 +157,70 @@
   }
   let selectedLines = $derived(details && selectedKey ? (details[selectedKey] ?? []) : [])
 
+  // 자동 펼침(2026-10-30, Stephen 지시): 배지를 누르지 않아도 "현재 단계"의 설명이 처음부터 말풍선으로 떠 있다.
+  // 단계(status)나 현재 단계의 설명 유무가 바뀔 때만 다시 맞추고, invalidateAll 로 details 객체만 새로 와도 고객이 고른 선택은 유지한다.
+  let _autoSig = ''
+  $effect(() => {
+    const cur = displaySteps[currentStepIndex]
+    const key = details && cur && cur.status !== 'cart' && details[cur.status] ? cur.status : null
+    const sig = `${status}|${key ?? ''}`
+    if (sig === _autoSig) return
+    _autoSig = sig
+    selectedKey = key
+  })
+
+  // 설명 줄 중 "운송장 번호: 값" 은 번호 부분을 누르면 복사된다(2026-10-30, Stephen 지시)
+  function splitTracking(line: string): { label: string; value: string } | null {
+    const m = /^(운송장 번호:\s*)(\S.*)$/.exec(line)
+    return m ? { label: m[1], value: m[2].trim() } : null
+  }
+  async function copyTracking(value: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value)
+    } catch {
+      // 클립보드 권한이 없는 환경(일부 인앱 브라우저·http) — 임시 입력칸으로 복사
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = value
+        ta.setAttribute('readonly', '')
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        if (!ok) throw new Error('copy failed')
+      } catch {
+        csToast.error('복사하지 못했어요. 번호를 길게 눌러 직접 복사해 주세요.')
+        return
+      }
+    }
+    csToast.success('운송장번호를 복사했습니다.')
+  }
+
+  // 말풍선 꼬리 — 선택한 배지(원형)의 가로 중앙을 말풍선 박스 왼쪽 기준 px 로 잰다. 배지 줄이 밀려 스크롤돼도 따라가도록 스크롤·크기 변화 때 다시 잰다.
+  // 두 요소의 실제 화면 좌표 차이로 구해 padding·스크롤·offsetParent 차이에 영향받지 않는다(진입 모션은 scale·세로 이동이라 가로 중앙은 같다 — 모션 끝나면 한 번 더 잰다).
+  let tailX = $state<number | null>(null)
+  function updateTail(): void {
+    const el = stepperEl
+    const info = document.getElementById(infoId)
+    if (!el || !info || !selectedKey) { tailX = null; return }
+    // dhero 펼침 중에는 선택 단계 배지가 5개 서브배지로 바뀌므로 현재 서브배지를 가리킨다
+    const target = el.querySelector<HTMLElement>('.step-item.selected') ?? (selectedKey === status ? el.querySelector<HTMLElement>('.step-item.active') : null)
+    const circle = target?.querySelector<HTMLElement>('.step-circle')
+    if (!circle) { tailX = null; return }
+    const c = circle.getBoundingClientRect()
+    tailX = c.left + c.width / 2 - info.getBoundingClientRect().left
+  }
+  $effect(() => {
+    void selectedKey; void status; void renderSteps; void selectedLines; void isDheroExpanded
+    if (!stepperEl) return
+    tick().then(updateTail)
+    document.fonts?.ready.then(updateTail)
+    window.addEventListener('resize', updateTail)
+    return () => window.removeEventListener('resize', updateTail)
+  })
+
   // 모바일 아코디언 등 늦게 렌더링/확장되는 컨테이너에 들어갈 때 overflow-x 스크롤 위치가
   // 0이 아닌 상태로 초기화되어 좌측이 잘려 보이는 문제 방지 — 항상 맨 왼쪽(신청 단계)부터 보이도록 고정
   let stepperEl = $state<HTMLDivElement | null>(null)
@@ -191,11 +257,11 @@
   })
 </script>
 
-<div class="journey-stepper" class:compact class:slim class:fluid>
+<div class="journey-stepper" class:compact class:plain class:slim class:fluid>
   {#if productName}
     <p class="stepper-product-name">{productName}</p>
   {/if}
-  <div class="stepper-scroll" style="--n: {renderSteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl}>
+  <div class="stepper-scroll" style="--n: {renderSteps.length}" class:fade class:cancelled-start={isCancelled && cancelledAlign === 'start'} role="list" aria-label="대여 여정" bind:this={stepperEl} onscroll={updateTail} onanimationend={updateTail}>
     {#if isCancelled}
       <div class="journey-cancelled">
         <span class="cancelled-icon">✕</span>
@@ -288,10 +354,11 @@
     {/if}
   </div>
   {#if details && selectedKey && selectedLines.length > 0}
-    <!-- 선택한 단계 설명 — 배지 줄 아래에 텍스트로 노출 -->
-    <div class="step-info" id={infoId} role="status" aria-live="polite">
+    <!-- 선택한 단계 설명 — 처음엔 현재 단계가 자동으로 펼쳐지고, 말풍선 꼬리가 해당 배지를 가리킨다 -->
+    <div class="step-info" id={infoId} role="status" aria-live="polite" style={tailX !== null ? `--tail-x: ${tailX}px` : undefined}>
       {#each selectedLines as line, li}
-        <p class:step-info-lead={li === 0}>{line}</p>
+        {@const tracking = splitTracking(line)}
+        <p class:step-info-lead={li === 0}>{#if tracking}{tracking.label}<button type="button" class="tracking-copy" title="눌러서 복사" onclick={() => copyTracking(tracking.value)}>{tracking.value}</button>{:else}{line}{/if}</p>
       {/each}
     </div>
   {/if}
@@ -356,7 +423,8 @@
   .journey-stepper .step-item.selected .step-circle { background: var(--cs-purple-pale); color: var(--cs-purple-dark); }
   .journey-stepper .step-item.selected.done .step-circle { background: var(--cs-purple-dark); color: var(--cs-white); }
   .step-info {
-    margin-top: 14px;
+    position: relative;
+    margin-top: 21px; /* 배지 줄과의 간격 14px → 21px(+50%, 2026-10-30 Stephen 지시) */
     padding: 12px 14px;
     border-radius: 15px;
     background: var(--cs-white);
@@ -365,7 +433,35 @@
     line-height: 1.5;
     color: var(--cs-text-mid);
     word-break: keep-all;
+    /* 미세한 그림자(2026-10-30, Stephen 지시) — drop-shadow 라 박스와 꼬리가 하나의 윤곽으로 함께 그림자를 받는다. 색은 --shadow-bottom-bar 와 같은 text(#100B32) 계열 */
+    filter: drop-shadow(0 1px 4px rgba(16, 11, 50, 0.08));
   }
+  /* 말풍선 꼬리 — 선택한 배지 가로 중앙을 가리킨다(좌우 모서리 라운드 밖으로 나가지 않게 clamp). 면(white)만 쓰고 테두리·그림자 없음 */
+  .step-info::before {
+    content: '';
+    position: absolute;
+    top: -7px;
+    left: clamp(22px, var(--tail-x, 50%), calc(100% - 22px));
+    width: 16px;
+    height: 8px;
+    transform: translateX(-50%);
+    background: var(--cs-white);
+    clip-path: polygon(50% 0, 0 100%, 100% 100%);
+  }
+  /* 운송장 번호 — 퍼플 글자, 호버·터치는 글자색만 바뀐다(배경·테두리·밑줄 없음) */
+  .tracking-copy {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-family: var(--font-en-d-din);  /* 숫자 폰트(D-DIN Exp, 2026-10-30 Stephen 지시) */
+    font-size: 14px;                    /* 본문 13px → 14px(+1pt) */
+    font-weight: 700;
+    color: var(--cs-purple);
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .tracking-copy:hover, .tracking-copy:active { color: var(--cs-purple-light); }
   .step-info p { margin: 0; }
   .step-info p + p { margin-top: 2px; }
   .step-info-lead { font-weight: 700; color: var(--cs-text); }
@@ -700,4 +796,9 @@
     .step-label { font-size: var(--text-pc-body-14); }
     .step-connector { width: 42px; height: 42px; }
   }
+
+  /* 박스 제거형(고객 대여카드) — 배경·라운드·패딩 없음. 말풍선은 흰 카드 위에서 보이도록 옅은 회색 면(그림자는 면 대비가 생겨 불필요) */
+  .journey-stepper.slim.fluid.plain { background: none; border-radius: 0; padding: 0; }
+  .journey-stepper.plain .step-info { background: var(--cs-surface-gray); filter: none; }
+  .journey-stepper.plain .step-info::before { background: var(--cs-surface-gray); }
 </style>

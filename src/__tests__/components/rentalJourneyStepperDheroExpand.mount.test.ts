@@ -110,6 +110,11 @@ describe('RentalJourneyStepper dhero + details 공존 (M1)', () => {
     // dheroStage 없으면 isSelectable 분기로 일반 selectable 버튼 렌더
     const btn = body.querySelector('.step-circle.selectable') as HTMLElement | null
     expect(btn).toBeTruthy()
+    // 자동 펼침(2026-10-30): 현재 단계(shipped)는 처음부터 열려 있고, 배지를 누르면 닫히며 다시 누르면 열린다
+    expect(body.querySelector('.step-info')).toBeTruthy()
+    btn!.click()
+    flushSync()
+    expect(body.querySelector('.step-info')).toBeNull()
     btn!.click()
     flushSync()
     expect(body.querySelector('.step-info')).toBeTruthy()

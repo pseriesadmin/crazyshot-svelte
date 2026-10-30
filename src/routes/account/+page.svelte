@@ -138,7 +138,10 @@
             {#if data.recentRental}
               <div class="w-full mt-[36px]">
                 <p class="text-[#444] tracking-[-0.3px] mb-[8px]" style="font: var(--text-m-script-14B);">최근 예약</p>
-                <RentalJourneyStepper slim fluid status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} returnDay={returnDayState(data.recentRental.status, data.recentRental.end_date, data.recentRental.return_method, data.recentRental.return_time)} />
+                <!-- 누르면 대여 목록의 해당 대여카드로 이동(2026-10-30) -->
+                <a href={`/account/rental?focus=${data.recentRental.id}`} class="block no-underline" style="color: inherit;" aria-label="해당 대여카드로 이동">
+                  <RentalJourneyStepper slim fluid status={data.recentRental.status} productName={data.recentRental.product_name ?? undefined} returnDay={returnDayState(data.recentRental.status, data.recentRental.end_date, data.recentRental.return_method, data.recentRental.return_time)} />
+                </a>
               </div>
             {/if}
           </div>
