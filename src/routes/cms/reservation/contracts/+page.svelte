@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { confirmDiscardUnsaved } from '$lib/utils/contractUnsavedGuard'
   import { goto, invalidateAll } from '$app/navigation'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import { page } from '$app/stores'
@@ -12,8 +13,10 @@
 
   // 신규 작성 모드 (template=null로 패널 표시)
   let isNewMode = $state(false)
-  // 매 "+ 작성" 클릭마다 고유값을 보장하는 카운터 — isNewMode가 이미 true여도 강제 재마운트
+  // 매 "+새로작성" 클릭마다 고유값을 보장하는 카운터 — isNewMode가 이미 true여도 강제 재마운트
   let newSessionNonce = $state(0)
+  /** 저장된 양식에서 다른 형식 파일을 골라 "새 양식으로 이어서 작성"을 시작한 경우 그 파일(새 작성 화면이 한 번 받아 간다) */
+  let importForNew = $state<File | null>(null)
 
   // 검색
   let searchQuery = $state('')
@@ -53,28 +56,43 @@
     try { localStorage.setItem(LIST_OPEN_KEY, listOpen ? '1' : '0') } catch { /* 저장 실패 무시 */ }
   }
 
-  const showPanel = $derived(isNewMode || (!!data.selectedId && !!data.selectedTemplate))
+  function startNewFromImport(file: File) {
+    const params = new URLSearchParams($page.url.searchParams)
+    params.delete('selected')
+    goto(`?${params.toString()}`, { replaceState: true, noScroll: true })
+    importForNew = file
+    newSessionNonce += 1
+    isNewMode = true
+  }
 
   function selectTemplate(id: string) {
+    // 편집 중인 스프레드시트에 저장 안 한 내용이 있으면 패널이 바뀌기 전에 확인한다(같은 양식 재클릭은 제외)
+    if ((isNewMode || id !== data.selectedId) && !confirmDiscardUnsaved()) return
     const params = new URLSearchParams($page.url.searchParams)
     params.set('selected', id)
     goto(`?${params.toString()}`, { replaceState: true, noScroll: true })
+    importForNew = null
     isNewMode = false
   }
 
   function openNew() {
+    if (!confirmDiscardUnsaved()) return
     const params = new URLSearchParams($page.url.searchParams)
     params.delete('selected')
     goto(`?${params.toString()}`, { replaceState: true, noScroll: true })
+    importForNew = null
     newSessionNonce += 1   // 매 클릭마다 증가 — 이미 isNewMode=true여도 ContractTemplatePanel 강제 재마운트
     isNewMode = true
   }
 
   function closePanel() {
+    if (!confirmDiscardUnsaved()) return
     const params = new URLSearchParams($page.url.searchParams)
     params.delete('selected')
     goto(`?${params.toString()}`, { replaceState: true, noScroll: true })
     isNewMode = false
+    importForNew = null
+    newSessionNonce += 1 // 새 작성 화면(랜딩)으로 돌아올 때 이전 작성 상태가 남지 않도록 다시 만든다
   }
 
   async function onSaved(id: string) {
@@ -123,7 +141,7 @@
     <h2 class="page-title">계약서 양식</h2>
     <span class="count-badge">{data.templates.length}건</span>
     <div class="toolbar-right">
-      <button class="cta-btn" onclick={openNew}>+ 작성</button>
+      <button class="cta-btn" onclick={openNew}>+새로작성</button>
     </div>
   </div>
 
@@ -134,7 +152,7 @@
     <div class="list-pane" class:collapsed={!listOpen}>
       <div class="list-pane-head">
         <button type="button" class="close-btn" onclick={toggleList} aria-expanded={listOpen} aria-label={listOpen ? '양식 목록 닫기' : '양식 목록 펼치기'} title={listOpen ? '양식 목록 닫기' : '양식 목록 펼치기'}>
-          {#if listOpen}✕{:else}<ChevronIcon direction="right" size={10} color="currentColor" />{/if}
+          <ChevronIcon direction={listOpen ? 'left' : 'right'} size={6} color="currentColor" />
         </button>
       </div>
       <div class="search-wrap">
@@ -212,30 +230,29 @@
 
     <!-- 우측: 에디터 영역 — ContractTemplatePanel(내부에 에디터+필드패널 2열 포함) -->
     <div class="editor-area">
-      {#if showPanel}
-        {#if isNewMode}
-          {#key '__new__:' + newSessionNonce}
-            <ContractTemplatePanel
-              template={null}
-              onclose={closePanel}
-              onsaved={onSaved}
-            />
-          {/key}
-        {:else if data.selectedTemplate}
-          {#key data.selectedId}
-            <ContractTemplatePanel
-              template={data.selectedTemplate}
-              onautoissuechange={() => invalidateAll()}
-              onclose={closePanel}
-              onsaved={onSaved}
-            />
-          {/key}
-        {/if}
+      <!--
+        선택한 양식이 없으면 빈 안내 화면 대신 "작성 방식 선택" 화면(+새로작성 버튼을 눌렀을 때의 랜딩 화면)을 바로 보여 준다(2026-10-29,
+        Stephen 요청). 양식을 고르면 그 양식의 편집 화면으로, 닫거나 삭제하면 다시 이 랜딩 화면으로 돌아온다.
+      -->
+      {#if !isNewMode && data.selectedId && data.selectedTemplate}
+        {#key data.selectedId}
+          <ContractTemplatePanel
+            template={data.selectedTemplate}
+            onautoissuechange={() => invalidateAll()}
+            onclose={closePanel}
+            onsaved={onSaved}
+            onStartNewFromImport={startNewFromImport}
+          />
+        {/key}
       {:else}
-        <div class="editor-empty">
-          <p>목록에서 양식을 선택하거나, 새 양식을 작성하세요.</p>
-          <button class="cta-btn" onclick={openNew}>+ 새 양식 작성</button>
-        </div>
+        {#key '__new__:' + newSessionNonce}
+          <ContractTemplatePanel
+            template={null}
+            initialImportFile={importForNew}
+            onclose={closePanel}
+            onsaved={onSaved}
+          />
+        {/key}
       {/if}
     </div>
 
@@ -483,21 +500,6 @@
     display: flex;
     flex-direction: column;
     background: var(--cs-white);
-  }
-
-  /* 선택 없을 때 빈 상태 */
-  .editor-empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-  }
-  .editor-empty p {
-    margin: 0;
-    color: var(--cs-text-mid);
-    font: var(--text-pc-body-14);
   }
 
   /* 빈 목록 상태 */

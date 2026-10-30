@@ -28,6 +28,7 @@
 - `docEditor*.mount.test.ts`: 컴포넌트 동작
 
 ## 변경 이력
+- 0.1.7 (2026-10-29): 스크롤 때 화면에 고정(position:fixed)된 보조 UI 정리 — ① `ui/TableContextBar` 표 보조 툴바를 보이는 편집 영역(`.de-editor-area`) 안으로 가두고 표가 영역 밖이면 숨김(전에는 화면 맨 위에 붙어 호스트의 헤더·메인 툴바 위로 지나갔다) ② `ui/DocToolbar` 서식 목록 창이 문서 스크롤 때 닫힘(목록 안 스크롤은 유지). 문서 포맷·렌더·치환·변수칩·호스트 API 변경 없음(호환).
 - 0.1.6 (2026-10-17): 이미지 도구 공통 계산을 `core/imageTools.ts`로 분리(모서리 정의·정렬별 허용 모서리·끌기 거리·화면 안 도구줄/손잡이 위치·점 표시 선호 저장) — DocEditor와 호스트의 RichContentEditor가 같은 규칙을 한 곳에서 쓴다. 문서 포맷·렌더·치환·계약서 고유 기능(변수칩·서명/직인·표 반복영역)은 변경 없음. 테스트: imageTools.test.ts, 실제 브라우저 e2e/editors.spec.ts. 기능 계약: .claude/rules-ref/editor-capabilities.md.
 - 0.1.5 (2026-10-16): 이미지 도구줄 정리(RichContentEditor와 같은 기준) — 서식 도구줄 정렬·모서리 점 드래그와 중복·충돌하던 소·중·대 프리셋·너비 입력·정렬 버튼 제거. 도구줄은 겹치기·편집·ALT·크기 조절 점 표시/숨김(아이콘, 선택은 localStorage 'de-image-resize-handles'에 기억)·삭제. 정렬은 상단 서식 도구줄, 크기는 모서리 점이 맡는다.
 - 0.1.4 (2026-10-16): onEditImage 가 문서 안 모든 이미지(images, 문서 순서)와 눌린 이미지 순번(index)을 함께 넘긴다 — 뷰어의 썸네일 정렬에 문서 전체 이미지가 나열되고, 어느 이미지든 편집 저장 시 그 자리 src만 교체(replace 는 위치가 밀려도 같은 이미지를 다시 찾고, 같은 이미지를 여러 번 편집해도 동작). 타입 EditImageInfo 는 core/types.ts.

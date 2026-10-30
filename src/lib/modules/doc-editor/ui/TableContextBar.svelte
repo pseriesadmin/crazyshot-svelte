@@ -40,8 +40,20 @@
       }
       const r = table.getBoundingClientRect()
       const BAR_H = 38
-      top = r.top - BAR_H - 4 >= 4 ? r.top - BAR_H - 4 : Math.max(4, r.top + 4)
-      left = Math.max(8, Math.min(r.left, window.innerWidth - 360))
+      // 이 바는 position:fixed 라 편집 영역 밖(상단 헤더·툴바 위)으로 나갈 수 있다 — 위치를 "보이는 편집 영역" 안으로 가두고,
+      // 표가 영역 밖으로 완전히 스크롤되면 숨긴다(화면 맨 위 y=4 에 고정돼 메인 툴바 위로 지나가던 결함)
+      const found = editor.view.dom.closest('.de-editor-area')?.getBoundingClientRect()
+      // 편집 영역의 크기를 잴 수 없으면(크기 0 — 화면 밖·테스트 환경) 영역 가두기를 하지 않고 화면 전체를 기준으로 한다
+      const area = found && found.bottom - found.top > 0 ? found : { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth }
+      if (found && found.bottom - found.top > 0 && (r.bottom < area.top + 8 || r.top > area.bottom - 8)) {
+        visible = false
+        return
+      }
+      const aboveTable = r.top - BAR_H - 4
+      const minTop = area.top + 4
+      const maxTop = area.bottom - BAR_H - 4
+      top = Math.min(maxTop, Math.max(minTop, aboveTable >= minTop ? aboveTable : r.top + 4))
+      left = Math.max(area.left + 8, Math.min(r.left, area.right - 360))
       visible = true
     } catch {
       visible = false

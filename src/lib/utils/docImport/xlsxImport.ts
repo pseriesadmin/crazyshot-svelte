@@ -24,6 +24,8 @@ import type { JSONContent } from '@tiptap/core'
 // Types now live in sheet-format.ts — import here for use in this file and re-export for backward compat
 import type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
 import { fitColumnWidthsToTarget } from './fitColumnWidths'
+import { readBiffWorkbookCached } from './xlsBiff'
+import { tryParseFormula, usesOnlySupportedFunctions, KOREAN_BUILTIN_FORMATS } from '$lib/utils/sheetFormula'
 export type { SheetMergeRange, XlsxCellFormatting } from '$lib/types/sheet-format'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +152,263 @@ async function extractBorderColors(arrayBuffer: ArrayBuffer, sheetName: string):
   return result
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 원본 배치 보존용 추출(preserveLayout) — 열 너비·행 높이·변별 테두리 (2026-10-29)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 엑셀 열 너비(글자 수 단위, 여백 포함 저장값) → px. 기본 글꼴 최대 숫자 폭 7px 기준(엑셀 표준 8.43자 ≈ 64px) */
+export const EXCEL_PX_PER_CHAR = 7
+/** 열 정보가 없는 칸의 엑셀 기본 열 너비(px) */
+export const EXCEL_DEFAULT_COL_PX = 64
+
+/** 엑셀 pt → 화면 px (96dpi) */
+export function excelPtToPx(pt: number): number {
+  return Math.round((pt * 96) / 72)
+}
+
+const EXCEL_INDEXED_COLORS: Record<number, string> = {
+  8: '#000000', 9: '#FFFFFF', 10: '#FF0000', 11: '#00FF00', 12: '#0000FF', 13: '#FFFF00', 14: '#FF00FF', 15: '#00FFFF',
+  16: '#800000', 17: '#008000', 18: '#000080', 19: '#808000', 20: '#800080', 21: '#008080', 22: '#C0C0C0', 23: '#808080',
+}
+
+/** 엑셀 테두리 한 변(<left>/<top>/…) → CSS "Npx 스타일 색". 선이 없으면 undefined. 자동색·테마색은 검정으로 본다 */
+function borderSideToCss(sideEl: Element | undefined): string | undefined {
+  const style = sideEl?.getAttribute('style')
+  if (!sideEl || !style || style === 'none') return undefined
+  let width = 1
+  let kind: 'solid' | 'dashed' | 'dotted' | 'double' = 'solid'
+  if (style === 'medium' || style === 'mediumDashed' || style === 'mediumDashDot' || style === 'mediumDashDotDot' || style === 'slantDashDot') width = 2
+  if (style === 'thick') width = 3
+  if (style === 'double') { width = 3; kind = 'double' }
+  if (/dashed|dashDot/i.test(style)) kind = 'dashed'
+  if (style === 'dotted' || style === 'hair') kind = 'dotted'
+  const colorEl = Array.from(sideEl.children).find((el) => el.localName === 'color')
+  let color = toHexColor(colorEl?.getAttribute('rgb'))
+  if (!color) {
+    const idx = colorEl?.getAttribute('indexed')
+    color = (idx !== null && idx !== undefined ? EXCEL_INDEXED_COLORS[parseInt(idx, 10)] : undefined) ?? '#000000'
+  }
+  return `${width}px ${kind} ${color}`
+}
+
+/** 글꼴 이름으로 허용하는 모양(글자·숫자·공백·_.-) — 스타일 문자열 주입 방지 */
+const SAFE_FONT_NAME = /^[\p{L}\p{N} _.-]{1,40}$/u
+
+export interface CellFont {
+  name?: string
+  sizePt?: number
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  color?: string
+}
+
+const DML_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+/** xl/theme/theme1.xml → 엑셀 테마 색 번호(0~11) 순서의 '#RRGGBB' 배열. (엑셀은 lt1·dk1·lt2·dk2·accent1~6·hlink·folHlink 순) */
+async function readThemeColors(zip: JSZip): Promise<string[]> {
+  const f = zip.file('xl/theme/theme1.xml')
+  if (!f) return []
+  const doc = new DOMParser().parseFromString(await f.async('string'), 'application/xml')
+  const scheme = doc.getElementsByTagNameNS(DML_NS, 'clrScheme')[0]
+  if (!scheme) return []
+  const byName = new Map<string, string>()
+  for (const el of Array.from(scheme.children)) {
+    const c = Array.from(el.children)[0]
+    const hex = toHexColor(c?.getAttribute('val') ?? c?.getAttribute('lastClr'))
+    if (hex) byName.set(el.localName, hex)
+  }
+  return ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'].map((n) => byName.get(n) ?? '#000000')
+}
+
+/** 엑셀 색 밝기(tint, -1~1)를 RGB 에 적용 — 양수는 흰색 쪽, 음수는 검정 쪽으로 섞는다 */
+function applyTint(hex: string, tint: number): string {
+  if (!tint || !isFinite(tint)) return hex
+  const n = parseInt(hex.slice(1), 16)
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => Math.round(tint > 0 ? c + (255 - c) * tint : c * (1 + tint)))
+  return '#' + ch.map((c) => Math.max(0, Math.min(255, c)).toString(16).padStart(2, '0')).join('').toUpperCase()
+}
+
+/** <color>/<fgColor> 요소 → '#RRGGBB'. 자동색·시스템색(indexed 64/65)은 undefined(= 기본색) */
+function resolveColorEl(el: Element | undefined, theme: string[]): string | undefined {
+  if (!el) return undefined
+  const rgb = toHexColor(el.getAttribute('rgb'))
+  if (rgb) return rgb
+  const th = el.getAttribute('theme')
+  if (th !== null) {
+    const base = theme[parseInt(th, 10)]
+    return base ? applyTint(base, parseFloat(el.getAttribute('tint') ?? '0')) : undefined
+  }
+  const idx = el.getAttribute('indexed')
+  if (idx !== null) {
+    const n = parseInt(idx, 10)
+    return n === 64 || n === 65 ? undefined : EXCEL_INDEXED_COLORS[n]
+  }
+  return undefined
+}
+
+export interface CellAlign {
+  horizontal?: 'left' | 'center' | 'right' | 'justify'
+  vertical?: 'top' | 'middle' | 'bottom'
+  wrap: boolean
+}
+
+export interface CellBorders {
+  top?: string
+  right?: string
+  bottom?: string
+  left?: string
+}
+
+interface SheetLayoutXml {
+  borders: Map<string, CellBorders>
+  /** 칸별 가로·세로 정렬과 자동 줄바꿈(엑셀 셀 서식의 <alignment>) */
+  aligns: Map<string, CellAlign>
+  /** 칸별 글꼴(이름·크기·굵기·기울임·밑줄·취소선·색) */
+  fonts: Map<string, CellFont>
+  /** 칸별 배경색(단색 채우기) */
+  fills: Map<string, string>
+  /** 칸별 내장 표시 형식 번호(numFmtId) — 라이브러리가 못 읽는 나라별 내장 서식(27~33)을 직접 풀기 위해 */
+  numFmtIds: Map<string, number>
+  /** 시트 기본 행 높이(px) — 행에 높이가 따로 없을 때 쓴다. 정보가 없으면 null */
+  defaultRowPx: number | null
+}
+
+/** styles.xml 에서 borderId별 변(上右下左) CSS 와 cellXfs 의 style-index→borderId */
+async function extractDetailedBorderStyles(
+  zip: JSZip,
+): Promise<{
+  byBorderId: CellBorders[]
+  cellXfBorderId: number[]
+  cellXfAlign: CellAlign[]
+  cellXfFont: CellFont[]
+  cellXfFill: (string | undefined)[]
+  cellXfNumFmtId: number[]
+} | null> {
+  const stylesFile = zip.file('xl/styles.xml')
+  if (!stylesFile) return null
+  const doc = new DOMParser().parseFromString(await stylesFile.async('string'), 'application/xml')
+  if (doc.getElementsByTagName('parsererror').length) return null
+  const byBorderId: CellBorders[] = []
+  const bordersEl = doc.getElementsByTagNameNS(SS_NS, 'borders')[0]
+  if (bordersEl) {
+    for (const b of Array.from(bordersEl.children).filter((el) => el.localName === 'border')) {
+      const side = (name: string): Element | undefined => Array.from(b.children).find((el) => el.localName === name)
+      byBorderId.push({
+        top: borderSideToCss(side('top')),
+        right: borderSideToCss(side('right')),
+        bottom: borderSideToCss(side('bottom')),
+        left: borderSideToCss(side('left')),
+      })
+    }
+  }
+  const theme = await readThemeColors(zip)
+  const flag = (el: Element | undefined): boolean => !!el && !['0', 'false', 'none'].includes(el.getAttribute('val') ?? '')
+  const fonts: CellFont[] = []
+  const fontsEl = doc.getElementsByTagNameNS(SS_NS, 'fonts')[0]
+  if (fontsEl) {
+    for (const f of Array.from(fontsEl.children).filter((el) => el.localName === 'font')) {
+      const kid = (n: string): Element | undefined => Array.from(f.children).find((el) => el.localName === n)
+      const sz = parseFloat(kid('sz')?.getAttribute('val') ?? '')
+      fonts.push({
+        name: kid('name')?.getAttribute('val') ?? undefined,
+        sizePt: Number.isFinite(sz) && sz > 0 ? sz : undefined,
+        bold: flag(kid('b')),
+        italic: flag(kid('i')),
+        underline: flag(kid('u')),
+        strike: flag(kid('strike')),
+        color: resolveColorEl(kid('color'), theme),
+      })
+    }
+  }
+  const fills: (string | undefined)[] = []
+  const fillsEl = doc.getElementsByTagNameNS(SS_NS, 'fills')[0]
+  if (fillsEl) {
+    for (const f of Array.from(fillsEl.children).filter((el) => el.localName === 'fill')) {
+      const p = Array.from(f.children).find((el) => el.localName === 'patternFill')
+      const solid = p?.getAttribute('patternType') === 'solid'
+      fills.push(solid ? resolveColorEl(Array.from(p!.children).find((el) => el.localName === 'fgColor'), theme) : undefined)
+    }
+  }
+  const cellXfBorderId: number[] = []
+  const cellXfAlign: CellAlign[] = []
+  const cellXfFont: CellFont[] = []
+  const cellXfFill: (string | undefined)[] = []
+  const cellXfNumFmtId: number[] = []
+  const cellXfsEl = doc.getElementsByTagNameNS(SS_NS, 'cellXfs')[0]
+  if (cellXfsEl) {
+    for (const xf of Array.from(cellXfsEl.children).filter((el) => el.localName === 'xf')) {
+      const id = parseInt(xf.getAttribute('borderId') ?? '0', 10)
+      cellXfBorderId.push(isNaN(id) ? 0 : id)
+      cellXfNumFmtId.push(parseInt(xf.getAttribute('numFmtId') ?? '0', 10) || 0)
+      cellXfFont.push(fonts[parseInt(xf.getAttribute('fontId') ?? '0', 10)] ?? {})
+      cellXfFill.push(fills[parseInt(xf.getAttribute('fillId') ?? '0', 10)])
+      const al = Array.from(xf.children).find((el) => el.localName === 'alignment')
+      const h = al?.getAttribute('horizontal') ?? ''
+      const v = al?.getAttribute('vertical') ?? ''
+      cellXfAlign.push({
+        horizontal:
+          h === 'left' ? 'left'
+          : h === 'center' || h === 'centerContinuous' ? 'center'
+          : h === 'right' ? 'right'
+          : h === 'justify' || h === 'distributed' || h === 'fill' ? 'justify'
+          : undefined, // general(기본) — 글자는 왼쪽·숫자는 오른쪽(가져올 때 값을 보고 정한다)
+        vertical: v === 'top' ? 'top' : v === 'center' || v === 'distributed' || v === 'justify' ? 'middle' : v === 'bottom' ? 'bottom' : undefined,
+        wrap: al?.getAttribute('wrapText') === '1' || al?.getAttribute('wrapText') === 'true',
+      })
+    }
+  }
+  return { byBorderId, cellXfBorderId, cellXfAlign, cellXfFont, cellXfFill, cellXfNumFmtId }
+}
+
+/** 시트의 셀별 테두리(변별)와 기본 행 높이 — 실패하면 빈 값(서식만 조용히 생략, 값·구조는 영향 없음) */
+async function extractSheetLayoutXml(arrayBuffer: ArrayBuffer, sheetName: string): Promise<SheetLayoutXml> {
+  const empty: SheetLayoutXml = { borders: new Map(), aligns: new Map(), fonts: new Map(), fills: new Map(), numFmtIds: new Map(), defaultRowPx: null }
+  try {
+    const zip = await JSZip.loadAsync(arrayBuffer)
+    const wsPath = await resolveWorksheetPath(zip, sheetName)
+    const styles = await extractDetailedBorderStyles(zip)
+    if (!wsPath) return empty
+    const wsFile = zip.file(wsPath)
+    if (!wsFile) return empty
+    const doc = new DOMParser().parseFromString(await wsFile.async('string'), 'application/xml')
+    if (doc.getElementsByTagName('parsererror').length) return empty
+
+    const fmtEl = doc.getElementsByTagNameNS(SS_NS, 'sheetFormatPr')[0]
+    const defPt = parseFloat(fmtEl?.getAttribute('defaultRowHeight') ?? '')
+    const defaultRowPx = Number.isFinite(defPt) && defPt > 0 ? excelPtToPx(defPt) : null
+
+    const borders = new Map<string, CellBorders>()
+    const aligns = new Map<string, CellAlign>()
+    const fonts = new Map<string, CellFont>()
+    const fills = new Map<string, string>()
+    const numFmtIds = new Map<string, number>()
+    if (styles) {
+      const cellEls = doc.getElementsByTagNameNS(SS_NS, 'c')
+      for (let i = 0; i < cellEls.length; i++) {
+        const ref = cellEls[i].getAttribute('r')
+        // 서식 번호가 없는 칸은 기본 서식(0번)
+        const s = parseInt(cellEls[i].getAttribute('s') ?? '0', 10)
+        if (!ref || isNaN(s)) continue
+        const b = styles.byBorderId[styles.cellXfBorderId[s] ?? -1]
+        if (b && (b.top || b.right || b.bottom || b.left)) borders.set(ref, b)
+        const a = styles.cellXfAlign[s]
+        if (a) aligns.set(ref, a)
+        const fo = styles.cellXfFont[s]
+        if (fo) fonts.set(ref, fo)
+        const fi = styles.cellXfFill[s]
+        if (fi) fills.set(ref, fi)
+        const nf = styles.cellXfNumFmtId[s]
+        if (nf) numFmtIds.set(ref, nf)
+      }
+    }
+    return { borders, aligns, fonts, fills, numFmtIds, defaultRowPx }
+  } catch {
+    return empty
+  }
+}
+
 export interface XlsxSheetInfo {
   name: string
 }
@@ -162,6 +421,15 @@ export interface XlsxImportOptions {
    * 행수가 100을 넘으면 서버 응답 지연을 유발할 수 있으므로 UI에서 제한.
    */
   range?: string
+  /**
+   * 원본 배치 보존(스프레드시트 양식 가져오기 전용, 2026-10-29) — 켜면:
+   *  · 열 너비를 파일의 글자 수 값(×7px)으로 직접 환산하고 A4 폭 자동 축소를 하지 않는다
+   *  · 병합에 걸치지 않은 빈 행도 지우지 않는다(원본 여백·세로 구조 유지)
+   *  · 행 높이를 가져온다
+   *  · 테두리를 변별 굵기·종류·색(자동색 포함)으로 가져온다
+   * 끄면(기본) 문서형 표 가져오기가 쓰는 기존 동작 그대로.
+   */
+  preserveLayout?: boolean
 }
 
 export interface XlsxSheetData {
@@ -173,6 +441,12 @@ export interface XlsxSheetData {
   colWidths: (number | null)[]
   /** [rowIndex][colIndex] 형태의 셀 서식(배경색·테두리색). rows와 동일 인덱스로 정렬됨 */
   cellFormatting: XlsxCellFormatting[][]
+  /** 행별 높이(px) — preserveLayout 일 때만 채워지고 rows 와 같은 인덱스. 아니면 빈 배열 */
+  rowHeights: (number | null)[]
+  /** 수식 칸의 수식 원문(칸 주소 "C1" → "=A1+B1", 시트 기준 상대 좌표) — preserveLayout 일 때만 */
+  formulas?: Record<string, string>
+  /** 수식 칸의 표시 형식 코드 — preserveLayout 일 때만 */
+  numFmts?: Record<string, string>
 }
 
 /**
@@ -197,6 +471,7 @@ export async function parseSheet(
 
   const ws = wb.Sheets[options.sheetName]
   if (!ws) throw new Error(`시트 "${options.sheetName}"를 찾을 수 없습니다.`)
+  const preserve = options.preserveLayout === true
 
   // blankrows 옵션을 주지 않는다(기본값 = 빈 행도 포함) — 병합 좌표(!merges, 절대 시트 행
   // 인덱스 기준)를 항상 fullRows와 1:1로 정렬시키기 위해 필수. 실무 문서(계약서 등)는 시각적
@@ -260,7 +535,7 @@ export async function parseSheet(
   const rows: string[][] = []
   const keptOldRowIndices: number[] = []
   fullRows.forEach((row, oldIdx) => {
-    if (isBlankRow(row) && !rowsTouchedByMerge.has(oldIdx)) return // 제거
+    if (!preserve && isBlankRow(row) && !rowsTouchedByMerge.has(oldIdx)) return // 제거(원본 배치 보존 시에는 유지)
     oldToNewRowIndex.set(oldIdx, rows.length)
     rows.push(row)
     keptOldRowIndices.push(oldIdx)
@@ -279,6 +554,12 @@ export async function parseSheet(
   const colCount = rows[0]?.length ?? 0
   const rawColWidths: (number | null)[] = Array.from({ length: colCount }, (_, ci) => {
     const col = ws['!cols']?.[effectiveRange.s.c + ci]
+    if (preserve) {
+      // 라이브러리의 wpx 는 한글 기본 글꼴(돋움 등)의 글자 폭을 몰라 글자당 12px 안팎으로 부풀린다 — 파일의 글자 수 값으로 직접 환산
+      const chars = col?.width
+      if (col?.hidden) return 0
+      return typeof chars === 'number' && chars > 0 ? Math.round(chars * EXCEL_PX_PER_CHAR) : EXCEL_DEFAULT_COL_PX
+    }
     const px = col?.wpx
     return typeof px === 'number' && px > 0 ? Math.round(px) : null
   })
@@ -303,11 +584,29 @@ export async function parseSheet(
   // 때마다(sheetToWorksheetConfig) 다시 적용하면 관리자가 그 이후 직접 넓힌 값이 재오픈
   // 시 매번 되돌아가는 문제가 있었다(2026-08-27 발견). 여기서 축소해 SpreadsheetSheet에
   // 담아 반환하면, 이후 저장·재오픈은 이 값을 그대로 유지한다.
-  const colWidths: (number | null)[] = fitColumnWidthsToTarget(filledColWidths)
+  const colWidths: (number | null)[] = preserve ? rawColWidths : fitColumnWidthsToTarget(filledColWidths)
 
   // 셀 서식 — 배경색은 ws[addr].s.fgColor.rgb(SheetJS cellStyles:true로 이미 읽힘,
   // 테마 색상도 resolve됨), 테두리색은 OOXML 직접 파싱(extractBorderColors)으로 보완
-  const borderColors = await extractBorderColors(arrayBuffer, options.sheetName)
+  const borderColors = preserve ? new Map<string, string>() : await extractBorderColors(arrayBuffer, options.sheetName)
+  // 구형 엑셀(.xls)은 압축 XML 이 아니라 바이너리 — 같은 모양의 서식 정보를 xlsBiff 가 직접 읽어 준다
+  const biffLayout = preserve ? readBiffWorkbookCached(arrayBuffer)?.layoutBySheet.get(options.sheetName) : undefined
+  const layoutXml: SheetLayoutXml = preserve
+    ? biffLayout
+      ? { ...biffLayout, numFmtIds: new Map() }
+      : await extractSheetLayoutXml(arrayBuffer, options.sheetName)
+    : { borders: new Map(), aligns: new Map(), fonts: new Map(), fills: new Map(), numFmtIds: new Map(), defaultRowPx: null }
+  // 병합 셀은 화면에 앵커 칸만 그려지므로, 엑셀이 병합 범위 가장자리 칸들에 나눠 둔 테두리를 앵커로 모은다
+  const anchorBorders = new Map<string, CellBorders>()
+  if (preserve) {
+    const at = (r: number, c: number): CellBorders | undefined => layoutXml.borders.get(XLSX.utils.encode_cell({ r, c }))
+    for (const m of rawMerges) {
+      const tl = at(m.s.r, m.s.c)
+      const bl = at(m.e.r, m.s.c)
+      const tr = at(m.s.r, m.e.c)
+      anchorBorders.set(XLSX.utils.encode_cell(m.s), { top: tl?.top, left: tl?.left, bottom: bl?.bottom, right: tr?.right })
+    }
+  }
   const cellFormatting: XlsxCellFormatting[][] = rows.map((row, newRi) => {
     const oldRi = keptOldRowIndices[newRi]
     return row.map((_cellText, ci) => {
@@ -317,6 +616,36 @@ export async function parseSheet(
       if (typeof bg === 'string' && bg) fmt.backgroundColor = toHexColor(bg)
       const border = borderColors.get(addr)
       if (border) fmt.borderColor = border
+      if (preserve) {
+        const sides = anchorBorders.get(addr) ?? layoutXml.borders.get(addr)
+        if (sides?.top) fmt.borderTop = sides.top
+        if (sides?.right) fmt.borderRight = sides.right
+        if (sides?.bottom) fmt.borderBottom = sides.bottom
+        if (sides?.left) fmt.borderLeft = sides.left
+        // 정렬·줄바꿈 — 글이 있는 칸만. 정렬 없음(general)은 엑셀처럼 글자 왼쪽·숫자 오른쪽,
+        // 세로는 엑셀 기본(아래). 편집기 기본이 가운데 정렬이라 명시하지 않으면 원본과 달라진다
+        if (_cellText.trim() !== '') {
+          const al = layoutXml.aligns.get(addr)
+          fmt.textAlign = al?.horizontal ?? (/^[\d,.\-+%₩$\s()]+$/.test(_cellText) ? 'right' : 'left')
+          fmt.verticalAlign = al?.vertical ?? 'bottom'
+          if (!al?.wrap) fmt.wrapText = false
+          // 글꼴 — 이름·크기(pt)·굵기·기울임·밑줄·취소선·색. 편집기·고객 화면이 받는 안전한 값만 쓴다
+          const fo = layoutXml.fonts.get(addr)
+          if (fo) {
+            if (fo.name && SAFE_FONT_NAME.test(fo.name)) fmt.fontFamily = fo.name
+            if (fo.sizePt) fmt.fontSize = `${Math.round(fo.sizePt * 2) / 2}pt`
+            if (fo.bold) fmt.fontWeight = 'bold'
+            if (fo.italic) fmt.fontStyle = 'italic'
+            if (fo.underline || fo.strike) fmt.textDecoration = [fo.underline ? 'underline' : '', fo.strike ? 'line-through' : ''].filter(Boolean).join(' ')
+            if (fo.color) fmt.color = fo.color
+          }
+        }
+        // 배경색 — SheetJS 가 못 읽은 경우(테마색·색인색)를 파일에서 직접 보충
+        if (!fmt.backgroundColor) {
+          const fill = layoutXml.fills.get(addr)
+          if (fill) fmt.backgroundColor = fill
+        }
+      }
       // 폰트 서식(2026-08-20 추가) — SheetJS CE의 cellStyles:true가 폰트 정보까지 채워주는
       // 파일에서는 그대로 활용하고, 채워주지 않는 파일에서는 옵셔널 체이닝으로 조용히 undefined
       // 처리된다(가져오기 자체가 깨지지 않음 — best-effort).
@@ -329,7 +658,44 @@ export async function parseSheet(
     })
   })
 
-  return { rows, merges, colWidths, cellFormatting }
+  // 행 높이 — 파일에 높이가 없는 행은 시트 기본 행 높이를 쓴다(그것도 없으면 null = 편집기 기본)
+  const rowHeights: (number | null)[] = preserve
+    ? keptOldRowIndices.map((oldRi) => {
+        const hpt = ws['!rows']?.[effectiveRange.s.r + oldRi]?.hpt
+        return typeof hpt === 'number' && hpt > 0 ? excelPtToPx(hpt) : layoutXml.defaultRowPx
+      })
+    : []
+
+  // 수식 — 값은 이미 rows 에 "엑셀이 계산해 둔 값"으로 들어 있다. 여기서는 수식 원문과 표시 형식을 함께 가져와, 편집기에서 시트 간 연결이
+  // 계속 계산되게 한다. 이 엔진이 읽지 못하는 수식(지원하지 않는 함수·외부 통합 문서·열 전체 참조 등)은 가져오지 않고 값만 둔다.
+  let formulas: Record<string, string> | undefined
+  let numFmts: Record<string, string> | undefined
+  if (preserve) {
+    const covered = new Set<string>()
+    for (const m of merges) for (let r = m.s.r; r <= m.e.r; r++) for (let c = m.s.c; c <= m.e.c; c++) if (!(r === m.s.r && c === m.s.c)) covered.add(`${r}:${c}`)
+    rows.forEach((row, newRi) => {
+      const oldRi = keptOldRowIndices[newRi]
+      row.forEach((_t, ci) => {
+        if (covered.has(`${newRi}:${ci}`)) return // 병합에 가려진 칸의 수식은 화면에 보이지 않는다
+        const abs = XLSX.utils.encode_cell({ r: effectiveRange.s.r + oldRi, c: effectiveRange.s.c + ci })
+        const cell = ws[abs] as { f?: string; z?: string } | undefined
+        const f = cell?.f
+        if (typeof f !== 'string' || f.trim() === '') return
+        const text = `=${f}`
+        const ast = tryParseFormula(text)
+        if (!ast || !usesOnlySupportedFunctions(ast)) return
+        const addr = XLSX.utils.encode_cell({ r: newRi, c: ci })
+        ;(formulas ??= {})[addr] = text
+        const builtin = layoutXml.numFmtIds.get(abs)
+        // 나라별로 달라지는 내장 서식(27~33)은 라이브러리가 미국식(m/d/yy)으로 풀어 버리므로 한국어 서식을 먼저 쓴다
+        const koreanBuiltin = builtin !== undefined ? KOREAN_BUILTIN_FORMATS[builtin] : undefined
+        const code = koreanBuiltin ?? (cell?.z && cell.z !== 'General' ? cell.z : undefined)
+        if (code) (numFmts ??= {})[addr] = code
+      })
+    })
+  }
+
+  return { rows, merges, colWidths, cellFormatting, rowHeights, ...(formulas ? { formulas } : {}), ...(numFmts ? { numFmts } : {}) }
 }
 
 export interface MergeLayout {

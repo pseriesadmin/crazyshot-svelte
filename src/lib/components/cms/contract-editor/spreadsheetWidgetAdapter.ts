@@ -33,6 +33,8 @@ export interface JssWorksheetInstance {
   getStyle(cell: string): string
   /** 전체 컬럼 너비 배열 반환 */
   getWidth(): (number | string)[]
+  /** 행별 높이("25px" 등, 높이가 지정된 행만 채워진 배열) */
+  getHeight?(): (string | undefined)[]
   /** 현재 선택 범위 좌표 [좌상단x, 좌상단y, 우하단x, 우하단y] */
   getSelection(): [number, number, number, number]
   /**
@@ -43,7 +45,8 @@ export interface JssWorksheetInstance {
    */
   updateSelectionFromCoords(x1: number, y1: number, x2: number, y2: number): void
   /** 좌표로 셀 값 조회 */
-  getValueFromCoords(x: number, y: number): string | number | boolean | null
+  /** processed=true 면 수식을 계산한 결과값, 아니면 입력한 원문(수식이면 "=…") */
+  getValueFromCoords(x: number, y: number, processed?: boolean): string | number | boolean | null
   /** 좌표로 셀 값 설정 */
   setValueFromCoords(x: number, y: number, value: string | number | boolean): void
   /** 컬럼 너비 지정 — "A4 용지 맞춤" 보조도구(ContractSpreadsheetEditor.svelte)에서 사용 */
@@ -69,6 +72,12 @@ export interface JssWorksheetConfig {
   style: Record<string, string>
   tableOverflow: boolean
   tableWidth: string
+  /** 라이브러리 자체 수식 해석(eval 기반)을 끈다 — 수식 계산은 우리 엔진(utils/sheetFormula)이 맡고, 파일에서 온 수식이 eval 로 실행되지 않게 한다 */
+  parseFormulas: false
+  /** 행별 높이 — { 행번호: { height: '25px' } } (jspreadsheet 는 단위가 붙은 문자열을 요구한다) */
+  rows?: Record<number, { height: string }>
+  /** 화면에 그려 둘 최소 격자 크기 [열, 행] — 화면용일 뿐 저장 값이 아니다(저장 시 trimSheetToUsedRange 가 잘라낸다) */
+  minDimensions?: [number, number]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,9 +158,32 @@ function formattingToCss(fmt: XlsxCellFormatting): string {
   if (fmt.fontWeight) parts.push(`font-weight: ${fmt.fontWeight}`)
   if (fmt.fontSize) parts.push(`font-size: ${fmt.fontSize}`)
   if (fmt.fontFamily) parts.push(`font-family: ${fmt.fontFamily}`)
+  if (fmt.fontStyle) parts.push(`font-style: ${fmt.fontStyle}`)
+  if (fmt.textDecoration) parts.push(`text-decoration: ${fmt.textDecoration}`)
+  // 줄바꿈 없음 — 글자가 칸 밖(오른쪽 빈 칸)으로 이어져 보이도록 넘침을 허용한다. 줄바꿈 있음은 편집기 기본이라 따로 쓰지 않는다
+  if (fmt.wrapText === false) parts.push('white-space: nowrap', 'overflow: visible')
   if (fmt.textAlign) parts.push(`text-align: ${fmt.textAlign}`)
   if (fmt.verticalAlign) parts.push(`vertical-align: ${fmt.verticalAlign}`)
   return parts.join('; ')
+}
+
+export type DecorationToken = 'underline' | 'line-through'
+
+/** text-decoration 값에서 밑줄·취소선만 골라 표준 순서('underline line-through')로 돌려준다. 없으면 '' */
+export function decorationTokens(value: string): string {
+  const v = String(value ?? '').toLowerCase()
+  const out: DecorationToken[] = []
+  if (/\bunderline\b/.test(v)) out.push('underline')
+  if (/\bline-through\b/.test(v)) out.push('line-through')
+  return out.join(' ')
+}
+
+/** 현재 text-decoration 값에서 한 가지(밑줄 또는 취소선)만 켜거나 끈 새 값을 돌려준다 — 다른 한 가지는 그대로 유지 */
+export function toggleDecoration(current: string, token: DecorationToken, on: boolean): string {
+  const set = new Set(decorationTokens(current).split(' ').filter(Boolean))
+  if (on) set.add(token)
+  else set.delete(token)
+  return decorationTokens([...set].join(' '))
 }
 
 /**
@@ -231,6 +263,15 @@ export function cssToFormatting(css: string): XlsxCellFormatting {
   if (sizeMatch) fmt.fontSize = sizeMatch[1].trim()
   const familyMatch = css.match(/(?:^|;)\s*font-family:\s*([^;]+)/i)
   if (familyMatch) fmt.fontFamily = familyMatch[1].trim()
+  const whiteSpaceMatch = css.match(/(?:^|;)\s*white-space:\s*([^;]+)/i)
+  if (whiteSpaceMatch && /\bnowrap\b/i.test(whiteSpaceMatch[1])) fmt.wrapText = false
+  const fontStyleMatch = css.match(/(?:^|;)\s*font-style:\s*([^;]+)/i)
+  if (fontStyleMatch && /\bitalic\b/i.test(fontStyleMatch[1])) fmt.fontStyle = 'italic'
+  const decoMatch = css.match(/(?:^|;)\s*text-decoration(?:-line)?:\s*([^;]+)/i)
+  if (decoMatch) {
+    const deco = decorationTokens(decoMatch[1])
+    if (deco) fmt.textDecoration = deco
+  }
   const alignMatch = css.match(/(?:^|;)\s*text-align:\s*([^;]+)/i)
   if (alignMatch) fmt.textAlign = alignMatch[1].trim()
   const vAlignMatch = css.match(/(?:^|;)\s*vertical-align:\s*([^;]+)/i)
@@ -314,12 +355,22 @@ export function sheetToWorksheetConfig(sheet: SpreadsheetSheet): JssWorksheetCon
     })
   })
 
+  const rows: Record<number, { height: string }> = {}
+  ;(sheet.rowHeights ?? []).forEach((h, i) => {
+    if (typeof h === 'number' && h > 0) rows[i] = { height: `${Math.round(h)}px` }
+  })
+
   return {
     worksheetName: sheet.name,
-    data: sheet.rows,
+    parseFormulas: false,
+    // 저장된 수식은 칸에 되돌려 놓는다 — 편집기가 계산해서 보여 준다(rows 에는 계산된 결과만 들어 있음)
+    data: sheet.formulas
+      ? sheet.rows.map((row, r) => row.map((v, c) => sheet.formulas?.[XLSX.utils.encode_cell({ r, c })] ?? v))
+      : sheet.rows,
     columns,
     mergeCells,
     style,
+    ...(Object.keys(rows).length ? { rows } : {}),
     // ⛔ 2026-08-28 tableOverflow:true(+tableWidth:'100%') 폐기 — 이 옵션이 켜지면
     // jspreadsheet-ce가 `.jss_content`에 자체 overflow-x:auto를 걸어 가로 스크롤 전용
     // 내부 래퍼를 만드는데, CSS 스펙상 overflow-x가 'visible'이 아니면 overflow-y도
@@ -351,10 +402,24 @@ export function sheetToWorksheetConfig(sheet: SpreadsheetSheet): JssWorksheetCon
 export function worksheetConfigToSheet(
   name: string,
   ws: JssWorksheetInstance,
+  /** 수식 칸의 계산 결과(칸 주소 → 보이는 글자). 없으면 라이브러리가 계산한 값을 쓴다 */
+  computed?: Map<string, string>,
 ): SpreadsheetSheet {
   const rawData = ws.getData()
-  const rows: string[][] = rawData.map((row) =>
-    row.map((cell) => (cell == null ? '' : String(cell))),
+  // 수식 칸은 입력 원문을 formulas 에, 칸 값(rows)에는 계산된 결과를 담는다 — 고객 화면·내보내기는 계산된 값을 쓴다
+  const formulas: Record<string, string> = {}
+  const rows: string[][] = rawData.map((row, r) =>
+    row.map((cell, c) => {
+      const raw = cell == null ? '' : String(cell)
+      if (raw.length > 1 && raw.startsWith('=') && typeof ws.getValueFromCoords === 'function') {
+        const addr = XLSX.utils.encode_cell({ r, c })
+        formulas[addr] = raw
+        if (computed) return computed.get(addr) ?? ''
+        const viaLibrary = ws.getValueFromCoords(c, r, true)
+        return viaLibrary == null ? '' : String(viaLibrary)
+      }
+      return raw
+    }),
   )
 
   const rowCount = rows.length
@@ -374,6 +439,13 @@ export function worksheetConfigToSheet(
     return null
   })
 
+  // 구버전 위젯·테스트용 목(mock)에는 getHeight 가 없을 수 있어 방어한다
+  const rawHeights = typeof ws.getHeight === 'function' ? ws.getHeight() : []
+  const rowHeights: (number | null)[] = Array.from({ length: rowCount }, (_, r) => {
+    const n = parseInt(String(rawHeights[r] ?? ''), 10)
+    return !isNaN(n) && n > 0 ? n : null
+  })
+
   const styleRecord = ws.getStyle()
 
   const cellFormatting: XlsxCellFormatting[][] = Array.from({ length: rowCount }, (_, r) =>
@@ -384,7 +456,86 @@ export function worksheetConfigToSheet(
     }),
   )
 
-  return { name, rows, merges, colWidths, cellFormatting }
+  return {
+    name, rows, merges, colWidths,
+    ...(rowHeights.some((h) => h !== null) ? { rowHeights } : {}),
+    ...(Object.keys(formulas).length ? { formulas } : {}),
+    cellFormatting,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 저장 시 뒤쪽 빈칸 정리 (2026-10-29)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 편집기 화면에 깔아 두는 빈 격자 기본 열 너비(px) — jspreadsheet-ce 기본값과 동일 */
+export const GRID_DEFAULT_COL_WIDTH = 100
+/** 편집기 화면 빈 격자 기본 행 높이(px, 여유를 두어 약간 작게 잡는다) */
+export const GRID_DEFAULT_ROW_HEIGHT = 24
+
+/** 빈 격자가 항상 열어 두는 최소 열 수 — A~Z(26열). 화면 폭에 다 안 들어가도 가로 스크롤로 쓸 수 있다 */
+export const GRID_MIN_COLS = 26
+
+/** 화면 크기(px)를 채우는 데 필요한 [열, 행] 수(열은 최소 A~Z). 실제 시트가 더 크면 그 크기를 유지한다 */
+export function gridDimensionsToFill(
+  viewWidth: number,
+  viewHeight: number,
+  sheetCols: number,
+  sheetRows: number,
+): [number, number] {
+  const cols = Math.ceil(Math.max(0, viewWidth) / GRID_DEFAULT_COL_WIDTH)
+  const rows = Math.ceil(Math.max(0, viewHeight) / GRID_DEFAULT_ROW_HEIGHT)
+  return [Math.max(sheetCols, cols, GRID_MIN_COLS), Math.max(sheetRows, rows, 1)]
+}
+
+/**
+ * 시트에서 "쓰인 영역"(값·서식·병합·반복 영역이 있는 마지막 행/열)까지만 남기고 뒤쪽 빈 행·열을 잘라낸다.
+ * 화면에는 엑셀처럼 빈 칸 격자를 넓게 깔아 두지만(minDimensions) 그 빈 칸은 저장 값이 아니다 — 저장·내보내기·고객 화면에
+ * 빈 격자가 따라가지 않게 한다. 최소 1행 1열은 남긴다. 중간의 빈 행·열은 그대로 둔다(위치가 바뀌면 안 되므로).
+ */
+export function trimSheetToUsedRange(sheet: SpreadsheetSheet): SpreadsheetSheet {
+  let lastRow = -1
+  let lastCol = -1
+  const mark = (r: number, c: number): void => {
+    if (r > lastRow) lastRow = r
+    if (c > lastCol) lastCol = c
+  }
+
+  sheet.rows.forEach((row, r) => {
+    row.forEach((value, c) => {
+      const hasValue = typeof value === 'string' ? value !== '' : value != null
+      const fmt = sheet.cellFormatting[r]?.[c]
+      // 빈 칸에서 눈에 보이는 서식은 배경색·테두리뿐이다. 정렬·글꼴 같은 글자 서식은 값이 없으면 보이지 않는다 —
+      // 편집기가 모든 칸에 기본으로 붙이는 가운데 정렬(text-align:center)이 "쓰인 칸"으로 오인돼 뒤쪽 빈칸 정리가 막히던 문제(2026-10-29)
+      const hasFormat =
+        !!fmt &&
+        [fmt.backgroundColor, fmt.borderColor, fmt.borderTop, fmt.borderRight, fmt.borderBottom, fmt.borderLeft].some(
+          (v) => v !== undefined && v !== '',
+        )
+      if (hasValue || hasFormat) mark(r, c)
+    })
+  })
+  for (const m of sheet.merges) mark(m.e.r, m.e.c)
+  for (const addr of Object.keys(sheet.formulas ?? {})) {
+    const { r, c } = XLSX.utils.decode_cell(addr)
+    mark(r, c)
+  }
+  if (sheet.repeatRegion) mark(sheet.repeatRegion.endRow, 0)
+
+  const rowCount = Math.max(lastRow + 1, 1)
+  const colCount = Math.max(lastCol + 1, 1)
+  return {
+    ...sheet,
+    rows: sheet.rows.slice(0, rowCount).map((row) => {
+      const cut = row.slice(0, colCount)
+      while (cut.length < colCount) cut.push('')
+      return cut
+    }),
+    merges: sheet.merges,
+    colWidths: sheet.colWidths.slice(0, colCount),
+    ...(sheet.rowHeights ? { rowHeights: sheet.rowHeights.slice(0, rowCount) } : {}),
+    cellFormatting: sheet.cellFormatting.slice(0, rowCount).map((row) => row.slice(0, colCount)),
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
