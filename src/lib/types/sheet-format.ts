@@ -47,6 +47,15 @@ export interface XlsxCellFormatting {
    *  2026-08-29 추가 — 툴바 전체 기능 점검 중 발견, 이 필드가 없어 글꼴 지정이 저장 시
    *  통째로 유실됐다) */
   fontFamily?: string
+  /** CSS font-style — 'italic' (스프레드시트 툴바 기울임, 2026-10-29 추가) */
+  fontStyle?: string
+  /** CSS text-decoration — 'underline'|'line-through'|'underline line-through' (밑줄·취소선 툴바, 2026-10-29 추가) */
+  textDecoration?: string
+  /**
+   * 자동 줄바꿈 여부(2026-10-29 추가). false = 줄바꿈 없이 한 줄로 두고 오른쪽 빈 칸 위로 글자가 이어져 보인다(엑셀의 기본 동작).
+   * 없음/true = 편집기 기본(칸 폭에서 줄바꿈). 엑셀 가져오기가 원본의 칸별 줄바꿈 설정을 옮길 때 쓴다.
+   */
+  wrapText?: boolean
   /** CSS vertical-align — 'top'|'middle'|'bottom' (jspreadsheet 세로정렬 툴바 저장값,
    *  2026-08-29 추가 — 위와 동일 점검에서 함께 발견, 세로정렬 지정이 저장 시 유실됐다) */
   verticalAlign?: string
@@ -129,6 +138,58 @@ export function splitCellImageOverlay(
 
   // 최초 마커(10라운드, 폐기됨) — URL만, 너비·오프셋 전부 기본값
   return { text, imageUrl: remainder, width: DEFAULT_IMAGE_OVERLAY_WIDTH, offsetX: 0, offsetY: 0 }
+}
+
+/** (행, 열) 0부터 → 엑셀 칸 주소 "A1" */
+export function cellAddress(row: number, col: number): string {
+  let n = col + 1
+  let letters = ''
+  while (n > 0) {
+    const m = (n - 1) % 26
+    letters = String.fromCharCode(65 + m) + letters
+    n = Math.floor((n - 1) / 26)
+  }
+  return `${letters}${row + 1}`
+}
+
+/** 칸 값이 수식 입력인지("=" 다음에 글자가 있는 문자열) */
+export function isFormulaText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 1 && value.startsWith('=')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 하이퍼링크 칸 값 규약 (2026-10-29)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 칸 값 끝(이미지 표식이 있으면 그 바로 앞)에 이 접두사 + URL(encodeURIComponent)이 붙어 있으면 그 칸은 링크다. 화면에는 앞부분 글자만 보이고
+ * (편집기: 파란 밑줄, 고객 화면: <a>), 엑셀 내보내기에서는 하이퍼링크가 된다. 행·열을 넣거나 지워도 칸과 함께 움직이도록 칸 값 안에 둔다.
+ * http(s)·mailto 만 허용한다.
+ */
+export const LINK_CELL_PREFIX = 'cs-link://'
+const SAFE_LINK_URL = /^(https?:\/\/|mailto:)[^\s"'<>]+$/i
+
+export function toLinkMarker(url: string): string {
+  return `${LINK_CELL_PREFIX}${encodeURIComponent(url)}`
+}
+
+/** 칸 글자에서 링크 표식을 떼어낸다(이미지 표식은 먼저 splitCellImageOverlay 로 떼어낸 글자를 넣을 것) */
+export function splitCellLink(text: string): { text: string; url: string | null } {
+  const idx = text.lastIndexOf(LINK_CELL_PREFIX)
+  if (idx === -1) return { text, url: null }
+  const visible = text.slice(0, idx)
+  try {
+    const url = decodeURIComponent(text.slice(idx + LINK_CELL_PREFIX.length))
+    return { text: visible, url: SAFE_LINK_URL.test(url) ? url : null }
+  } catch {
+    return { text: visible, url: null }
+  }
+}
+
+/** 칸 값에서 이미지·링크 표식을 모두 뗀 보이는 글자만 */
+export function plainCellText(value: string): string {
+  const afterImage = value.includes(IMAGE_CELL_PREFIX) ? splitCellImageOverlay(value).text : value
+  return splitCellLink(afterImage).text
 }
 
 /** 셀 값에 이미지(서명/직인) 오버레이 마커가 포함돼 있는지 판별 */
