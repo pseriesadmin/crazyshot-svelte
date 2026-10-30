@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
-import { mount, unmount, flushSync } from 'svelte'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { mount, unmount, flushSync, tick } from 'svelte'
 import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
 
 /** 단계 배지를 누르면 배지 줄 아래에 설명 텍스트가 나온다(고객 화면, details 가 있을 때만) — 실행: npm run test:component (2026-10-26) */
@@ -31,12 +31,13 @@ describe('RentalJourneyStepper — 단계 배지 설명(details)', () => {
     expect(body.querySelector('.step-info')).toBeNull()
   })
 
-  it('SD-2 details 가 있는 단계만 버튼이 되고 처음에는 아무것도 선택되지 않는다', () => {
+  it('SD-2 details 가 있는 단계만 버튼이 되고, 처음에는 현재 단계(계약완료)만 자동으로 선택·펼쳐진다', () => {
     const body = render({ details })
     expect(badge(body, '반출중').tagName).toBe('BUTTON')
     expect(badge(body, '반출중').getAttribute('aria-pressed')).toBe('false')
     expect(badge(body, '대여중').tagName).toBe('DIV') // details 없는 단계
-    expect(body.querySelector('.step-info')).toBeNull()
+    expect(badge(body, '계약완료').getAttribute('aria-pressed')).toBe('true')
+    expect(body.querySelector('.step-info')?.textContent).toContain('예약이 확정되었어요')
   })
 
   it('SD-3 반출중 배지를 누르면 배지 줄 아래에 택배사·운송장 번호가 나오고, 다시 누르면 닫힌다', () => {
@@ -70,5 +71,36 @@ describe('RentalJourneyStepper — 단계 배지 설명(details)', () => {
   it('SD-5 장바구니(draft) 배지는 선택 대상이 아니다', () => {
     const body = render({ status: 'draft', details: { hold: ['x'] } })
     expect(badge(body, '장바구니').tagName).toBe('DIV')
+  })
+
+  it('SD-6 현재 단계의 설명이 없으면 자동 펼침 없음(다른 배지는 눌러야 열림)', () => {
+    const body = render({ status: 'in_use', details })
+    expect(body.querySelector('.step-info')).toBeNull()
+  })
+
+  it('SD-7 현재 단계 배지를 다시 누르면 자동으로 열린 설명도 닫힌다', () => {
+    const body = render({ details })
+    badge(body, '계약완료').click(); flushSync()
+    expect(body.querySelector('.step-info')).toBeNull()
+  })
+
+  it('SD-8 말풍선: 선택한 배지를 가리키는 꼬리 위치 변수(--tail-x)가 설명 박스에 실린다', async () => {
+    const body = render({ details })
+    await tick(); await Promise.resolve()
+    flushSync()
+    const info = body.querySelector('.step-info') as HTMLElement
+    expect(info.getAttribute('style') ?? '').toMatch(/--tail-x:\s*-?[\d.]+px/)
+  })
+
+  it('SD-10 운송장 번호 줄은 번호만 복사 버튼이 되고, 누르면 번호가 복사된다', async () => {
+    const body = render({ status: 'shipped', details })
+    const btn = body.querySelector('.tracking-copy') as HTMLButtonElement
+    expect(btn.textContent).toBe('TEST-QA-1026')
+    expect(body.querySelectorAll('.tracking-copy')).toHaveLength(1) // 택배사 줄은 버튼 아님
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    btn.click()
+    await Promise.resolve()
+    expect(writeText).toHaveBeenCalledWith('TEST-QA-1026')
   })
 })
