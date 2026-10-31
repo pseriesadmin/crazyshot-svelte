@@ -51,6 +51,11 @@ function normalizeLeadText(raw: string): string {
   for (const [word, n] of KO_HOUR_WORDS) {
     t = t.replace(new RegExp(`(오전|오후|저녁|밤|낮|아침|새벽)\\s*${word}\\s*시(?!간)`, 'g'), `$1 ${n}시`)
   }
+  // 밤 1~5시(새벽?)·낮 6~11시(오전?)·아침 12시(낮?)는 12시간 어긋나게 읽힐 수 있어 해석하지 않는다 — 숫자를 오전·오후 없는 시각으로 남겨 null 이 되게 한다(밤 12시와 같은 방식)
+  t = t
+    .replace(/(밤)(\s*[1-5]\s*시)/g, '모호$2').replace(/(밤)(\s*[1-5]\s*):/g, '모호$2시:')
+    .replace(/(낮)(\s*(?:1[01]|[6-9])\s*시)/g, '모호$2').replace(/(낮)(\s*(?:1[01]|[6-9])\s*):/g, '모호$2시:')
+    .replace(/(아침)(\s*12\s*시)/g, '모호$2').replace(/(아침)(\s*12\s*):/g, '모호$2시:')
   t = t.replace(/(저녁|낮)(?=\s*\d)/g, '오후').replace(/(아침|새벽)(?=\s*\d)/g, '오전')
   t = t.replace(/밤(\s*12\s*시)/g, '자정$1').replace(/밤(\s*12\s*):/g, '자정$1시:').replace(/밤(?=\s*\d)/g, '오후')
   return t
