@@ -299,3 +299,51 @@ describe('parseLeadRuleText — 보완(2026-10-31, 서버 #785와 동일 규칙)
     expect(parseLeadRuleText('1일 전 밤 11:30까지')).toEqual(R(1, 23))
   })
 })
+
+describe('parseLeadRuleText — 밤·낮·아침 모호 시각(2026-10-31, 서버 #786과 동일 규칙)', () => {
+  const R = (leadDays: number, cutoffHour: number) => ({ leadDays, cutoffHour })
+
+  it('밤 1~5시는 새벽인지 오후인지 모호해 해석하지 않는다(예전엔 오후 1~5시로 읽음)', () => {
+    for (const h of [1, 2, 3, 4, 5]) {
+      expect(parseLeadRuleText(`1일 전 밤 ${h}시까지`)).toBeNull()
+      expect(parseLeadRuleText(`1일 전 밤 ${h}:30까지`)).toBeNull()
+    }
+    expect(parseLeadRuleText('1일 전 밤 한 시까지')).toBeNull()
+  })
+
+  it('낮 6~11시는 오전인지 오후인지 모호해 해석하지 않는다(예전엔 낮 11시를 23시로 읽음)', () => {
+    for (const h of [6, 7, 8, 9, 10, 11]) {
+      expect(parseLeadRuleText(`1일 전 낮 ${h}시까지`)).toBeNull()
+      expect(parseLeadRuleText(`1일 전 낮 ${h}:00까지`)).toBeNull()
+    }
+    expect(parseLeadRuleText('1일 전 낮 열한 시까지')).toBeNull()
+  })
+
+  it('아침 12시는 모호해 해석하지 않는다(예전엔 0시로 읽음)', () => {
+    expect(parseLeadRuleText('1일 전 아침 12시까지')).toBeNull()
+    expect(parseLeadRuleText('1일 전 아침 12:00까지')).toBeNull()
+  })
+
+  it('모호한 조합이 당일 문구에서도 같게 처리된다', () => {
+    expect(parseLeadRuleText('당일 낮 11시까지')).toBeNull()
+    expect(parseLeadRuleText('당일 밤 1시까지')).toBeNull()
+  })
+
+  it('모호하지 않은 밤·낮·아침·새벽·저녁 표기는 그대로 읽는다', () => {
+    expect(parseLeadRuleText('1일 전 밤 6시까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 밤 9시까지')).toEqual(R(1, 21))
+    expect(parseLeadRuleText('1일 전 밤 11시까지')).toEqual(R(1, 23))
+    expect(parseLeadRuleText('1일 전 낮 12시까지')).toEqual(R(1, 12))
+    expect(parseLeadRuleText('1일 전 낮 1시까지')).toEqual(R(1, 13))
+    expect(parseLeadRuleText('1일 전 낮 5시까지')).toEqual(R(1, 17))
+    expect(parseLeadRuleText('1일 전 아침 9시까지')).toEqual(R(1, 9))
+    expect(parseLeadRuleText('1일 전 아침 11시까지')).toEqual(R(1, 11))
+    expect(parseLeadRuleText('1일 전 새벽 1시까지')).toEqual(R(1, 1))
+    expect(parseLeadRuleText('1일 전 저녁 6시까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('이틀 전 저녁 일곱 시')).toEqual(R(2, 19))
+  })
+
+  it('모호한 조합 옆에 분명한 시각이 따로 있으면 그것을 읽는다', () => {
+    expect(parseLeadRuleText('1일 전 낮 11시 또는 오후 7시까지')).toEqual(R(1, 19))
+  })
+})
