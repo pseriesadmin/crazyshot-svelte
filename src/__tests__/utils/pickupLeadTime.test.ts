@@ -169,3 +169,133 @@ describe('퀵서비스 당일 신청 마감 18시 — 수령일 선택 가능 �
     expect(minPickupDate(quick, kst(2026, 10, 30, 18, 0))).toBe('2026-10-31')
   })
 })
+
+describe('parseLeadRuleText — 폭넓은 표기 인식(2026-10-30 확장, 서버 parse_lead_rule_text 와 동일 규칙)', () => {
+  const R = (leadDays: number, cutoffHour: number) => ({ leadDays, cutoffHour })
+
+  it('붙여쓰기·띄어쓰기·"이전" 표기: 1일전, 1 일 전, 1일 이전', () => {
+    expect(parseLeadRuleText('대여일 1일전 오후 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('대여일 1 일 전 오후 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('대여일 2일 이전 오후 7시까지')).toEqual(R(2, 19))
+  })
+  it('한글 날짜: 하루 전·전날·이틀 전·사흘 전·나흘 전', () => {
+    expect(parseLeadRuleText('하루 전 오후 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('전날 오후 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('이틀 전 19:00까지')).toEqual(R(2, 19))
+    expect(parseLeadRuleText('사흘 전 오후 6시까지')).toEqual(R(3, 18))
+    expect(parseLeadRuleText('나흘 전 오전 10시까지')).toEqual(R(4, 10))
+  })
+  it('D-N 표기: D-2 19:00, d - 1 오후 7시', () => {
+    expect(parseLeadRuleText('D-2 19:00까지')).toEqual(R(2, 19))
+    expect(parseLeadRuleText('d - 1 오후 7시까지')).toEqual(R(1, 19))
+  })
+  it('붙여쓴 시각: 오후7시, 오후 7 시', () => {
+    expect(parseLeadRuleText('1일 전 오후7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 오후 7 시까지')).toEqual(R(1, 19))
+  })
+  it('오후/오전 + 시:분 (예전엔 오후 7:00 을 오전 7시로 잘못 읽음)', () => {
+    expect(parseLeadRuleText('1일 전 오후 7:00까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 오전 9:30까지')).toEqual(R(1, 9))
+  })
+  it('시와 분: 오후 6시 30분 → 시 단위만 사용(18시)', () => {
+    expect(parseLeadRuleText('1일 전 오후 6시 30분까지')).toEqual(R(1, 18))
+  })
+  it('저녁·밤·낮·아침·새벽·정오 표현', () => {
+    expect(parseLeadRuleText('1일 전 저녁 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 밤 9시까지')).toEqual(R(1, 21))
+    expect(parseLeadRuleText('1일 전 낮 12시까지')).toEqual(R(1, 12))
+    expect(parseLeadRuleText('1일 전 아침 9시까지')).toEqual(R(1, 9))
+    expect(parseLeadRuleText('1일 전 새벽 2시까지')).toEqual(R(1, 2))
+    expect(parseLeadRuleText('1일 전 정오까지')).toEqual(R(1, 12))
+  })
+  it('24시간 "19시" 표기(13~23시는 오전·오후 없이도 확실)', () => {
+    expect(parseLeadRuleText('2일 전 19시까지')).toEqual(R(2, 19))
+    expect(parseLeadRuleText('2일 전 19시 마감')).toEqual(R(2, 19))
+  })
+  it('오전·오후가 없는 1~12시("7시")는 어느 쪽인지 알 수 없어 해석하지 않는다(안전)', () => {
+    expect(parseLeadRuleText('1일 전 7시까지')).toBeNull()
+    expect(parseLeadRuleText('1일 전 12시까지')).toBeNull()
+  })
+  it('영문 am/pm: 7pm, 7 PM, 6:30pm', () => {
+    expect(parseLeadRuleText('1일 전 7pm까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 7 PM까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 6:30pm까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 9am까지')).toEqual(R(1, 9))
+  })
+  it('한글 숫자 시각: 오후 일곱 시, 오후 여섯시, 오전 열 시, 열두 시', () => {
+    expect(parseLeadRuleText('1일 전 오후 일곱 시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 오후 여섯시까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 오전 열 시까지')).toEqual(R(1, 10))
+    expect(parseLeadRuleText('1일 전 오후 열두 시까지')).toEqual(R(1, 12))
+  })
+  it('전각 숫자·콜론도 읽는다: １일 전 １９：００', () => {
+    expect(parseLeadRuleText('１일 전 １９：００까지')).toEqual(R(1, 19))
+  })
+  it('당일 표기 확장: 오늘·같은 날·저녁·24시간·시분·이전', () => {
+    expect(parseLeadRuleText('오늘 오후 6시까지')).toEqual(R(0, 18))
+    expect(parseLeadRuleText('수령 당일 저녁 7시 이전')).toEqual(R(0, 19))
+    expect(parseLeadRuleText('당일 18시 마감')).toEqual(R(0, 18))
+    expect(parseLeadRuleText('당일 오후 6시 30분까지')).toEqual(R(0, 18))
+    expect(parseLeadRuleText('당일 6pm까지')).toEqual(R(0, 18))
+    expect(parseLeadRuleText('같은 날 오후 5시까지')).toEqual(R(0, 17))
+  })
+  it('당일 문구는 끝맺음(까지·마감·이전)이 없으면 읽지 않는다(퀵 "12시부터" 오해 방지)', () => {
+    expect(parseLeadRuleText('당일 오후 12시부터 오후 8시내에 예약시간 설정 시점 기준으로 최소 3시간 전 부터 가능')).toBeNull()
+    expect(parseLeadRuleText('당일 오후 6시')).toBeNull()
+  })
+  it('기존 거부 사례는 그대로 거부', () => {
+    expect(parseLeadRuleText('20:00 마감 임박')).toBeNull()
+    expect(parseLeadRuleText('15:00 마감')).toBeNull()
+    expect(parseLeadRuleText('대여일 2일 전까지')).toBeNull()
+    expect(parseLeadRuleText('3시간 전까지')).toBeNull()
+    expect(parseLeadRuleText('밤 12시까지 1일 전')).toBeNull()
+  })
+  it('기존 정형 문구는 결과 불변', () => {
+    expect(parseLeadRuleText('예약일 2일 전 19:00까지 마감.')).toEqual(R(2, 19))
+    expect(parseLeadRuleText('예약 대여일 1일 전 오후 7시까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('당일 예약은 오후 6시까지')).toEqual(R(0, 18))
+  })
+})
+
+describe('parseLeadRuleText — 보완(2026-10-31, 서버 #785와 동일 규칙)', () => {
+  const R = (leadDays: number, cutoffHour: number) => ({ leadDays, cutoffHour })
+
+  it('터무니없이 큰 일수는 해석하지 않는다(상한 365일) — 달력 오류 방지, 서버와 같은 결과', () => {
+    expect(parseLeadRuleText('99999999999일 전 오후 7시')).toBeNull()
+    expect(parseLeadRuleText('2147483648일 전 오후 7시')).toBeNull()
+    expect(parseLeadRuleText('366일 전 오후 7시까지')).toBeNull()
+    expect(parseLeadRuleText('365일 전 오후 7시까지')).toEqual(R(365, 19))
+    expect(parseLeadRuleText('0007일 전 오후 7시까지')).toEqual(R(7, 19))
+  })
+
+  it('당일 문구 사이의 글자 수(12자)는 이모지도 1글자로 센다 — 서버와 같은 결과', () => {
+    expect(parseLeadRuleText(`당일 ${'😀'.repeat(10)} 오후 6시까지`)).toEqual(R(0, 18))
+    expect(parseLeadRuleText(`당일 ${'😀'.repeat(11)} 오후 6시까지`)).toBeNull()
+  })
+
+  it('PM/AM이 시각 앞에 오는 표기: PM 6:00 → 18시, AM 9:30 → 9시', () => {
+    expect(parseLeadRuleText('1일 전 PM 6:00까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 pm 6까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 AM 9:30까지')).toEqual(R(1, 9))
+    expect(parseLeadRuleText('1일 전 PM 12:00까지')).toEqual(R(1, 12))
+    expect(parseLeadRuleText('1일 전 AM 12:00까지')).toEqual(R(1, 0))
+    expect(parseLeadRuleText('1일 전 PM 13:00까지')).toBeNull()
+    expect(parseLeadRuleText('당일 PM 6:00까지')).toEqual(R(0, 18))
+    expect(parseLeadRuleText('당일 AM 10시까지')).toEqual(R(0, 10))
+  })
+
+  it('PM 앞 표기 추가가 기존 표기를 바꾸지 않는다', () => {
+    expect(parseLeadRuleText('1일 전 7pm까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 6:30pm까지')).toEqual(R(1, 18))
+    expect(parseLeadRuleText('1일 전 19:00까지')).toEqual(R(1, 19))
+    expect(parseLeadRuleText('1일 전 오후 7:00까지')).toEqual(R(1, 19))
+  })
+
+  it('밤 12:00 / 밤 12:30 은 자정인지 모호해 해석하지 않는다(밤 12시와 같게)', () => {
+    expect(parseLeadRuleText('1일 전 밤 12:00까지')).toBeNull()
+    expect(parseLeadRuleText('1일 전 밤 12:30까지')).toBeNull()
+    expect(parseLeadRuleText('1일 전 밤 12시까지')).toBeNull()
+    expect(parseLeadRuleText('1일 전 밤 9:00까지')).toEqual(R(1, 21))
+    expect(parseLeadRuleText('1일 전 밤 11:30까지')).toEqual(R(1, 23))
+  })
+})
