@@ -65,6 +65,20 @@ export function buildLockerGuideSms(
   return entrance ? `${body}\n중앙현관 비밀번호: ${entrance}` : body
 }
 
+// 무인보관함 "반납" 안내 문자 고정 문구 — 공통 안내문장(locker_return_guide) 조립이 실패했을 때만 쓰는 예비 문구(2026-10-31).
+export function buildLockerReturnGuideSms(
+  productName: string | null | undefined,
+  lockerNumber: string | null | undefined,
+  password: string,
+  entrancePassword?: string | null,
+): string {
+  const head = `[크레이지샷] ${productName ?? '상품'} 반납 무인보관함 이용정보`
+  const no = (lockerNumber ?? '').trim()
+  const body = no ? `${head} No ${no} / ${password}\n반납 후 반납정보 등록에서 무인함 정보를 입력해 주세요.` : `${head} ${password}\n반납 후 반납정보 등록에서 무인함 정보를 입력해 주세요.`
+  const entrance = (entrancePassword ?? '').trim()
+  return entrance ? `${body}\n중앙현관 비밀번호: ${entrance}` : body
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 예약 라이프사이클 SMS 허브 — 3축(채팅카드+FCM+SMS) 동시 발송 체계 (2026-10-02)
 // ─────────────────────────────────────────────────────────────────────────────

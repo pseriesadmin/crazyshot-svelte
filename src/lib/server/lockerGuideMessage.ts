@@ -1,7 +1,7 @@
 /**
  * 무인보관함 이용 안내 문장 조립 — 푸시알림 설정의 "공통 안내문장"이 푸시·문자·채팅카드의 정본 (2026-10-11, Stephen 확정)
  * 대상 고객은 항상 그 예약의 소유자(rental_reservations.user_id) 한 명이다. 이 함수는 문장만 만들고 발송 대상은 호출부가 같은 예약에서 정한다.
- * 문장 = CMS 편집 문장(없으면 기본 문구) + 변수(고객이름·상품명·예약코드·수령/반납일시·무인함번호·무인함비밀번호·중앙현관비밀번호·반납기한).
+ * 문장 = CMS 편집 문장(수령=locker_guide, 반납=locker_return_guide — 없으면 각각의 기본 문구) + 변수(고객이름·상품명·예약코드·수령/반납일시·무인함번호·무인함비밀번호·중앙현관비밀번호·반납기한).
  * 조회 실패는 null — 호출부가 기존 고정 문구로 되돌려 안내가 끊기지 않게 한다.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -14,6 +14,8 @@ export interface LockerGuideComposeOverrides {
   /** CMS "시범 발송"처럼 아직 저장되지 않은 입력값 */
   lockerNumber?: string | null
   lockerPassword?: string | null
+  /** 어느 단계의 안내인가 — 수령(기본)은 locker_guide, 반납은 locker_return_guide 문장을 쓴다(2026-10-31, Migration #787) */
+  leg?: 'pickup' | 'return'
 }
 
 const joinDateTime = (date?: string | null, time?: string | null): string => [date ?? '', time ?? ''].filter(Boolean).join(' ')
@@ -64,7 +66,8 @@ export async function composeLockerGuideMessage(
       ...(entrance ? { 중앙현관비밀번호: entrance } : {}),
     }
 
-    const template = (await getNotifyMessageOverride(admin, 'locker_guide')) ?? getNotifySpec('locker_guide')?.defaultMessage
+    const notifyType = overrides?.leg === 'return' ? 'locker_return_guide' : 'locker_guide'
+    const template = (await getNotifyMessageOverride(admin, notifyType)) ?? getNotifySpec(notifyType)?.defaultMessage
     if (!template) return null
     const text = renderLockerGuideMessage(template, vars)
     return text || null

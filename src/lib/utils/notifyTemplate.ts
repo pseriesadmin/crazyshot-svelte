@@ -81,6 +81,8 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   // 무인보관함 이용 안내(2026-10-11, Stephen 확정): 이 안내문장이 푸시·문자·채팅카드 세 곳의 공통 정본이다(비우면 아래 기본 문구).
   // 문자는 SMS_BRAND_PREFIX가 앞에 붙고 길면 LMS로 나간다. 비밀번호가 푸시 알림 본문에도 들어가므로 해당 고객 1명에게만 발송된다.
   { notifyType: 'locker_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 무인보관함 이용 {{무인함번호}}번함 비밀번호는 '{{무인함비밀번호}}'입니다.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
+  // 무인보관함 반납 안내(2026-10-31, Migration #787): 반납 시각 1시간 전 같은 방식으로 나가는 "반납용" 공통 안내문장(푸시·문자·채팅카드). 비우면 아래 기본 문구.
+  { notifyType: 'locker_return_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 반납 안내예요.\n① {{무인함번호}}번함에 장비를 넣어 주세요. (비밀번호 '{{무인함비밀번호}}')\n② 반납 후 반납정보 등록에서 무인함 번호·비밀번호를 입력해 주세요.\n반납 기한 {{반납기한}}까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
   // 반납 방식별 단계 알림(2026-10-17, Migration #722) — 푸시·문자 공통 안내문장(채팅카드는 크론이 같은 기본 문구를 보낸다)
   { notifyType: 'return_notice_courier', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납일이에요. 크레이지배송 반납 방법을 확인하고 반납요청을 등록해 주세요.' },
   { notifyType: 'return_notice_quick_5h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.' },
@@ -287,7 +289,7 @@ export function validateNotifyMessage(notifyType: string, message: string): Noti
   }
   // 문자 대상 알림은 수신동의와 무관하게 항상 발송되는 안내라, 링크·주소가 들어가면 스팸·광고 오해가 생긴다 — 저장은 허용하되 알린다.
   // 자동 링크 첨부 여부는 sms.ts와 같은 기준(소문자 'http' 포함 여부)으로 안내해 경고문과 실제 동작이 어긋나지 않게 한다.
-  if (spec.sms && notifyType !== 'locker_guide' && EXTERNAL_LINK_PATTERN.test(text)) {
+  if (spec.sms && notifyType !== 'locker_guide' && notifyType !== 'locker_return_guide' && EXTERNAL_LINK_PATTERN.test(text)) {
     warnings.push(
       text.includes('http')
         ? '문장에 링크(http)가 있어 자동 링크 첨부는 생략됩니다. 문자는 수신 동의와 무관하게 발송되는 안내이므로 광고·외부 링크는 넣지 않는 것이 좋습니다.'

@@ -6,7 +6,7 @@
   import { csToast } from '$lib/utils/toast'
   import { slide } from 'svelte/transition'
   import { RETURN_CHECKLIST_ITEMS } from '$lib/utils/returnNotice'
-  import { sanitizeLockerInput } from '$lib/utils/lockerFields'
+  import { sanitizeLockerInput, legsFromSelection, selectionFromLegs } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
   import { isReturnDue } from '$lib/utils/returnDue'
@@ -2127,6 +2127,10 @@
   let lockerPwFetchedForId = $state<number | null>(null)
   let lockerPassword       = $state('')
   let lockerNumber         = $state('')   // 무인함 번호(Migration 678) — 비밀번호와 함께 필수
+  // 안내 발송 대상 콤보([수령]·[반납], Migration #787) — 관리자가 직접 고른다. 둘 다 꺼져 있으면 [배정 확정]·[시범 발송] 비활성
+  let lockerLegPickup      = $state(false)
+  let lockerLegReturn      = $state(false)
+  const lockerLegs = $derived(legsFromSelection(lockerLegPickup, lockerLegReturn))
   let lockerPwLoading      = $state(false)
   let lockerPwSaving       = $state(false)
   let lockerPwError        = $state<string | null>(null)
@@ -2141,16 +2145,25 @@
     lockerPwFetchedForId = id
     lockerPassword       = ''
     lockerNumber         = ''
+    lockerLegPickup      = false
+    lockerLegReturn      = false
     lockerPwError        = null
     lockerPwLoading      = true
 
     fetch(`/api/cms/reservations/${id}/locker-password`)
       .then(r => r.json())
-      .then((d: { locker_password: string | null; locker_number?: string | null }) => {
+      .then((d: { locker_password: string | null; locker_number?: string | null; locker_guide_legs?: string | null }) => {
         if (lockerPwFetchedForId === id) {
           lockerPassword  = d.locker_password ?? ''
           lockerNumber    = d.locker_number ?? ''
+          const sel = selectionFromLegs(d.locker_guide_legs)
+          lockerLegPickup = sel.pickup
+          lockerLegReturn = sel.return
           lockerPwLoading = false
+          // 방문·퀵 예약을 처음 열었는데 무인보관함 정보가 아직 없으면 설정 안내(같은 예약은 패널을 다시 열 때까지 1회)
+          if (!lockerPassword.trim() && !lockerPwClosed) {
+            csToast.warning('무인보관함 정보를 설정해주세요.', { id: 'locker-setup-needed' })
+          }
         }
       })
       .catch(() => {
@@ -2168,7 +2181,7 @@
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password`, {
         method:  'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null }),
+        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null, locker_guide_legs: lockerLegs }),
       })
       if (!res.ok) {
         // SvelteKit error()는 {message}로, json({error})는 {error}로 응답 — 둘 다 읽어 실제 사유(예: 숫자 4~6자리)를 보여준다
@@ -2205,7 +2218,7 @@
       const res = await fetch(`/api/cms/reservations/${row.reservation_id}/locker-password/test-send`, {
         method:  'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null }),
+        body: JSON.stringify({ locker_password: lockerPassword || null, locker_number: lockerNumber || null, locker_guide_legs: lockerLegs }),
       })
       const d = await res.json().catch(() => ({})) as { error?: string; message?: string; sent_at?: string; to_masked?: string }
       if (!res.ok || !d.message || !d.sent_at) {
@@ -3125,9 +3138,15 @@
             {/if}
             <button
               type="button"
+              class="btn-reassign-small"
+              onclick={sendLockerTest}
+              disabled={lockerTestSending || lockerPwClosed || !lockerLegs}
+            >{lockerTestSending ? '발송 중...' : '시범 발송'}</button>
+            <button
+              type="button"
               class="btn-tracking-save btn-tracking-save--sm"
               onclick={saveLockerPassword}
-              disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || !lockerNumber.trim() || lockerPwLoading}
+              disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || !lockerNumber.trim() || !lockerLegs || lockerPwLoading}
             >{lockerPwSaving ? '저장 중...' : '배정 확정'}</button>
           </div>
         </div>
@@ -3157,12 +3176,25 @@
                 oncompositionend={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
                 disabled={lockerPwClosed}
               />
-              <button
-                type="button"
-                class="btn-reassign-small"
-                onclick={sendLockerTest}
-                disabled={lockerTestSending || lockerPwClosed}
-              >{lockerTestSending ? '발송 중...' : '시범 발송'}</button>
+              <!-- 안내 발송 대상 콤보 — 초소형 라운드 버튼형(§0-10-C) 모양 + ON/OFF 콤보(§14) 컬러. 둘 다 선택 가능 -->
+              <div class="locker-leg-group" role="group" aria-label="안내 발송 대상">
+                <button
+                  type="button"
+                  class="locker-leg-btn"
+                  class:locker-leg-btn--on={lockerLegPickup}
+                  aria-pressed={lockerLegPickup}
+                  disabled={lockerPwClosed}
+                  onclick={() => { lockerLegPickup = !lockerLegPickup }}
+                >수령</button>
+                <button
+                  type="button"
+                  class="locker-leg-btn"
+                  class:locker-leg-btn--on={lockerLegReturn}
+                  aria-pressed={lockerLegReturn}
+                  disabled={lockerPwClosed}
+                  onclick={() => { lockerLegReturn = !lockerLegReturn }}
+                >반납</button>
+              </div>
             </div>
           </div>
           {#if lockerTestResult && lockerTestResultFor === row.reservation_id}
@@ -4542,6 +4574,30 @@
     color: var(--cs-white);
   }
   .btn-reassign-small:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* 무인보관함 안내 발송 대상 콤보([수령]·[반납]) — 모양은 초소형 라운드 버튼형(§0-10-C, .btn-reassign-small과 동일),
+     선택(ON) 컬러는 CMS 콤보 ON/OFF 표준(§14: 활성 = --cs-purple 채움 + 흰 글자). border·box-shadow 없음 */
+  .locker-leg-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .locker-leg-btn {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .locker-leg-btn:hover:not(:disabled):not(.locker-leg-btn--on) {
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
+  }
+  .locker-leg-btn--on { background: var(--cs-purple); color: var(--cs-white); }
+  .locker-leg-btn--on:disabled { opacity: 1; cursor: default; }
+  .locker-leg-btn:disabled:not(.locker-leg-btn--on) { opacity: 0.38; cursor: not-allowed; }
 
   /* 상품 코드 행 + 재배정 줄을 하나의 그룹으로 — 그룹 안은 구분선 없이 이어지고 아래 구분선은 그룹 전체에 1줄(2026-10-06) */
   .unit-block {

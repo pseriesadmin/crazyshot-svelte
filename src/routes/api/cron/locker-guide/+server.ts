@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
-import { sendSms, buildLockerGuideSms } from '$lib/server/sms'
+import { sendSms, buildLockerGuideSms, buildLockerReturnGuideSms } from '$lib/server/sms'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
@@ -71,10 +71,14 @@ export const GET: RequestHandler = async ({ request }) => {
       try {
         // 푸시알림 설정의 공통 안내문장이 푸시·문자·채팅카드의 정본(2026-10-11) — 조립 실패 시에만 기존 고정 문구로 되돌린다.
         // 모든 발송 대상은 이 예약의 소유 고객 한 명이다(전화번호·푸시·채팅 모두 reservation.user_id 기준).
-        const composed = await composeLockerGuideMessage(admin, row.reservation_id)
-        const smsText = composed
-          ? `${SMS_BRAND_PREFIX}${composed}`
+        // 수령 건은 locker_guide, 반납 건은 locker_return_guide 문장·푸시 유형을 쓴다(2026-10-31, Migration #787).
+        const isReturn = row.leg === 'return'
+        const pushType = isReturn ? 'locker_return_guide' : 'locker_guide'
+        const composed = await composeLockerGuideMessage(admin, row.reservation_id, { leg: row.leg })
+        const fallbackSms = isReturn
+          ? buildLockerReturnGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
           : buildLockerGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
+        const smsText = composed ? `${SMS_BRAND_PREFIX}${composed}` : fallbackSms
 
         // 비밀번호가 담긴 문자를 가장 먼저 보낸다 — 실패하면 채팅·푸시를 보내지 않고(중복 방지) 이 건을 재시도 대상으로 되돌린다.
         const canSms = !!(row.phone && row.password)
@@ -87,8 +91,10 @@ export const GET: RequestHandler = async ({ request }) => {
           }
         }
 
-        const { error: notifyError } = composed
-          ? await admin.rpc('send_locker_guide_card', { p_reservation_id: row.reservation_id, p_content: composed })
+        // 조립 실패 시: 수령은 기존 고정 카드(알림 RPC), 반납은 수령 문구로 나가지 않도록 반납용 예비 문장을 카드 본문으로 보낸다.
+        const cardText = composed ?? (isReturn ? fallbackSms.replace(/^\[크레이지샷\]\s*/, '') : null)
+        const { error: notifyError } = cardText
+          ? await admin.rpc('send_locker_guide_card', { p_reservation_id: row.reservation_id, p_content: cardText })
           : await admin.rpc('send_rental_chat_notification', {
               p_reservation_id: row.reservation_id,
               p_notify_type:    'locker_guide',
@@ -99,7 +105,7 @@ export const GET: RequestHandler = async ({ request }) => {
           throw new Error(notifyError.message)
         }
 
-        await sendReservationLifecyclePush(admin, row.reservation_id, 'locker_guide', { skipSms: true, ...(composed ? { bodyOverride: composed } : {}) }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
+        await sendReservationLifecyclePush(admin, row.reservation_id, pushType, { skipSms: true, ...(composed ? { bodyOverride: composed } : {}) }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
 
         succeeded++
       } catch (err) {

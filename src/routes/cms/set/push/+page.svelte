@@ -296,7 +296,7 @@
       {@const hasDraft = draft.trim() !== ''}
       {@const previewBody = applyNotifyTemplate(hasDraft ? draft : spec.defaultMessage, SAMPLE_VARS)}
       {@const smsDefault = data.smsDefaults[row.notify_type]}
-      {@const smsPreview = hasDraft || !smsDefault ? `${SMS_BRAND_PREFIX}${previewBody}${previewBody.includes('http') || row.notify_type === 'locker_guide' ? '' : `\n${SAMPLE_LINK}`}` : smsDefault}
+      {@const smsPreview = hasDraft || !smsDefault ? `${SMS_BRAND_PREFIX}${previewBody}${previewBody.includes('http') || row.notify_type === 'locker_guide' || row.notify_type === 'locker_return_guide' ? '' : `\n${SAMPLE_LINK}`}` : smsDefault}
       <div class="msg-panel" id="msg-{row.notify_type}">
         <div class="msg-editor">
           <div class="msg-editor-head">
@@ -338,8 +338,11 @@
             <div class="msg-preview-box"><span class="msg-preview-tag">푸시</span>{previewBody}</div>
             {#if spec.sms}
               <div class="msg-preview-box"><span class="msg-preview-tag">문자</span>{smsPreview}</div>
-              {#if row.notify_type === 'locker_guide'}
+              {#if row.notify_type === 'locker_guide' || row.notify_type === 'locker_return_guide'}
                 <p class="msg-warn">무인보관함 문자는 예약별 실제 함 번호·비밀번호로 채워져 발송되며, 링크는 자동으로 붙지 않습니다(미리보기의 값은 예시).</p>
+              {/if}
+              {#if row.notify_type === 'locker_return_guide'}
+                <p class="msg-hint">반납 시각 1시간 전에, 예약 상세 '무인보관함 배정정보'에서 [반납]을 선택한 예약에만 발송됩니다. 중앙현관 비밀번호는 '무인보관함 이용 안내' 항목에서 설정한 값을 같이 씁니다.</p>
               {/if}
               <p class="msg-warn">이 알림은 푸시와 문자가 같은 문장을 씁니다. 문장을 저장하면 현재 문자 문구도 이 문장으로 바뀌고, 비워서 복원하면 위의 기본 문구로 돌아갑니다.</p>
             {/if}

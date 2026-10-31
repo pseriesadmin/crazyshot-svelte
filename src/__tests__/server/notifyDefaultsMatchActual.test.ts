@@ -35,7 +35,7 @@ import { load } from '../../routes/cms/set/push/+page.server'
 describe('화면의 푸시 기본 문구 = push.ts 고정 문구', () => {
   for (const [type, copy] of Object.entries(CUSTOMER_LIFECYCLE_PUSH_COPY)) {
     const spec = getNotifySpec(type)
-    if (!spec || type === 'locker_guide') continue // 무인보관함은 공통 안내문장 별도 조립(lockerGuideMessage)
+    if (!spec || type === 'locker_guide' || type === 'locker_return_guide') continue // 무인보관함(수령·반납)은 공통 안내문장 별도 조립(lockerGuideMessage)
     it(`${type}`, () => {
       expect(copy.body('{{상품명}}')).toBe(spec.defaultMessage)
     })
@@ -48,7 +48,7 @@ describe('화면의 문자 현재 문구 = sms.ts 고정 문구', () => {
       parent: async () => ({ cmsRole: 'manager' }),
       url: new URL('https://x.test/cms/set/push'),
     }))
-    const smsTypes = NOTIFY_SPECS.filter((s) => s.sms && s.notifyType !== 'locker_guide').map((s) => s.notifyType)
+    const smsTypes = NOTIFY_SPECS.filter((s) => s.sms && s.notifyType !== 'locker_guide' && s.notifyType !== 'locker_return_guide').map((s) => s.notifyType)
     expect(smsTypes.length).toBe(17)
     for (const t of smsTypes) {
       expect(res.smsDefaults[t], t).toBeTruthy()

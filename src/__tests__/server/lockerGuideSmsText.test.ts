@@ -45,7 +45,7 @@ describe('무인함 번호 + 비밀번호 필수 규칙(서버·화면)', () => 
   })
   it('시범 발송 API: 번호·비밀번호 모두 필수, 같은 문구 빌더 사용', () => {
     expect(test).toContain("if (!password || !lockerNumber)")
-    expect(test).toContain('buildLockerGuideSms(productName, lockerNumber, password, await getLockerEntrancePassword(admin))')
+    expect(test).toContain('buildLockerGuideSms(productName, lockerNumber, password, entrance)') // 수령용 예비 문구(반납은 buildLockerReturnGuideSms — 2026-10-31)
   })
   it('화면: 번호 입력칸이 비밀번호 입력칸 왼쪽, 확정 버튼은 둘 다 입력돼야 활성', () => {
     expect(panel.indexOf('placeholder="무인함 번호 입력"')).toBeLessThan(panel.indexOf('placeholder="무인보관함 비밀번호 입력"'))

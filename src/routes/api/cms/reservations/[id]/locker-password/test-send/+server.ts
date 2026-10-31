@@ -4,7 +4,8 @@
  * 실제 고객 번호가 아니라 회사 테스트폰(SMS_TEST_PHONE, 미설정 시 Solapi에 등록된 회사 발신번호 SMS_SENDER_PHONE)으로
  * 자동 발송과 같은 문구를 실제로 보낸다. 고객에게는 아무것도 가지 않는다.
  * 본문: 요청 본문의 locker_number·locker_password(입력 중인 값) → 없으면 저장된 값. 무인함 번호 1~10자 + 비밀번호 4~10자(둘 다 숫자·특수문자만, 둘 다 필수).
- * 응답: { message, sent_at, to_masked } — 화면이 발송 문구와 시각을 그대로 보여준다.
+ * 발송 대상(요청 본문 locker_guide_legs: pickup|return|both, 2026-10-31): 선택한 단계마다 그 단계의 문구로 1통씩(수령 → 반납 순서) 보낸다.
+ * 응답: { message, messages[{leg,message}], sent_at, to_masked } — 화면이 발송 문구와 시각을 그대로 보여준다(둘 다면 message 는 두 문구를 빈 줄로 이은 것).
  */
 import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
@@ -15,11 +16,11 @@ import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
-import { sendSms, buildLockerGuideSms } from '$lib/server/sms'
+import { sendSms, buildLockerGuideSms, buildLockerReturnGuideSms } from '$lib/server/sms'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
 import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
-import { isValidLockerNumber, isValidLockerPassword, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR } from '$lib/utils/lockerFields'
+import { isValidLockerNumber, isValidLockerPassword, isValidLockerGuideLegs, legListFromLegs, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR, LOCKER_GUIDE_LEGS_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
 
@@ -43,9 +44,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) return json({ error: '유효하지 않은 예약 ID입니다.' }, { status: 400 })
 
-  let body: { locker_password?: string | null; locker_number?: string | null } = {}
+  let body: { locker_password?: string | null; locker_number?: string | null; locker_guide_legs?: string | null } = {}
   try {
-    body = await request.json() as { locker_password?: string | null; locker_number?: string | null }
+    body = await request.json() as { locker_password?: string | null; locker_number?: string | null; locker_guide_legs?: string | null }
   } catch {
     body = {}
   }
@@ -73,6 +74,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!isValidLockerPassword(password)) return json({ error: LOCKER_PASSWORD_ERROR }, { status: 400 })
   if (!isValidLockerNumber(lockerNumber)) return json({ error: LOCKER_NUMBER_ERROR }, { status: 400 })
 
+  if (!isValidLockerGuideLegs(body.locker_guide_legs)) return json({ error: LOCKER_GUIDE_LEGS_ERROR }, { status: 400 })
+  const legs = legListFromLegs(body.locker_guide_legs)
+
   // sendSms는 Solapi 키 미설정 시 조용히 건너뛴다 — "보냈다"고 거짓 보고하지 않도록 먼저 확인
   if (!env.SOLAPI_API_KEY || !env.SOLAPI_API_SECRET || !env.SMS_SENDER_PHONE) {
     return json({ error: '문자 발송 설정(Solapi)이 되어 있지 않습니다.' }, { status: 503 })
@@ -88,17 +92,22 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
   const emb = (row as unknown as { products: { name?: string } | { name?: string }[] | null }).products
   const productName = (Array.isArray(emb) ? emb[0]?.name : emb?.name) ?? null
-  // 실제 발송과 같은 공통 안내문장(푸시알림 설정) — 아직 저장하지 않은 입력값(번호·비밀번호)도 반영해 조립한다
-  const composed = await composeLockerGuideMessage(admin, reservationId, { lockerNumber, lockerPassword: password })
-  const message = composed
-    ? `${SMS_BRAND_PREFIX}${composed}`
-    : buildLockerGuideSms(productName, lockerNumber, password, await getLockerEntrancePassword(admin))
+  // 실제 발송과 같은 공통 안내문장(푸시알림 설정) — 아직 저장하지 않은 입력값(번호·비밀번호)도 반영해 단계별로 조립한다
+  const entrance = await getLockerEntrancePassword(admin)
+  const messages: { leg: 'pickup' | 'return'; message: string }[] = []
+  for (const leg of legs) {
+    const composed = await composeLockerGuideMessage(admin, reservationId, { lockerNumber, lockerPassword: password, leg })
+    const fallback = leg === 'return'
+      ? buildLockerReturnGuideSms(productName, lockerNumber, password, entrance)
+      : buildLockerGuideSms(productName, lockerNumber, password, entrance)
+    messages.push({ leg, message: composed ? `${SMS_BRAND_PREFIX}${composed}` : fallback })
+  }
 
   try {
-    await sendSms(testPhone, message)
+    for (const m of messages) await sendSms(testPhone, m.message)
   } catch {
     return json({ error: '시범 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.' }, { status: 502 })
   }
 
-  return json({ success: true, message, sent_at: new Date().toISOString(), to_masked: maskPhone(testPhone) })
+  return json({ success: true, message: messages.map((m) => m.message).join('\n\n'), messages, sent_at: new Date().toISOString(), to_masked: maskPhone(testPhone) })
 }
