@@ -33,6 +33,7 @@ const IMPORTANT_NOTIFY_LABELS: Record<string, string> = {
   coupon_gift:                '쿠폰',
   late_fee_paid:              '연체료',
   locker_guide:                '보관함',
+  locker_return_guide:         '보관함 반납',
   dhero_place_guide:           '수령위치',
   tracking_notify:             '운송장',
   chat_unanswered:             '미답변',

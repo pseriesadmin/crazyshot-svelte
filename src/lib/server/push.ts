@@ -92,6 +92,12 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
     title: '무인보관함 이용 안내',
     body: (p) => `${p} 이용 시간이 영업외시간이라 무인보관함으로 인계돼요. 비밀번호는 채팅에서 확인해주세요.`,
   },
+  // 2026-10-31 추가(Migration #787): 무인보관함 "반납" 안내 — 크론(/api/cron/locker-guide)이 반납 시각 1시간 전에 보낸다.
+  // 평소에는 크론이 조립한 공통 안내문장(bodyOverride)이 본문이고, 이 고정 문구는 조립 실패 때의 예비.
+  locker_return_guide: {
+    title: '무인보관함 반납 안내',
+    body: (p) => `${p} 반납 안내예요. 무인보관함 정보는 채팅에서 확인하고, 반납 후 반납정보를 등록해 주세요.`,
+  },
   // 2026-08-25 추가(Migration 347, NOW-FIX-2 §15 동기화): 두발히어로 수령위치 등록 안내.
   // 채팅카드(send_rental_chat_notification 'dhero_place_guide')와 쌍을 이루는 브라우저 푸시.
   // placePageUrl은 외부 URL이라 푸시 알림에서 직접 링크 클릭을 유도할 수 없음 —
@@ -411,8 +417,9 @@ export async function sendReservationLifecyclePush(
     // 무인보관함 이용 안내(2026-10-11): 푸시알림 설정의 공통 안내문장을 정본으로 이 고객 한 명에게만 보낸다.
     // 크론이 이미 조립한 문장(bodyOverride)이 있으면 그대로, 없으면 여기서 조립한다(조립 실패 시 기존 문구).
     let lockerBody: string | undefined
-    if (notifyType === 'locker_guide') {
-      lockerBody = options?.bodyOverride ?? (await composeLockerGuideMessage(admin, reservationId)) ?? undefined
+    const isLockerType = notifyType === 'locker_guide' || notifyType === 'locker_return_guide'
+    if (isLockerType) {
+      lockerBody = options?.bodyOverride ?? (await composeLockerGuideMessage(admin, reservationId, { leg: notifyType === 'locker_return_guide' ? 'return' : 'pickup' })) ?? undefined
     }
 
     await sendPushToUser(
@@ -420,7 +427,7 @@ export async function sendReservationLifecyclePush(
       notifyType,
       { title: copy.title, body: lockerBody ?? (TRACKING_NOTIFY_TYPES.includes(notifyType) ? applyNotifyTemplate(copy.body(productName), vars) : copy.body(productName)), link: '/account/rental' },
       // 무인보관함은 조립 실패(lockerBody 없음) 때도 편집 문장을 적용하지 않는다 — 함번호·비밀번호 변수 없이 치환되면 깨진 문장이 나가기 때문
-      { vars, noOverride: notifyType === 'locker_guide' || lockerBody !== undefined },
+      { vars, noOverride: isLockerType || lockerBody !== undefined },
     )
 
     // SMS 동시 발송(2026-10-02, Stephen 확정): 푸시 성공 여부와 무관하게 대상 타입이면 항상 SMS도
@@ -432,7 +439,7 @@ export async function sendReservationLifecyclePush(
       const phone = profileRow?.phone
       if (phone) {
         // 무인보관함은 문자를 크론이 따로 보내고(허브는 skipSms) 허브 문자 경로에서는 편집 문장을 쓰지 않는다
-        const smsOverride = notifyType === 'locker_guide' ? null : await getNotifyMessageOverride(admin, notifyType)
+        const smsOverride = isLockerType ? null : await getNotifyMessageOverride(admin, notifyType)
         const customMessage = smsOverride ? applyNotifyTemplate(smsOverride, vars) || null : null
         await sendLifecycleSms(admin, {
           phone,

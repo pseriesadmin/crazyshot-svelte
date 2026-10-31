@@ -9,7 +9,7 @@ const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = []
 let claimQueue: Array<Array<Record<string, unknown>>> = []
 let chatError: { message: string } | null = null
 const sendSmsMock = vi.fn()
-const pushMock = vi.fn(async () => undefined)
+const pushMock = vi.fn(async (..._a: unknown[]): Promise<undefined> => undefined)
 
 vi.mock('$env/dynamic/private', () => ({ env: { CRON_SECRET: 's3cret', SUPABASE_SERVICE_ROLE_KEY: 'k' } }))
 vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'http://localhost' }))
@@ -17,6 +17,7 @@ vi.mock('$lib/server/push', () => ({ sendReservationLifecyclePush: (...a: unknow
 vi.mock('$lib/server/sms', () => ({
   sendSms: (...a: unknown[]) => sendSmsMock(...a),
   buildLockerGuideSms: (n: string | null, no: string | null, p: string) => `[크레이지샷] ${n ?? '상품'} 대여예약 무인보관함 이용정보 No ${no} / ${p}`,
+  buildLockerReturnGuideSms: (n: string | null, no: string | null, p: string) => `[크레이지샷] ${n ?? '상품'} 반납 무인보관함 이용정보 No ${no} / ${p}`,
 }))
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
@@ -31,7 +32,7 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { GET } from '../../routes/api/cron/locker-guide/+server'
 
-const row = (id: number, phone: string | null) => ({ reservation_id: id, leg: 'pickup', phone, password: '1234', locker_number: '5', product_name: '카메라' })
+const row = (id: number, phone: string | null, leg: 'pickup' | 'return' = 'pickup') => ({ reservation_id: id, leg, phone, password: '1234', locker_number: '5', product_name: '카메라' })
 const call = async (): Promise<{ processed: number; succeeded: number; failed: number; retryScheduled: number }> => {
   const res = await GET({ request: new Request('http://x', { headers: { authorization: 'Bearer s3cret' } }) } as unknown as Parameters<typeof GET>[0])
   return res.json()
@@ -97,5 +98,31 @@ describe('locker-guide cron', () => {
     const lastClaim = rpcCalls.map(c => c.fn).lastIndexOf('claim_reservations_due_for_locker_guide')
     const firstRelease = rpcCalls.map(c => c.fn).indexOf('release_locker_guide_claim')
     expect(firstRelease).toBeGreaterThan(lastClaim)
+  })
+
+  // ── 수령/반납 구분(2026-10-31, Migration #787) ──
+  it('C7: 수령 건은 locker_guide, 반납 건은 locker_return_guide 유형으로 푸시한다', async () => {
+    claimQueue = [[row(7, '010-1111-2222', 'pickup'), row(8, '010-1111-2222', 'return')]]
+    await call()
+    const types = pushMock.mock.calls.map((c) => c[2])
+    expect(types).toEqual(['locker_guide', 'locker_return_guide'])
+  })
+
+  it('C8: 문장 조립이 실패한 반납 건은 반납용 고정 문자 + 반납용 채팅카드(수령용 알림 RPC 아님)로 나간다', async () => {
+    claimQueue = [[row(9, '010-1111-2222', 'return')]]
+    const r = await call()
+    expect(sendSmsMock).toHaveBeenCalledWith('010-1111-2222', '[크레이지샷] 카메라 반납 무인보관함 이용정보 No 5 / 1234')
+    expect(rpcCalls.some((c) => c.fn === 'send_rental_chat_notification')).toBe(false)
+    const card = rpcCalls.find((c) => c.fn === 'send_locker_guide_card')
+    expect(card?.args.p_reservation_id).toBe(9)
+    expect(String(card?.args.p_content)).toContain('반납')
+    expect(r.succeeded).toBe(1)
+  })
+
+  it('C9: 조립 실패한 수령 건은 기존 그대로(수령용 문자 + 알림 RPC)', async () => {
+    claimQueue = [[row(10, '010-1111-2222', 'pickup')]]
+    await call()
+    expect(sendSmsMock).toHaveBeenCalledWith('010-1111-2222', '[크레이지샷] 카메라 대여예약 무인보관함 이용정보 No 5 / 1234')
+    expect(rpcCalls.some((c) => c.fn === 'send_rental_chat_notification')).toBe(true)
   })
 })

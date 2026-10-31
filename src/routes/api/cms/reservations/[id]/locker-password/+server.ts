@@ -6,6 +6,7 @@
  * 이 등급 체크가 빠져 있던 전례가 있어(security-auth.md) 이번 신규 라우트는 반드시 포함.
  *
  * GET  : service_role로 조회 (RLS 우회 — 관리자는 모든 예약 조회 가능해야 함)
+ * 안내 발송 대상(locker_guide_legs: pickup|return|both, Migration #787): 비밀번호를 저장할 때 필수. 조회는 비밀번호가 있을 때만 내려준다(비밀번호가 비면 값은 무의미).
  * PATCH: locals.supabase(관리자 실세션)으로 update_reservation_locker_password RPC 호출
  *        — RPC 내부의 is_cms_user() 검증이 auth.uid() 기반이라 service_role 호출 시 거부됨
  */
@@ -16,7 +17,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { isValidLockerNumber, isValidLockerPassword, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR } from '$lib/utils/lockerFields'
+import { isValidLockerNumber, isValidLockerPassword, isValidLockerGuideLegs, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR, LOCKER_GUIDE_LEGS_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -33,14 +34,19 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   const { data, error: resErr } = await admin
     .from('rental_reservations')
-    .select('locker_password, locker_number')
+    .select('locker_password, locker_number, locker_guide_legs')
     .eq('id', reservationId)
     .maybeSingle()
 
   if (resErr || !data) return json({ error: '예약을 찾을 수 없습니다.' }, { status: 404 })
 
-  const r = data as { locker_password: string | null; locker_number: string | null }
-  return json({ locker_password: r.locker_password ?? null, locker_number: r.locker_number ?? null })
+  const r = data as { locker_password: string | null; locker_number: string | null; locker_guide_legs?: string | null }
+  return json({
+    locker_password: r.locker_password ?? null,
+    locker_number: r.locker_number ?? null,
+    // 비밀번호가 없으면 발송 대상도 없는 것으로 본다 — 폐기 뒤 남은 값이 화면에 미리 선택돼 보이지 않게
+    locker_guide_legs: r.locker_password ? (r.locker_guide_legs ?? null) : null,
+  })
 }
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
@@ -55,7 +61,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) throw error(400, '유효하지 않은 예약 ID입니다.')
 
-  const body = await request.json() as { locker_password?: string | null; locker_number?: string | null }
+  const body = await request.json() as { locker_password?: string | null; locker_number?: string | null; locker_guide_legs?: string | null }
   const lockerPassword = (body.locker_password ?? '').trim() || null
   const lockerNumber = (body.locker_number ?? '').trim() || null
 
@@ -66,6 +72,12 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   // 무인함 번호 형식: 1~10자, 숫자·특수문자만
   if (lockerNumber !== null && !isValidLockerNumber(lockerNumber)) {
     throw error(400, LOCKER_NUMBER_ERROR)
+  }
+
+  // 안내 발송 대상(수령·반납·둘 다) — 저장할 때는 반드시 골라야 하고, 삭제(둘 다 비움)할 때는 비운다
+  const legs = lockerPassword !== null && isValidLockerGuideLegs(body.locker_guide_legs) ? body.locker_guide_legs : null
+  if (lockerPassword !== null && legs === null) {
+    throw error(400, LOCKER_GUIDE_LEGS_ERROR)
   }
 
   // RSV-B-B5: 무인보관함 비밀번호 형식 검증 (4~10자, 숫자·특수문자만 — 2026-10-08 영문·한글 불가로 변경)
@@ -83,6 +95,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     p_reservation_id: reservationId,
     p_password:       lockerPassword,
     p_locker_number:  lockerNumber,
+    p_legs:           legs,
   })
 
   if (rpcErr) {
@@ -92,5 +105,5 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     throw error(500, '비밀번호 저장 중 오류가 발생했습니다.')
   }
 
-  return json({ success: true, locker_password: lockerPassword, locker_number: lockerNumber })
+  return json({ success: true, locker_password: lockerPassword, locker_number: lockerNumber, locker_guide_legs: legs })
 }

@@ -41,8 +41,8 @@ describe('smsByteLength / classifySms', () => {
 })
 
 describe('카탈로그', () => {
-  it('설정 행 31종이 모두 정의돼 있고 기본 문구의 변수는 전부 허용 변수다', () => {
-    expect(NOTIFY_SPECS).toHaveLength(31)
+  it('설정 행 32종이 모두 정의돼 있고 기본 문구의 변수는 전부 허용 변수다', () => {
+    expect(NOTIFY_SPECS).toHaveLength(32)
     for (const spec of NOTIFY_SPECS) {
       expect(findUnknownVariables(spec.notifyType, spec.defaultMessage)).toEqual([])
     }
