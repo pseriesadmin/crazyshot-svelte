@@ -32,6 +32,7 @@ import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpand
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { getPriceMinForProducts } from '$lib/server/getPriceMinForProducts'
 import { getPrice12hForProducts } from '$lib/server/getPrice12hForProducts'
+import { getImageUrlsForProducts } from '$lib/server/getImageUrlsForProducts'
 import type { RequestHandler } from './$types'
 
 // RPC 결과 "약한 매칭" 기준 — 이 건수 이하면 자연어 폴백 보강 실행
@@ -211,6 +212,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     .map((r) => String(r['product_id'] ?? r['id'] ?? ''))
   const priceMinMap = await getPriceMinForProducts(locals.supabase, missingPriceIds)
 
+  // 보충 결과(natural_fallback·semantic)는 image_urls 도 없다 — 이미지가 없는 행만 배치 조회로 채운다(2026-11-01, 검색 결과 기본 이미지 버그 수정).
+  // RPC 행(image_urls 또는 image_url 보유)은 그대로 둔다.
+  const hasImage = (r: Record<string, unknown>): boolean =>
+    (Array.isArray(r['image_urls']) && (r['image_urls'] as unknown[]).length > 0) || !!r['image_url']
+  const missingImageIds = finalResults.filter((r) => !hasImage(r)).map((r) => String(r['product_id'] ?? r['id'] ?? ''))
+  const imageMap = await getImageUrlsForProducts(locals.supabase, missingImageIds)
+
   const wishedIds = await getWishedProductIds(
     locals.supabase,
     session?.user?.id,
@@ -230,6 +238,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     return {
       ...r,
       price_min: r['price_min'] ?? priceMinMap[id] ?? null,
+      ...(hasImage(r) || !imageMap[id] ? {} : { image_urls: imageMap[id] }),
       price_12h: price12hMap[id] ?? null,
       sale_only: saleMap[id]?.sale_only ?? false,
       sale_price: saleMap[id]?.sale_price ?? null,
