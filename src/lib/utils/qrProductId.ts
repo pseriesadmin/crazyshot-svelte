@@ -1,6 +1,6 @@
 /** QR 스캔 결과에서 상품 식별자(UUID 또는 품번) 추출
  * QR-CONTENT-1: 신규 QR은 품번 원문 텍스트. 기존 URL 방식 QR 하위호환 유지.
- * 신버전 payload(`{product_code}|{category}`)는 `|` 앞부분만 반환해 하위호환 유지.
+ * 옛 인쇄본 payload(`{product_code}|{category}`, 2026-11-01까지 생성)는 `|` 앞부분만 반환해 하위호환 유지.
  */
 export function extractProductId(raw: string): string | null {
   const text = raw.trim()
@@ -11,7 +11,7 @@ export function extractProductId(raw: string): string | null {
   const codeInUrlMatch = text.match(/\/qr\/product\/([A-Z0-9\-]{3,30})$/i)
   if (codeInUrlMatch?.[1]) return codeInUrlMatch[1]
   // 신규 (QR-CONTENT-1): URL 패턴이 아니면 원문 자체를 품번으로 취급
-  // 신버전 payload: `{product_code}|{category}` — `|` 있으면 앞부분만 반환(하위호환)
+  // 옛 인쇄본 payload: `{product_code}|{category}` — `|` 있으면 앞부분만 반환(하위호환)
   if (!text.includes('://') && !text.startsWith('/')) {
     const pipeIdx = text.indexOf('|')
     const code = pipeIdx >= 0 ? text.slice(0, pipeIdx) : text
@@ -64,7 +64,7 @@ export type QrPayloadResult =
  *
  * 판별 순서 (단락-전진 fallthrough):
  *   1. `/qr/member/` 접두어 → member
- *   2. `|` 포함 → 신버전 상품 payload (`{product_code}|{category}`)
+ *   2. `|` 포함 → 옛 인쇄본 상품 payload (`{product_code}|{category}`)
  *   3. 예약코드 패턴 일치 → reservation
  *   4. URL 아닌 원문 텍스트 → old product (레거시 QR 하위호환)
  *   5. 나머지 → unknown
@@ -76,7 +76,7 @@ export function identifyQrPayload(raw: string): QrPayloadResult {
   const memberCode = extractMemberCode(text)
   if (memberCode) return { type: 'member', value: memberCode }
 
-  // 2. 신버전 상품 payload (pipe 포함)
+  // 2. 옛 인쇄본 상품 payload (pipe 포함)
   if (!text.includes('://') && !text.startsWith('/') && text.includes('|')) {
     const code = extractProductId(text)
     if (code) return { type: 'product', value: code }

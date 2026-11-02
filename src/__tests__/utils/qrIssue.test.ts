@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderQrToCanvas, QR_CANVAS_SIZE } from '../../lib/utils/qrIssue'
+import { renderQrToCanvas, buildProductQrPayload, QR_CANVAS_SIZE } from '../../lib/utils/qrIssue'
 
 /**
  * qrIssue.ts — renderQrToCanvas 회귀 테스트
@@ -68,5 +68,12 @@ describe('renderQrToCanvas — 버퍼 크기 & 인라인 스타일 초기화', (
     const canvas = makeCanvas(220)
     await renderQrToCanvas(canvas, '/qr/member/MEM-0001')
     expect(canvas.width).toBe(QR_CANVAS_SIZE)
+  })
+})
+
+describe('buildProductQrPayload — 품번만 담는다', () => {
+  it('품번 원문 그대로 반환하고 카테고리·구분자(|)를 붙이지 않는다', () => {
+    expect(buildProductQrPayload('CSLIT2609001')).toBe('CSLIT2609001')
+    expect(buildProductQrPayload('CSLIT2609001')).not.toContain('|')
   })
 })

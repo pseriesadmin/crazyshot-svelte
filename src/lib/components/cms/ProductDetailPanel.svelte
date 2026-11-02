@@ -456,12 +456,12 @@
     }
   }
 
-  // QR 코드 렌더링 — QR-CONTENT-1: 신버전 payload={product_code}|{category}
+  // QR 코드 렌더링 — QR-CONTENT-1: payload = product_code 원문(카테고리 미병기, 2026-11-02)
   $effect(() => {
     const code = product.product_code
     const canvas = canvasEl
     if (!code || !canvas) return
-    const payload = buildProductQrPayload(code, product.category ?? '')
+    const payload = buildProductQrPayload(code)
     renderQrToCanvas(canvas, payload)
   })
 

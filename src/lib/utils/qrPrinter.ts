@@ -10,7 +10,7 @@ export type QrPrintJobStatus = 'idle' | 'connecting' | 'ready' | 'printing' | 'e
 
 /** 단일 QR 프린트 작업 */
 export interface QrPrintJob {
-  /** 인쇄할 QR payload (product_code 또는 `{code}|{category}` 형식) */
+  /** 인쇄할 QR payload (product_code 원문. 2026-11-01 이전 인쇄본은 `{code}|{category}` 형식) */
   payload: string
   /** QR 아래에 표시할 레이블 (없으면 생략) */
   label?: string
