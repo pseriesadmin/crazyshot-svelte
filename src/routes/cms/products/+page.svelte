@@ -366,12 +366,11 @@
       csToast.warning('품번이 발행된 항목을 선택하세요.')
       return
     }
-    const parentCategory = activeDetail.rootProduct?.category ?? ''
     const items: Array<{ code: string; dataUrl: string }> = await Promise.all(
       selected.map(async (u: { id: string; product_code: string | null }) => ({
         code: u.product_code!,
         dataUrl: await buildQrDataUrl(
-          buildProductQrPayload(u.product_code!, parentCategory),
+          buildProductQrPayload(u.product_code!),
           { width: 300, margin: 2 },
         ),
       }))

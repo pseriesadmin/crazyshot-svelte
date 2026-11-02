@@ -2,7 +2,7 @@
  * qrIssue.ts — QR 코드 발행 중앙 모듈
  *
  * 크레이지샷 QR 발행 로직을 6곳에서 복붙하던 방식을 단일 모듈로 통합.
- * - buildProductQrPayload: 상품 QR에 카테고리 병기 (신버전 payload)
+ * - buildProductQrPayload: 상품 QR payload (품번 원문만)
  * - renderQrToCanvas: DOM 의존, 브라우저 전용
  * - buildQrDataUrl: 서버·일괄인쇄 겸용 순수함수
  * - downloadQrWithLabel: DOM 의존, 브라우저 전용 — 기존 3곳 복붙 라벨합성 로직 그대로 추출
@@ -25,12 +25,13 @@ export const PNG_DPI = 300
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**
- * 상품 QR payload 생성 — 신버전: `{product_code}|{category}`
- * products.md §2-4: 상품 QR만 카테고리 병기, 다른 5곳(예약/회원 등) payload는 무변경.
- * 파싱 쪽(qrProductId.ts extractProductId)에서 `|` 앞부분만 추출해 하위호환 유지.
+ * 상품 QR payload 생성 — 품번(product_code) 원문만 담는다.
+ * 2026-11-02: 카테고리 병기(`{product_code}|{category}`, 2026-09-17 도입)를 폐기하고 품번만 담도록 되돌림(Stephen 지시).
+ * 상품 QR 생성 지점은 모두 이 함수를 거친다. 예약/회원 등 다른 QR payload는 무변경.
+ * 파싱 쪽(qrProductId.ts extractProductId)은 `|` 있는 옛 인쇄본과 품번 원문을 모두 읽는다(하위호환).
  */
-export function buildProductQrPayload(productCode: string, category: string): string {
-  return `${productCode}|${category}`
+export function buildProductQrPayload(productCode: string): string {
+  return productCode
 }
 
 /**
