@@ -11,6 +11,8 @@
 		userHandle?: string
 		contextType?: string
 		contextId?: string
+		/** 모바일(<640px)에서만 완전히 숨김 — 로그인 화면용(2026-11-03). PC는 그대로 노출 */
+		hideMobile?: boolean
 	}
 
 	let {
@@ -18,11 +20,28 @@
 		userName = '게스트',
 		userHandle = 'guest',
 		contextType = 'general',
-		contextId
+		contextId,
+		hideMobile = false
 	}: Props = $props()
 
 	let peekMode = $state(true)
 	let bubbling = $state(false)
+	/** 화면을 처음 열었을 때(또는 새로고침 직후) 첫 노출 전까지 true — 숨김 모션(peek-in)을 재생하지 않고 숨은 자리에서 대기한다 */
+	let entering = $state(true)
+
+	/** 2026-11-03: 화면 열림·스크롤 멈춤 시 우→좌 팝아웃으로 다시 나타나는 지연(ms) — 모바일 사용성 개선 */
+	const ENTER_DELAY_MS = 200
+	const SETTLE_DELAY_MS = 250
+	let settleTimer: ReturnType<typeof setTimeout> | undefined
+
+	function scheduleExpand(delay: number): void {
+		clearTimeout(settleTimer)
+		settleTimer = setTimeout(() => {
+			if (chatStore.isOpen) return
+			entering = false
+			expandFromPeek()
+		}, delay)
+	}
 
 	function expandFromPeek(): void {
 		if (!peekMode) return
@@ -85,21 +104,30 @@
 	$effect(() => {
 		function onScroll() {
 			if (chatStore.isOpen) return
-			peekMode = true
+			peekMode = true                    // 위·아래 어느 방향이든 스크롤 중에는 우측으로 감춤
+			scheduleExpand(SETTLE_DELAY_MS)    // 스크롤이 멈추면 우→좌로 다시 노출
 		}
 		window.addEventListener('scroll', onScroll, { passive: true })
-		return () => window.removeEventListener('scroll', onScroll)
+		return () => {
+			window.removeEventListener('scroll', onScroll)
+			clearTimeout(settleTimer)
+		}
 	})
 
 	$effect(() => {
 		void page.url.pathname
-		if (!chatStore.isOpen) peekMode = true
+		if (!chatStore.isOpen) {
+			peekMode = true
+			scheduleExpand(ENTER_DELAY_MS)     // 화면 열림·이동 시 우→좌 노출
+		}
 	})
 </script>
 
 <div
 	class="fab-bar"
 	class:peek={peekMode}
+	class:entering={entering}
+	class:hide-mobile={hideMobile}
 	class:bubbling={bubbling}
 	onclick={handleBarClick}
 	role="group"
@@ -223,14 +251,30 @@
 			backface-visibility: hidden;
 			/* 2026-10-09: 막대 전체가 아니라 아이콘 3개가 각자 움직인다(순차 모션) — 막대 자체의 투명 영역이 페이지 터치를 막지 않도록 */
 			pointer-events: none;
+			/* 2026-11-03: 모바일 30% 축소(Stephen 지시) — 바 전체를 우하단 기준으로 0.7배.
+			   아이콘 크기·간격·이동 거리(translateX)·감쇠 키프레임이 모두 같은 비율로 줄어 기존 모션 값은 그대로 보존된다.
+			   우측 24px·하단 100px 위치는 transform-origin 덕분에 유지. */
+			transform: scale(0.7);
+			transform-origin: right bottom;
+			/* 2026-11-03: 숨김은 화면 밖까지 완전히 가린다(Stephen 지시) — 아이콘 폭 70 + 오른쪽 여백 24/0.7 + 그림자·배지 여유.
+			   기존 59.5px(좌측 약 10px 노출)에서 확장. 오버슈트 비율(+13%/-8%/+1.7%)은 이 값 기준으로 유지. */
+			--fab-peek-x: 120px;
 		}
 		.fab-item { pointer-events: auto; }
+
+		.fab-bar.hide-mobile { display: none; }
+
+		/* 첫 노출 전 대기: 숨김 모션을 재생하지 않고 숨은 자리에 머문다(이후 팝아웃이 이 위치에서 시작) */
+		.fab-bar.peek.entering .fab-item {
+			animation: none;
+			transform: translateX(var(--fab-peek-x));
+		}
 
 		/* 순차 모션(2026-10-09, Stephen 지시): 장바구니 → 검색 → 채팅 순으로 감춤·노출. 아이콘마다 --i × 50ms 지연.
 		   길이는 기존의 1.5배(팝아웃 0.5s→0.75s, 감춤 0.22s→0.33s), 감쇠 스프링·오버슈트 곡선은 그대로.
 		   지연 동안 시작 위치에 머물도록 fill-mode both(끝 위치 = 정지 상태와 같아 되돌림 없음). */
 		.fab-bar.peek .fab-item {
-			transform: translateX(59.5px);           /* 정지: peek(기존 막대 85% 이동량과 동일) */
+			transform: translateX(var(--fab-peek-x)); /* 정지: peek(화면 밖 완전 숨김) */
 			animation: fab-bar-peek-in 0.33s cubic-bezier(0.25, 0.1, 0.25, 1) both;
 			animation-delay: calc(var(--i) * 50ms);
 		}
@@ -240,7 +284,7 @@
 		}
 
 		@keyframes fab-bar-pop-out {
-			0%   { transform: translateX(59.5px); }  /* peek 시작 */
+			0%   { transform: translateX(var(--fab-peek-x)); }  /* peek 시작 */
 			26%  { transform: translateX(-21.7px); } /* 1차 오버슈트, 진폭 대비 약 -37% */
 			43%  { transform: translateX(10.3px); }  /* 직전 대비 약 48% */
 			57%  { transform: translateX(-5.1px); }  /* 49% */
@@ -253,10 +297,10 @@
 		}
 		@keyframes fab-bar-peek-in {
 			0%   { transform: translateX(0); }
-			55%  { transform: translateX(67.2px); }  /* +13% 오버슈트 */
-			78%  { transform: translateX(54.8px); }  /* -8%  언더슈트 */
-			92%  { transform: translateX(60.5px); }  /* +1.7% */
-			100% { transform: translateX(59.5px); }  /* 정지 (peek) */
+			55%  { transform: translateX(calc(var(--fab-peek-x) * 1.13)); }  /* +13% 오버슈트 */
+			78%  { transform: translateX(calc(var(--fab-peek-x) * 0.92)); }  /* -8%  언더슈트 */
+			92%  { transform: translateX(calc(var(--fab-peek-x) * 1.017)); }  /* +1.7% */
+			100% { transform: translateX(var(--fab-peek-x)); }  /* 정지 (peek) */
 		}
 
 		/* 확장 시 버블 애니메이션: 장바구니·검색 + 채팅 FAB 내부 SVG — 아이콘별 순차 지연에 맞춰 시작, 길이 1.5배(0.32s→0.48s) */
