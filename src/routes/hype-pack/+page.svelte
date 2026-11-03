@@ -498,18 +498,59 @@
     transition: transform 0.3s ease-out;
   }
   .m-pack-theme-card:hover .m-pack-theme-img { transform: scale(1.05); }
+  /* 2026-11-03(Stephen 지시): 모바일 가독성 — 테마 타이틀을 하단 가운데로 재배치하고 가로폭·글자 100% 확대(2배) */
   .m-pack-theme-badge-wrap {
     position: absolute;
     bottom: 16px;
     left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: center;
   }
   .m-pack-theme-badge {
-    padding: 7px 18px;
+    padding: 14px 54px;   /* 좌우 36→54px: 버튼 영역 가로폭 약 20% 확대(Stephen 지시) */
     border-radius: 9999px;
+    max-width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    /* 터치·호버 모션(Stephen 지시, 2026-11-03) — 하단 탭바 아이콘과 같은 스프링 곡선. 터치는 :active, 마우스 호버는 hover 기기에서만
+       (iOS는 탭 뒤 :hover가 남아 떠 있는 채로 굳는다) */
+    transition: transform 0.24s cubic-bezier(0.34, 1.28, 0.64, 1);
+    position: relative;
+  }
+  /* 배경색은 팩마다 인라인 값이라 흰색 반투명 막(::before)을 덧입혀 살짝 밝힌다 — 어두운 색에서도 보이도록 brightness 필터 대신 사용.
+     테두리·그림자 추가 없이 면 색만 반응 */
+  .m-pack-theme-badge::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: rgba(255, 255, 255, 0.22);
+    opacity: 0;
+    transition: opacity 0.24s ease;
+    pointer-events: none;
+  }
+  .m-pack-theme-card:active .m-pack-theme-badge {
+    transform: translateY(-3px) scale(1.1);
+  }
+  .m-pack-theme-card:active .m-pack-theme-badge::before { opacity: 1; }
+  @media (hover: hover) {
+    .m-pack-theme-card:hover .m-pack-theme-badge {
+      transform: translateY(-3px) scale(1.1);
+    }
+    .m-pack-theme-card:hover .m-pack-theme-badge::before { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .m-pack-theme-badge,
+    .m-pack-theme-badge::before { transition-duration: 0.01ms; }
   }
   .m-pack-theme-name {
-    font-family: 'Tilt Warp', sans-serif;
-    font-size: 15px;
+    position: relative;   /* 호버 막(::before) 위에 글자가 오도록 */
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* 30px(--text-m-ad-en-30) 한 단계 아래 영문 디스플레이 토큰 — 400 24px (Stephen 지시, 2026-11-03) */
+    font: var(--text-m-menu-en-24);
     color: var(--cs-white);
     line-height: 1.3;
     white-space: nowrap;
