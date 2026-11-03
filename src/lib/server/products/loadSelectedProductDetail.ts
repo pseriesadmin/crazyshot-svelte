@@ -157,7 +157,7 @@ export async function loadSelectedProductDetail(
       spParentId
         ? admin
             .from('products')
-            .select('name, brand, category, product_caption, slug, image_urls, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, is_bundle_product, content_blocks, keywords, components, specifications, manual_files')
+            .select('name, brand, category, product_caption, slug, image_urls, mobile_images, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return, sale_price, sale_only, option_only, is_bundle_product, content_blocks, keywords, components, specifications, manual_files')
             .eq('id', spParentId)
             .is('deleted_at', null)  // BND-2: 삭제된 부모가 선택된 경우 데이터 노출 차단
             .single()
@@ -205,6 +205,8 @@ export async function loadSelectedProductDetail(
       components:          src.components,
       specifications:      (src.specifications as KeyValueItem[] | Record<string, string> | null) ?? null,
       image_urls:          (src.image_urls as string[] | null) ?? (sp as Record<string, unknown>).image_urls as string[] ?? [],
+      // 모바일 전용 이미지도 PC 이미지와 같이 부모 기준(자식 선택 시 부모 것을 읽기전용으로 표시)
+      mobile_images:       (src.mobile_images as { src: string; url: string; enabled?: boolean; primary?: boolean }[] | null) ?? [],
       // 아래 duplicate-detection 블록에서 selectedProduct 자신이 부모일 때만 실제로 채움
       hasOlderDuplicateCode: false,
       categoryComboItems:    [],

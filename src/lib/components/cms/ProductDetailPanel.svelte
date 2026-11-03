@@ -42,6 +42,9 @@
   interface RentalOption   { id: string; name: string; display_order: number }
   interface PickupPointOpt { id: string; name: string; address: string }
 
+  /** 모바일 전용 이미지 — src=PC 이미지 주소, url=모바일 large 주소, primary=모바일 대표(헤더 첫 장) */
+  interface MobileImage { src: string; url: string; enabled?: boolean; primary?: boolean }
+
   interface ProductDetail {
     id: string
     category: string
@@ -53,6 +56,7 @@
     description: string | null
     product_caption: string | null
     image_urls: string[]
+        mobile_images?: MobileImage[] | null
     parent_product_id?: string | null
     specifications: { key: string; value: string }[] | Record<string, string> | null
     components?: { key: string; value: string }[] | Record<string, string> | null
@@ -366,6 +370,7 @@
 
   // ── 이미지 탭 전용 상태 ─────────────────────────────────────
   let localImages = $state<string[]>([...product.image_urls])
+  let localMobile = $state<MobileImage[]>([...(product.mobile_images ?? [])])
   let isDragging = $state(false)
   let dragCounter = 0
   let isAutoSaving = $state(false)
@@ -395,6 +400,7 @@
 
   $effect(() => {
     localImages = [...product.image_urls]
+    localMobile = [...(product.mobile_images ?? [])]
     localSpecs = normalizeKeyValueList(product.specifications)
     localComponents = normalizeKeyValueList(product.components)
     localSlug = product.slug
@@ -589,12 +595,12 @@
     }
   }
 
-  async function uploadFile(file: File): Promise<string | null> {
+  async function uploadFile(file: File, opts: { largeMax?: { w: number; h: number } } = {}): Promise<string | null> {
     isUploading = true
     uploadError = null
     try {
       // 1. 클라이언트 리사이즈: thumb(400×300) + large(1200×900) WebP 동시 생성
-      const { thumb, large } = await resizeProductImage(file)
+      const { thumb, large } = await resizeProductImage(file, opts)
 
       // 2. 서버 업로드 (Supabase Storage)
       const fd = new FormData()
@@ -704,8 +710,16 @@
     // 겹침도 함께 차단(isAnySaving).
     if (isAnySaving) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return }
     const removedUrl = localImages[i]
+    const removedMobile = mobileOf(removedUrl)
     localImages = localImages.filter((_, idx) => idx !== i)
     await autoSave()
+    // 그 PC 이미지로 만든 모바일 전용 이미지도 함께 정리(저장 목록 + 파일)
+    if (removedMobile) {
+      const mobileSaved = await saveMobileList(localMobile.filter((m) => m.src !== removedUrl))
+      // 목록 저장이 성공했을 때만 파일을 지운다(실패하면 목록과 파일이 어긋나 고아 항목이 남는다)
+      if (mobileSaved) fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: removedMobile.url }) }).catch(() => {})
+      else csToast.warning('PC 이미지는 삭제됐지만 모바일 이미지 정리에 실패했습니다. 새로고침 후 모바일 칸을 확인해 주세요.')
+    }
     // Supabase Storage 오브젝트 정리 (외부 URL은 서버에서 무시)
     if (removedUrl) {
       fetch('/api/cms/upload', {
@@ -716,7 +730,140 @@
     }
   }
 
-  // 공통 이미지·문서 뷰어(MediaViewer) — 현재 이미지 목록을 그대로 넘긴다
+  // ── 모바일 전용 이미지 ─────────────────────────────────────
+  /** PC 이미지 주소 → 그 이미지로 만든 모바일 전용 이미지 */
+  function mobileOf(src: string): MobileImage | undefined {
+    return localMobile.find((m) => m.src === src)
+  }
+
+  async function saveMobileList(next: MobileImage[]): Promise<boolean> {
+    const savedProductId = product.id
+    isAutoSaving = true
+    uploadError = null
+    try {
+      const fd = new FormData()
+      fd.append('product_id', savedProductId)
+      fd.append('section_type', 'mobile_images')
+      fd.append('mobile_images', JSON.stringify(next))
+      const res = await fetch('?/updateSection', { method: 'POST', body: fd })
+      const result = deserialize(await res.text())
+      if (result.type !== 'success') throw new Error('save')
+      localMobile = next
+      await invalidateAll()
+      onsectionsaved?.(savedProductId)
+      return true
+    } catch {
+      uploadError = '모바일 이미지 저장 실패. 다시 시도해주세요.'
+      await invalidateAll()
+      onsectionsaved?.(savedProductId)
+      return false
+    } finally {
+      isAutoSaving = false
+    }
+  }
+
+  // 모바일 이미지 파일 업로드 — 상품 폴더의 mobile/ 하위에 저장(상품 이미지 목록에 자동으로 붙지 않는 경로, 서버가 부모 id 폴더로 받는다)
+  async function uploadMobileFiles(files: { large: Blob; thumb: Blob }): Promise<string | null> {
+    const fd = new FormData()
+    fd.append('product_id', `${product.parent_product_id ?? product.id}/mobile`)
+    fd.append('thumb', new File([files.thumb], 'thumb.webp', { type: 'image/webp' }))
+    fd.append('large', new File([files.large], 'large.webp', { type: 'image/webp' }))
+    const res = await fetch('/api/cms/upload', { method: 'POST', body: fd })
+    if (!res.ok) return null
+    const data = await res.json() as { largeUrl: string }
+    return data.largeUrl
+  }
+
+  async function createMobileImage(i: number, files: { large: Blob; thumb: Blob }): Promise<boolean> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return false }
+    if (isAnySaving || isUploading) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return false }
+    const src = localImages.filter(Boolean)[i]
+    if (!src) return false
+    isUploading = true
+    let newUrl: string | null
+    try { newUrl = await uploadMobileFiles(files) } catch { newUrl = null } finally { isUploading = false }
+    if (!newUrl) { csToast.error('모바일 이미지 업로드에 실패했습니다.'); return false }
+    const old = mobileOf(src)
+    const next = [...localMobile.filter((m) => m.src !== src), { src, url: newUrl, enabled: true, primary: old?.primary === true }]
+    const ok = await saveMobileList(next)
+    if (!ok) {
+      // 저장에 실패하면 방금 올린 파일이 남지 않도록 정리
+      fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: newUrl }) }).catch(() => {})
+      return false
+    }
+    // 같은 이미지로 만들어 둔 이전 모바일 이미지는 새 것으로 교체됐으니 파일 정리
+    if (old) fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: old.url }) }).catch(() => {})
+    // 저장 직후 PC 이미지 뷰어를 닫고, 방금 만든 모바일 이미지를 모바일 뷰어로 바로 보여준다
+    const mobIdx = localImages.filter(Boolean).filter((u) => !!mobileOf(u)).indexOf(src)
+    viewerOpen = false
+    mobViewerIndex = mobIdx >= 0 ? mobIdx : 0
+    mobViewerOpen = true
+    return true
+  }
+
+  // 모바일 대표(모바일 상품상세 헤더 첫 장) — PC 대표와 같은 방식(2초 누르기), 한 장만 지정
+  let mobHoldTimer = $state<ReturnType<typeof setTimeout> | null>(null)
+  function startMobHold(src: string): void {
+    if (isChildProduct) return
+    mobHoldTimer = setTimeout(async () => {
+      mobHoldTimer = null
+      if (isAnySaving || isUploading) return
+      if (mobileOf(src)?.primary) return
+      await saveMobileList(localMobile.map((m) => ({ ...m, primary: m.src === src })))
+    }, 2000)
+  }
+  function cancelMobHold(): void {
+    if (mobHoldTimer) { clearTimeout(mobHoldTimer); mobHoldTimer = null }
+  }
+
+  async function removeMobileImage(src: string): Promise<void> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return }
+    if (isAnySaving || isUploading) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return }
+    const cur = mobileOf(src)
+    if (!cur) return
+    const ok = await saveMobileList(localMobile.filter((m) => m.src !== src))
+    if (ok) fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: cur.url }) }).catch(() => {})
+  }
+
+  // 모바일 이미지 보정 저장 — 편집본으로 같은 PC 이미지의 모바일 이미지를 교체(대표 지정 유지)하고 이전 파일은 정리
+  async function saveEditedMobileImage(i: number, blob: Blob): Promise<boolean> {
+    if (isChildProduct) { csToast.warning('대표 상품에서 수정하세요.'); return false }
+    if (isAnySaving || isUploading) { csToast.warning('저장 중입니다. 잠시 후 다시 시도하세요.'); return false }
+    const src = localImages.filter(Boolean).filter((u) => !!mobileOf(u))[i]
+    const old = src ? mobileOf(src) : undefined
+    if (!src || !old) return false
+    isUploading = true
+    let newUrl: string | null = null
+    try {
+      // 확대·선명도 보정이 들어갈 수 있어 큰 사이즈 상한을 넓힌다(서버 한도 안에서 화질만 조정)
+      const resized = await resizeProductImage(new File([blob], 'edited.webp', { type: 'image/webp' }), { largeMax: { w: 4000, h: 4000 } })
+      newUrl = await uploadMobileFiles(resized)
+    } catch { newUrl = null } finally { isUploading = false }
+    if (!newUrl) { csToast.error('편집 이미지 업로드에 실패했습니다.'); return false }
+    const ok = await saveMobileList(localMobile.map((m) => (m.src === src ? { ...m, url: newUrl as string } : m)))
+    if (!ok) {
+      fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: newUrl }) }).catch(() => {})
+      return false
+    }
+    fetch('/api/cms/upload', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ largeUrl: old.url }) }).catch(() => {})
+    return true
+  }
+
+  // 모바일 이미지 미리보기 뷰어(읽기 전용) — PC 이미지 순서대로
+  let mobViewerOpen = $state(false)
+  let mobViewerIndex = $state(0)
+  const mobViewerItems = $derived(
+    localImages.filter(Boolean).map((u, i) => ({ src: u, i, m: localMobile.find((x) => x.src === u) }))
+      .filter((x) => !!x.m)
+      .map((x) => ({ url: x.m?.url ?? '', thumbUrl: thumbUrl(x.m?.url ?? ''), name: `${localBasic.name || product.name} 모바일 이미지 ${x.i + 1}` }))
+  )
+  function openMobViewer(src: string): void {
+    const idx = localImages.filter(Boolean).filter((u) => !!mobileOf(u)).indexOf(src)
+    mobViewerIndex = idx >= 0 ? idx : 0
+    mobViewerOpen = true
+  }
+
+    // 공통 이미지·문서 뷰어(MediaViewer) — 현재 이미지 목록을 그대로 넘긴다
   const viewerItems = $derived(
     localImages.filter(Boolean).map((u, i) => ({ url: largeUrl(u), thumbUrl: thumbUrl(u), name: `${localBasic.name || product.name} 이미지 ${i + 1}` }))
   )
@@ -733,11 +880,17 @@
     const list = localImages.filter(Boolean)
     const oldUrl = list[i]
     if (!oldUrl) return false
-    const newUrl = await uploadFile(new File([blob], 'edited.webp', { type: 'image/webp' }))
+    // 편집 결과는 확대·선명도 보정이 들어갈 수 있어 큰 사이즈 상한을 넓혀 다시 줄어들지 않게 한다(서버 한도 안에서 화질만 조정)
+    const newUrl = await uploadFile(new File([blob], 'edited.webp', { type: 'image/webp' }), { largeMax: { w: 4000, h: 4000 } })
     if (!newUrl) { csToast.error(uploadError ?? '편집 이미지 업로드에 실패했습니다.'); return false }
     // 업로드 API가 배열 끝에 새 주소를 이어 붙여 두므로, 같은 자리 교체본으로 배열 전체를 다시 저장한다
     localImages = list.map((u, idx) => (idx === i ? newUrl : u))
     await autoSave()
+    // PC 이미지를 편집해 새 주소가 되면 모바일 전용 이미지도 새 주소에 다시 연결
+    if (localMobile.some((m) => m.src === oldUrl)) {
+      const relinked = await saveMobileList(localMobile.map((m) => (m.src === oldUrl ? { ...m, src: newUrl } : m)))
+      if (!relinked) csToast.warning('PC 이미지는 저장됐지만 모바일 전용 이미지 연결에 실패했습니다. 모바일 이미지를 다시 만들어 주세요.')
+    }
     fetch('/api/cms/upload', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -2655,6 +2808,7 @@
         {#if localImages.filter(Boolean).length > 0}
           <div class="img-card-grid">
             {#each localImages.filter(Boolean) as url, i}
+              <div class="img-cell">
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="img-card"
@@ -2697,6 +2851,35 @@
                   aria-label={`이미지 ${i + 1} 제거`}
                   title="이미지 제거"
                 >✕</button>
+              </div>
+              <!-- 모바일 전용 이미지 칸 — PC 이미지 아래, 있으면 썸네일(2초 누르기 = 모바일 대표) / 없으면 빈 칸 -->
+              {#if mobileOf(url)}
+                {@const mob = mobileOf(url)}
+                <div class="img-mob-slot" class:primary={mob?.primary}>
+                  <button
+                    type="button"
+                    class="img-mob-view"
+                    onclick={() => openMobViewer(url)}
+                    onmousedown={() => startMobHold(url)}
+                    onmouseup={cancelMobHold}
+                    onmouseleave={cancelMobHold}
+                    aria-label={`이미지 ${i + 1} 모바일 전용 이미지 보기`}
+                    title="클릭: 크게 보기 · 2초간 누르기: 모바일 대표 이미지로 설정"
+                  >
+                    <img src={thumbUrl(mob?.url ?? '')} alt={`이미지 ${i + 1} 모바일 전용`} loading="lazy" />
+                  </button>
+                  <button
+                    type="button"
+                    class="img-mob-remove"
+                    disabled={isAnySaving || isUploading || isChildProduct}
+                    onclick={() => removeMobileImage(url)}
+                    aria-label={`이미지 ${i + 1} 모바일 전용 이미지 제거`}
+                    title="모바일 이미지 제거"
+                  >✕</button>
+                </div>
+              {:else}
+                <div class="img-mob-slot img-mob-slot--empty"><span class="img-mob-label">모바일 이미지 없음</span></div>
+              {/if}
               </div>
             {/each}
           </div>
@@ -3357,6 +3540,16 @@
 {/if}
 
 <!-- 이미지 뷰어(공통 MediaViewer) -->
+{#if mobViewerOpen}
+  <MediaViewer
+    items={mobViewerItems}
+    bind:index={mobViewerIndex}
+    title="모바일 전용 이미지"
+    onclose={() => (mobViewerOpen = false)}
+    onSave={isChildProduct ? undefined : saveEditedMobileImage}
+  />
+{/if}
+
 {#if viewerOpen}
   <MediaViewer
     items={viewerItems}
@@ -3365,6 +3558,7 @@
     onclose={closeLightbox}
     onDelete={isChildProduct ? undefined : deleteFromViewer}
     onSave={isChildProduct ? undefined : saveEditedImage}
+    onMobileCreate={isChildProduct ? undefined : createMobileImage}
   />
 {/if}
 
@@ -4051,6 +4245,53 @@
   }
   .img-card:hover .img-card-remove { opacity: 1; }
   .img-card-remove:hover { background: var(--cs-red-badge); }
+
+  /* PC 이미지 + 모바일 전용 이미지 칸(세로로 한 쌍) */
+  .img-cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .img-mob-slot {
+    position: relative;
+    height: 112px;
+    padding: 5px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-surface-gray);
+  }
+  .img-mob-slot.primary { outline: 3px solid var(--cs-purple); outline-offset: -1px; }
+  .img-mob-slot--empty { justify-content: center; background: transparent; border: 1px dashed var(--cs-lilac); }
+  .img-mob-view {
+    flex-shrink: 0;
+    height: 100%;
+    aspect-ratio: 390 / 800;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--cs-white);
+    cursor: zoom-in;
+  }
+  .img-mob-view img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .img-mob-label { font: var(--text-pc-script-12); color: var(--cs-text-mid); }
+  .img-mob-remove {
+    position: absolute;
+    top: 5px; right: 5px;
+    width: 24px; height: 24px;
+    min-height: unset;
+    border: none; border-radius: 50%;
+    background: rgba(16,11,50,0.65);
+    color: var(--cs-white);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.12s;
+  }
+  .img-mob-slot:hover .img-mob-remove { opacity: 1; }
+  .img-mob-remove:hover:not(:disabled) { background: var(--cs-red-badge); }
+  .img-mob-remove:disabled { cursor: not-allowed; }
 
   /* 대표이미지 아웃라인 */
   .img-card.primary { outline: 3px solid var(--cs-purple); outline-offset: -1px; }

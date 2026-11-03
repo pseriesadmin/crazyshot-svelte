@@ -1171,6 +1171,48 @@ export const actions: Actions = {
       if (updateError) return fail(500, { error: '이미지 수정에 실패했습니다.' })
     }
 
+    if (sectionType === 'mobile_images') {
+      // 모바일 전용 이미지 [{src,url,enabled}] — PC 이미지(image_urls)와 같은 자리끼리 짝지어 모바일 상품상세 헤더에서 대체 노출
+      // 읽을 수 없는 입력(비어 있음·JSON 오류·배열 아님)은 저장하지 않고 거절한다 — 조용히 빈 목록으로 저장하면 기존 모바일 이미지가 전부 지워진다
+      const mobStr = form.get('mobile_images') as string | null
+      let parsed: unknown = null
+      if (mobStr) {
+        try { parsed = JSON.parse(mobStr) } catch { parsed = null }
+      }
+      if (!Array.isArray(parsed)) return fail(400, { error: '모바일 이미지 정보가 올바르지 않습니다.' })
+      const mobStorageUrlPrefix = `${getSupabaseUrl()}/storage/v1/object/public/product-images/`
+      const seenSrc = new Set<string>()
+      const mobile_images: { src: string; url: string; enabled: boolean; primary: boolean }[] = []
+      for (const m of parsed as unknown[]) {
+        if (!m || typeof m !== 'object') return fail(400, { error: '모바일 이미지 정보가 올바르지 않습니다.' })
+        const { src, url, primary } = m as { src?: unknown; url?: unknown; primary?: unknown }
+        if (typeof src !== 'string' || typeof url !== 'string' || !src || src.length > 1000 || url.length > 1000) {
+          return fail(400, { error: '모바일 이미지 정보가 올바르지 않습니다.' })
+        }
+        // 모바일 이미지 파일은 우리 상품 이미지 저장소의 것만 허용
+        if (!url.startsWith(mobStorageUrlPrefix)) return fail(400, { error: '모바일 이미지 주소가 올바르지 않습니다.' })
+        if (seenSrc.has(src)) continue   // 같은 PC 이미지에 모바일 이미지는 한 장만
+        seenSrc.add(src)
+        mobile_images.push({ src, url, enabled: true, primary: primary === true })
+      }
+      // 모바일 대표는 한 장만 — 여러 장이 지정돼 오면 첫 장만 남긴다
+      let primaryTaken = false
+      for (const m of mobile_images) {
+        if (m.primary && primaryTaken) m.primary = false
+        if (m.primary) primaryTaken = true
+      }
+      if (mobile_images.length > 8) {
+        return fail(400, { error: '모바일 이미지는 최대 8장까지 등록할 수 있습니다.' })
+      }
+      // 자식 상품이면 부모 기준으로 저장(이미지 섹션과 동일)
+      let mobTargetId = productId
+      const { data: mobSelf } = await admin.from('products').select('parent_product_id').eq('id', productId).single()
+      const mobParentId = (mobSelf as Record<string, unknown> | null)?.parent_product_id as string | null
+      if (mobParentId) mobTargetId = mobParentId
+      const { error: mobErr } = await admin.from('products').update({ mobile_images }).eq('id', mobTargetId)
+      if (mobErr) return fail(500, { error: '모바일 이미지 저장에 실패했습니다.' })
+    }
+
     if (sectionType === 'specs') {
       // 순서 보존 배열 [{key,value}]로 저장 (객체 입력도 배열로 전환 — products.md §4-1)
       let specifications: KeyValueItem[] | null = null

@@ -17,12 +17,19 @@ export interface ResizedImage {
  * File → { thumb, large } WebP Blob 쌍 반환.
  * 원본이 목표 크기보다 작으면 업스케일하지 않는다.
  */
-export async function resizeProductImage(file: File): Promise<ResizedImage> {
-  const [thumb, large] = await Promise.all([
-    resizeToBlob(file, 400, 300, 0.82),
-    resizeToBlob(file, 1200, 900, 0.88),
-  ])
-  return { thumb, large }
+export async function resizeProductImage(file: File, opts: { largeMax?: { w: number; h: number } } = {}): Promise<ResizedImage> {
+  const lw = opts.largeMax?.w ?? 1200
+  const lh = opts.largeMax?.h ?? 900
+  const thumbP = resizeToBlob(file, 400, 300, 0.82)
+  // 큰 사이즈를 넓힌 경우(편집으로 확대한 이미지 등)에는 서버 업로드 한도(4MB) 안에 들어올 때까지 화질을 단계적으로 낮춘다
+  let large = await resizeToBlob(file, lw, lh, 0.88)
+  if (lw > 1200) {
+    for (const q of [0.8, 0.7, 0.6, 0.5]) {
+      if (large.size <= SERVER_UPLOAD_MAX_BYTES) break
+      large = await resizeToBlob(file, lw, lh, q)
+    }
+  }
+  return { thumb: await thumbP, large }
 }
 
 async function resizeToBlob(

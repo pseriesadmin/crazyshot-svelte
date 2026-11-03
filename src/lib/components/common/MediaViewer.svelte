@@ -15,6 +15,8 @@
    *     <MediaViewer items={...} bind:index onclose={() => (open = false)} onDelete={async (i) => ...} />
    *   {/if}
    *
+   *  · onMobileCreate를 넘기면 도구줄에 '모바일 전용 이미지' 아이콘이 나타난다(상품 이미지 전용). 모바일 상품상세 헤더 비율(390×800) 점선 가이드 위에서
+   *    이미지를 줄이거나 늘려 구도를 맞춘 뒤 '+'를 누르면, 가이드 안 모습 그대로(빈 상·하단은 이미지 가장자리 색을 이어 자동 채움) large·thumb WebP로 onMobileCreate(index, {large, thumb})에 전달한다.
    *  · onDelete를 넘기면 삭제 버튼이 나타난다(안 넘기면 숨김 — 읽기 전용 화면). 삭제는 "삭제 안전 토스트"(1차 경고 → 2차 실행)를 따른다.
    *    onDelete는 실제 삭제를 하고 성공 여부(true/false)를 돌려준다. 호출한 쪽이 items에서 그 항목을 뺐다면 뷰어가 알아서 다음 장으로 이동하고,
    *    남은 항목이 없으면 onclose를 부른다.
@@ -44,9 +46,11 @@
     onSave?: (index: number, blob: Blob) => Promise<boolean> | boolean
     /** 열자마자 편집 모드로 들어간다(onSave가 있을 때) — 편집 버튼으로 연 경우 */
     startInEdit?: boolean
+    /** 모바일 전용 이미지를 만든다(성공하면 true). 넘기지 않으면 모바일 이미지 버튼을 숨긴다 */
+    onMobileCreate?: (index: number, files: { large: Blob; thumb: Blob }) => Promise<boolean> | boolean
   }
 
-  let { items, index = $bindable(0), title = '이미지', onclose, onDelete, downloadable = true, onSave, startInEdit = false }: Props = $props()
+  let { items, index = $bindable(0), title = '이미지', onclose, onDelete, downloadable = true, onSave, startInEdit = false, onMobileCreate }: Props = $props()
 
   const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 
@@ -99,6 +103,7 @@
       document.body.classList.remove('mv-open')
       document.body.style.overflow = prev
       if (edObjectUrl) URL.revokeObjectURL(edObjectUrl)
+      if (mobObjectUrl) URL.revokeObjectURL(mobObjectUrl)
     }
   })
 
@@ -118,7 +123,7 @@
   }
   function rotate(): void { rotation = (rotation + 90) % 360 }
   function go(delta: number): void {
-    if (items.length < 2 || editMode) return
+    if (items.length < 2 || editMode || mobMode) return
     index = (index + delta + items.length) % items.length
   }
   function pick(i: number): void { index = i; gridMode = false }
@@ -146,7 +151,7 @@
 
   // ── 이미지 편집(자르기 · 명암 · 컬러감 · 배경색 · 회전) ──────────────────────
   type Aspect = 'free' | '1:1' | '4:3' | '16:9'
-  type EditSection = 'crop' | 'light' | 'tone' | 'bg' | 'rotate'
+  type EditSection = 'crop' | 'light' | 'tone' | 'sharp' | 'bg' | 'rotate'
   const ASPECTS: { id: Aspect; label: string; r: number | null }[] = [
     { id: 'free', label: '자유', r: null },
     { id: '1:1', label: '1:1', r: 1 },
@@ -157,6 +162,7 @@
     { id: 'crop', label: '자르기' },
     { id: 'light', label: '명암 조절' },
     { id: 'tone', label: '컬러감 조절' },
+    { id: 'sharp', label: '선명도·해상도' },
     { id: 'bg', label: '배경색 변경' },
     { id: 'rotate', label: '회전' },
   ]
@@ -174,6 +180,9 @@
     { name: '보라', hex: '#7E57C2' }, { name: '브라운', hex: '#795548' }, { name: '카키', hex: '#8D8B55' }, { name: '크레이지샷 남색', hex: '#100B32' },
   ]
   const MAX_EDIT_SIDE = 2400
+  /** 확대 결과의 긴 변 상한(브라우저 메모리 보호) */
+  const MAX_OUT_SIDE = 4000
+  const SCALE_CHOICES = [1, 1.5, 2]
 
   let editMode = $state(false)
   let editLoading = $state(false)
@@ -187,6 +196,8 @@
   let edLight = $state(0)        // 명암: -50(어둡게) ~ +50(밝게)
   let edWarm = $state(0)         // 컬러감: -50(차갑게) ~ +50(따뜻하게)
   let edBgColor = $state<string | null>(null)   // null = 원본 배경 유지
+  let edSharp = $state(0)        // 선명도: 0(원본) ~ 100
+  let edScale = $state(1)        // 해상도 배율(적용할 때 반영): 1 / 1.5 / 2
   let edBgTol = $state(36)       // 배경 인식 범위
   let edAspect = $state<Aspect>('free')
   let crop = $state({ x: 0, y: 0, w: 1, h: 1 })   // 회전·반전 적용된 이미지 기준 비율(0~1)
@@ -212,7 +223,7 @@
       const img = new Image()
       await new Promise<void>((ok, fail) => { img.onload = () => ok(); img.onerror = () => fail(new Error('load')); img.src = edObjectUrl as string })
       edImg = img
-      edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edAspect = 'free'
+      edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edAspect = 'free'; edSharp = 0; edScale = 1
       edOpen = visibleSections[0]?.id ?? null
       crop = { x: 0, y: 0, w: 1, h: 1 }
       editMode = true
@@ -263,7 +274,7 @@
   function turn(dir: 1 | -1): void { edTurns = (edTurns + dir + 4) % 4; geometryChanged() }
   function flip(axis: 'h' | 'v'): void { if (axis === 'h') edFlipH = !edFlipH; else edFlipV = !edFlipV; geometryChanged() }
   function resetEdit(): void {
-    edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edBgTol = 36
+    edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edBgTol = 36; edSharp = 0; edScale = 1
     geometryChanged()
   }
   function toggleSection(id: EditSection): void { edOpen = edOpen === id ? null : id }
@@ -335,41 +346,117 @@
     return edMask
   }
 
-  /** 기준 캔버스의 (sx,sy,sw,sh) 영역을 dw×dh로 그리면서 명암·컬러감·배경색을 반영 */
+  /** 박스 블러(가로·세로 한 번씩) — 선명도 계산용. RGB만 처리 */
+  function boxBlurRgb(src: Uint8ClampedArray, w: number, h: number, r: number): Uint8ClampedArray {
+    const tmp = new Uint8ClampedArray(src.length)
+    const out = new Uint8ClampedArray(src.length)
+    const win = 2 * r + 1
+    for (let y = 0; y < h; y++) {
+      for (let c = 0; c < 3; c++) {
+        let sum = 0
+        for (let x = -r; x <= r; x++) sum += src[(y * w + Math.min(Math.max(x, 0), w - 1)) * 4 + c]
+        for (let x = 0; x < w; x++) {
+          tmp[(y * w + x) * 4 + c] = sum / win
+          sum += src[(y * w + Math.min(x + r + 1, w - 1)) * 4 + c] - src[(y * w + Math.max(x - r, 0)) * 4 + c]
+        }
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) {
+        let sum = 0
+        for (let y = -r; y <= r; y++) sum += tmp[(Math.min(Math.max(y, 0), h - 1) * w + x) * 4 + c]
+        for (let y = 0; y < h; y++) {
+          out[(y * w + x) * 4 + c] = sum / win
+          sum += tmp[(Math.min(y + r + 1, h - 1) * w + x) * 4 + c] - tmp[(Math.max(y - r, 0) * w + x) * 4 + c]
+        }
+      }
+    }
+    return out
+  }
+
+  /** 언샵 마스크 — 원본에서 흐린 사본을 빼 윤곽만 더한다. 작은 차이(잡음)는 건드리지 않아 거칠어지는 것을 막는다 */
+  function sharpenPixels(px: Uint8ClampedArray, w: number, h: number, strength: number): void {
+    const r = Math.max(1, Math.round(Math.max(w, h) / 900))   // 이미지가 클수록 윤곽 폭도 비례
+    const blur = boxBlurRgb(boxBlurRgb(px, w, h, r), w, h, r)
+    const amount = (strength / 100) * 1.6
+    const NOISE = 3
+    for (let i = 0; i < px.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const d = px[i + c] - blur[i + c]
+        if (d > NOISE || d < -NOISE) px[i + c] = px[i + c] + d * amount
+      }
+    }
+  }
+
+  /** 큰 폭으로 키울 때는 한 번에 키우지 않고 1.5배 이내씩 여러 번 — 뭉개짐·계단 현상을 줄인다 */
+  function drawScaled(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, dw: number, dh: number): void {
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    if (dw <= sw * 1.5 || dh <= sh * 1.5) { ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh); return }
+    let cur = document.createElement('canvas')
+    cur.width = sw; cur.height = sh
+    const c0 = cur.getContext('2d')
+    if (!c0) { ctx.drawImage(src, sx, sy, sw, sh, 0, 0, dw, dh); return }
+    c0.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh)
+    while (cur.width * 1.5 < dw) {
+      const next = document.createElement('canvas')
+      next.width = Math.round(cur.width * 1.4); next.height = Math.round(cur.height * 1.4)
+      const nc = next.getContext('2d')
+      if (!nc) break
+      nc.imageSmoothingEnabled = true
+      nc.imageSmoothingQuality = 'high'
+      nc.drawImage(cur, 0, 0, next.width, next.height)
+      cur = next
+    }
+    ctx.drawImage(cur, 0, 0, cur.width, cur.height, 0, 0, dw, dh)
+  }
+
+  /** 기준 캔버스의 (sx,sy,sw,sh) 영역을 dw×dh로 그리면서 명암·컬러감·배경색·선명도를 반영 */
   function renderEdited(ctx: CanvasRenderingContext2D, sx: number, sy: number, sw: number, sh: number, dw: number, dh: number): void {
     if (!edBase) return
-    ctx.drawImage(edBase, sx, sy, sw, sh, 0, 0, dw, dh)
+    drawScaled(ctx, edBase, sx, sy, sw, sh, dw, dh)
     const adjust = edLight !== 0 || edWarm !== 0
     const mask = edBgColor ? ensureMask() : null
-    if (!adjust && !mask) return
+    const sharp = edSharp > 0
+    if (!adjust && !mask && !sharp) return
     const data = ctx.getImageData(0, 0, dw, dh)
     const px = data.data
     const f = 1 + edLight / 100
     const warm = edWarm * 0.6
     const bgc = edBgColor ? hexToRgb(edBgColor) : null
     const bw = edBase.width
-    for (let y = 0; y < dh; y++) {
-      for (let x = 0; x < dw; x++) {
-        const i = (y * dw + x) * 4
-        let r = px[i], g = px[i + 1], b = px[i + 2]
-        if (adjust) { r = r * f + warm; g = g * f + warm * 0.15; b = b * f - warm }
-        if (mask && bgc) {
-          const mx = Math.min(Math.floor(sx + ((x + 0.5) * sw) / dw), bw - 1)
-          const my = Math.min(Math.floor(sy + ((y + 0.5) * sh) / dh), edBase.height - 1)
-          const a = mask[my * bw + mx] / 255
-          if (a > 0) { r += (bgc[0] - r) * a; g += (bgc[1] - g) * a; b += (bgc[2] - b) * a }
+    if (adjust || mask) {
+      for (let y = 0; y < dh; y++) {
+        for (let x = 0; x < dw; x++) {
+          const i = (y * dw + x) * 4
+          let r = px[i], g = px[i + 1], b = px[i + 2]
+          if (adjust) { r = r * f + warm; g = g * f + warm * 0.15; b = b * f - warm }
+          if (mask && bgc) {
+            const mx = Math.min(Math.floor(sx + ((x + 0.5) * sw) / dw), bw - 1)
+            const my = Math.min(Math.floor(sy + ((y + 0.5) * sh) / dh), edBase.height - 1)
+            const a = mask[my * bw + mx] / 255
+            if (a > 0) { r += (bgc[0] - r) * a; g += (bgc[1] - g) * a; b += (bgc[2] - b) * a }
+          }
+          px[i] = r < 0 ? 0 : r > 255 ? 255 : r
+          px[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g
+          px[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b
         }
-        px[i] = r < 0 ? 0 : r > 255 ? 255 : r
-        px[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g
-        px[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b
       }
     }
+    if (sharp) sharpenPixels(px, dw, dh, edSharp)
     ctx.putImageData(data, 0, 0)
+  }
+
+  /** 적용 시 실제 결과 크기 — 선택한 배율을 긴 변 상한 안으로 제한 */
+  function outputSize(sw: number, sh: number): { w: number; h: number; k: number } {
+    const k = Math.min(edScale, MAX_OUT_SIDE / Math.max(sw, sh))
+    const kk = Math.max(k, 1)
+    return { w: Math.round(sw * kk), h: Math.round(sh * kk), k: kk }
   }
 
   // 미리보기 그리기 — 스테이지 크기에 맞춰 축소해 표시
   $effect(() => {
-    void edVersion; void edLight; void edWarm; void edBgColor; void edBgTol
+    void edVersion; void edLight; void edWarm; void edBgColor; void edBgTol; void edSharp
     if (!editMode || !edBase || !edCanvas) return
     const maxW = Math.max(stageW - 144, 120), maxH = Math.max(stageH - 8, 120)
     const k = Math.min(maxW / edBase.width, maxH / edBase.height, 1)
@@ -442,11 +529,12 @@
     try {
       const sx = Math.round(crop.x * edBase.width), sy = Math.round(crop.y * edBase.height)
       const sw = Math.max(Math.round(crop.w * edBase.width), 1), sh = Math.max(Math.round(crop.h * edBase.height), 1)
+      const outSz = outputSize(sw, sh)
       const out = document.createElement('canvas')
-      out.width = sw; out.height = sh
+      out.width = outSz.w; out.height = outSz.h
       const ctx = out.getContext('2d', { willReadFrequently: true })
       if (!ctx) throw new Error('canvas')
-      renderEdited(ctx, sx, sy, sw, sh, sw, sh)
+      renderEdited(ctx, sx, sy, sw, sh, outSz.w, outSz.h)
       const blob = await new Promise<Blob | null>((ok) => out.toBlob(ok, 'image/webp', 0.92))
       if (!blob) throw new Error('blob')
       const saved = await onSave(index, blob)
@@ -458,9 +546,207 @@
     }
   }
 
+
+  // ── 모바일 전용 이미지(상품상세 모바일 헤더 비율 390×800 가이드) ───────────────
+  const MOB_RATIO_W = 390
+  const MOB_RATIO_H = 800
+  const MOB_OUT_W = 780   // 2배 해상도 출력
+  const MOB_OUT_H = 1600
+  const MOB_THUMB_W = 240
+  const MOB_THUMB_H = 492
+  const canMobile = $derived(!!onMobileCreate && isImage)
+
+  let mobMode = $state(false)
+  let mobLoading = $state(false)
+  let mobSaving = $state(false)
+  let mobImg: HTMLImageElement | null = null
+  let mobObjectUrl = $state<string | null>(null)
+  let mobNat = $state({ w: 0, h: 0 })
+  let mobF = $state(1)          // 1 = 이미지 전체가 가이드 안에 들어오는 크기(contain), 커질수록 확대
+  let mobX = $state(0)          // 가이드 중심 기준 이미지 중심 이동량(가이드 px)
+  let mobY = $state(0)
+  let mobBarH = $state(0)
+
+  // 가이드 크기 — 스테이지 높이(+ 버튼 자리)와 폭에 맞춰 390:800 비율로 계산
+  const mobGuide = $derived.by(() => {
+    const maxH = Math.max(Math.min(stageH - 92, 640), 160)
+    const maxW = Math.max(stageW - 48, 90)
+    const h = Math.min(maxH, (maxW * MOB_RATIO_H) / MOB_RATIO_W)
+    return { w: Math.round((h * MOB_RATIO_W) / MOB_RATIO_H), h: Math.round(h) }
+  })
+  const mobBase = $derived(mobNat.w > 0 ? Math.min(mobGuide.w / mobNat.w, mobGuide.h / mobNat.h) : 1)
+  const mobCover = $derived(mobNat.w > 0 ? Math.max(mobGuide.w / mobNat.w, mobGuide.h / mobNat.h) / mobBase : 1)
+  const mobScale = $derived(mobBase * mobF)      // 원본 1px 당 가이드 px
+  const MOB_F_MIN = 0.3
+  const MOB_F_MAX = 4
+
+  async function startMobile(): Promise<void> {
+    if (!current || !canMobile) return
+    mobLoading = true
+    try {
+      const res = await fetch(current.url)
+      if (!res.ok) throw new Error(String(res.status))
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const img = new Image()
+      await new Promise<void>((ok, fail) => { img.onload = () => ok(); img.onerror = () => fail(new Error('load')); img.src = url })
+      if (mobObjectUrl) URL.revokeObjectURL(mobObjectUrl)
+      mobObjectUrl = url
+      mobImg = img
+      mobNat = { w: img.naturalWidth, h: img.naturalHeight }
+      mobF = 1; mobX = 0; mobY = 0
+      mobMode = true
+    } catch {
+      csToast.error('이 이미지는 모바일 이미지로 만들 수 없습니다.')
+      endMobile()
+    } finally {
+      mobLoading = false
+    }
+  }
+
+  function endMobile(): void {
+    mobMode = false
+    mobImg = null
+    if (mobObjectUrl) { URL.revokeObjectURL(mobObjectUrl); mobObjectUrl = null }
+  }
+
+  function mobSetF(next: number): void {
+    mobF = Math.min(Math.max(next, MOB_F_MIN), MOB_F_MAX)
+  }
+  function mobFitAll(): void { mobF = 1; mobX = 0; mobY = 0 }
+  function mobFill(): void { mobF = Math.min(mobCover, MOB_F_MAX); mobX = 0; mobY = 0 }
+
+  let mobDrag: { x: number; y: number; px: number; py: number } | null = null
+  function mobDown(e: PointerEvent): void {
+    mobDrag = { x: e.clientX, y: e.clientY, px: mobX, py: mobY }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  function mobMove(e: PointerEvent): void {
+    if (!mobDrag) return
+    mobX = mobDrag.px + (e.clientX - mobDrag.x)
+    mobY = mobDrag.py + (e.clientY - mobDrag.y)
+  }
+  function mobUp(): void { mobDrag = null }
+  function mobWheel(e: WheelEvent): void {
+    e.preventDefault()
+    mobSetF(mobF * Math.exp(-e.deltaY * 0.0015))
+  }
+
+  type Rgb = [number, number, number]
+  const medianOf = (arr: number[]): number => { arr.sort((p, q) => p - q); return arr[Math.floor(arr.length / 2)] }
+
+  /**
+   * 가장자리 색 띠(profile) — 이미지 가장자리 바로 안쪽 여러 줄의 칸별 중앙값을 구해 상품이 가장자리에 걸친 칸(이상치)은 배경 색으로 대체하고,
+   * 이동 평균으로 부드럽게 만든다. 빈 영역은 이 띠를 그대로 바깥으로 늘려 채우므로 이미지 가장자리와 색이 이어진다.
+   */
+  function edgeProfile(px: Uint8ClampedArray, W: number, length: number, at: (pos: number, depth: number) => number): Rgb[] {
+    const DEPTH = 8
+    const prof: Rgb[] = []
+    for (let k = 0; k < length; k++) {
+      const rs: number[] = [], gs: number[] = [], bs: number[] = []
+      for (let d = 0; d < DEPTH; d++) {
+        const o = at(k, d) * 4
+        rs.push(px[o]); gs.push(px[o + 1]); bs.push(px[o + 2])
+      }
+      prof.push([medianOf(rs), medianOf(gs), medianOf(bs)])
+    }
+    // 이상치(배경과 크게 다른 칸 — 가장자리에 걸친 상품) → 전체 중앙값 배경색으로 교체
+    const mid: Rgb = [medianOf(prof.map((c) => c[0])), medianOf(prof.map((c) => c[1])), medianOf(prof.map((c) => c[2]))]
+    const lim = 38 * 38 * 3
+    const cleaned = prof.map((c): Rgb => {
+      const dr = c[0] - mid[0], dg = c[1] - mid[1], db = c[2] - mid[2]
+      return dr * dr + dg * dg + db * db > lim ? mid : c
+    })
+    // 이동 평균 2회 — 칸 사이 줄무늬 제거
+    const win = Math.max(3, Math.round(length / 16))
+    let cur = cleaned
+    for (let pass = 0; pass < 2; pass++) {
+      const next: Rgb[] = []
+      for (let k = 0; k < length; k++) {
+        let r = 0, g = 0, b = 0, n = 0
+        for (let q = Math.max(0, k - win); q <= Math.min(length - 1, k + win); q++) { r += cur[q][0]; g += cur[q][1]; b += cur[q][2]; n++ }
+        next.push([r / n, g / n, b / n])
+      }
+      cur = next
+    }
+    return cur
+  }
+
+  /** 가이드 안 모습을 OW×OH로 그리고, 빈 상·하단(좌·우)은 이미지 가장자리 색을 바깥으로 이어 자동 채움 */
+  function renderMobile(): HTMLCanvasElement | null {
+    if (!mobImg || mobGuide.w <= 0) return null
+    const W = MOB_OUT_W, H = MOB_OUT_H
+    const m = W / mobGuide.w
+    // 원본 가장자리 몇 px(경계선·반투명 테두리)는 쓰지 않는다 — 가로선·색 어긋남의 원인
+    const ins = Math.max(2, Math.round(Math.min(mobNat.w, mobNat.h) * 0.004))
+    const sw = mobNat.w - ins * 2, sh = mobNat.h - ins * 2
+    if (sw <= 0 || sh <= 0) return null
+    const dw = sw * mobScale * m, dh = sh * mobScale * m
+    // 정수 좌표로 맞춰 가장자리 줄이 반투명하게 번지지 않도록
+    const x0 = Math.round(W / 2 + mobX * m - dw / 2), y0 = Math.round(H / 2 + mobY * m - dh / 2)
+    const x1 = x0 + Math.max(Math.round(dw), 1), y1 = y0 + Math.max(Math.round(dh), 1)
+    const c = document.createElement('canvas')
+    c.width = W; c.height = H
+    const ctx = c.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    ctx.drawImage(mobImg, ins, ins, sw, sh, x0, y0, x1 - x0, y1 - y0)
+    const vx0 = Math.max(x0, 0), vx1 = Math.min(x1, W), vy0 = Math.max(y0, 0), vy1 = Math.min(y1, H)
+    if (vx1 - vx0 < 2 || vy1 - vy0 < 2) {
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, W, H)
+      return c
+    }
+    if (vx0 === 0 && vx1 === W && vy0 === 0 && vy1 === H) return c   // 빈 영역 없음
+    const data = ctx.getImageData(0, 0, W, H)
+    const px = data.data
+    const clampDepth = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
+    const top = y0 > 0 ? edgeProfile(px, W, vx1 - vx0, (k, d) => clampDepth(vy0 + d, 0, H - 1) * W + vx0 + k) : null
+    const bottom = y1 < H ? edgeProfile(px, W, vx1 - vx0, (k, d) => clampDepth(vy1 - 1 - d, 0, H - 1) * W + vx0 + k) : null
+    const left = x0 > 0 ? edgeProfile(px, W, vy1 - vy0, (k, d) => (vy0 + k) * W + clampDepth(vx0 + d, 0, W - 1)) : null
+    const right = x1 < W ? edgeProfile(px, W, vy1 - vy0, (k, d) => (vy0 + k) * W + clampDepth(vx1 - 1 - d, 0, W - 1)) : null
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (x >= vx0 && x < vx1 && y >= vy0 && y < vy1) continue
+        let col: Rgb | null = null
+        if (y < vy0 && top) col = top[clampDepth(x, vx0, vx1 - 1) - vx0]
+        else if (y >= vy1 && bottom) col = bottom[clampDepth(x, vx0, vx1 - 1) - vx0]
+        else if (x < vx0 && left) col = left[clampDepth(y, vy0, vy1 - 1) - vy0]
+        else if (x >= vx1 && right) col = right[clampDepth(y, vy0, vy1 - 1) - vy0]
+        const o = (y * W + x) * 4
+        px[o] = col ? col[0] : 255
+        px[o + 1] = col ? col[1] : 255
+        px[o + 2] = col ? col[2] : 255
+        px[o + 3] = 255
+      }
+    }
+    ctx.putImageData(data, 0, 0)
+    return c
+  }
+
+  async function createMobile(): Promise<void> {
+    if (!onMobileCreate || mobSaving) return
+    mobSaving = true
+    try {
+      const big = renderMobile()
+      if (!big) throw new Error('canvas')
+      const small = document.createElement('canvas')
+      small.width = MOB_THUMB_W; small.height = MOB_THUMB_H
+      small.getContext('2d')?.drawImage(big, 0, 0, MOB_THUMB_W, MOB_THUMB_H)
+      const toBlob = (cv: HTMLCanvasElement, q: number): Promise<Blob | null> => new Promise((ok) => cv.toBlob(ok, 'image/webp', q))
+      const [large, thumb] = await Promise.all([toBlob(big, 0.88), toBlob(small, 0.82)])
+      if (!large || !thumb) throw new Error('blob')
+      const saved = await onMobileCreate(index, { large, thumb })
+      if (saved) { csToast.success('모바일 전용 이미지를 만들었습니다.'); endMobile() }
+    } catch {
+      csToast.error('모바일 이미지 저장에 실패했습니다.')
+    } finally {
+      mobSaving = false
+    }
+  }
+
   function onKey(e: KeyboardEvent): void {
-    if (e.key === 'Escape') { if (editMode) { if (!editSaving) endEdit() } else if (gridMode) gridMode = false; else onclose(); return }
-    if (editMode || gridMode || !isImage) return
+    if (e.key === 'Escape') { if (mobMode) { if (!mobSaving) endMobile() } else if (editMode) { if (!editSaving) endEdit() } else if (gridMode) gridMode = false; else onclose(); return }
+    if (editMode || mobMode || gridMode || !isImage) return
     // 입력창(배경에 포커스가 남은 글 입력란 등)에서 치는 글자는 단축키로 가로채지 않는다
     const t = e.target
     if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
@@ -561,6 +847,26 @@
           {/each}
         </div>
         {/if}
+      </div>
+    </div>
+  {:else if mobMode}
+    <div class="mv-stage mv-mob-stage" style={`margin-bottom:${mobBarH + 32}px;`} bind:clientWidth={stageW} bind:clientHeight={stageH} role="presentation" onwheel={mobWheel}>
+      <div class="mv-mob-wrap" role="presentation" onpointerdown={mobDown} onpointermove={mobMove} onpointerup={mobUp} onpointercancel={mobUp}>
+        <div class="mv-mob-guide" style={`width:${mobGuide.w}px;height:${mobGuide.h}px;`}>
+          {#if mobObjectUrl}
+            <img
+              class="mv-mob-img"
+              src={mobObjectUrl}
+              alt=""
+              draggable="false"
+              style={`width:${mobNat.w * mobScale}px;height:${mobNat.h * mobScale}px;left:${mobGuide.w / 2 + mobX - (mobNat.w * mobScale) / 2}px;top:${mobGuide.h / 2 + mobY - (mobNat.h * mobScale) / 2}px;`}
+            />
+          {/if}
+          <span class="mv-mob-label">모바일 {MOB_RATIO_W}×{MOB_RATIO_H}</span>
+        </div>
+        <button type="button" class="mv-mob-add" onclick={createMobile} onpointerdown={(e) => e.stopPropagation()} disabled={mobSaving} aria-label="모바일 전용 이미지로 저장" title="가이드 안 모습 그대로 모바일 전용 이미지로 저장">
+          {mobSaving ? '…' : '+'}
+        </button>
       </div>
     </div>
   {:else if gridMode}
@@ -665,6 +971,14 @@
                   <label class="mv-slider"><span>어둡게</span><input type="range" min="-50" max="50" step="1" bind:value={edLight} aria-label="명암 조절" /><span>밝게</span></label>
                 {:else if sec.id === 'tone'}
                   <label class="mv-slider"><span>차갑게</span><input type="range" min="-50" max="50" step="1" bind:value={edWarm} aria-label="컬러감 조절" /><span>따뜻하게</span></label>
+                {:else if sec.id === 'sharp'}
+                  <div class="mv-row">
+                    {#each SCALE_CHOICES as k (k)}
+                      <button type="button" class="mv-chip" class:active={edScale === k} onclick={() => (edScale = k)} aria-pressed={edScale === k}>{k === 1 ? '원래 크기' : `${k}배`}</button>
+                    {/each}
+                  </div>
+                  <label class="mv-slider"><span>선명도 낮게</span><input type="range" min="0" max="100" step="1" bind:value={edSharp} aria-label="선명도 조절" /><span>높게</span></label>
+                  <p class="mv-hint">선명도는 미리보기에 바로 보입니다. 해상도는 [적용]을 누를 때 반영되며{#if edBase && edScale > 1} 결과는 약 {outputSize(Math.max(Math.round(crop.w * edBase.width), 1), Math.max(Math.round(crop.h * edBase.height), 1)).w}×{outputSize(Math.max(Math.round(crop.w * edBase.width), 1), Math.max(Math.round(crop.h * edBase.height), 1)).h}px{/if}, 원본에 없는 세부 묘사를 새로 만들지는 못하고 경계를 또렷하게 해줍니다. 너무 높이면 가장자리에 하얀 테두리가 생길 수 있어요.</p>
                 {:else if sec.id === 'bg'}
                   <div class="mv-row">
                     <button type="button" class="mv-chip" class:active={edBgColor === null} onclick={() => (edBgColor = null)} aria-pressed={edBgColor === null}>원본 배경</button>
@@ -714,8 +1028,20 @@
         <button type="button" class="mv-apply" onclick={applyEdit} disabled={editSaving}>{editSaving ? '저장 중...' : '적용'}</button>
       </div>
     </div>
+  {:else if mobMode}
+    <div class="mv-edit-bar mv-mob-bar" role="toolbar" aria-label="모바일 이미지 도구" bind:clientHeight={mobBarH}>
+      <p class="mv-hint">이미지를 끌어 이동하고, 슬라이더·마우스 휠로 크기를 맞춘 뒤 가이드 아래 + 를 누르세요. 비어 있는 상·하단은 이미지 가장자리 색으로 자동 채워집니다.</p>
+      <div class="mv-row">
+        <button type="button" class="mv-chip" onclick={mobFitAll}>전체 보기</button>
+        <button type="button" class="mv-chip" onclick={mobFill}>꽉 채우기</button>
+      </div>
+      <label class="mv-slider"><span>줄이기</span><input type="range" min={MOB_F_MIN} max={MOB_F_MAX} step="0.01" value={mobF} oninput={(e) => mobSetF(Number((e.currentTarget as HTMLInputElement).value))} aria-label="이미지 크기 조절" /><span>늘리기</span></label>
+      <div class="mv-row mv-edit-actions">
+        <button type="button" class="mv-text-btn" onclick={endMobile} disabled={mobSaving}>취소</button>
+      </div>
+    </div>
   {:else}
-  <div class="mv-bar" role="toolbar" aria-label="뷰어 도구">
+  <div class="mv-bar" class:mv-bar-wide={!!onMobileCreate} role="toolbar" aria-label="뷰어 도구">
     <button type="button" class="mv-btn" class:active={gridMode} onclick={() => (gridMode = !gridMode)} aria-label="썸네일 정렬" aria-pressed={gridMode} title="썸네일 정렬">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
         <rect x="2" y="2" width="5.5" height="5.5" rx="1.2" fill="currentColor" />
@@ -743,6 +1069,14 @@
           <path d="M14.5 9a5.5 5.5 0 1 1-1.8-4.07M14.5 2.5v3h-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
+      {#if canMobile}
+        <button type="button" class="mv-btn" onclick={startMobile} disabled={gridMode || mobLoading} aria-label="모바일 전용 이미지 만들기" title="모바일 전용 이미지 만들기">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <rect x="5" y="1.8" width="8" height="14.4" rx="2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M8 13.8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+        </button>
+      {/if}
       {#if canEdit}
         <button type="button" class="mv-btn" onclick={startEdit} disabled={gridMode || editLoading} aria-label="이미지 편집" title="이미지 편집">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -983,6 +1317,7 @@
     scrollbar-width: none;
   }
   .mv-bar::-webkit-scrollbar { display: none; }
+  .mv-bar-wide { width: min(512px, calc(100vw - 24px)); }
   .mv-btn {
     flex-shrink: 0;
     width: 44px; height: 44px;
@@ -1011,6 +1346,66 @@
     display: flex; align-items: center; justify-content: center;
   }
   .mv-del :global(.del-icon-btn) { margin-left: 0; }
+
+  /* 모바일 전용 이미지 */
+  .mv-mob-stage { overflow: hidden; touch-action: none; }
+  .mv-mob-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 28px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .mv-mob-guide {
+    position: relative;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .mv-mob-img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+  .mv-mob-guide::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border: 2px dashed var(--cs-white);
+    box-shadow: 0 0 0 9999px rgba(16, 11, 50, 0.6);
+    pointer-events: none;
+  }
+  .mv-mob-label {
+    position: absolute;
+    left: 8px; top: 8px;
+    z-index: 3;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(16, 11, 50, 0.7);
+    color: var(--cs-white);
+    font: var(--text-pc-script-12);
+    pointer-events: none;
+  }
+  .mv-mob-add {
+    position: relative;
+    z-index: 4;   /* 가이드 바깥을 어둡게 덮는 막(z-index 2)보다 위에 */
+    flex-shrink: 0;
+    width: 44px; height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--cs-white);
+    color: var(--cs-purple);
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .mv-mob-add:hover:not(:disabled) { background: var(--cs-lilac); }
+  .mv-mob-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* 이미지 편집 */
   .mv-edit-box { position: relative; flex-shrink: 0; }
