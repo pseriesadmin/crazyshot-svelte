@@ -766,6 +766,15 @@
   );
 
   let imageUrls = $derived(product.image_urls ?? []);
+  // 모바일 전용 이미지 — PC 이미지와 같은 순서로 짝지어 모바일 헤더에서 대체 노출(없으면 null → PC 이미지 그대로)
+  let mobileImageList = $derived((product as { mobile_images?: { src: string; url: string; primary?: boolean }[] | null }).mobile_images ?? []);
+  let mobileImageUrls = $derived(imageUrls.map((u) => mobileImageList.find((m) => m.src === u)?.url ?? null));
+  // 모바일 헤더 순서 — 모바일 대표로 지정한 이미지를 첫 장으로(나머지는 PC 순서 유지). PC 화면은 영향 없음
+  let mobileOrder = $derived.by((): number[] => {
+    const natural = imageUrls.map((_, i) => i);
+    const pi = imageUrls.findIndex((u) => mobileImageList.some((m) => m.src === u && m.primary));
+    return pi > 0 ? [pi, ...natural.filter((i) => i !== pi)] : natural;
+  });
 
   let contentBlocks = $derived.by((): ContentBlock[] => {
     const raw = (product as ProductRow).content_blocks;
@@ -821,7 +830,7 @@
 </svelte:head>
 
 <!-- ① Hero (PC sub-GNB는 ProductHero 내부에서 hero overlay 배치) -->
-<ProductHero imageUrls={imageUrls} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} categories={data.categories} />
+<ProductHero imageUrls={imageUrls} mobileImageUrls={mobileImageUrls} mobileOrder={mobileOrder} category={product.category ?? 'camera'} categoryLabel={data.categoryLabel} productName={product.name} categories={data.categories} />
 
 <!-- ② ProductInfo Section -->
 <section class="info-section">

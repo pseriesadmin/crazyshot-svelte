@@ -21,13 +21,17 @@
 
   interface Props {
     imageUrls?: string[];
+    /** 모바일 전용 이미지(imageUrls와 같은 순서, 없으면 null) — 모바일 헤더 슬라이드에서만 PC 이미지를 대체 */
+    mobileImageUrls?: (string | null)[];
+    /** 모바일 헤더 슬라이드 순서(imageUrls 번호 배열) — 모바일 대표 이미지를 첫 장으로 */
+    mobileOrder?: number[];
     category?: string;
     categoryLabel?: string | null;
     productName?: string;
     categories?: DisplayCategory[];
   }
 
-  let { imageUrls = [], category = 'camera', categoryLabel = null, productName = '', categories = [] }: Props = $props();
+  let { imageUrls = [], mobileImageUrls = [], mobileOrder = [], category = 'camera', categoryLabel = null, productName = '', categories = [] }: Props = $props();
 
   // /products "카테고리 설정"과 동일 정본(icon_url 있는 항목만 아이콘 행에 노출 — 아이콘 없는
   // 카테고리는 /products에서도 텍스트 라벨만 보이지만, 이 컴포넌트는 아이콘 전용 레이아웃이라
@@ -85,6 +89,14 @@
     return getCloudinaryUrl(imageUrls[idx], 1240, 1000);
   }
 
+  // 모바일 슬라이드용 — 모바일 전용 이미지가 있으면 그것을, 없으면 PC 이미지를 쓴다
+  const mobileSlides = $derived(mobileOrder.length === imageUrls.length ? mobileOrder : imageUrls.map((_, k) => k));
+
+  function getMobileImage(idx: number): string {
+    const m = mobileImageUrls[idx];
+    return m ? m : getBgImage(idx);
+  }
+
   function isLocalPath(url: string): boolean {
     return url.startsWith('/') || url.startsWith('blob:');
   }
@@ -116,16 +128,16 @@
 
   <!-- 모바일(≤640px) 좌우 스와이프 트랙 — PC는 위 hero-bg + 썸네일 -->
   <div class="hero-track" class:fit-all={fitAll} bind:this={track} onscroll={onTrackScroll}>
-    {#each imageUrls as _, i}
+    {#each mobileSlides as srcIdx, i (srcIdx)}
       <div class="hero-slide">
         {#if i === 0}
           <!-- 첫 장은 즉시 로딩이 필요한 모바일에서만 요청 — PC는 숨겨진 트랙이 hero-bg와 같은 이미지를 한 번 더 받지 않도록 조건부 소스 + 투명 대체 이미지 -->
           <picture>
-            <source media="(max-width: 640px)" srcset={getBgImage(0)} />
+            <source media="(max-width: 640px)" srcset={getMobileImage(srcIdx)} />
             <img src={TRANSPARENT_PIXEL} alt="{productName} 이미지 {i + 1}" draggable="false" />
           </picture>
         {:else}
-          <img src={getBgImage(i)} alt="{productName} 이미지 {i + 1}" loading="lazy" draggable="false" />
+          <img src={getMobileImage(srcIdx)} alt="{productName} 이미지 {i + 1}" loading="lazy" draggable="false" />
         {/if}
       </div>
     {/each}
