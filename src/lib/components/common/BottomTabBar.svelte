@@ -25,7 +25,7 @@
   let poppingTab = $state<string | null>(null)
   let moreMenuOpen = $state(false)
 
-  // 스크롤 인터랙션: 다운 → 가림, 업 → 보임 (상태는 공용 store — 탭바 위에 뜨는 요소와 판정 공유)
+  // 스크롤 인터랙션: 스크롤 중 → 가림, 멈춤 → 보임 (상태는 공용 store — 탭바 위에 뜨는 요소와 판정 공유)
   let lastY = 0
   // iOS Safari 스크롤 끝 고무줄 되튕김(수 px 역방향)·툴바 접힘/펼침이 '스크롤 업'으로 오판돼 탭바가 깜빡이는 것을 막는 장치 3종
   const SCROLL_DELTA = 10      // ① 최소 이동량
@@ -36,20 +36,37 @@
   let locked = false
   let lockTimer: ReturnType<typeof setTimeout> | undefined
 
+  // 2026-11-03: 스크롤 방향과 무관하게 스크롤 중에는 가리고, 스크롤이 멈추면 다시 노출한다(Stephen 지시 — 숨김·노출 모션 값은 기존 그대로)
+  const SETTLE_MS = 250        // 이 시간 동안 스크롤 입력이 없으면 '멈춤'으로 보고 노출
+  let settleTimer: ReturnType<typeof setTimeout> | undefined
+
+  function scheduleShow(): void {
+    clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => {
+      if (!tabBarState.hidden) return
+      tabBarState.hidden = false
+      locked = true
+      clearTimeout(lockTimer)
+      lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
+    }, SETTLE_MS)
+  }
+
   function onScroll() {
+    // 숨김 중에는 잠금 여부와 무관하게 입력이 계속되는 한 노출을 미룬다(계속 스크롤하는데 중간에 나타나지 않게)
+    if (tabBarState.hidden) scheduleShow()
     if (locked) return
     const y = window.scrollY
     if (y <= 50) { tabBarState.hidden = false; lastY = y; return }   // 최상단 — 항상 보임
     const max = document.documentElement.scrollHeight - window.innerHeight
-    if (y >= max - EDGE_PX) { lastY = Math.max(0, Math.min(y, max)); return }  // 바닥 경계 — 현재 상태 유지
+    if (y >= max - EDGE_PX) { lastY = Math.max(0, Math.min(y, max)); return }  // 바닥 경계(고무줄 구간) — 판정 제외
     const dy = y - lastY
     if (Math.abs(dy) < SCROLL_DELTA) return                          // 미세 이동 무시(lastY 유지 → 느린 스크롤은 누적)
     lastY = y
-    const next = dy > 0                                               // 다운 → 가림 / 업 → 보임
-    if (next === tabBarState.hidden) return
-    tabBarState.hidden = next
+    if (tabBarState.hidden) return
+    tabBarState.hidden = true                                         // 위·아래 어느 방향이든 가림
     locked = true
-    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, next ? HIDE_MS : LOCK_MS)
+    lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, HIDE_MS)
+    scheduleShow()
   }
 
   // iOS 26 Safari는 position:fixed; bottom:0 요소가 레이아웃에 있으면 transform으로 숨겨도 그 영역(탭바 70px+안전영역)을
@@ -102,6 +119,7 @@
       window.removeEventListener('scroll', onScroll)
       window.removeEventListener('resize', onResize)
       clearTimeout(lockTimer)
+      clearTimeout(settleTimer)
       locked = false
       html.style.overscrollBehaviorY = prevOverscroll
       tabBarState.hidden = false

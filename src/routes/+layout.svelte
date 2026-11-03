@@ -186,6 +186,7 @@
 			userId={chatUserId}
 			userName={chatUserName}
 			userHandle={chatUserHandle}
+			hideMobile={page.url.pathname.startsWith('/auth/login')}
 		/>
 	{/if}
 
