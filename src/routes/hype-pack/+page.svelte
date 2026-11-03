@@ -17,11 +17,8 @@
     return href && KEYWORD_HREF_PATTERN.test(href) ? href : null
   }
 
-  const KEYWORDS_FALLBACK = ['CANON 100mm', 'FeiyuTech SCORP Mini 2', 'FDR-AX43', 'Air 3S Drone']
-  // Use CMS-managed keywords when set, else fallback
-  const displayKeywords = $derived(
-    data.banner.keywords.length > 0 ? data.banner.keywords : KEYWORDS_FALLBACK
-  )
+  // CMS 관리 키워드만 표시 — 모두 제거하면 예시 칩 없이 그대로 비워 둔다(2026-11-03, Stephen 지시)
+  const displayKeywords = $derived(data.banner.keywords ?? [])
 
   // Compute the banner item to display (random or first)
   function getDisplayBannerItem() {
@@ -90,6 +87,7 @@
     <div class="m-scroll-menu-top">
       <h2 class="m-section-title">추천 HypePack</h2>
     </div>
+    {#if displayKeywords.length > 0}
     <div class="m-chips-wrap">
       {#each displayKeywords as kw}
         {@const kwHref = safeKeywordHref(data.banner.keyword_links?.[kw])}
@@ -100,6 +98,7 @@
         {/if}
       {/each}
     </div>
+    {/if}
   </div>
 
   <!-- 광고 배너 (AdPack, 모바일) -->
