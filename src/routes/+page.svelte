@@ -223,7 +223,20 @@
     const targetRect = target.getBoundingClientRect()
     const delta = (targetRect.left + targetRect.width / 2) - (containerRect.left + containerRect.width / 2)
     container.scrollBy({ left: delta, behavior: 'smooth' })
+
+    // 모바일(2026-11-03, Stephen 지시): 어중간한 화면 위치에서 탭을 누르면 탭 영역을 화면 상단으로 부드럽게 올려
+    // 아래에 바뀌는 상품 슬라이드가 하단 탭바에 가려진 채 노출되지 않게 한다. PC(.theme-circle-tabs)는 해당 없음.
+    if (!container.classList.contains('m-theme-circle-tabs')) return
+    const wrap = container.closest<HTMLElement>('.m-theme-circle-tabs-wrap') ?? container
+    const top = wrap.getBoundingClientRect().top
+    const dy = top - M_THEME_TOP_OFFSET
+    if (Math.abs(dy) < 8) return
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.scrollBy({ top: dy, behavior: reduce ? 'auto' : 'smooth' })
   }
+
+  /** 모바일 테마 탭 선택 시 탭 영역 상단 여백(px) — 위쪽 섹션 제목(취·향·직·격 PICK!)이 일부 보이고 상단 GNB 필(61px)에 가리지 않는 위치 */
+  const M_THEME_TOP_OFFSET = 80
 
   let pkgSliderEl: { scrollLeft: number } | undefined
   function onPkgScroll() {
