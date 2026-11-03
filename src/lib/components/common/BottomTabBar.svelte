@@ -106,6 +106,14 @@
     lockTimer = setTimeout(() => { locked = false; lastY = window.scrollY }, LOCK_MS)
   }
 
+  // 네이버 앱 인앱 브라우저는 오른쪽 아래에 자체 스크롤 아이콘을 띄워 'My' 탭을 일부 가린다(2026-11-03, Stephen 제보) —
+  // 이 브라우저에서만 탭바 오른쪽을 비워 5개 탭이 아이콘 왼쪽에 모두 보이게 한다(다른 브라우저는 무변경)
+  const NAVER_INAPP_UA = /NAVER\(inapp/i
+  let naverInApp = $state(false)
+  $effect(() => {
+    naverInApp = NAVER_INAPP_UA.test(navigator.userAgent)
+  })
+
   $effect(() => {
     lastY = window.scrollY
     tabBarState.hidden = false
@@ -149,7 +157,7 @@
   const INACTIVE = '#c1bbec'
 </script>
 
-<div class="tab-bar" class:hidden={cssHidden} class:removed bind:this={barEl}>
+<div class="tab-bar" class:hidden={cssHidden} class:removed class:naver-inapp={naverInApp} bind:this={barEl}>
   {#each TABS as tab}
     <button
       class="tab-item"
@@ -221,6 +229,11 @@
   @media (prefers-reduced-motion: reduce) {
     .tab-bar,
     .tab-bar.hidden { transition-duration: 0.01ms; transition-delay: 0s; }
+  }
+
+  /* 네이버 인앱: 오른쪽 56px을 비워 브라우저 자체 스크롤 아이콘과 겹치지 않게(탭은 flex:1이라 남은 폭에 맞춰 줄어듦) */
+  .tab-bar.naver-inapp {
+    padding-right: 56px;
   }
 
   /* 숨김 전환이 끝난 뒤 레이아웃에서 완전히 제거 — iOS 26 Safari의 하단 고정 요소 영역 예약 해제용(위 스크립트 주석 참고) */
