@@ -170,9 +170,9 @@
   const editSectionIds = $derived<EditSection[]>(current?.editTools ?? EDIT_SECTIONS.map((e) => e.id))
   const visibleSections = $derived(EDIT_SECTIONS.filter((e) => editSectionIds.includes(e.id)))
   const canEdit = $derived(!!onSave && isImage && current?.editable !== false)
-  /** 배경색 24색 */
+  /** 배경색 25색 */
   const BG_COLORS: { name: string; hex: string }[] = [
-    { name: '흰색', hex: '#FFFFFF' }, { name: '밝은 회색', hex: '#F2F2F2' }, { name: '회색', hex: '#BDBDBD' }, { name: '진회색', hex: '#6B6B6B' },
+    { name: '기본 배경색', hex: '#F3F0EE' }, { name: '흰색', hex: '#FFFFFF' }, { name: '밝은 회색', hex: '#F2F2F2' }, { name: '회색', hex: '#BDBDBD' }, { name: '진회색', hex: '#6B6B6B' },
     { name: '차콜', hex: '#2B2B2B' }, { name: '검정', hex: '#000000' }, { name: '아이보리', hex: '#FFF8E7' }, { name: '베이지', hex: '#E8D8BF' },
     { name: '연분홍', hex: '#FADADD' }, { name: '분홍', hex: '#F48FB1' }, { name: '빨강', hex: '#E53935' }, { name: '주황', hex: '#FB8C00' },
     { name: '노랑', hex: '#FDD835' }, { name: '연두', hex: '#C5E1A5' }, { name: '초록', hex: '#43A047' }, { name: '민트', hex: '#80CBC4' },
@@ -207,8 +207,10 @@
   let edBase: HTMLCanvasElement | null = null     // 회전·반전만 반영한 캔버스(긴 변 최대 2400px)
   let edVersion = $state(0)                       // edBase 갱신 알림
   // 배경 인식 결과 캐시(기준 캔버스와 같은 크기, 0~255 = 배경일 확률) — 회전·반전·인식 범위가 바뀌면 다시 계산
-  let edMask: Uint8ClampedArray | null = null
-  let edMaskKey = ''
+  let edBgAnalysis: BgAnalysis | null = null
+  let edBgAnalysisKey = ''
+  let edBgCanvas: HTMLCanvasElement | null = null
+  let edBgCanvasKey = ''
 
   const MIN_CROP = 0.05
 
@@ -240,8 +242,10 @@
     editMode = false
     edImg = null
     edBase = null
-    edMask = null
-    edMaskKey = ''
+    edBgAnalysis = null
+    edBgAnalysisKey = ''
+    edBgCanvas = null
+    edBgCanvasKey = ''
     if (edObjectUrl) { URL.revokeObjectURL(edObjectUrl); edObjectUrl = null }
   }
 
@@ -261,8 +265,10 @@
     ctx.scale(edFlipH ? -1 : 1, edFlipV ? -1 : 1)
     ctx.drawImage(edImg, -dw / 2, -dh / 2, dw, dh)
     edBase = c
-    edMask = null
-    edMaskKey = ''
+    edBgAnalysis = null
+    edBgAnalysisKey = ''
+    edBgCanvas = null
+    edBgCanvasKey = ''
     edVersion++
   }
 
@@ -279,17 +285,41 @@
   }
   function toggleSection(id: EditSection): void { edOpen = edOpen === id ? null : id }
 
-  // ── 배경 자동 인식: 테두리 색을 배경으로 보고, 테두리에서 이어진 비슷한 색 영역만 배경으로 판정 ──
+  // ── 배경 분리·재채색 ──────────────────────────────────────────────────────
+  // 원칙: 배경이라고 확신하는 곳만 바꾸고 상품(오브젝트)은 한 픽셀도 건드리지 않는다.
+  //  ① 테두리 색(B)과 "같은 색의 밝기만 다른 것(그림자·완만한 그라데이션)"만 테두리에서 이어진 영역으로 확장 — 색 차이·급격한 경계에서 멈춘다
+  //  ② 배경 영역은 새 색 × (배경 기준색 대비 원래 밝기 비율)로 칠한다 → 그림자·그라데이션이 그대로 남는다
+  //  ③ 경계의 안티앨리어싱 띠(5px)는 배경색과 오브젝트색의 혼합 비율(알파)을 풀어, 배경 몫만 새 색으로 바꾼다 → 경계가 거칠지 않고 옛 배경색 테두리가 남지 않는다
   function hexToRgb(hex: string): [number, number, number] {
     const n = parseInt(hex.slice(1), 16)
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
   }
-  function computeMask(base: HTMLCanvasElement, tol: number): Uint8ClampedArray | null {
-    const w = base.width, h = base.height
-    const ctx = base.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return null
-    const px = ctx.getImageData(0, 0, w, h).data
-    // 배경 색 추정 — 테두리 픽셀 색의 채널별 중앙값
+
+  interface BgAnalysis {
+    w: number; h: number
+    px: Uint8ClampedArray        // 원본 픽셀(RGBA)
+    reg: Uint8Array              // 0 오브젝트 · 1 배경 · 2 경계 띠 · 3 배경 아님으로 판정된 조각
+    shade: Float32Array          // 배경(1)·띠(2)의 밝기 비율(1 = 배경 기준색 그대로, <1 그림자)
+    wgt: Uint8Array              // 띠에서 배경이 차지하는 몫 0~255
+    bl: Uint8Array               // 띠 옆 배경 색(RGB)
+    mode: Uint8Array             // 띠 픽셀 처리(비트): 1 = 원본 가장자리가 오염(링잉 등)돼 안쪽 오브젝트 색과 새 배경색의 혼합으로 다시 만든다 · 2 = 안쪽 오브젝트 색(fcol)이 저장됨. 0 = 원래 픽셀의 배경 몫만 교체
+    fcol: Uint8Array             // 안쪽 오브젝트 색(RGB)
+  }
+
+  /** 밝기 비율 — 배경 기준색 대비 얼마나 어두운지(작은 흔들림·압축 잡음은 1로 눌러 배경이 균일하게 칠해지게 한다) */
+  function shadeOf(r: number, g: number, b: number, fr: number, fg: number, fb: number): number {
+    const den = fr * fr + fg * fg + fb * fb
+    if (den < 1) return 1
+    const k = (r * fr + g * fg + b * fb) / den
+    const d = k - 1
+    const dz = 0.025
+    const v = Math.abs(d) < dz ? 1 : 1 + d - Math.sign(d) * dz
+    return v < 0 ? 0 : v > 1.15 ? 1.15 : v
+  }
+
+  function analyzeBackgroundPixels(px: Uint8ClampedArray, w: number, h: number, tol: number): BgAnalysis | null {
+    const n = w * h
+    // 1) 배경 기준색 B — 테두리 픽셀 색의 채널별 중앙값
     const rs: number[] = [], gs: number[] = [], bs: number[] = []
     const take = (x: number, y: number): void => { const i = (y * w + x) * 4; rs.push(px[i]); gs.push(px[i + 1]); bs.push(px[i + 2]) }
     const step = Math.max(1, Math.floor(Math.max(w, h) / 400))
@@ -297,53 +327,368 @@
     for (let y = 0; y < h; y += step) { take(0, y); take(w - 1, y) }
     const med = (arr: number[]): number => { arr.sort((p, q) => p - q); return arr[Math.floor(arr.length / 2)] }
     const br = med(rs), bg = med(gs), bb = med(bs)
-    const lim = tol * tol * 3
-    const near = (i: number): boolean => {
-      const dr = px[i] - br, dg = px[i + 1] - bg, db = px[i + 2] - bb
-      return dr * dr + dg * dg + db * db <= lim
+    const BB = br * br + bg * bg + bb * bb
+    const useScale = BB > 2500   // 기준색이 거의 검정이면 밝기 비율이 불안정 → 단순 색 거리만
+
+    // 판정 기준은 고정값이 아니라 '이 이미지 테두리 배경의 실제 편차'에서 구한다 — 잡음이 적은 깨끗한 배경일수록 엄격해져,
+    // 배경과 비슷한 흰색·밝은 상품(예: 흰 렌즈)을 배경으로 오인하지 않는다. 슬라이더(인식 범위)는 이 기준을 배율로 넓히거나 좁힌다.
+    const tolScale = tol / 36
+    const Bn = Math.sqrt(BB)
+    const ks: number[] = [], resid: number[] = [], stepDiffs: number[] = []
+    const sampleStat = (x: number, y: number): void => {
+      const o = (y * w + x) * 4
+      const k = useScale ? (px[o] * br + px[o + 1] * bg + px[o + 2] * bb) / BB : 1
+      const dr = px[o] - k * br, dg = px[o + 1] - k * bg, db = px[o + 2] - k * bb
+      ks.push(k); resid.push(Math.sqrt(dr * dr + dg * dg + db * db))
     }
-    const hard = new Uint8Array(w * h)
-    const stack: number[] = []
+    for (let x = 0; x < w; x += step) { sampleStat(x, 0); sampleStat(x, h - 1) }
+    for (let y = 0; y < h; y += step) { sampleStat(0, y); sampleStat(w - 1, y) }
+    const pairDiff = (o1: number, o2: number): number => {
+      const dr = px[o1] - px[o2], dg = px[o1 + 1] - px[o2 + 1], db = px[o1 + 2] - px[o2 + 2]
+      return Math.sqrt(dr * dr + dg * dg + db * db)
+    }
+    for (let x = 0; x < w - 1; x += step) { stepDiffs.push(pairDiff(x * 4, (x + 1) * 4), pairDiff(((h - 1) * w + x) * 4, ((h - 1) * w + x + 1) * 4)) }
+    for (let y = 0; y < h - 1; y += step) { stepDiffs.push(pairDiff(y * w * 4, (y + 1) * w * 4), pairDiff((y * w + w - 1) * 4, ((y + 1) * w + w - 1) * 4)) }
+    const pct = (arr: number[], q: number): number => { const c = arr.slice().sort((p1, p2) => p1 - p2); return c[Math.min(c.length - 1, Math.floor(c.length * q))] }
+    const kMed = med(ks.slice())
+    const kDev = pct(ks.map((v) => Math.abs(v - kMed)), 0.9)          // 테두리 밝기 비율의 흔들림
+    const resP = pct(resid, 0.95)                                      // 테두리 색 편차
+    const stepP = pct(stepDiffs, 0.9)                                  // 이웃 픽셀 간 차이(잡음 수준)
+    const kHi = 1 + Math.max(0.012, 2 * kDev) * tolScale             // 배경보다 '밝은' 쪽 허용폭 — 좁게(흰 상품 보호)
+    const resBase = Math.max(4, 2.2 * resP) * tolScale
+
+    // 배경다움: B 방향의 밝기 비율 k 로 맞춘 뒤 남는 색 차이가 작아야 한다(strict=엄격: 오브젝트 안쪽 구멍 씨앗용)
+    const likeRgb = (r: number, g: number, b: number, strict: boolean): boolean => {
+      let k = 1
+      if (useScale) {
+        k = (r * br + g * bg + b * bb) / BB
+        if (strict ? (k < 0.96 || k > 1 + 0.02 * tolScale) : (k < 0.45 || k > kHi)) return false
+      }
+      // 어두워진 만큼(그림자)은 색 차이를 조금 더 허용
+      const L = strict ? Math.max(3, 1.6 * resP) * tolScale : resBase + 0.1 * Math.max(0, 1 - k) * Bn * tolScale
+      const dr = r - k * br, dg = g - k * bg, db = b - k * bb
+      return dr * dr + dg * dg + db * db <= L * L
+    }
+    const like = (o: number, strict: boolean): boolean => likeRgb(px[o], px[o + 1], px[o + 2], strict)
+    const stepTol = Math.max(4.5, 2.5 * stepP) * Math.sqrt(tolScale)   // 급한 경계(오브젝트 윤곽)에서 번짐을 멈춘다
+    const flatTol = Math.max(3, 2.2 * stepP) * Math.sqrt(tolScale)
+    // 이웃 픽셀 사이 변화를 '밝기 방향(배경 기준색 B 방향)'과 '색 방향'으로 나눈다 — 그림자·완만한 그라데이션은 밝기 방향으로만 서서히 변하므로
+    // 밝기 방향 변화는 넉넉히(한 칸 1.8%), 색 방향 변화는 잡음 수준으로만 허용한다. 오브젝트 윤곽은 둘 다 급해서 여기서 멈춘다.
+    const ux = br / Bn, uy = bg / Bn, uz = bb / Bn
+    const alongTol = Math.max(stepTol, 0.018 * Bn * Math.sqrt(tolScale))
+    const stepOkVec = (o1: number, o2: number, cTol: number): boolean => {
+      const dr = px[o1] - px[o2], dg = px[o1 + 1] - px[o2 + 1], db = px[o1 + 2] - px[o2 + 2]
+      if (!useScale) return dr * dr + dg * dg + db * db <= cTol * cTol
+      const al = dr * ux + dg * uy + db * uz
+      if (al > alongTol || al < -alongTol) return false
+      const cr = dr - al * ux, cg = dg - al * uy, cb = db - al * uz
+      return cr * cr + cg * cg + cb * cb <= cTol * cTol
+    }
+    const stepOk = (a: number, c: number): boolean => stepOkVec(a, c, stepTol)
+    // 평평함: 배경은 이웃과 거의 같다(잡음 수준·완만한 그림자). 경계의 부드러운 전이(은색 하이라이트·흐린 윤곽)는 '확실한 배경'에서 빼고 아래 경계 띠에서 혼합 비율로 정밀하게 푼다
+    const flat = (q: number): boolean => {
+      const o = q * 4
+      const x = q % w, y = (q - x) / w
+      return (x <= 0 || stepOkVec(o, (q - 1) * 4, flatTol)) && (x >= w - 1 || stepOkVec(o, (q + 1) * 4, flatTol)) && (y <= 0 || stepOkVec(o, (q - w) * 4, flatTol)) && (y >= h - 1 || stepOkVec(o, (q + w) * 4, flatTol))
+    }
+
+    const reg = new Uint8Array(n)
+    const queue = new Int32Array(n)
+    /** 시작 픽셀들에서 배경다운 이웃으로 번진다. 수집한 픽셀 수를 돌려준다(queue 앞쪽에 목록이 남는다) */
+    const grow = (tail0: number): number => {
+      let head = 0, tail = tail0
+      while (head < tail) {
+        const p = queue[head++]
+        const x = p % w, y = (p - x) / w
+        const o = p * 4
+        if (x > 0) { const q = p - 1; if (reg[q] === 0 && like(q * 4, false) && stepOk(o, q * 4) && flat(q)) { reg[q] = 4; queue[tail++] = q } }
+        if (x < w - 1) { const q = p + 1; if (reg[q] === 0 && like(q * 4, false) && stepOk(o, q * 4) && flat(q)) { reg[q] = 4; queue[tail++] = q } }
+        if (y > 0) { const q = p - w; if (reg[q] === 0 && like(q * 4, false) && stepOk(o, q * 4) && flat(q)) { reg[q] = 4; queue[tail++] = q } }
+        if (y < h - 1) { const q = p + w; if (reg[q] === 0 && like(q * 4, false) && stepOk(o, q * 4) && flat(q)) { reg[q] = 4; queue[tail++] = q } }
+      }
+      return tail
+    }
+
+    // 2) 테두리에서 이어진 배경
+    let seeds = 0
     const seed = (x: number, y: number): void => {
       const p = y * w + x
-      if (!hard[p] && near(p * 4)) { hard[p] = 1; stack.push(p) }
+      if (reg[p] === 0 && like(p * 4, false)) { reg[p] = 4; queue[seeds++] = p }
     }
     for (let x = 0; x < w; x++) { seed(x, 0); seed(x, h - 1) }
     for (let y = 0; y < h; y++) { seed(0, y); seed(w - 1, y) }
-    while (stack.length) {
-      const p = stack.pop() as number
-      const x = p % w, y = (p - x) / w
-      if (x > 0) { const q = p - 1; if (!hard[q] && near(q * 4)) { hard[q] = 1; stack.push(q) } }
-      if (x < w - 1) { const q = p + 1; if (!hard[q] && near(q * 4)) { hard[q] = 1; stack.push(q) } }
-      if (y > 0) { const q = p - w; if (!hard[q] && near(q * 4)) { hard[q] = 1; stack.push(q) } }
-      if (y < h - 1) { const q = p + w; if (!hard[q] && near(q * 4)) { hard[q] = 1; stack.push(q) } }
+    let cnt = grow(seeds)
+    for (let i = 0; i < cnt; i++) reg[queue[i]] = 1
+    if (cnt === 0) return null
+
+    // 3) 오브젝트로 둘러싸인 안쪽 배경(손잡이 구멍 등) — 배경색과 거의 같은 큰 덩어리만
+    const minSize = Math.max(300, Math.round(n * 0.0003))
+    for (let p = 0; p < n; p++) {
+      if (reg[p] !== 0 || !like(p * 4, true)) continue
+      reg[p] = 4
+      queue[0] = p
+      const size = grow(1)
+      let val = 3
+      if (size >= minSize) {
+        // 덩어리 평균 색이 배경 기준색과 정말 같을 때만 배경 — 오브젝트 안의 흰 하이라이트·밝은 면을 배경으로 오인하지 않게
+        let mr = 0, mg = 0, mb = 0
+        for (let i = 0; i < size; i++) { const o = queue[i] * 4; mr += px[o]; mg += px[o + 1]; mb += px[o + 2] }
+        mr /= size; mg /= size; mb /= size
+        const k = useScale ? (mr * br + mg * bg + mb * bb) / BB : 1
+        const dr = mr - k * br, dg = mg - k * bg, db = mb - k * bb
+        const lim = Math.max(2.5, 1.2 * resP) * tolScale
+        if ((!useScale || (k >= 0.96 && k <= 1 + 0.02 * tolScale)) && dr * dr + dg * dg + db * db <= lim * lim) val = 1
+      }
+      for (let i = 0; i < size; i++) reg[queue[i]] = val
     }
-    // 가장자리를 부드럽게 — 3×3 평균
-    const out = new Uint8ClampedArray(w * h)
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        let sum = 0, n = 0
-        for (let dy = -1; dy <= 1; dy++) {
-          const yy = y + dy
-          if (yy < 0 || yy >= h) continue
-          for (let dx = -1; dx <= 1; dx++) {
-            const xx = x + dx
-            if (xx < 0 || xx >= w) continue
-            sum += hard[yy * w + xx]; n++
+
+    // 3.5) 배경 속 작은 얼룩(먼지·잡음 덩어리) — 배경색에 가까운 아주 작은 '오브젝트 섬'은 배경으로 돌린다(작은 어두운 부품·가는 선은 색이 달라 그대로 남는다)
+    const smallMax = Math.max(50, Math.round(n * 0.0002))
+    const seen = new Uint8Array(n)
+    for (let p0 = 0; p0 < n; p0++) {
+      if ((reg[p0] !== 0 && reg[p0] !== 3) || seen[p0]) continue
+      let head = 0, tail = 0
+      queue[tail++] = p0; seen[p0] = 1
+      let sr = 0, sg = 0, sb = 0, touchesEdge = false
+      while (head < tail) {
+        const p = queue[head++]
+        const o = p * 4
+        sr += px[o]; sg += px[o + 1]; sb += px[o + 2]
+        const x = p % w, y = (p - x) / w
+        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesEdge = true
+        if (x > 0) { const q = p - 1; if (!seen[q] && (reg[q] === 0 || reg[q] === 3)) { seen[q] = 1; queue[tail++] = q } }
+        if (x < w - 1) { const q = p + 1; if (!seen[q] && (reg[q] === 0 || reg[q] === 3)) { seen[q] = 1; queue[tail++] = q } }
+        if (y > 0) { const q = p - w; if (!seen[q] && (reg[q] === 0 || reg[q] === 3)) { seen[q] = 1; queue[tail++] = q } }
+        if (y < h - 1) { const q = p + w; if (!seen[q] && (reg[q] === 0 || reg[q] === 3)) { seen[q] = 1; queue[tail++] = q } }
+      }
+      if (tail <= smallMax && !touchesEdge && likeRgb(sr / tail, sg / tail, sb / tail, false)) {
+        for (let i = 0; i < tail; i++) reg[queue[i]] = 1
+      }
+    }
+
+    // 4) 경계 띠 — 배경에서 5px 이내의 비(非)배경 픽셀(흐릿한 경계도 덮는다)
+    const band: number[] = []
+    let frontier: number[] = []
+    for (let p = 0; p < n; p++) {
+      if (reg[p] !== 1) continue
+      const x = p % w, y = (p - x) / w
+      if ((x > 0 && reg[p - 1] !== 1) || (x < w - 1 && reg[p + 1] !== 1) || (y > 0 && reg[p - w] !== 1) || (y < h - 1 && reg[p + w] !== 1)) frontier.push(p)
+    }
+    // 배경 가장자리 1겹도 띠로 돌려 혼합 비율로 다시 푼다 — 흰 상품 가장자리처럼 배경과 비슷한 경계 픽셀이 이진 판정으로 깎여 나가는 것을 막는다
+    const eroded = new Uint8Array(n)
+    for (const p of frontier) { reg[p] = 2; eroded[p] = 1; band.push(p) }
+    for (let layer = 0; layer < 5; layer++) {
+      const next: number[] = []
+      for (const p of frontier) {
+        const x = p % w, y = (p - x) / w
+        const nb = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]
+        for (const q of nb) {
+          if (q < 0 || reg[q] === 1 || reg[q] === 2) continue
+          reg[q] = 2; band.push(q); next.push(q)
+        }
+      }
+      frontier = next
+    }
+
+    // 5) 배경 픽셀의 밝기 비율 — 배경 기준색(B) 대비. 그림자·완만한 그라데이션이 그대로 비율로 남는다(기준색이 거의 검정이면 비율 없이 평평하게)
+    const shade = new Float32Array(n)
+    const wgt = new Uint8Array(n)
+    const bl = new Uint8Array(n * 3)
+    for (let p = 0; p < n; p++) {
+      if (reg[p] !== 1) continue
+      const o = p * 4
+      shade[p] = useScale ? shadeOf(px[o], px[o + 1], px[o + 2], br, bg, bb) : 1
+    }
+
+    // 6) 경계 띠 — 가장 가까운 '확실한 배경'색(Bl)·'확실한 오브젝트'색(F)과 거리로 배경 몫(w)을 푼다
+    const mode = new Uint8Array(n)
+    const fcol = new Uint8Array(n * 3)
+    /** 띠 픽셀마다 가장 가까운 확실한 픽셀(조건 isSrc)과 그 거리 — 띠 안에서만 번지는 너비 우선 탐색 */
+    const nearest = (isSrc: (rg: number) => boolean): { src: Int32Array; dist: Uint8Array } => {
+      const src = new Int32Array(n).fill(-1)
+      const dist = new Uint8Array(n)
+      const q: number[] = []
+      for (const p of band) {
+        const x = p % w, y = (p - x) / w
+        const cand = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]
+        for (const c of cand) { if (c >= 0 && isSrc(reg[c])) { src[p] = c; dist[p] = 1; q.push(p); break } }
+      }
+      for (let head = 0; head < q.length; head++) {
+        const p = q[head]
+        const x = p % w, y = (p - x) / w
+        const cand = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]
+        for (const r of cand) {
+          if (r < 0 || reg[r] !== 2 || src[r] !== -1) continue
+          src[r] = src[p]; dist[r] = Math.min(255, dist[p] + 1); q.push(r)
+        }
+      }
+      return { src, dist }
+    }
+    const isBgRg = (rg: number): boolean => rg === 1
+    const isObjRg = (rg: number): boolean => rg === 0 || rg === 3
+    const nb = nearest(isBgRg)
+    const nf = nearest(isObjRg)
+    /** 확실한 픽셀 c 주변 3×3 중 같은 종류 픽셀의 평균 색(잡음 줄이기) */
+    const meanAround = (c: number, pred: (rg: number) => boolean): [number, number, number] => {
+      const cx = c % w, cy = (c - cx) / w
+      let r = 0, g = 0, b = 0, k = 0
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = cx + dx, yy = cy + dy
+        if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue
+        const q = yy * w + xx
+        if (!pred(reg[q])) continue
+        const o = q * 4
+        r += px[o]; g += px[o + 1]; b += px[o + 2]; k++
+      }
+      return k ? [r / k, g / k, b / k] : [px[c * 4], px[c * 4 + 1], px[c * 4 + 2]]
+    }
+    for (const p of band) {
+      const o = p * 4
+      const sb = nb.src[p]
+      if (sb < 0) {
+        // 안쪽 배경이 없는 좁은 틈 — 배경으로 되돌린다
+        if (eroded[p]) { reg[p] = 1; shade[p] = useScale ? shadeOf(px[o], px[o + 1], px[o + 2], br, bg, bb) : 1 }
+        continue
+      }
+      const [blr, blg, blb] = meanAround(sb, isBgRg)
+      const sf = nf.src[p]
+      let wv = 0
+      let useF = false
+      let fr = 0, fg = 0, fb = 0
+      if (sf < 0) {
+        // 가까운 확실한 오브젝트가 없다(외톨이 픽셀) — 옆 배경과 아주 비슷할 때만 배경으로(가는 선·끈이 지워지지 않게)
+        const dr = px[o] - blr, dg = px[o + 1] - blg, db = px[o + 2] - blb
+        wv = dr * dr + dg * dg + db * db <= (tol * 0.6) * (tol * 0.6) ? 1 : 0
+      } else {
+        ;[fr, fg, fb] = meanAround(sf, isObjRg)
+        const vr = blr - fr, vg = blg - fg, vb = blb - fb
+        const dd = vr * vr + vg * vg + vb * vb
+        if (dd < 225) {
+          // 가까운 오브젝트 색이 배경색과 거의 같아 혼합 비율을 풀 수 없다 — 이 픽셀이 옆 배경과 같은 색이면 배경 얼룩이므로 배경으로, 아니면 그대로 둔다
+          const dr = px[o] - blr, dg = px[o + 1] - blg, db = px[o + 2] - blb
+          if (dr * dr + dg * dg + db * db <= resBase * resBase) wv = 1
+        } else {
+          let t = ((px[o] - fr) * vr + (px[o + 1] - fg) * vg + (px[o + 2] - fb) * vb) / dd
+          t = t < 0 ? 0 : t > 1 ? 1 : t
+          // 이 픽셀이 두 색(오브젝트–배경)을 잇는 선 위에 있나 — 그러면 정상적인 혼합(안티앨리어싱)
+          const er = px[o] - (fr + t * vr), eg = px[o + 1] - (fg + t * vg), eb = px[o + 2] - (fb + t * vb)
+          const lineTol = 10 + 0.12 * Math.sqrt(dd)
+          if (er * er + eg * eg + eb * eb <= lineTol * lineTol) {
+            wv = t
+          } else {
+            // 선에서 벗어났다: 배경 쪽에 가까우면 원본 가장자리의 링잉·번짐(오염), 오브젝트 쪽이면 오브젝트의 질감 — 후자는 건드리지 않는다
+            const dB = (px[o] - blr) ** 2 + (px[o + 1] - blg) ** 2 + (px[o + 2] - blb) ** 2
+            const dF = (px[o] - fr) ** 2 + (px[o + 1] - fg) ** 2 + (px[o + 2] - fb) ** 2
+            if (dB < dF) {
+              const dO = nf.dist[p], dBg = nb.dist[p]
+              wv = dO / (dO + dBg)
+              useF = true
+            }
           }
         }
-        out[y * w + x] = Math.round((sum / n) * 255)
+      }
+      if (wv <= 0) continue
+      wgt[p] = Math.round(wv * 255)
+      bl[p * 3] = Math.round(blr); bl[p * 3 + 1] = Math.round(blg); bl[p * 3 + 2] = Math.round(blb)
+      shade[p] = useScale ? shadeOf(blr, blg, blb, br, bg, bb) : 1
+      if (sf >= 0) { mode[p] = useF ? 3 : 2; fcol[p * 3] = Math.round(fr); fcol[p * 3 + 1] = Math.round(fg); fcol[p * 3 + 2] = Math.round(fb) }
+    }
+
+    // 6b) 흐린 경계 확장 — 띠 바깥에서도 색이 '배경→오브젝트' 선을 따라 계속 변하는 동안(최대 8칸)만 배경 몫을 이어 푼다. 경계가 흐릴수록 전이가 길다.
+    //     평평해지면(은색 하이라이트·오브젝트 면) 멈추므로 오브젝트 질감은 건드리지 않는다.
+    let ext: number[] = band.filter((p) => wgt[p] > 12 && wgt[p] < 250 && (mode[p] & 2) !== 0)
+    for (let layer = 0; layer < 8 && ext.length > 0; layer++) {
+      const nextExt: number[] = []
+      for (const p of ext) {
+        const blr = bl[p * 3], blg = bl[p * 3 + 1], blb = bl[p * 3 + 2]
+        const fr = fcol[p * 3], fg = fcol[p * 3 + 1], fb = fcol[p * 3 + 2]
+        const vr = blr - fr, vg = blg - fg, vb = blb - fb
+        const dd = vr * vr + vg * vg + vb * vb
+        if (dd < 225) continue
+        const tp = wgt[p] / 255
+        const x = p % w, y = (p - x) / w
+        const cand = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, y > 0 ? p - w : -1, y < h - 1 ? p + w : -1]
+        for (const q of cand) {
+          if (q < 0 || (reg[q] !== 0 && reg[q] !== 3)) continue
+          const o = q * 4
+          let t = ((px[o] - fr) * vr + (px[o + 1] - fg) * vg + (px[o + 2] - fb) * vb) / dd
+          if (t >= tp - 0.012 || t <= 0.05) continue
+          const er = px[o] - (fr + t * vr), eg = px[o + 1] - (fg + t * vg), eb = px[o + 2] - (fb + t * vb)
+          const lineTol = 10 + 0.12 * Math.sqrt(dd)
+          if (er * er + eg * eg + eb * eb > lineTol * lineTol) continue
+          t = t > 1 ? 1 : t
+          reg[q] = 2; mode[q] = 2; wgt[q] = Math.round(t * 255)
+          bl[q * 3] = blr; bl[q * 3 + 1] = blg; bl[q * 3 + 2] = blb
+          fcol[q * 3] = fr; fcol[q * 3 + 1] = fg; fcol[q * 3 + 2] = fb
+          shade[q] = shade[p]
+          band.push(q); nextExt.push(q)
+        }
+      }
+      ext = nextExt
+    }
+    return { w, h, px, reg, shade, wgt, bl, mode, fcol }
+  }
+
+  /** 분석 결과에 새 배경색(tr,tg,tb)을 입힌 픽셀을 만든다 — 오브젝트(reg 0)·배경이 아닌 조각(3)은 원본 그대로 */
+  function recolorBackgroundPixels(an: BgAnalysis, tr: number, tg: number, tb: number): Uint8ClampedArray<ArrayBuffer> {
+    const { px, reg, shade, wgt, bl, mode, fcol } = an
+    const n = an.w * an.h
+    const out = new Uint8ClampedArray(px)
+    for (let p = 0; p < n; p++) {
+      const rg = reg[p]
+      const o = p * 4
+      if (rg === 1) {
+        const k = shade[p]
+        out[o] = tr * k; out[o + 1] = tg * k; out[o + 2] = tb * k
+      } else if (rg === 2) {
+        const w8 = wgt[p]
+        if (w8 === 0) continue
+        const wv = w8 / 255
+        const k = shade[p]
+        if ((mode[p] & 1) === 1) {
+          // 원본 가장자리가 오염된 곳 — 안쪽 오브젝트 색과 새 배경색만으로 다시 만든다(옛 배경색·링잉이 남지 않게)
+          out[o] = fcol[p * 3] * (1 - wv) + tr * k * wv
+          out[o + 1] = fcol[p * 3 + 1] * (1 - wv) + tg * k * wv
+          out[o + 2] = fcol[p * 3 + 2] * (1 - wv) + tb * k * wv
+        } else {
+          out[o] = px[o] + wv * (tr * k - bl[p * 3])
+          out[o + 1] = px[o + 1] + wv * (tg * k - bl[p * 3 + 1])
+          out[o + 2] = px[o + 2] + wv * (tb * k - bl[p * 3 + 2])
+        }
       }
     }
     return out
   }
-  function ensureMask(): Uint8ClampedArray | null {
-    if (!edBase) return null
-    const key = `${edVersion}:${edBgTol}`
-    if (edMask && edMaskKey === key) return edMask
-    edMask = computeMask(edBase, edBgTol)
-    edMaskKey = key
-    return edMask
+
+  /** 배경색을 바꾼 기준 캔버스(캐시) — 선택 색이 없으면 원본 기준 캔버스 */
+  function bgSourceCanvas(): HTMLCanvasElement | null {
+    if (!edBase || !edBgColor) return edBase
+    const akey = `${edVersion}:${edBgTol}`
+    if (edBgAnalysisKey !== akey) {
+      const ctx = edBase.getContext('2d', { willReadFrequently: true })
+      edBgAnalysis = ctx ? analyzeBackgroundPixels(ctx.getImageData(0, 0, edBase.width, edBase.height).data, edBase.width, edBase.height, edBgTol) : null
+      edBgAnalysisKey = akey
+      edBgCanvas = null
+      edBgCanvasKey = ''
+    }
+    const an = edBgAnalysis
+    if (!an) return edBase
+    // 명암·컬러감 조절은 맨 마지막에 전체에 걸리므로, 선택한 배경색이 그대로 나오도록 미리 반대로 계산해 둔다
+    const f = 1 + edLight / 100
+    const warm = edWarm * 0.6
+    const [R, G, B] = hexToRgb(edBgColor)
+    const tr = (R - warm) / f, tg = (G - warm * 0.15) / f, tb = (B + warm) / f
+    const ckey = `${akey}:${edBgColor}:${edLight}:${edWarm}`
+    if (edBgCanvas && edBgCanvasKey === ckey) return edBgCanvas
+    const out = recolorBackgroundPixels(an, tr, tg, tb)
+    const cv = document.createElement('canvas')
+    cv.width = an.w; cv.height = an.h
+    const cx = cv.getContext('2d')
+    if (!cx) return edBase
+    cx.putImageData(new ImageData(out, an.w, an.h), 0, 0)
+    edBgCanvas = cv
+    edBgCanvasKey = ckey
+    return cv
   }
 
   /** 박스 블러(가로·세로 한 번씩) — 선명도 계산용. RGB만 처리 */
@@ -411,36 +756,23 @@
     ctx.drawImage(cur, 0, 0, cur.width, cur.height, 0, 0, dw, dh)
   }
 
-  /** 기준 캔버스의 (sx,sy,sw,sh) 영역을 dw×dh로 그리면서 명암·컬러감·배경색·선명도를 반영 */
+  /** 기준 캔버스의 (sx,sy,sw,sh) 영역을 dw×dh로 그리면서 배경색·명암·컬러감·선명도를 반영(배경색은 기준 캔버스 단계에서 먼저 바꾼다) */
   function renderEdited(ctx: CanvasRenderingContext2D, sx: number, sy: number, sw: number, sh: number, dw: number, dh: number): void {
     if (!edBase) return
-    drawScaled(ctx, edBase, sx, sy, sw, sh, dw, dh)
+    drawScaled(ctx, bgSourceCanvas() ?? edBase, sx, sy, sw, sh, dw, dh)
     const adjust = edLight !== 0 || edWarm !== 0
-    const mask = edBgColor ? ensureMask() : null
     const sharp = edSharp > 0
-    if (!adjust && !mask && !sharp) return
+    if (!adjust && !sharp) return
     const data = ctx.getImageData(0, 0, dw, dh)
     const px = data.data
-    const f = 1 + edLight / 100
-    const warm = edWarm * 0.6
-    const bgc = edBgColor ? hexToRgb(edBgColor) : null
-    const bw = edBase.width
-    if (adjust || mask) {
-      for (let y = 0; y < dh; y++) {
-        for (let x = 0; x < dw; x++) {
-          const i = (y * dw + x) * 4
-          let r = px[i], g = px[i + 1], b = px[i + 2]
-          if (adjust) { r = r * f + warm; g = g * f + warm * 0.15; b = b * f - warm }
-          if (mask && bgc) {
-            const mx = Math.min(Math.floor(sx + ((x + 0.5) * sw) / dw), bw - 1)
-            const my = Math.min(Math.floor(sy + ((y + 0.5) * sh) / dh), edBase.height - 1)
-            const a = mask[my * bw + mx] / 255
-            if (a > 0) { r += (bgc[0] - r) * a; g += (bgc[1] - g) * a; b += (bgc[2] - b) * a }
-          }
-          px[i] = r < 0 ? 0 : r > 255 ? 255 : r
-          px[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g
-          px[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b
-        }
+    if (adjust) {
+      const f = 1 + edLight / 100
+      const warm = edWarm * 0.6
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i] * f + warm, g = px[i + 1] * f + warm * 0.15, b = px[i + 2] * f - warm
+        px[i] = r < 0 ? 0 : r > 255 ? 255 : r
+        px[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g
+        px[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b
       }
     }
     if (sharp) sharpenPixels(px, dw, dh, edSharp)
@@ -982,7 +1314,7 @@
                 {:else if sec.id === 'bg'}
                   <div class="mv-row">
                     <button type="button" class="mv-chip" class:active={edBgColor === null} onclick={() => (edBgColor = null)} aria-pressed={edBgColor === null}>원본 배경</button>
-                    <span class="mv-hint">배경을 자동으로 인식해 선택한 색으로 바꿉니다.</span>
+                    <span class="mv-hint">배경만 골라 선택한 색으로 바꾸고, 상품은 그대로 두며 그림자·명암은 남깁니다.</span>
                   </div>
                   <div class="mv-swatches">
                     {#each BG_COLORS as c (c.hex)}
@@ -990,7 +1322,7 @@
                         type="button"
                         class="mv-swatch"
                         class:selected={edBgColor === c.hex}
-                        style={`background:${c.hex};color:${c.hex === '#FFFFFF' || c.hex === '#F2F2F2' || c.hex === '#FFF8E7' || c.hex === '#FADADD' || c.hex === '#FDD835' || c.hex === '#C5E1A5' || c.hex === '#B3E5FC' || c.hex === '#D1C4E9' || c.hex === '#E8D8BF' || c.hex === '#80CBC4' ? '#100B32' : '#ffffff'};`}
+                        style={`background:${c.hex};color:${c.hex === '#F3F0EE' || c.hex === '#FFFFFF' || c.hex === '#F2F2F2' || c.hex === '#FFF8E7' || c.hex === '#FADADD' || c.hex === '#FDD835' || c.hex === '#C5E1A5' || c.hex === '#B3E5FC' || c.hex === '#D1C4E9' || c.hex === '#E8D8BF' || c.hex === '#80CBC4' ? '#100B32' : '#ffffff'};`}
                         onclick={() => (edBgColor = c.hex)}
                         aria-label={`배경색 ${c.name}`}
                         aria-pressed={edBgColor === c.hex}
@@ -1492,7 +1824,7 @@
     white-space: nowrap;
   }
   .mv-slider input[type='range'] { flex: 1; min-width: 80px; accent-color: var(--cs-purple); }
-  .mv-swatches { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; }
+  .mv-swatches { display: grid; grid-template-columns: repeat(13, 1fr); gap: 6px; }
   .mv-swatch {
     aspect-ratio: 1 / 1;
     min-width: 0;
