@@ -99,6 +99,13 @@
 
 	// PRD.1.7 — 채팅 FAB
 	let chatUserId = $derived($authState.user?.id ?? 'test-user')
+
+	// 모바일 GNB 알림 링 확인 처리용(GNB.svelte NOTICE_VISIT_KEY): /account 아래 화면은 GNB 가 없으므로, 항상 떠 있는 이 레이아웃이 방문한 계정만 기록한다
+	$effect(() => {
+		const uid = $authState.user?.id
+		if (!uid || !page.url.pathname.startsWith('/account')) return
+		try { localStorage.setItem('cs_gnb_notice_visit_v1', uid) } catch { /* 저장 불가 — 링이 늦게 꺼질 수 있을 뿐 */ }
+	})
 	let chatUserName = $derived(
 		($authState.user?.user_metadata?.full_name as string | undefined) ??
 		$authState.user?.email?.split('@')[0] ??

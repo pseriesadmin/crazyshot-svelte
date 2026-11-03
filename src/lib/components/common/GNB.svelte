@@ -4,6 +4,7 @@
   import { page } from '$app/stores'
   import { loginHref } from '$lib/utils/loginRedirect'
   import { supabase } from '$lib/services/supabase'
+  import { fade } from 'svelte/transition'
 
   // 비로그인 로그인 링크 — 지금 화면을 redirect로 붙여 로그인 후 직전 화면으로 복귀
   const signInHref = $derived(loginHref($page.url.pathname, $page.url.search))
@@ -30,6 +31,83 @@
       .then(({ data }) => {
         if (!cancelled) gnbAvatarUrl = (data as { avatar_url: string | null } | null)?.avatar_url ?? null
       })
+    return () => { cancelled = true }
+  })
+
+  // 알림 수신 표시(2026-11-03, Stephen 지시): 대여현황 카드 변경정보(관리자가 바꾼 예약 상태)·새 쿠폰이 마지막 확인 이후 생겼으면
+  // 모바일 아바타 둘레에 회전하는 도트 링을 띄운다. '마지막 확인'은 이 기기(localStorage)에 계정별로 저장하고(Stephen 선택: 기기 저장 — DB 변경 없음),
+  // /account 화면(마이페이지·대여현황)에 들어가면 확인한 것으로 본다. 처음 사용(저장값 없음)은 기준선만 저장해 오탐을 막는다. 조회·저장 실패는 조용히 무시(링만 꺼짐).
+  const NOTICE_STORAGE_PREFIX = 'cs_gnb_notice_v1:'
+  // /account 아래 화면에서는 GNB 가 그려지지 않아(+layout.svelte) 이 컴포넌트가 '마이페이지를 봤다'를 직접 알 수 없다 —
+  // 항상 떠 있는 레이아웃이 방문한 계정 id 를 이 키에 남기고, GNB 가 다시 나타나 조회에 성공하면 확인 처리 후 지운다
+  const NOTICE_VISIT_KEY = 'cs_gnb_notice_visit_v1'
+  const NOTICE_REFETCH_MS = 60_000            // 화면 이동마다 조회하지 않도록 비-계정 화면에서는 1분 간격
+  // 관리자 처리로만 바뀌는 단계 — 고객 본인의 신청(hold) 직후 오탐을 피하려 hold·draft 는 제외
+  const NOTICE_RENTAL_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'cancelled']
+  let hasNotice = $state(false)
+  // 알림 링의 점 16개 — 원 둘레에 같은 간격(22.5°)으로 놓고 앞쪽(회전 진행 방향)으로 갈수록 점이 커지고 진해져 꼬리처럼 보이게 한다(회전감이 부드럽게 읽힘)
+  const NOTICE_DOT_COUNT = 16
+  const NOTICE_DOTS = Array.from({ length: NOTICE_DOT_COUNT }, (_, i) => {
+    const t = i / (NOTICE_DOT_COUNT - 1)
+    const rad = (i * (360 / NOTICE_DOT_COUNT) - 90) * (Math.PI / 180)
+    return { cx: 24 + 21 * Math.cos(rad), cy: 24 + 21 * Math.sin(rad), r: 0.9 + 1.5 * t, o: 0.3 + 0.7 * t }
+  })
+  let lastNoticeFetch = 0
+
+  interface NoticeSeen { rentals: string[]; coupons: string[] }
+
+  function readNoticeSeen(uid: string): NoticeSeen | null {
+    try {
+      const raw = localStorage.getItem(NOTICE_STORAGE_PREFIX + uid)
+      if (!raw) return null
+      const v = JSON.parse(raw) as Partial<NoticeSeen>
+      return Array.isArray(v.rentals) && Array.isArray(v.coupons) ? { rentals: v.rentals, coupons: v.coupons } : null
+    } catch { return null }
+  }
+
+  function writeNoticeSeen(uid: string, seen: NoticeSeen): void {
+    try { localStorage.setItem(NOTICE_STORAGE_PREFIX + uid, JSON.stringify(seen)) } catch { /* 저장 불가(사생활 보호 모드 등) — 링만 못 켜질 뿐 */ }
+  }
+
+  $effect(() => {
+    const uid = $authState.user?.id
+    const onAccount = $page.url.pathname.startsWith('/account')
+    if (!uid || isGuestUser) { hasNotice = false; return }
+    let visitedAccount = false
+    try { visitedAccount = localStorage.getItem(NOTICE_VISIT_KEY) === uid } catch { /* 읽기 불가 — 방문 기록만 무시 */ }
+    const markSeen = onAccount || visitedAccount
+    if (!markSeen && Date.now() - lastNoticeFetch < NOTICE_REFETCH_MS) return
+    lastNoticeFetch = Date.now()
+    let cancelled = false
+    void (async () => {
+      try {
+        const [rentalRes, couponRes] = await Promise.all([
+          supabase.from('rental_reservations').select('id, status, updated_at')
+            .eq('user_id', uid).in('status', NOTICE_RENTAL_STATUSES)
+            .order('submitted_at', { ascending: false }).limit(30),
+          // 최신 발급분부터 50장 — 정렬 없이 limit 만 걸면 보유 쿠폰이 50장을 넘을 때 새 쿠폰이 빠지거나 조회마다 다른 50장이 와서 감지가 어긋난다
+          supabase.from('user_coupons').select('id').eq('user_id', uid).is('used_at', null)
+            .order('created_at', { ascending: false }).limit(50),
+        ])
+        if (cancelled || rentalRes.error || couponRes.error) return
+        const rentalRows = (rentalRes.data ?? []) as { id: string; status: string | null; updated_at: string | null }[]
+        const couponRows = (couponRes.data ?? []) as { id: string }[]
+        const current: NoticeSeen = {
+          rentals: rentalRows.map((r) => `${r.id}:${r.status}:${r.updated_at}`),
+          coupons: couponRows.map((c) => c.id),
+        }
+        const seen = readNoticeSeen(uid)
+        if (!seen || markSeen) {   // 처음이거나 마이페이지를 보는 중·보고 온 직후 → 확인한 것으로 기록하고 링 끔
+          writeNoticeSeen(uid, current)
+          if (visitedAccount) { try { localStorage.removeItem(NOTICE_VISIT_KEY) } catch { /* 지우기 불가 — 다음에 다시 확인 처리될 뿐 */ } }
+          hasNotice = false
+          return
+        }
+        hasNotice = current.rentals.some((x) => !seen.rentals.includes(x)) || current.coupons.some((x) => !seen.coupons.includes(x))
+      } catch {
+        if (!cancelled) hasNotice = false
+      }
+    })()
     return () => { cancelled = true }
   })
 
@@ -216,14 +294,26 @@
 
     {#if !$authState.loading}
       {#if $authState.user && !isGuestUser}
-        <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label="내 계정">
-          <canvas class="gnb-holo-canvas" width="120" height="120" aria-hidden="true" bind:this={holoCanvas}></canvas>
-          {#if gnbAvatarUrl}
-            <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img gnb-avatar-img-mobile" decoding="async" />
-          {:else}
-            <span class="gnb-avatar-initial-text">{userInitial()}</span>
+        <span class="gnb-avatar-wrap">
+          <button class="gnb-avatar-btn gnb-avatar-btn-initial" onclick={() => goto('/account')} aria-label={hasNotice ? '내 계정 (새 알림 있음)' : '내 계정'}>
+            <canvas class="gnb-holo-canvas" width="120" height="120" aria-hidden="true" bind:this={holoCanvas}></canvas>
+            {#if gnbAvatarUrl}
+              <img src={gnbAvatarUrl} alt="" class="gnb-avatar-img gnb-avatar-img-mobile" decoding="async" />
+            {:else}
+              <span class="gnb-avatar-initial-text">{userInitial()}</span>
+            {/if}
+          </button>
+          {#if hasNotice}
+            <!-- 알림 수신: 아바타 바깥을 도는 도트 링(버튼은 overflow:hidden 이라 형제로 둔다) -->
+            <svg class="gnb-notice-ring" viewBox="0 0 48 48" aria-hidden="true" in:fade={{ duration: 450 }} out:fade={{ duration: 300 }}>
+              <g class="gnb-notice-pulse">
+                {#each NOTICE_DOTS as d}
+                  <circle cx={d.cx} cy={d.cy} r={d.r} opacity={d.o} />
+                {/each}
+              </g>
+            </svg>
           {/if}
-        </button>
+        </span>
       {:else}
         <a href={signInHref} class="gnb-avatar-btn" aria-label="내 계정">
           <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 40 40" fill="none" aria-hidden="true">
@@ -427,14 +517,55 @@
     height: 64px;
   }
 
+  /* 아바타 + 알림 링 래퍼 — 아바타 10% 확대(32→35.2px, Stephen 지시 2026-11-03) */
+  .gnb-avatar-wrap {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    width: 35.2px;
+    height: 35.2px;
+  }
+  /* 알림 수신 도트 링 — 아바타 바깥(래퍼 기준 사방 6px)을 도는 동그란 점 16개(꼬리처럼 커지고 진해짐) */
+  .gnb-notice-ring {
+    position: absolute;
+    inset: -6px;
+    width: calc(100% + 12px);
+    height: calc(100% + 12px);
+    pointer-events: none;
+    /* 일정한 속도의 연속 회전 + GPU 합성 레이어로 끊김 최소화.
+       ⚠ 여기에 정적 transform(translateZ 등)을 두지 말 것 — 키프레임과 변환 함수 목록이 달라지면 행렬 보간이 되어
+       360° 회전이 항등 행렬과 같아 "돌지 않는" 것처럼 보인다(2026-11-03 실제 결함) */
+    animation: gnb-notice-spin 4.8s linear infinite;
+    will-change: transform;
+  }
+  .gnb-notice-ring circle {
+    fill: var(--cs-red-badge);
+  }
+  /* 페이드 인·아웃 — 회전하는 동안 링 전체가 부드럽게 옅어졌다 짙어지기를 반복(등장·사라짐은 Svelte fade 로 처리) */
+  .gnb-notice-pulse {
+    animation: gnb-notice-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes gnb-notice-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  @keyframes gnb-notice-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .gnb-notice-ring,
+    .gnb-notice-pulse { animation: none; }
+  }
+
   .gnb-avatar-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    min-width: 32px;
-    min-height: 32px;
+    width: 35.2px;
+    height: 35.2px;
+    min-width: 35.2px;
+    min-height: 35.2px;
     text-decoration: none;
     flex-shrink: 0;
     opacity: 0.85;
@@ -449,7 +580,7 @@
     border: none;
     color: var(--cs-dark);
     font-family: var(--font-en-display);
-    font-size: 14.4px;
+    font-size: 15.84px;
     font-weight: 700;
     cursor: pointer;
     text-transform: uppercase;
