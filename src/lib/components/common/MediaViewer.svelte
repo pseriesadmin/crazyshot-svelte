@@ -104,6 +104,7 @@
       document.body.style.overflow = prev
       if (edObjectUrl) URL.revokeObjectURL(edObjectUrl)
       if (mobObjectUrl) URL.revokeObjectURL(mobObjectUrl)
+      mobKeyReset()
     }
   })
 
@@ -190,7 +191,9 @@
   let edOpen = $state<EditSection | null>('crop')
   let edImg: HTMLImageElement | null = null
   let edObjectUrl: string | null = null
-  let edTurns = $state(0)        // 90도 단위 회전 횟수(0~3)
+  let edTurns = $state(0)        // 90도 단위 회전 횟수(0~3) — 현재 화면의 회전 버튼은 edTilt를 쓴다
+  let edTilt = $state(0)         // 5도 단위 기울기(도, 시계 방향이 +, -180 초과~180)
+  const ED_TILT_STEP = 5
   let edFlipH = $state(false)
   let edFlipV = $state(false)
   let edLight = $state(0)        // 명암: -50(어둡게) ~ +50(밝게)
@@ -225,7 +228,7 @@
       const img = new Image()
       await new Promise<void>((ok, fail) => { img.onload = () => ok(); img.onerror = () => fail(new Error('load')); img.src = edObjectUrl as string })
       edImg = img
-      edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edAspect = 'free'; edSharp = 0; edScale = 1
+      edTurns = 0; edTilt = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edAspect = 'free'; edSharp = 0; edScale = 1
       edOpen = visibleSections[0]?.id ?? null
       crop = { x: 0, y: 0, w: 1, h: 1 }
       editMode = true
@@ -255,12 +258,22 @@
     const k = Math.min(1, MAX_EDIT_SIDE / Math.max(sw, sh))
     const dw = Math.max(Math.round(sw * k), 1), dh = Math.max(Math.round(sh * k), 1)
     const swap = edTurns % 2 === 1
+    const w0 = swap ? dh : dw, h0 = swap ? dw : dh
+    // 기울여도 작업 영역 크기는 그대로(확대·축소 없음) — 이미지 중심을 축으로 돌리고, 드러난 모서리는 테두리 색으로 채운다
+    const th = (edTilt * Math.PI) / 180
     const c = document.createElement('canvas')
-    c.width = swap ? dh : dw
-    c.height = swap ? dw : dh
+    c.width = w0
+    c.height = h0
     const ctx = c.getContext('2d')
     if (!ctx) return
+    if (edTilt !== 0) {
+      // 기울여서 드러난 모서리는 원본 테두리 색으로 채운다
+      ctx.fillStyle = borderColorOf(edImg)
+      ctx.fillRect(0, 0, c.width, c.height)
+      ctx.imageSmoothingQuality = 'high'
+    }
     ctx.translate(c.width / 2, c.height / 2)
+    ctx.rotate(th)
     ctx.rotate((edTurns * Math.PI) / 2)
     ctx.scale(edFlipH ? -1 : 1, edFlipV ? -1 : 1)
     ctx.drawImage(edImg, -dw / 2, -dh / 2, dw, dh)
@@ -277,10 +290,14 @@
     edAspect = 'free'
     rebuildBase()
   }
-  function turn(dir: 1 | -1): void { edTurns = (edTurns + dir + 4) % 4; geometryChanged() }
+  function turn(dir: 1 | -1): void {
+    const next = (edTilt + dir * ED_TILT_STEP) % 360
+    edTilt = next > 180 ? next - 360 : next <= -180 ? next + 360 : next
+    geometryChanged()
+  }
   function flip(axis: 'h' | 'v'): void { if (axis === 'h') edFlipH = !edFlipH; else edFlipV = !edFlipV; geometryChanged() }
   function resetEdit(): void {
-    edTurns = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edBgTol = 36; edSharp = 0; edScale = 1
+    edTurns = 0; edTilt = 0; edFlipH = false; edFlipV = false; edLight = 0; edWarm = 0; edBgColor = null; edBgTol = 36; edSharp = 0; edScale = 1
     geometryChanged()
   }
   function toggleSection(id: EditSection): void { edOpen = edOpen === id ? null : id }
@@ -854,6 +871,22 @@
     crop = { x: sx > 0 ? ax : ax - w, y: sy > 0 ? ay : ay - h, w, h }
   }
   function cropUp(): void { cropDrag = null }
+  // 편집 화면 위에서 세로 스크롤하면 자르기 영역을 중심 기준으로 확대(위로)·축소(아래로) — 가로세로 비율은 유지
+  function editWheel(e: WheelEvent): void {
+    if (editSaving || edBox.w <= 0 || edBox.h <= 0) return
+    e.preventDefault()
+    if (!e.deltaY) return
+    const lo = Math.max(MIN_CROP / crop.w, MIN_CROP / crop.h)
+    const hi = Math.min(1 / crop.w, 1 / crop.h)
+    const f = Math.min(Math.max(Math.exp(-e.deltaY * 0.0015), lo), Math.max(hi, lo))
+    const w = crop.w * f, h = crop.h * f
+    const cx = crop.x + crop.w / 2, cy = crop.y + crop.h / 2
+    crop = {
+      x: Math.min(Math.max(cx - w / 2, 0), 1 - w),
+      y: Math.min(Math.max(cy - h / 2, 0), 1 - h),
+      w, h
+    }
+  }
 
   async function applyEdit(): Promise<void> {
     if (!edBase || !onSave || editSaving) return
@@ -898,6 +931,8 @@
   let mobX = $state(0)          // 가이드 중심 기준 이미지 중심 이동량(가이드 px)
   let mobY = $state(0)
   let mobBarH = $state(0)
+  let mobRot = $state(0)        // 이미지 기울기(도, 시계 방향이 +) — 5도씩 조절
+  const MOB_ROT_STEP = 5
 
   // 가이드 크기 — 스테이지 높이(+ 버튼 자리)와 폭에 맞춰 390:800 비율로 계산
   const mobGuide = $derived.by(() => {
@@ -926,7 +961,7 @@
       mobObjectUrl = url
       mobImg = img
       mobNat = { w: img.naturalWidth, h: img.naturalHeight }
-      mobF = 1; mobX = 0; mobY = 0
+      mobF = 1; mobX = 0; mobY = 0; mobRot = 0
       mobMode = true
     } catch {
       csToast.error('이 이미지는 모바일 이미지로 만들 수 없습니다.')
@@ -937,6 +972,7 @@
   }
 
   function endMobile(): void {
+    mobKeyReset()
     mobMode = false
     mobImg = null
     if (mobObjectUrl) { URL.revokeObjectURL(mobObjectUrl); mobObjectUrl = null }
@@ -944,6 +980,10 @@
 
   function mobSetF(next: number): void {
     mobF = Math.min(Math.max(next, MOB_F_MIN), MOB_F_MAX)
+  }
+  function mobRotate(dir: 1 | -1): void {
+    const next = (mobRot + dir * MOB_ROT_STEP) % 360
+    mobRot = next > 180 ? next - 360 : next <= -180 ? next + 360 : next
   }
   function mobFitAll(): void { mobF = 1; mobX = 0; mobY = 0 }
   function mobFill(): void { mobF = Math.min(mobCover, MOB_F_MAX); mobX = 0; mobY = 0 }
@@ -959,8 +999,21 @@
     mobY = mobDrag.py + (e.clientY - mobDrag.y)
   }
   function mobUp(): void { mobDrag = null }
+  // 모바일 도구줄 위에서 좌우 스크롤(트랙패드 가로 스크롤·Shift+휠)로 크기 조절 — 오른쪽 늘리기 / 왼쪽 줄이기
+  function mobBarWheel(node: HTMLElement): { destroy: () => void } {
+    const onWheel = (e: WheelEvent): void => {
+      const d = e.deltaX || (e.shiftKey ? e.deltaY : 0)
+      if (!d) return
+      e.preventDefault()
+      mobSetF(mobF * Math.exp(d * 0.0015))
+    }
+    node.addEventListener('wheel', onWheel, { passive: false })
+    return { destroy: () => node.removeEventListener('wheel', onWheel) }
+  }
   function mobWheel(e: WheelEvent): void {
     e.preventDefault()
+    // 가로 스크롤(트랙패드 좌우·Shift+휠)은 이미지를 좌우로 이동, 세로 스크롤은 크기 조절
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) { mobX -= e.deltaX; return }
     mobSetF(mobF * Math.exp(-e.deltaY * 0.0015))
   }
 
@@ -1004,6 +1057,29 @@
     return cur
   }
 
+  /** 원본 이미지 테두리(바깥 2px 띠)의 중앙값 색 — 기울였을 때 드러나는 빈 영역을 채우는 색 */
+  function sourceBorderColor(): string { return mobImg ? borderColorOf(mobImg) : '#ffffff' }
+  function borderColorOf(img: HTMLImageElement): string {
+    const S = 96
+    const cv = document.createElement('canvas')
+    cv.width = S; cv.height = S
+    const cx = cv.getContext('2d', { willReadFrequently: true })
+    if (!cx) return '#ffffff'
+    cx.drawImage(img, 0, 0, S, S)
+    const d = cx.getImageData(0, 0, S, S).data
+    const rs: number[] = [], gs: number[] = [], bs: number[] = []
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        if (x >= 2 && x < S - 2 && y >= 2 && y < S - 2) continue
+        const o = (y * S + x) * 4
+        if (d[o + 3] < 128) continue   // 투명한 테두리는 색 계산에서 제외(검정으로 채워지는 것 방지)
+        rs.push(d[o]); gs.push(d[o + 1]); bs.push(d[o + 2])
+      }
+    }
+    if (rs.length === 0) return '#ffffff'
+    return `rgb(${medianOf(rs)},${medianOf(gs)},${medianOf(bs)})`
+  }
+
   /** 가이드 안 모습을 OW×OH로 그리고, 빈 상·하단(좌·우)은 이미지 가장자리 색을 바깥으로 이어 자동 채움 */
   function renderMobile(): HTMLCanvasElement | null {
     if (!mobImg || mobGuide.w <= 0) return null
@@ -1021,6 +1097,18 @@
     c.width = W; c.height = H
     const ctx = c.getContext('2d', { willReadFrequently: true })
     if (!ctx) return null
+    if (mobRot !== 0) {
+      // 기울인 경우: 원본 테두리 색으로 바탕을 채운 뒤, 이미지 중심을 축으로 회전해 그린다(드러난 모서리·빈 영역은 테두리 색)
+      ctx.fillStyle = sourceBorderColor()
+      ctx.fillRect(0, 0, W, H)
+      ctx.imageSmoothingQuality = 'high'
+      ctx.save()
+      ctx.translate(W / 2 + mobX * m, H / 2 + mobY * m)
+      ctx.rotate((mobRot * Math.PI) / 180)
+      ctx.drawImage(mobImg, ins, ins, sw, sh, -dw / 2, -dh / 2, dw, dh)
+      ctx.restore()
+      return c
+    }
     ctx.drawImage(mobImg, ins, ins, sw, sh, x0, y0, x1 - x0, y1 - y0)
     const vx0 = Math.max(x0, 0), vx1 = Math.min(x1, W), vy0 = Math.max(y0, 0), vy1 = Math.min(y1, H)
     if (vx1 - vx0 < 2 || vy1 - vy0 < 2) {
@@ -1076,9 +1164,78 @@
     }
   }
 
+  // 방향키 연속 이동: 누르고 있는 시간이 길수록 빨라진다(0.4초 뒤부터 가속)
+  const MOB_ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']
+  const mobKeys = new Set<string>()
+  let mobKeyFast = false
+  let mobKeyZoom = false
+  let mobKeyRaf = 0
+  let mobKeyStart = 0
+  let mobKeyLast = 0
+  function mobKeyDir(): { dx: number; dy: number } {
+    return {
+      dx: (mobKeys.has('ArrowRight') ? 1 : 0) - (mobKeys.has('ArrowLeft') ? 1 : 0),
+      dy: (mobKeys.has('ArrowDown') ? 1 : 0) - (mobKeys.has('ArrowUp') ? 1 : 0)
+    }
+  }
+  function mobKeyStep(): void {
+    const { dx, dy } = mobKeyDir()
+    if (mobKeyZoom) { if (dx) mobSetF(mobF * (1 + dx * (mobKeyFast ? 0.05 : 0.01))); return }
+    const step = mobKeyFast ? 10 : 1
+    mobX += dx * step
+    mobY += dy * step
+  }
+  function mobKeyLoop(now: number): void {
+    mobKeyRaf = 0
+    if (!mobMode || mobSaving || mobKeys.size === 0) return
+    const dt = Math.min(now - mobKeyLast, 50) / 1000
+    mobKeyLast = now
+    const held = now - mobKeyStart
+    if (held > 400) {
+      const ramp = Math.min(1 + (held - 400) / 800, 3)   // 1배 → 3배로 서서히 가속
+      const { dx, dy } = mobKeyDir()
+      if (mobKeyZoom) {
+        if (dx) mobSetF(mobF * Math.exp(dx * dt * (mobKeyFast ? 1.8 : 0.7) * ramp))
+      } else {
+        const speed = (mobKeyFast ? 400 : 90) * ramp   // 가이드 px/초
+        mobX += dx * speed * dt
+        mobY += dy * speed * dt
+      }
+    }
+    mobKeyRaf = requestAnimationFrame(mobKeyLoop)
+  }
+  function onKeyUp(e: KeyboardEvent): void {
+    mobKeys.delete(e.key)
+    if (e.key === 'Control') mobKeyZoom = false
+    if (mobKeys.size === 0 && mobKeyRaf) { cancelAnimationFrame(mobKeyRaf); mobKeyRaf = 0 }
+  }
+  function mobKeyReset(): void {
+    mobKeys.clear()
+    if (mobKeyRaf) { cancelAnimationFrame(mobKeyRaf); mobKeyRaf = 0 }
+  }
+
   function onKey(e: KeyboardEvent): void {
     if (e.key === 'Escape') { if (mobMode) { if (!mobSaving) endMobile() } else if (editMode) { if (!editSaving) endEdit() } else if (gridMode) gridMode = false; else onclose(); return }
-    if (editMode || mobMode || gridMode || !isImage) return
+    if (mobMode) {
+      // 모바일 가이드: 방향키로 이미지 이동, Ctrl + 좌우 방향키로 크기 조절(Shift는 빠르게)
+      // 키를 누르고 있는 동안은 OS 키반복(처음 지연 후 뭉텅이 입력) 대신 매 프레임 부드럽게 이어서 움직인다
+      if (!MOB_ARROWS.includes(e.key) || mobSaving) return
+      // 크기 슬라이더(range)에 포커스가 남아 있어도 방향키는 슬라이더가 아닌 이미지 이동으로 쓴다(preventDefault로 슬라이더 이동 차단)
+      const t = e.target
+      if (t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t instanceof HTMLInputElement && t.type !== 'range'))) return
+      e.preventDefault()
+      if (e.repeat) return
+      mobKeys.add(e.key)
+      mobKeyFast = e.shiftKey
+      mobKeyZoom = e.ctrlKey
+      mobKeyStart = performance.now()
+      mobKeyLast = mobKeyStart
+      // 눌렀을 때 한 번 즉시 반응(가볍게 톡 치면 1칸/한 단계)
+      mobKeyStep()
+      if (!mobKeyRaf) mobKeyRaf = requestAnimationFrame(mobKeyLoop)
+      return
+    }
+    if (editMode || gridMode || !isImage) return
     // 입력창(배경에 포커스가 남은 글 입력란 등)에서 치는 글자는 단축키로 가로채지 않는다
     const t = e.target
     if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
@@ -1132,7 +1289,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onkeyup={onKeyUp} onblur={mobKeyReset} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
@@ -1153,7 +1310,7 @@
 
   <!-- 본문 -->
   {#if editMode}
-    <div class="mv-stage mv-edit-stage" style={`margin-bottom:${edBarH + 32}px;`} bind:clientWidth={stageW} bind:clientHeight={stageH} role="presentation">
+    <div class="mv-stage mv-edit-stage" style={`margin-bottom:${edBarH + 32}px;`} bind:clientWidth={stageW} bind:clientHeight={stageH} role="presentation" onwheel={editWheel}>
       <div class="mv-edit-box" style={`width:${edBox.w}px;height:${edBox.h}px;`}>
         <canvas bind:this={edCanvas} class="mv-edit-canvas"></canvas>
         {#if editSectionIds.includes('crop')}
@@ -1191,14 +1348,25 @@
               src={mobObjectUrl}
               alt=""
               draggable="false"
-              style={`width:${mobNat.w * mobScale}px;height:${mobNat.h * mobScale}px;left:${mobGuide.w / 2 + mobX - (mobNat.w * mobScale) / 2}px;top:${mobGuide.h / 2 + mobY - (mobNat.h * mobScale) / 2}px;`}
+              style={`width:${mobNat.w * mobScale}px;height:${mobNat.h * mobScale}px;left:${mobGuide.w / 2 + mobX - (mobNat.w * mobScale) / 2}px;top:${mobGuide.h / 2 + mobY - (mobNat.h * mobScale) / 2}px;transform:rotate(${mobRot}deg);`}
             />
           {/if}
           <span class="mv-mob-label">모바일 {MOB_RATIO_W}×{MOB_RATIO_H}</span>
         </div>
-        <button type="button" class="mv-mob-add" onclick={createMobile} onpointerdown={(e) => e.stopPropagation()} disabled={mobSaving} aria-label="모바일 전용 이미지로 저장" title="가이드 안 모습 그대로 모바일 전용 이미지로 저장">
-          {mobSaving ? '…' : '+'}
-        </button>
+        <div class="mv-row mv-mob-tools" role="presentation" onpointerdown={(e) => e.stopPropagation()}>
+          <button type="button" class="mv-mob-icon" onclick={() => mobRotate(-1)} aria-label="왼쪽으로 5도 회전" title="왼쪽으로 5도 회전">
+            <svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M3.5 9a5.5 5.5 0 1 0 1.8-4.07M3.5 2.5v3h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+          <button type="button" class="mv-mob-icon" onclick={mobFitAll} aria-label="전체 보기" title="전체 보기">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /><rect x="7" y="7" width="6" height="6" rx="1" fill="currentColor" /></svg>
+          </button>
+          <button type="button" class="mv-mob-icon" onclick={mobFill} aria-label="꽉 채우기" title="꽉 채우기">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2" fill="currentColor" /></svg>
+          </button>
+          <button type="button" class="mv-mob-icon" onclick={() => mobRotate(1)} aria-label="오른쪽으로 5도 회전" title="오른쪽으로 5도 회전">
+            <svg viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M14.5 9a5.5 5.5 0 1 1-1.8-4.07M14.5 2.5v3h-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
       </div>
     </div>
   {:else if gridMode}
@@ -1288,7 +1456,7 @@
           <div class="mv-acc-item">
             <button type="button" class="mv-acc-head" class:open={edOpen === sec.id} aria-expanded={edOpen === sec.id} onclick={() => toggleSection(sec.id)}>
               <span>{sec.label}</span>
-              <ChevronIcon direction={edOpen === sec.id ? 'up' : 'down'} size={10} color="#666666" />
+              <ChevronIcon direction={edOpen === sec.id ? 'up' : 'down'} size={5} color="#666666" />
             </button>
             {#if edOpen === sec.id}
               <div class="mv-acc-panel">
@@ -1361,16 +1529,10 @@
       </div>
     </div>
   {:else if mobMode}
-    <div class="mv-edit-bar mv-mob-bar" role="toolbar" aria-label="모바일 이미지 도구" bind:clientHeight={mobBarH}>
-      <p class="mv-hint">이미지를 끌어 이동하고, 슬라이더·마우스 휠로 크기를 맞춘 뒤 가이드 아래 + 를 누르세요. 비어 있는 상·하단은 이미지 가장자리 색으로 자동 채워집니다.</p>
-      <div class="mv-row">
-        <button type="button" class="mv-chip" onclick={mobFitAll}>전체 보기</button>
-        <button type="button" class="mv-chip" onclick={mobFill}>꽉 채우기</button>
-      </div>
-      <label class="mv-slider"><span>줄이기</span><input type="range" min={MOB_F_MIN} max={MOB_F_MAX} step="0.01" value={mobF} oninput={(e) => mobSetF(Number((e.currentTarget as HTMLInputElement).value))} aria-label="이미지 크기 조절" /><span>늘리기</span></label>
-      <div class="mv-row mv-edit-actions">
-        <button type="button" class="mv-text-btn" onclick={endMobile} disabled={mobSaving}>취소</button>
-      </div>
+    <div class="mv-edit-bar mv-mob-bar" role="toolbar" aria-label="모바일 이미지 도구" bind:clientHeight={mobBarH} use:mobBarWheel>
+      <button type="button" class="mv-mob-add" onclick={createMobile} onpointerdown={(e) => e.stopPropagation()} disabled={mobSaving} aria-label="모바일 전용 이미지로 저장" title="가이드 안 모습 그대로 모바일 전용 이미지로 저장">
+        {#if mobSaving}…{:else}<svg viewBox="0 0 18 12" fill="none" aria-hidden="true"><path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" /></svg>{/if}
+      </button>
     </div>
   {:else}
   <div class="mv-bar" class:mv-bar-wide={!!onMobileCreate} role="toolbar" aria-label="뷰어 도구">
@@ -1401,18 +1563,18 @@
           <path d="M14.5 9a5.5 5.5 0 1 1-1.8-4.07M14.5 2.5v3h-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
+      {#if canEdit}
+        <button type="button" class="mv-btn" onclick={startEdit} disabled={gridMode || editLoading} aria-label="이미지 편집" title="이미지 편집">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M3 15l.7-3.3L12.4 3a1.6 1.6 0 0 1 2.3 2.3L6 14l-3 1zM10.8 4.6l2.6 2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      {/if}
       {#if canMobile}
         <button type="button" class="mv-btn" onclick={startMobile} disabled={gridMode || mobLoading} aria-label="모바일 전용 이미지 만들기" title="모바일 전용 이미지 만들기">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
             <rect x="5" y="1.8" width="8" height="14.4" rx="2" stroke="currentColor" stroke-width="1.6" />
             <path d="M8 13.8h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          </svg>
-        </button>
-      {/if}
-      {#if canEdit}
-        <button type="button" class="mv-btn" onclick={startEdit} disabled={gridMode || editLoading} aria-label="이미지 편집" title="이미지 편집">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <path d="M3 15l.7-3.3L12.4 3a1.6 1.6 0 0 1 2.3 2.3L6 14l-3 1zM10.8 4.6l2.6 2.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
       {/if}
@@ -1736,6 +1898,9 @@
     display: flex; align-items: center; justify-content: center;
     transition: background 0.12s;
   }
+  /* 표준 체크 아이콘 크기(front-uiux §17: Mobile 22×15 → PC 18×12) */
+  .mv-mob-add svg { width: 22px; height: 15px; }
+  @media (min-width: 768px) { .mv-mob-add svg { width: 18px; height: 12px; } }
   .mv-mob-add:hover:not(:disabled) { background: var(--cs-lilac); }
   .mv-mob-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1769,7 +1934,7 @@
     width: min(560px, calc(100vw - 24px));
     max-height: calc(100vh - 150px);
     overflow-y: auto;
-    padding: 8px 14px 10px;
+    padding: 8px 16.8px 10px;   /* 좌우 14px의 120%(20% 추가) */
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -1777,6 +1942,33 @@
     background: var(--cs-white);
     border-radius: var(--cms-radius-lg, 30px);
   }
+  /* 모바일 도구줄: 흰 배경 없이 두 버튼만 */
+  .mv-mob-bar {
+    width: max-content;
+    padding: 0;
+    overflow: visible;
+    background: transparent;
+  }
+  .mv-row.mv-mob-tools {   /* .mv-row(gap 4px)가 뒤에 선언돼 있어 클래스 2개로 우선순위를 올린다 */
+    position: relative;
+    z-index: 4;   /* 가이드 바깥을 어둡게 덮는 막(z-index 2)보다 위에 — 밝은 원형 배경 유지 */
+    flex-shrink: 0;
+    gap: 12px;   /* 기본 4px의 3배(+200%) */
+  }
+  .mv-mob-icon {
+    flex-shrink: 0;
+    width: 31px; height: 31px;   /* 44px의 70%(30% 축소) */
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .mv-mob-icon svg { width: 16.8px; height: 16.8px; }   /* 14px의 120%(20% 확대) */
+  .mv-mob-icon:hover { background: var(--cs-lilac); }   /* 두 버튼 간격: 기본 4px의 3배(+200%) */
   .mv-acc { display: flex; flex-direction: column; }
   .mv-acc-item + .mv-acc-item { border-top: 1px solid var(--cs-lilac); }
   .mv-acc-head {
