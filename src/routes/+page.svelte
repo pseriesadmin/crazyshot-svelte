@@ -25,7 +25,8 @@
 
   // ── 캐러셀 상태 ───────────────────────────────────────────────────
   let pcIdx    = $state(0)
-  let mobileIdx = $state(0)
+  // 모바일 히어로 위치(확장 트랙 기준): 2장 이상이면 [마지막 복제, 1…N장, 첫 장 복제] 로 이어 붙여 좌우 무한 슬라이드. 1~N 이 실제 장, 0·N+1 은 복제 구간
+  let heroPos = $state(0)
   // 캐러셀 배열 — 랜덤 모드 셔플은 서버(+page.server.ts)에서 끝낸 상태로 내려온다.
   // $state+$effect로 클라이언트에서 채우면 SSR 첫 HTML엔 빈 배열이라 기본 배경이 잠깐 보였다가 교체되는 깜빡임이 생김
   const pcCarousel     = $derived(heroPC)
@@ -33,7 +34,7 @@
 
   // 배너 목록이 바뀌면(재조회 등) 첫 장부터 다시 시작
   $effect(() => { void pcCarousel; pcIdx = 0 })
-  $effect(() => { void mobileCarousel; mobileIdx = 0 })
+  $effect(() => { void mobileCarousel; heroPos = mobileCarousel.length > 1 ? 1 : 0 })
 
   // 자동 슬라이드 (4초 인터벌)
   $effect(() => {
@@ -44,12 +45,87 @@
     return () => clearInterval(id)
   })
 
+  // 모바일 히어로 좌우 터치 슬라이드 — 손가락을 따라 이동하다 놓으면 이전/다음 장으로 스냅. 양쪽 끝 없이 계속 같은 방향으로 이어진다
+  // (세로 스크롤은 touch-action: pan-y 로 브라우저에 맡김)
+  const HERO_SWIPE_MIN_PX = 12        // 살짝만 밀어도 자석처럼 넘어가도록 최소 이동 거리를 작게
+  const HERO_SWIPE_RATIO  = 0.03      // 화면 너비의 3% (375px 기준 약 11px → 위 12px 적용)
+  const HERO_PAUSE_MS     = 6000      // 터치 후 자동 슬라이드 재개까지 대기
+  const HERO_ANIM_MS      = 400       // CSS transition(.m-hero-track)과 동일하게 유지
+  const heroSlides = $derived(
+    mobileCarousel.length > 1
+      ? [mobileCarousel[mobileCarousel.length - 1], ...mobileCarousel, mobileCarousel[0]]
+      : mobileCarousel
+  )
+  let heroDragX    = $state(0)
+  let heroDragging = $state(false)
+  let heroJump     = $state(false)    // 복제 구간 → 실제 장으로 되돌릴 때 전환 없이 즉시 이동
+  let heroStartX   = 0
+  let heroMoved    = false
+  let heroPointer  = -1
+  let heroPausedUntil = 0
+  let heroSettleTimer: ReturnType<typeof setTimeout> | undefined
+
+  // 복제 구간(0 또는 N+1)에 도착했으면 같은 그림의 실제 장으로 눈에 띄지 않게 옮긴다
+  function heroSettle(): void {
+    const n = mobileCarousel.length
+    if (n <= 1) return
+    if (heroPos === 0 || heroPos === n + 1) {
+      heroJump = true
+      heroPos = heroPos === 0 ? n : 1
+      requestAnimationFrame(() => requestAnimationFrame(() => { heroJump = false }))
+    }
+  }
+  function heroGo(delta: number): void {
+    const n = mobileCarousel.length
+    if (n <= 1) return
+    if (heroPos === 0 || heroPos === n + 1) return   // 직전 이동의 복제 구간 정리 전에는 다음 이동 보류(0.4초 이내)
+    heroPos += delta
+    clearTimeout(heroSettleTimer)
+    heroSettleTimer = setTimeout(heroSettle, HERO_ANIM_MS + 30)
+  }
+
+  function heroDown(e: PointerEvent): void {
+    if (mobileCarousel.length <= 1 || heroPointer !== -1) return
+    heroPointer = e.pointerId
+    heroStartX = e.clientX
+    heroMoved = false
+    heroDragging = true
+    heroDragX = 0
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  function heroMove(e: PointerEvent): void {
+    if (e.pointerId !== heroPointer) return
+    const dx = e.clientX - heroStartX
+    if (Math.abs(dx) > 6) heroMoved = true
+    heroDragX = dx
+  }
+  function heroUp(e: PointerEvent): void {
+    if (e.pointerId !== heroPointer) return
+    const w = (e.currentTarget as HTMLElement).clientWidth || 375
+    const dx = e.clientX - heroStartX
+    const limit = Math.max(HERO_SWIPE_MIN_PX, w * HERO_SWIPE_RATIO)
+    heroPointer = -1
+    heroDragging = false
+    heroDragX = 0
+    if (e.type === 'pointerup' && dx <= -limit) heroGo(1)
+    else if (e.type === 'pointerup' && dx >= limit) heroGo(-1)
+    heroPausedUntil = Date.now() + HERO_PAUSE_MS
+  }
+  // 드래그로 넘긴 직후에는 배너 링크 이동을 막는다
+  function heroClickCapture(e: MouseEvent): void {
+    if (!heroMoved) return
+    e.preventDefault()
+    e.stopPropagation()
+    heroMoved = false
+  }
+
   $effect(() => {
     if (mobileCarousel.length <= 1) return
     const id = setInterval(() => {
-      mobileIdx = (mobileIdx + 1) % mobileCarousel.length
+      if (heroDragging || Date.now() < heroPausedUntil) return
+      heroGo(1)   // 항상 왼쪽으로 밀려 다음 장이 들어온다(마지막 → 첫 장도 같은 방향)
     }, 4000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); clearTimeout(heroSettleTimer) }
   })
 
   // ── CMS 배너 관리 모달 ──────────────────────────────────────────────
@@ -229,14 +305,18 @@
     if (!container.classList.contains('m-theme-circle-tabs')) return
     const wrap = container.closest<HTMLElement>('.m-theme-circle-tabs-wrap') ?? container
     const top = wrap.getBoundingClientRect().top
-    const dy = top - M_THEME_TOP_OFFSET
+    // 섹션 제목(취·향·직·격 PICK!)은 화면 밖으로 올리고 원형 탭(슬라이드 타이틀)부터 노출(2026-11-04, Stephen 지시).
+    // 아래로 내려가는 경우 GNB 가 숨겨지므로 맨 위(0)에 붙이고, 위로 올라가는 경우엔 GNB 가 나타나 가리므로 그 아래(40)에 둔다
+    const dy = top - (top < 0 ? M_THEME_TOP_OFFSET_UP : M_THEME_TOP_OFFSET)
     if (Math.abs(dy) < 8) return
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     window.scrollBy({ top: dy, behavior: reduce ? 'auto' : 'smooth' })
   }
 
-  /** 모바일 테마 탭 선택 시 탭 영역 상단 여백(px) — 위쪽 섹션 제목(취·향·직·격 PICK!)이 일부 보이고 상단 GNB 필(61px)에 가리지 않는 위치 */
-  const M_THEME_TOP_OFFSET = 80
+  /** 모바일 테마 탭 선택 시 탭 영역 상단 여백(px) — 섹션 제목(취·향·직·격 PICK!)은 화면 밖으로 넘기고 원형 탭부터 보이게 함.
+   *  OFFSET: 아래로 스크롤해 이동할 때(GNB 숨김) / OFFSET_UP: 위로 스크롤해 이동할 때(GNB 필 61px 등장) */
+  const M_THEME_TOP_OFFSET = 0
+  const M_THEME_TOP_OFFSET_UP = 40
 
   let pkgSliderEl: { scrollLeft: number } | undefined
   function onPkgScroll() {
@@ -618,21 +698,36 @@
 
   <!-- ① 모바일 히어로 -->
   <!-- 관리자 전용 버튼 게이팅은 PC 반응형 전용 노출 기능 — 모바일에는 노출하지 않음 -->
-  <div class="m-hero">
+  <div
+    class="m-hero"
+    class:swipeable={mobileCarousel.length > 1}
+    onpointerdown={heroDown}
+    onpointermove={heroMove}
+    onpointerup={heroUp}
+    onpointercancel={heroUp}
+    onclickcapture={heroClickCapture}
+  >
     {#if mobileCarousel.length > 0}
-      {@const b = mobileCarousel[mobileIdx]}
-      {#if b}
-        {#if b.link_url}
-          <a href={b.link_url} class="m-hero-banner-link">
-            <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
-          </a>
-        {:else}
-          <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" />
-        {/if}
-        {#if b.sub_copy}
-          <div class="m-hero-sub-copy">{b.sub_copy}</div>
-        {/if}
-      {/if}
+      <div
+        class="m-hero-track"
+        class:dragging={heroDragging || heroJump}
+        style="transform: translate3d(calc({-heroPos * 100}% + {heroDragX}px), 0, 0)"
+      >
+        {#each heroSlides as b}
+          <div class="m-hero-slide">
+            {#if b.link_url}
+              <a href={b.link_url} class="m-hero-banner-link" draggable="false">
+                <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" draggable="false" />
+              </a>
+            {:else}
+              <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" draggable="false" />
+            {/if}
+            {#if b.sub_copy}
+              <div class="m-hero-sub-copy">{b.sub_copy}</div>
+            {/if}
+          </div>
+        {/each}
+      </div>
     {:else}
       <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
     {/if}
@@ -792,9 +887,8 @@
               <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="md-pick-img" loading="lazy" />
             </div>
             <div class="mdp-info">
-              {#if prod.category}
-                <p class="mdp-category">{CATEGORY_TABS.find((t) => t.id === prod.category)?.label ?? prod.category}</p>
-              {/if}
+              <!-- 카테고리 라벨은 노출하지 않음(2026-11-04, Stephen 지시) — 상품명 → 가격 순으로 표시(2026-11-04 위치 맞교환) -->
+              <p class="mdp-name">{prod.name}</p>
               <div class="mdp-price-row">
                 {#if prod.sale_only}
                   <span class="mdp-price-group">
@@ -817,7 +911,6 @@
                   {/if}
                 {/if}
               </div>
-              <p class="mdp-name">{prod.name}</p>
             </div>
           </a>
         {/each}
@@ -1755,6 +1848,25 @@
     height: 720px;
     background: #fdefc3;
   }
+  /* 좌우 터치 슬라이드: 세로 스크롤은 브라우저가, 가로 드래그는 JS가 처리 */
+  .m-hero.swipeable { touch-action: pan-y; }
+  .m-hero-track {
+    display: flex;
+    width: 100%;
+    height: 720px;
+    /* 자석처럼 끌려가 착 붙는 느낌 — 끝에서 아주 살짝만 넘쳤다 돌아옴 */
+    transition: transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.08);
+    will-change: transform;
+  }
+  .m-hero-track.dragging { transition: none; }
+  .m-hero-slide {
+    position: relative;
+    flex: 0 0 100%;
+    height: 720px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .m-hero-track { transition: none; }
+  }
   .m-hero-bg {
     position: absolute;
     top: 0;
@@ -1904,17 +2016,9 @@
     display: flex;
     flex-direction: column;
     gap: 10.8px;
-    padding: 10.8px 0 0;
+    padding: 14.04px 0 0;   /* 썸네일↔가격 영역 간격 10.8px → +30%(2026-11-04, Stephen 지시) */
     width: 100%;
     min-width: 0;
-  }
-  .mdp-category {
-    font: var(--text-m-script-12);
-    font-weight: 700;
-    color: var(--cs-text-light);
-    line-height: 1;
-    margin: 0;
-    text-transform: uppercase;
   }
   .mdp-price-row {
     display: flex;
@@ -1936,7 +2040,8 @@
   .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); }
   .mdp-name {
     font: var(--text-m-script-12);
-    color: var(--cs-purple-dark);
+    font-weight: 700;          /* 2026-11-04 Stephen 지시: 볼드 적용(토큰 기본 500 → 700) */
+    color: var(--cs-purple);   /* 2026-11-04 Stephen 지시: purple-dark → 퍼플 토큰 */
     letter-spacing: -0.5px;
     line-height: 1.12;
     margin: 0;
