@@ -7,6 +7,10 @@
 
   let { data }: { data: PageData } = $props()
 
+  // 서버는 현재 chargeWarning 을 항상 null 로 내려준다(첫 결제 실패 시에는 success:false 로 응답) — 타입이 null 로 좁아져
+  // 아래 화면에서 data.chargeWarning 을 문자열로 쓰면 never 오류가 나므로, 문자열 | null 로 넓혀 읽는다(동작 변화 없음)
+  const chargeWarning: string | null = $derived('chargeWarning' in data ? (data.chargeWarning as string | null) : null)
+
   function formatAmount(amount: number): string {
     return amount.toLocaleString('ko-KR')
   }
@@ -48,7 +52,7 @@
           <path d="M1 7L7 13L19 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
-      {#if 'chargeWarning' in data && data.chargeWarning}
+      {#if chargeWarning}
         <p class="title-text">카드 등록 완료! 최초 결제는 다음 청구일에 재시도돼요.</p>
       {:else}
         <p class="title-text">정기구독이 시작됐어요!</p>
@@ -101,8 +105,8 @@
 
       </div>
 
-      {#if 'chargeWarning' in data && data.chargeWarning}
-        <p class="charge-warning" role="alert">{data.chargeWarning}</p>
+      {#if chargeWarning}
+        <p class="charge-warning" role="alert">{chargeWarning}</p>
       {/if}
 
       <!-- 확인 버튼 -->

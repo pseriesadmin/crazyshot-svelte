@@ -13,6 +13,7 @@
 <script lang="ts">
   import PdfModal from '$lib/components/common/PdfModal.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import { manualPublicUrl } from '$lib/utils/productManuals'
   import { getSupabaseUrl } from '$lib/env/supabasePublic'
 
@@ -41,7 +42,8 @@
       {#each manuals as m, i (m.path)}
         <li>
           <button type="button" class="manual-item" onclick={() => (openIndex = i)} aria-label={`${m.productName} ${m.name} 상품설명서 보기`}>
-            <img class="manual-thumb" src={m.imageUrl} alt="" loading="lazy" />
+            <!-- 표준 상품 썸네일(ProductDPCard thumb 변형) — 크기만 이 영역 특성에 맞춰 지정 -->
+            <span class="manual-thumb"><ProductDPCard variant="thumb" name={m.productName} imageUrl={m.imageUrl} /></span>
             <span class="manual-text">
               <span class="manual-product">{m.productName}</span>
               <span class="manual-name">{m.name}</span>
@@ -137,11 +139,8 @@
   }
   .manual-thumb {
     flex-shrink: 0;
-    width: 84px; /* 40px × 3 = 120px 에서 30% 축소 (PC·모바일 공통) */
-    height: 84px;
-    object-fit: cover;
-    background: var(--cs-lilac);
-    border-radius: var(--cms-radius-sm); /* 상품 이미지 반경 10px (front-uiux §4 image) */
+    display: block;
+    --pc-thumb-size: 84px; /* 40px × 3 = 120px 에서 30% 축소 (PC·모바일 공통) */
   }
   .manual-text {
     flex: 1;

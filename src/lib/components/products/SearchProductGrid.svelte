@@ -61,6 +61,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div class="product-grid-item" onclick={() => onProductClick?.(String(p.id))}>
             <ProductDPCard
+              variant="fluid"
               id={String(p.id)}
               name={p.name}
               category={p.category}
@@ -187,18 +188,7 @@
     min-width: 0;
     box-sizing: border-box;
   }
-  .product-grid-item :global(.pc-card) {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    flex-shrink: 1;
-  }
-  .product-grid-item :global(.pc-img-wrap) {
-    width: 100%;
-    height: auto;
-    aspect-ratio: 1;
-    flex-shrink: 1;
-  }
+  /* 카드·이미지 폭 100% 는 ProductDPCard 의 fluid 변형이 담당(기존 :global 오버라이드 이식) */
 
   @media (min-width: 768px) {
     /* PC — 결과 헤더 원래 크기 복원 */

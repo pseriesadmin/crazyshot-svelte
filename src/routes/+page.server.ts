@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
 import { loadBannerSlots } from '$lib/server/crazylogBannerSlots'
 import { plainTextPreview } from '$lib/utils/crazylogText'
+import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 
 export type BannerSlot = {
   id: string
@@ -417,10 +418,14 @@ export const load: PageServerLoad = async ({ locals }) => {
   for (const key of Object.keys(categoryProducts)) categoryProducts[key] = categoryProducts[key].map(withDualPrice)
   mdProducts = mdProducts.map(withDualPrice)
 
+  // MD 추천 카드의 찜 버튼용 — 로그인 사용자가 이미 찜한 MD 추천 상품 id (비로그인이면 빈 배열, /products 와 같은 헬퍼)
+  const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, mdProducts.map((p) => p.id))
+
   return {
     bannerMap, isCms, categories, crazylogPosts, bannerSlots, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts,
+    isLoggedIn: !!session?.user.id, wishedIds,
   }
 }

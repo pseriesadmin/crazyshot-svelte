@@ -671,62 +671,23 @@
     <div class="m-prod-grid">
       {#if useDbGrid}
         {#each mobileGrid.slice(0, 6) as prod (prod.id)}
-          {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
-          {@const d12 = prod.price_12h ?? null}
-          {@const isSaleOnly = prod.sale_only}
-          {@const salePrice = prod.sale_price}
-          <a href={productLink(prod)} class="m-prod-card" in:fade={{ duration: 700 }}>
-            <div class="m-prod-img-box">
-              <img src={productImg(prod)} alt={prod.name} class="abs-img"
-                style="width:100%;height:100%;object-fit:cover;left:0;top:0"
-                loading="lazy" />
-              {#if data.isLoggedIn}
-                <button
-                  class="mprod-clip"
-                  class:active={wishedSet.has(prod.id)}
-                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
-                  aria-pressed={wishedSet.has(prod.id)}
-                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
-                >
-                  <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
-                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
-                  </svg>
-                </button>
-              {/if}
-            </div>
-            <div class="m-prod-info">
-              {#if prod.category}
-                <p class="m-prod-category">{categoryNameMap[prod.category] ?? prod.category}</p>
-              {/if}
-              {#if isSaleOnly}
-                <div class="m-prod-price-row">
-                  <span class="m-prod-price-group">
-                    <span class="m-prod-price-label">Price</span>
-                    <span class="m-prod-price-num">{formatPrice(salePrice ?? 0)}</span>
-                  </span>
-                </div>
-              {:else if d24 !== null || d12 !== null}
-                <div class="m-prod-price-row">
-                  {#if d24 !== null}
-                    <span class="m-prod-price-group">
-                      <span class="m-prod-price-label">Day</span>
-                      <span class="m-prod-price-num">{formatPrice(d24)}</span>
-                    </span>
-                  {/if}
-                  {#if d24 !== null && d12 !== null}
-                    <span class="m-prod-price-sep">/</span>
-                  {/if}
-                  {#if d12 !== null}
-                    <span class="m-prod-price-group">
-                      <span class="m-prod-price-label">12H</span>
-                      <span class="m-prod-price-num">{formatPrice(d12)}</span>
-                    </span>
-                  {/if}
-                </div>
-              {/if}
-              <p class="m-prod-name">{prod.name}</p>
-            </div>
-          </a>
+          <!-- 표준 ProductDPCard 의 list 변형 — 기존 .m-prod-card 를 이식(2열 셀 폭·페이드인은 래퍼 .m-prod-cell 이 담당) -->
+          <div class="m-prod-cell" in:fade={{ duration: 700 }}>
+            <ProductDPCard
+              variant="list"
+              id={prod.id}
+              name={prod.name}
+              imageUrl={productImg(prod)}
+              price24h={prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
+              price12h={prod.price_12h ?? null}
+              isSaleOnly={prod.sale_only}
+              salePrice={prod.sale_price}
+              href={productLink(prod)}
+              category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
+              wished={wishedSet.has(prod.id)}
+              onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+            />
+          </div>
         {/each}
       {:else}
         {#each mobileProducts.slice(0, 6) as prod}
@@ -772,62 +733,23 @@
     <div class="m-prod-grid">
       {#if useDbGrid}
         {#each mobileGrid.slice(6) as prod (prod.id)}
-          {@const d24 = prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
-          {@const d12 = prod.price_12h ?? null}
-          {@const isSaleOnly = prod.sale_only}
-          {@const salePrice = prod.sale_price}
-          <a href={productLink(prod)} class="m-prod-card" in:fade={{ duration: 700 }}>
-            <div class="m-prod-img-box">
-              <img src={productImg(prod)} alt={prod.name} class="abs-img"
-                style="width:100%;height:100%;object-fit:cover;left:0;top:0"
-                loading="lazy" />
-              {#if data.isLoggedIn}
-                <button
-                  class="mprod-clip"
-                  class:active={wishedSet.has(prod.id)}
-                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
-                  aria-pressed={wishedSet.has(prod.id)}
-                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
-                >
-                  <svg width="30" height="30" viewBox="0 0 63 63" fill="none" aria-hidden="true">
-                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
-                  </svg>
-                </button>
-              {/if}
-            </div>
-            <div class="m-prod-info">
-              {#if prod.category}
-                <p class="m-prod-category">{categoryNameMap[prod.category] ?? prod.category}</p>
-              {/if}
-              {#if isSaleOnly}
-                <div class="m-prod-price-row">
-                  <span class="m-prod-price-group">
-                    <span class="m-prod-price-label">Price</span>
-                    <span class="m-prod-price-num">{formatPrice(salePrice ?? 0)}</span>
-                  </span>
-                </div>
-              {:else if d24 !== null || d12 !== null}
-                <div class="m-prod-price-row">
-                  {#if d24 !== null}
-                    <span class="m-prod-price-group">
-                      <span class="m-prod-price-label">Day</span>
-                      <span class="m-prod-price-num">{formatPrice(d24)}</span>
-                    </span>
-                  {/if}
-                  {#if d24 !== null && d12 !== null}
-                    <span class="m-prod-price-sep">/</span>
-                  {/if}
-                  {#if d12 !== null}
-                    <span class="m-prod-price-group">
-                      <span class="m-prod-price-label">12H</span>
-                      <span class="m-prod-price-num">{formatPrice(d12)}</span>
-                    </span>
-                  {/if}
-                </div>
-              {/if}
-              <p class="m-prod-name">{prod.name}</p>
-            </div>
-          </a>
+          <!-- 표준 ProductDPCard 의 list 변형 — 기존 .m-prod-card 를 이식(2열 셀 폭·페이드인은 래퍼 .m-prod-cell 이 담당) -->
+          <div class="m-prod-cell" in:fade={{ duration: 700 }}>
+            <ProductDPCard
+              variant="list"
+              id={prod.id}
+              name={prod.name}
+              imageUrl={productImg(prod)}
+              price24h={prod.price_24h ?? (prod.base_price_daily > 0 ? prod.base_price_daily : null)}
+              price12h={prod.price_12h ?? null}
+              isSaleOnly={prod.sale_only}
+              salePrice={prod.sale_price}
+              href={productLink(prod)}
+              category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
+              wished={wishedSet.has(prod.id)}
+              onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+            />
+          </div>
         {/each}
       {:else}
         {#each mobileProducts.slice(6) as prod}
@@ -938,54 +860,22 @@
       </div>
       <div class="md-picks-track">
         {#each data.mdProducts as prod}
-          <a href={productLink(prod)} class="md-pick-card">
-            <div class="md-pick-img-box">
-              <img src={productImg(prod)} alt={prod.name} class="abs-img"
-                style="width:100%;height:100%;object-fit:cover;left:0;top:0"
-                loading="lazy" />
-              {#if data.isLoggedIn}
-                <button
-                  class="mdp-clip"
-                  class:active={wishedSet.has(prod.id)}
-                  aria-label={wishedSet.has(prod.id) ? '찜 해제' : '찜하기'}
-                  aria-pressed={wishedSet.has(prod.id)}
-                  onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleWishToggle(prod.id) }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 63 63" fill="none" aria-hidden="true">
-                    <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
-                  </svg>
-                </button>
-              {/if}
-            </div>
-            <div class="mdp-info">
-              {#if prod.category}
-                <p class="mdp-category">{categoryNameMap[prod.category] ?? prod.category}</p>
-              {/if}
-              <div class="mdp-price-row">
-                {#if prod.sale_only}
-                  <span class="mdp-price-group">
-                    <span class="mdp-price-label">Price</span>
-                    <span class="mdp-price-num">{formatPrice(prod.sale_price ?? 0)}</span>
-                  </span>
-                {:else}
-                  {#if (prod.price_24h ?? prod.base_price_daily) > 0}
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">Day</span>
-                      <span class="mdp-price-num">{formatPrice(prod.price_24h ?? prod.base_price_daily)}</span>
-                    </span>
-                  {/if}
-                  {#if prod.price_12h}
-                    <span class="mdp-price-sep">/</span>
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">12H</span>
-                      <span class="mdp-price-num">{formatPrice(prod.price_12h)}</span>
-                    </span>
-                  {/if}
-                {/if}
-              </div>
-              <p class="mdp-name">{prod.name}</p>
-            </div>
-          </a>
+          <!-- 표준 ProductDPCard 의 pick 변형 — 기존 .md-pick-card 이식(폭 139/232px·카테고리 대문자·호버=이미지만 확대) -->
+          {@const mdDay = prod.price_24h ?? prod.base_price_daily}
+          <ProductDPCard
+            variant="pick"
+            id={prod.id}
+            name={prod.name}
+            imageUrl={productImg(prod)}
+            price24h={mdDay > 0 ? mdDay : null}
+            price12h={prod.price_12h || null}
+            isSaleOnly={prod.sale_only}
+            salePrice={prod.sale_price}
+            href={productLink(prod)}
+            category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
+            wished={wishedSet.has(prod.id)}
+            onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+          />
         {/each}
       </div>
     </div>
@@ -1626,52 +1516,14 @@
     display: flex;
     gap: 15px;
     overflow-x: auto;
+    /* overflow-x 만 auto 로 두면 overflow-y 도 auto 가 되어, 가격 줄 글자 하단이 카드 밖으로 4px 넘칠 때 트랙이 세로로 스크롤돼
+       손가락으로 밀 때 썸네일 윗부분이 잘려 보였다(2026-11-05 실측: scrollHeight 216 > clientHeight 212). 세로 스크롤을 막고 하단 여유를 둔다 */
+    overflow-y: hidden;
+    padding-bottom: 6px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
   .md-picks-track::-webkit-scrollbar { display: none; }
-  .md-pick-card {
-    flex: none;
-    width: 139px;   /* PC 232px × 0.60(PC→모바일 카드 이미지 비율, front-uiux.md §24) ≈ 139px */
-    text-decoration: none;
-    display: flex;
-    flex-direction: column;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-  /* 호버: 카드(썸네일 틀) 자체 확대는 트랙 overflow로 잘려 깨지므로 내부 이미지만 1.04배 확대 — PC·모바일 공통(ProductDPCard와 동일 배율) */
-  .md-pick-img-box .abs-img { transition: transform 0.3s ease; }
-  .md-pick-card:hover .md-pick-img-box .abs-img { transform: scale(1.04); }
-  .md-pick-img-box {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
-    overflow: hidden;
-    position: relative;
-    background: var(--cs-lilac);
-  }
-  .mdp-clip {
-    position: absolute;
-    top: 7px;
-    right: 7px;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    border: none;
-    background: color-mix(in srgb, var(--cs-red-xlight) 80%, transparent); /* 비찜 상태 red-5 토큰(#FFEAEA), 알파 80% 유지 */
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    transition: background 0.18s, transform 0.18s, color 0.18s;
-    padding: 0;
-  }
-  .mdp-clip svg { width: 14px; height: 14px; }
-  .mdp-clip:hover { background: #ffb8b8; transform: scale(1.1); }
-  .mdp-clip.active { background: rgba(255, 207, 207, 0.8); color: #FF3535; }
-  .mdp-clip.active svg path { fill: #FF3535; }
-  .mdp-clip:active { transform: scale(0.9); }
 
   /* Best Pick(m-prod-card) 전용 — 박스가 174px 정사각형이 아니라 157.5×200px로 더 커서
      mdp-clip(22px) 그대로 쓰면 비율상 작아 보임(Stephen 2026-08-26 확인) — 이 카드만 확대 */
@@ -1698,58 +1550,6 @@
   .mprod-clip.active { background: rgba(255, 207, 207, 0.8); color: #FF3535; }
   .mprod-clip.active svg path { fill: #FF3535; }
   .mprod-clip:active { transform: scale(0.9); }
-  .mdp-info {
-    display: flex;
-    flex-direction: column;
-    /* 모바일 상품정보 표준 확정값(front-uiux.md §14-4, 2026-09-29) — 12px의 90% */
-    gap: 10.8px;
-    padding: 10.8px 0 0;
-    width: 100%;
-    min-width: 0;
-  }
-  .mdp-category {
-    font: var(--text-m-script-12);
-    font-weight: 700;
-    color: var(--cs-text-light);
-    line-height: 1;
-    margin: 0;
-    text-transform: uppercase;
-  }
-  .mdp-price-row {
-    display: flex;
-    /* box-center로는 레이블·숫자 폰트 내부 여백 차이 때문에 레이블이 위로 뜬 것처럼
-       보임(2026-09-27, 모바일 Best Pick·.pc-price-row와 동일 원인) — 베이스라인 정렬로 교체 */
-    align-items: baseline;
-    gap: 3px;
-    /* purple-90 컬러토큰 반영(ProductDPCard .pc-price-row와 통일) */
-    color: var(--cs-purple-dark);
-    letter-spacing: -0.8px;   /* 모바일 확정 자간(PC는 @media에서 -0.5px 복원) */
-    flex-wrap: wrap;
-  }
-  .mdp-price-group { display: flex; align-items: baseline; gap: 3px; }
-  .mdp-price-label { font: var(--text-m-tag-11); font-weight: 500; line-height: 1; } /* 11px Medium — 모바일 확정값 */
-  .mdp-price-num {
-    /* 모바일 확정값(2026-09-29): 16px Black — PC는 아래 미디어쿼리에서 --text-pc-title-18 유지 */
-    font: var(--text-m-body-16B);
-    font-weight: 900;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    /* purple-60 컬러토큰 반영(ProductDPCard .pc-price-num과 통일) */
-    color: var(--cs-purple-light);
-  }
-  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); } /* purple-20 */
-  .mdp-name {
-    /* 모바일 확정값(2026-09-29): 12px Medium · purple-90 · 행간 112% — PC는 @media에서 기존 값 유지 */
-    font: var(--text-m-script-12);
-    color: var(--cs-purple-dark);
-    letter-spacing: -0.5px;
-    line-height: 1.12;
-    margin: 0;
-    width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 
   /* ─────────────────────────────────────────────────────────────────── */
   /* MOBILE LIST SECTION */
@@ -1812,6 +1612,8 @@
     transition: transform 0.2s;
   }
   .m-prod-card:hover { transform: scale(1.02); }
+  /* DB 목록 카드 래퍼 — 표준 ProductDPCard(list 변형)를 2열 그리드 셀로 배치 + 페이드인. 폭 계산은 위 .m-prod-card 와 동일 */
+  .m-prod-cell { width: calc(50% - 5px); }
   .m-prod-img-box {
     width: 100%;
     aspect-ratio: 1 / 1;
@@ -2092,21 +1894,5 @@
     /* MD picks: desktop layout */
     .md-picks-section { padding: 26px 56px 40px; max-width: 100%; }
     .md-picks-header { margin-bottom: 30px; }  /* 제목↔카드 여백 20px → 30px (+50%, PC 전용, 요청 2026-09-29) */  /* 상단 패딩 20px → 26px (+30%, 요청 2026-09-29) */
-    .md-pick-card { width: 232px; }  /* PC 표준 290px 대비 20% 축소(요청 2026-09-29), 이미지는 1:1 유지 */
-    .md-pick-img-box { border-radius: 33px 13px 33px 13px; }
-    .mdp-clip { top: 14px; right: 14px; width: 44px; height: 44px; }
-    .mdp-clip svg { width: 34px; height: 34px; }
-    /* 카테고리/가격/상품명 간 여백 30% 축소(요청, 2026-09-27, .pc-info와 동일) — 20px → 14px */
-    .mdp-info { gap: 14px; padding: 14px 0 0; }
-    /* 한 사이즈 큰 폰트토큰 PC 반영(요청, 2026-09-27) — 18px(--text-m-title-18B) →
-       PC는 --text-pc-title-18(동일 18px이지만 PC 전용 lh/폰트 스택), ProductDPCard
-       .pc-price-num과 동일 패턴 */
-    .mdp-price-num { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
-    /* PC는 기존 14px Bold 유지(모바일만 축소 요청, 2026-09-27) */
-    .mdp-price-label { font: var(--text-pc-body-14); line-height: 1; }
-    /* 모바일 확정값이 PC로 새지 않도록 기존 PC 값 복원(2026-09-29) */
-    .mdp-price-row { letter-spacing: -0.5px; }
-    .mdp-price-sep { color: inherit; }
-    .mdp-name { font: var(--text-m-script-14); color: var(--cs-purple-dark); letter-spacing: -0.5px; line-height: 1; margin: 0; }  /* ProductDPCard .pc-name 표준과 동일 */
   }
 </style>

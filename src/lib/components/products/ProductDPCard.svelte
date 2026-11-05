@@ -14,6 +14,22 @@
     href?: string
     wished?: boolean
     onWishToggle?: (id: string | undefined) => void
+    /**
+     * 표준(standard)을 기준으로 영역 특성에 맞춘 변형 — 기본 standard 는 기존과 완전히 동일.
+     *  - list : /products 모바일 목록(.m-prod-card 에서 이식) — 폭 100%(2열 그리드 셀)·정사각 비율·배경 #e1def3·찜 버튼 32px·호버 시 카드 1.02배, 루트는 <a>. 정보 구조는 홈 MD 추천(pick-home)과 동일: 상품명이 가격 위·상품명 purple Bold·정보 상단 여백 14.04px
+     *  - thumb: 썸네일만(설명서 목록 등) — 정보·찜 없음, 비대화형, 크기는 부모가 --pc-thumb-size(기본 84px)로 지정
+     *  - pick : /products MD 추천(.md-pick-card 에서 이식) — 폭 모바일 139px·PC 232px, 루트 <a>, 호버=이미지만 확대(표준 동작). 정보 구조는 list·pick-home 과 동일(상품명이 가격 위·purple Bold·상단 여백 14.04px, 2026-11-05)
+     *  - fluid / fluid-mobile: 2열 그리드 셀 안에서 카드·이미지 폭 100%(정사각 비율) — fluid=모든 폭(검색 결과), fluid-mobile=≤640px 만(하이프팩 테마 목록). 반경·찜·정보는 표준 값 그대로
+     *  - scroll-m: 가로 스크롤 한 줄 카드 M — 모바일 139px·PC 232px(상품 상세 '최신 등록 상품')
+     *  - scroll-s: 가로 스크롤 한 줄 카드 S(표준의 ×0.7) — 모바일 122px·PC 203px, 반경·찜 버튼도 같은 비율(마이페이지 찜 목록)
+     *  - pick-home: 홈 MD 추천(.md-pick-card 에서 이식) — 가로 스크롤 트랙에서 2장 노출(폭 (트랙−15px)/2, 최대 174px, 스냅 시작 정렬), 카테고리 없음, 상품명이 가격 위, 상품명 purple·Bold, 정보 상단 여백 14.04px, 루트 <a>
+     * 새 변형을 추가할 때는 .claude/plan/상품 썸네일 표준화 — 파편 스타일 등록부(2026-11-05).md 에 기존 커스텀 값을 먼저 옮겨 적는다.
+     */
+    variant?: 'standard' | 'list' | 'thumb' | 'pick' | 'pick-home' | 'fluid' | 'fluid-mobile' | 'scroll-m' | 'scroll-s'
+    /** 상품별로 등록한 서브카피(products.product_caption, CMS '상품카피' 20자 이내) — 있으면 가격 줄 아래에 표시. 없으면 줄 자체를 그리지 않는다 */
+    subCopy?: string | null
+    /** 카테고리 줄 노출 — 표준은 숨김(기본 false, 2026-11-05 Stephen 지시). 필요한 영역만 true 로 켠다 */
+    showCategory?: boolean
   }
 
   let {
@@ -28,12 +44,19 @@
     href,
     wished = false,
     onWishToggle,
+    variant = 'standard',
+    showCategory = false,
+    subCopy = null,
   }: Props = $props()
+
+  /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조 — 2026-11-05 Stephen 지시로 list 도 동일) */
+  const nameFirst = $derived(variant === 'pick-home' || variant === 'list' || variant === 'pick')
 
   let isWished = $state(false)
   $effect(() => { isWished = wished })
 
   function handleWish(e: MouseEvent) {
+    e.preventDefault() // list 변형(<a> 루트)에서 찜 클릭이 링크 이동으로 이어지지 않게 — 그 외 변형은 영향 없음
     e.stopPropagation()
     isWished = !isWished
     onWishToggle?.(id)
@@ -48,15 +71,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="pc-card"
-  onclick={handleClick}
-  onkeydown={(e) => { if (e.key === 'Enter') handleClick() }}
-  role="button"
-  tabindex="0"
-  aria-label={name}
->
+{#snippet inner()}
   <!-- 이미지 영역 290×290 -->
   <div class="pc-img-wrap">
     <img src={imageUrl} alt={name} loading="lazy" class="pc-img" />
@@ -81,8 +96,12 @@
 
   <!-- 텍스트 영역 -->
   <div class="pc-info">
-    {#if category}
+    {#if category && showCategory}
       <p class="pc-category">{category}</p>
+    {/if}
+
+    {#if nameFirst}
+      <p class="pc-name">{name}</p>
     {/if}
 
     {#if isSaleOnly}
@@ -112,9 +131,41 @@
       </div>
     {/if}
 
-    <p class="pc-name">{name}</p>
+    {#if !nameFirst}
+      <p class="pc-name">{name}</p>
+    {/if}
+
+    {#if subCopy}
+      <p class="pc-subcopy">{subCopy}</p>
+    {/if}
   </div>
-</div>
+{/snippet}
+
+{#if variant === 'thumb'}
+  <!-- 썸네일만(비대화형) — 이미지 박스는 표준(.pc-img-wrap/.pc-img)과 같은 구조.
+       버튼 안(설명서 목록 행)에서도 올바른 HTML 이 되도록 span 으로 만들고 CSS 로 블록 처리 -->
+  <span class="pc-card pc-card--thumb">
+    <span class="pc-img-wrap">
+      <img src={imageUrl} alt="" loading="lazy" class="pc-img" />
+    </span>
+  </span>
+{:else if (variant === 'list' || variant === 'pick' || variant === 'pick-home') && href}
+  <a class="pc-card pc-card--{variant}" {href} aria-label={name}>
+    {@render inner()}
+  </a>
+{:else}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="pc-card{variant === 'standard' ? '' : ` pc-card--${variant}`}"
+    onclick={handleClick}
+    onkeydown={(e) => { if (e.key === 'Enter') handleClick() }}
+    role="button"
+    tabindex="0"
+    aria-label={name}
+  >
+    {@render inner()}
+  </div>
+{/if}
 
 <style>
   /* ━━━ Mobile 기본 (174px = 290 × 0.6) ━━━ */
@@ -292,4 +343,115 @@
     /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
     .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
   }
+
+  /* ━━━ 변형(variant) — 표준을 기준으로 영역 특성만 덮어쓴다. 각 값의 출처·이력은
+     .claude/plan/상품 썸네일 표준화 — 파편 스타일 등록부(2026-11-05).md ━━━
+     `.pc-card.pc-card--x`·`.pc-card--x .pc-*` 로 쓰는 이유: 표준 PC 규칙(@media, 클래스 1개)보다 항상 이기게 하려는 것 */
+
+  /* list — /products 모바일 목록(.m-prod-card 이식, 2열 그리드 셀 안에서 폭 100%) */
+  .pc-card.pc-card--list {
+    width: 100%;
+    color: inherit;
+    transition: transform 0.2s;
+  }
+  .pc-card--list:hover { transform: scale(1.02); }   /* 카드 전체 1.02배(이미지 확대 대신) — 기존 .m-prod-card 동작 */
+  .pc-card--list .pc-img-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
+    background: #e1def3;                              /* 기존 .m-prod-img-box 배경 */
+  }
+  .pc-card--list .pc-img { position: absolute; inset: 0; }
+  .pc-card--list:hover .pc-img { transform: none; }
+  .pc-card--list .pc-clip { top: 11px; right: 11px; width: 32px; height: 32px; }   /* 기존 .mprod-clip */
+  .pc-card--list .pc-clip svg { width: 26px; height: 26px; }
+
+  /* pick — /products MD 추천(.md-pick-card 이식): 가로 스크롤 트랙 안의 고정폭 카드 */
+  .pc-card.pc-card--pick { width: 139px; color: inherit; }   /* PC 232px × 0.60 ≈ 139px */
+  .pc-card--pick .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1 / 1; }
+  .pc-card--pick .pc-img { position: absolute; inset: 0; }
+  .pc-card--pick .pc-category { text-transform: uppercase; }   /* 기존 .mdp-category */
+  @media (min-width: 768px) {
+    .pc-card.pc-card--pick { width: 232px; }   /* 표준 290px 대비 20% 축소(요청 2026-09-29) */
+  }
+
+  /* pick-home — 홈 MD 추천(.md-pick-card 이식): 2열 그리드 셀 폭 100%, 최대 174px */
+  .pc-card.pc-card--pick-home {
+    flex: 0 0 auto;
+    width: min(174px, calc((100% - 15px) / 2));   /* 가로 스크롤 트랙에서 2장 노출 — 15px = 홈 .md-picks-track 의 gap */
+    scroll-snap-align: start;
+    color: inherit;
+  }
+  .pc-card--pick-home .pc-img-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1.57;   /* 세로폭 +30%(1:1.3) → 10% 더(1.43) → 10% 더 = 1.43 × 1.1 ≈ 1.57(2026-11-05 Stephen 지시, 가로 160px 기준 높이 약 251px) */
+    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
+  }
+  .pc-card--pick-home .pc-img { position: absolute; inset: 0; }
+
+  /* fluid / fluid-mobile — 2열 그리드 셀 안에서 폭 100%(기존 SearchProductGrid·하이프팩 테마 목록의 :global 오버라이드 이식) */
+  .pc-card.pc-card--fluid { width: 100%; max-width: 100%; min-width: 0; flex-shrink: 1; }
+  .pc-card--fluid .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1; flex-shrink: 1; }
+  @media (max-width: 640px) {
+    .pc-card.pc-card--fluid-mobile { width: 100%; max-width: 100%; min-width: 0; flex-shrink: 1; }
+    .pc-card--fluid-mobile .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1; flex-shrink: 1; }
+  }
+
+  /* scroll-m — 모바일 139px(= PC 232px × 0.60, 반경 20/8), PC 232px(표준 290px −20%, 반경 33/13) — 기존 상품 상세 '최신 등록 상품' 오버라이드 이식 */
+  .pc-card.pc-card--scroll-m { width: 139px; }
+  .pc-card--scroll-m .pc-img-wrap { width: 139px; height: 139px; border-radius: 20px 8px 20px 8px; }
+  @media (min-width: 768px) {
+    .pc-card.pc-card--scroll-m { width: 232px; }
+    .pc-card--scroll-m .pc-img-wrap { width: 232px; height: 232px; border-radius: 33px 13px 33px 13px; }
+  }
+
+  /* scroll-s — 표준 ×0.7: 모바일 174→122px(반경 14/6, 찜 15px·아이콘 10px·여백 5px), PC 290→203px(반경 23/9, 찜 31px·아이콘 24px·여백 10px) — 기존 WishlistScroll 오버라이드 이식 */
+  .pc-card.pc-card--scroll-s { width: 122px; }
+  .pc-card--scroll-s .pc-img-wrap { width: 122px; height: 122px; border-radius: 14px 6px 14px 6px; }
+  .pc-card--scroll-s .pc-clip { width: 15px; height: 15px; top: 5px; right: 5px; }
+  .pc-card--scroll-s .pc-clip svg { width: 10px; height: 10px; }
+  @media (min-width: 768px) {
+    .pc-card.pc-card--scroll-s { width: 203px; }
+    .pc-card--scroll-s .pc-img-wrap { width: 203px; height: 203px; border-radius: 23px 9px 23px 9px; }
+    .pc-card--scroll-s .pc-clip { width: 31px; height: 31px; top: 10px; right: 10px; }
+    .pc-card--scroll-s .pc-clip svg { width: 24px; height: 24px; }
+  }
+
+  /* 홈 MD 추천 정보 구조 공통(pick-home·list): 썸네일↔정보 간격 10.8px +30%(2026-11-04 Stephen 지시), 상품명 볼드 + purple 토큰(2026-11-04 Stephen 지시), list 도 동일하게(2026-11-05) */
+  .pc-card--pick-home .pc-info,
+  .pc-card--list .pc-info,
+  .pc-card--pick .pc-info { padding-top: 14.04px; }
+  .pc-card--pick-home .pc-name,
+  .pc-card--list .pc-name,
+  .pc-card--pick .pc-name { font-weight: 700; color: var(--cs-purple); }
+
+  /* 서브카피(상품카피) — 가격 줄 아래 보조 문구, 최대 2줄 */
+  .pc-subcopy {
+    margin: 0;
+    width: 100%;
+    font: var(--text-m-script-12);
+    color: var(--cs-text-mid);
+    letter-spacing: -0.5px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* thumb — 썸네일만(설명서 목록 등): 크기는 부모가 --pc-thumb-size 로 지정, 반경 10px(이미지 반경 표준) */
+  .pc-card.pc-card--thumb {
+    width: var(--pc-thumb-size, 84px);
+    cursor: default;
+  }
+  .pc-card--thumb .pc-img-wrap {
+    display: block;
+    width: var(--pc-thumb-size, 84px);
+    height: var(--pc-thumb-size, 84px);
+    border-radius: var(--cms-radius-sm);
+  }
+  .pc-card--thumb:hover .pc-img { transform: none; }
 </style>
