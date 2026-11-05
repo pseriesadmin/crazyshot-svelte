@@ -46,6 +46,9 @@ describe('pdfViewerLogic — 줌', () => {
     expect(fitWidthZoom(5000, 100, 20)).toBe(3)
     expect(fitWidthZoom(0, 595, 20)).toBe(1) // 아직 측정 전이면 100%
     expect(fitWidthZoom(700, 0, 20)).toBe(1)
+    // 좁은 모바일(375px, 쪽 여백 12px) A4는 50% 미만이어야 폭에 맞는다 — 하한을 낮춰 주면 그 값까지 내려간다
+    expect(fitWidthZoom(343, 595, 12, 0.25)).toBeCloseTo(319 / (595 * CSS_PX_PER_PT), 5)
+    expect(fitWidthZoom(343, 595, 12)).toBe(0.5)
   })
 
   it('표시 퍼센트는 브라우저 PDF 뷰어처럼 96dpi 기준 100% = 1pt가 1.333px', () => {

@@ -5,6 +5,7 @@
   import SearchKeywordBar from '$lib/components/products/SearchKeywordBar.svelte'
   import SearchProductGrid from '$lib/components/products/SearchProductGrid.svelte'
   import SearchCrazylogSection, { type SearchCrazylogPost } from '$lib/components/crazylog/SearchCrazylogSection.svelte'
+  import SearchManualSection, { type SearchManual } from '$lib/components/products/SearchManualSection.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { recordSearchClick } from '$lib/services/searchService'
   import { toggleWish } from '$lib/utils/wishlist'
@@ -70,6 +71,8 @@
   const resultTotalLabel = $derived(formatResultTotal(searchResults.length, hasMoreRemote, resultTotal))
   /** 크레이지로그 검색 결과 — 검색 실행(Enter·아이콘·키워드 칩) 때만 조회, 자동완성·추천에서는 호출하지 않음 */
   let crazylogResults    = $state<SearchCrazylogPost[]>([])
+  /** 검색된 상품에 연결된 상품설명서(PDF) — 상품 결과를 받은 뒤 그 상품 id 로 조회(최초 받아온 결과 기준) */
+  let manualResults      = $state<SearchManual[]>([])
   /** 마지막 검색 요청 번호 — 늦게 도착한 이전 검색 응답이 최신 결과를 덮지 않게 */
   let searchSeq = 0
   /** 자동완성 드롭다운 전용 — 결과 그리드(searchResults)와 분리 */
@@ -162,7 +165,7 @@
     if (debounceTimer) clearTimeout(debounceTimer)
     suggestAbort?.abort()
     suggestResults = []
-    if (!q) { searchSeq++; isSearching = false; submittedQuery = ''; searchResults = []; resultTotal = null; hasMoreRemote = false; isLoadingMore = false; crazylogResults = []; return }
+    if (!q) { searchSeq++; isSearching = false; submittedQuery = ''; searchResults = []; resultTotal = null; hasMoreRemote = false; isLoadingMore = false; crazylogResults = []; manualResults = []; return }
     doSearch(q)
   }
 
@@ -189,12 +192,31 @@
     return await resp.json()
   }
 
+  /** 검색된 상품(id 목록)에 연결된 상품설명서 조회 — 실패해도 상품 결과에는 영향 없음 */
+  async function fetchManualResults(products: SearchProduct[]): Promise<SearchManual[]> {
+    const imgById = new Map(products.map((p) => [p.id, p.img]))
+    const ids = products.map((p) => p.id).filter(Boolean).slice(0, 50)
+    if (ids.length === 0) return []
+    const resp = await fetch(`/api/search/manuals?ids=${ids.map(encodeURIComponent).join(',')}`)
+    if (!resp.ok) throw new Error(`상품설명서 검색 API 오류: ${resp.status}`)
+    const payload = await resp.json() as { results?: Record<string, unknown>[] }
+    return (payload.results ?? []).map((r) => ({
+      productId:   String(r['product_id'] ?? ''),
+      productName: String(r['product_name'] ?? ''),
+      imageUrl:    imgById.get(String(r['product_id'] ?? '')) ?? '/images/products/grid-flat.png',
+      slug:        r['slug'] ? String(r['slug']) : null,
+      path:        String(r['path'] ?? ''),
+      name:        String(r['name'] ?? ''),
+    }))
+  }
+
   async function doSearch(q: string) {
     const seq = ++searchSeq
     isSearching = true
     searchLogId = null  // 새 검색 시 이전 log ID 초기화
     submittedQuery = q
     crazylogResults = []
+    manualResults = []
     // 상품·크레이지로그를 병렬 조회 — 한쪽 실패가 다른 쪽 결과를 비우지 않는다
     const [productsRes, logsRes] = await Promise.allSettled([fetchProductResults(q), fetchCrazylogResults(q)])
     if (seq !== searchSeq) return  // 더 최신 검색이 시작됨 — 이 응답은 버린다
@@ -215,6 +237,13 @@
     isLoadingMore = false
     crazylogResults = logsRes.status === 'fulfilled' ? (logsRes.value.results ?? []).map(mapCrazylogRow) : []
     isSearching = false
+    // 상품설명서는 상품 결과가 나온 뒤 그 상품 id 로 조회 — 화면을 막지 않고 도착하면 섹션이 나타난다
+    try {
+      const manuals = await fetchManualResults(searchResults)
+      if (seq === searchSeq) manualResults = manuals
+    } catch {
+      if (seq === searchSeq) manualResults = []
+    }
   }
 
   /** 더보기 — 동작 규칙(연타·검색 중 무시·이전 응답 폐기·실패 복구)은 runLoadMore(searchLoadMore.ts)가 맡는다 */
@@ -344,22 +373,33 @@
     totalLabel={submittedQuery ? resultTotalLabel : undefined}
     onLoadMore={submittedQuery && showMoreButton ? loadMore : undefined}
     loadingMore={isLoadingMore}
-    hideEmpty={!!submittedQuery && crazylogResults.length > 0}
-    attached={!!submittedQuery && crazylogResults.length > 0}
+    hideEmpty={!!submittedQuery && (crazylogResults.length > 0 || manualResults.length > 0)}
+    attached={!!submittedQuery && (crazylogResults.length > 0 || manualResults.length > 0)}
   />
+
+  <!-- ── 상품설명서 검색 결과 (검색된 상품에 연결된 PDF가 1건 이상일 때만, 최대 20건) ── -->
+  {#if submittedQuery}
+    <SearchManualSection
+      manuals={manualResults}
+      topRound={searchResults.length === 0}
+    />
+  {/if}
 
   <!-- ── 크레이지로그 검색 결과 (검색 실행 후·결과 1건 이상일 때만, 최대 6건) ── -->
   {#if submittedQuery}
     <SearchCrazylogSection
       posts={crazylogResults}
-      topRound={searchResults.length === 0}
+      topRound={searchResults.length === 0 && manualResults.length === 0}
       moreHref={crazylogResults.length >= CRAZYLOG_LIMIT ? `/crazylog/list?q=${encodeURIComponent(submittedQuery)}` : undefined}
     />
   {/if}
 
 </div>
 
-<BottomTabBar />
+<!-- 검색 결과 화면에서는 공통 바텀 탭바를 숨긴다(결과 목록 하단을 가리지 않게) — 검색 전(추천 상품)에는 기존대로 노출 -->
+{#if !submittedQuery}
+  <BottomTabBar />
+{/if}
 
 <style>
   /* ── 페이지 루트 ── */

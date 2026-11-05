@@ -29,10 +29,14 @@ export function stepZoom(zoom: number, direction: 'in' | 'out'): number {
   return prev ?? MIN_ZOOM
 }
 
-/** 가로 맞춤 배율 — 영역 너비에서 좌우 여백을 뺀 폭에 페이지 폭(pt)을 맞춘다. 측정 전(0)이면 100%. */
-export function fitWidthZoom(containerWidthPx: number, pageWidthPt: number, paddingPerSidePx: number): number {
+/**
+ * 가로 맞춤 배율 — 영역 너비에서 좌우 여백을 뺀 폭에 페이지 폭(pt)을 맞춘다. 측정 전(0)이면 100%.
+ * minZoom: 맞춤 배율의 하한(기본 50%). 좁은 모바일 화면에서 A4 한 쪽은 약 40%여야 폭에 맞으므로, 호출부가 더 낮은 하한을 줄 수 있다.
+ */
+export function fitWidthZoom(containerWidthPx: number, pageWidthPt: number, paddingPerSidePx: number, minZoom: number = MIN_ZOOM): number {
   if (containerWidthPx <= 0 || pageWidthPt <= 0) return 1
-  return clampZoom((containerWidthPx - paddingPerSidePx * 2) / (pageWidthPt * CSS_PX_PER_PT))
+  const fit = (containerWidthPx - paddingPerSidePx * 2) / (pageWidthPt * CSS_PX_PER_PT)
+  return Math.min(MAX_ZOOM, Math.max(minZoom, fit))
 }
 
 export function toDisplayPercent(zoom: number): number {
