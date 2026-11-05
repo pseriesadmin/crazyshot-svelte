@@ -33,21 +33,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     // body 없으면 기본값 사용
   }
 
-  const { context_type = 'general', context_id, context_reservation_id } = body
+  // 고객당 상담 대화 1개(Migration 777·793) — 예약 상담 요청도 일반 대화로 바꿔 받는다(배포 전 화면을 가진 브라우저 대응).
+  // 예약 번호는 대화 연결에 쓰지 않으며, 상담 시작 카드는 화면이 reservation-card API 로 따로 넣는다.
+  const requestedType = body.context_type ?? 'general'
+  const context_type = requestedType === 'reservation' ? 'general' : requestedType
+  const context_id = requestedType === 'reservation' ? undefined : body.context_id
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   const validContextId = context_id && UUID_RE.test(context_id) ? context_id : null
+  const validReservationId: number | null = null
 
-  // context_reservation_id는 본인 소유 예약일 때만 신뢰 — 타 사용자 예약에 상담을 연결해
-  // 대여완료 자동종료(Migration 279 트리거) 등을 오염시키지 못하도록 소유권 검증
-  let validReservationId: number | null = null
-  if (context_type === 'reservation' && Number.isInteger(context_reservation_id) && (context_reservation_id as number) > 0) {
-    const { data: ownedReservation } = await admin
-      .from('rental_reservations')
-      .select('id')
-      .eq('id', context_reservation_id as number)
+  // 이미 열려 있는(진행중·대기) 일반 대화가 있으면 새로 만들지 않고 그대로 돌려준다 — 일반 대화 중복 생성 방지
+  if (context_type === 'general' && !validContextId) {
+    const { data: openSession } = await db
+      .from('chat_sessions')
+      .select('*')
       .eq('user_id', session.user.id)
+      .eq('context_type', 'general')
+      .in('status', ['open', 'pending'])
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle()
-    if (ownedReservation) validReservationId = context_reservation_id as number
+    if (openSession) return json({ session: openSession as ChatSession }, { status: 200 })
   }
 
   // 최근 종료된 세션이 있으면 신규 생성 대신 재활성화
@@ -61,7 +67,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   if (context_type) query = query.eq('context_type', context_type)
   if (validContextId) query = query.eq('context_id', validContextId)
-  if (validReservationId) query = query.eq('context_reservation_id', validReservationId)
 
   const { data: closedSession } = await query.maybeSingle()
 
