@@ -698,7 +698,7 @@
     <!-- 상품 이미지 없는 단순 카드 (쿠폰 코드 / 연체료 등) -->
     <div class="simple-content">
       {#if payload.type === 'coupon_duplicate_warning'}
-        <p class="dup-warning-title" role="alert">⚠ 이미 선물한 쿠폰입니다.</p>
+        <p class="dup-warning-title" role="alert">⚠ 이미 보유 중인 쿠폰입니다.</p>
         {#if payload.discount_label}
           <p class="dup-warning-sub">{payload.discount_label} · 고객에게는 알림이 발송되지 않았습니다.</p>
         {/if}

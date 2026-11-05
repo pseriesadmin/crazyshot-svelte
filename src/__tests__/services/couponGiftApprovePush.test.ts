@@ -108,7 +108,7 @@ describe('coupon-gift approve — 고객 푸시', () => {
     ownedResult = { data: { id: 'uc-1' } }
     const r = (await POST(makeEvent(false))) as unknown as { status: number; data: { error: string; duplicate: boolean } }
     expect(r.status).toBe(409)
-    expect(r.data.error).toBe('이미 선물한 쿠폰입니다.')
+    expect(r.data.error).toBe('이미 보유 중인 쿠폰입니다.')
     expect(mockRpc).not.toHaveBeenCalled()
     expect(mockPush).not.toHaveBeenCalled()
     const warn = insertedRows.find((x) => x.table === 'chat_messages')?.row as Record<string, unknown>

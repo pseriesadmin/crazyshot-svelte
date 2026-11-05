@@ -1,9 +1,9 @@
-// 쿠폰 선물 중복 방지 — 고객이 이미 보유(또는 사용)한 동일 쿠폰을 다시 선물하려 할 때
+// 쿠폰 선물 중복 방지 — 고객이 이미 보유(선물·자동배포·사용 포함)한 동일 쿠폰을 다시 선물하려 할 때
 // 고객에게는 카드·푸시를 보내지 않고, 그 세션에 "관리자에게만 보이는"(admin_only) 경고 카드만 남긴다.
 // (user_coupons는 (user_id, coupon_id) 유일 — 재선물은 어차피 배포되지 않으므로 알림만 막는다)
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export const COUPON_ALREADY_GIFTED_MESSAGE = '이미 선물한 쿠폰입니다.'
+export const COUPON_ALREADY_GIFTED_MESSAGE = '이미 보유 중인 쿠폰입니다.'
 
 export async function isCouponAlreadyOwned(
   admin: SupabaseClient,

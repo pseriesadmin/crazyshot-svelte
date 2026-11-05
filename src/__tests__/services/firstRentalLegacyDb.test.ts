@@ -47,6 +47,8 @@ async function createFirstRentalCoupon(): Promise<string> {
       code, type: 'all', validity_type: 'unlimited', discount_type: 'fixed', discount_value: 1000,
       is_active: true, min_purchase_amount: 0, min_rental_amount: 0, min_rental_days: 0,
       is_first_rental_only: true, per_user_limit: 1,
+      // 가입 즉시 자동배포(Migration #791)가 새 테스트 계정에 이 쿠폰을 먼저 지급하지 않도록 끈다
+      auto_distribute_enabled: false,
     })
     .select('id')
     .single()
