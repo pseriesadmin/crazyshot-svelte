@@ -10,6 +10,8 @@
   import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
   import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
+  import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
+  import { toggleWish } from '$lib/utils/wishlist'
   import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
   import {
     HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB, HELP_HERO_DEFAULT_BG,
@@ -18,6 +20,19 @@
 
   interface Props { data: PageData }
   let { data }: Props = $props()
+
+  // MD 추천 카드 찜 — /products 와 같은 방식(서버가 내려준 찜 id 로 시작, 토글 성공 시 화면 상태 갱신)
+  let wishedSet = $state(new Set<string>(data.wishedIds))
+  $effect(() => { wishedSet = new Set<string>(data.wishedIds) })
+
+  async function handleWishToggle(id: string | undefined): Promise<void> {
+    if (!id) return
+    const action = await toggleWish(id)
+    if (!action) return
+    const next = new Set(wishedSet)
+    if (action === 'added') next.add(id); else next.delete(id)
+    wishedSet = next
+  }
 
   // DB 배너 (마이그레이션 #45 적용 후 활성화) — 표시용 (is_active + 날짜 필터)
   const heroPC     = $derived(data.bannerMap?.['hero_pc']     ?? [])
@@ -969,37 +984,21 @@
       </div>
       <div class="md-picks-track">
         {#each data.mdProducts as prod}
-          <a href={'/products/' + (prod.slug || prod.id)} class="md-pick-card">
-            <div class="md-pick-img-box">
-              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="md-pick-img" loading="lazy" />
-            </div>
-            <div class="mdp-info">
-              <!-- 카테고리 라벨은 노출하지 않음(2026-11-04, Stephen 지시) — 상품명 → 가격 순으로 표시(2026-11-04 위치 맞교환) -->
-              <p class="mdp-name">{prod.name}</p>
-              <div class="mdp-price-row">
-                {#if prod.sale_only}
-                  <span class="mdp-price-group">
-                    <span class="mdp-price-label">Price</span>
-                    <span class="mdp-price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
-                  </span>
-                {:else}
-                  {#if prod.price_24h}
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">Day</span>
-                      <span class="mdp-price-num">{prod.price_24h.toLocaleString('ko-KR')}</span>
-                    </span>
-                  {/if}
-                  {#if prod.price_24h && prod.price_12h}<span class="mdp-price-sep">/</span>{/if}
-                  {#if prod.price_12h}
-                    <span class="mdp-price-group">
-                      <span class="mdp-price-label">12H</span>
-                      <span class="mdp-price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>
-                    </span>
-                  {/if}
-                {/if}
-              </div>
-            </div>
-          </a>
+          <!-- 표준 ProductDPCard 의 pick-home 변형 — 기존 홈 .md-pick-card 이식(카테고리 없음·상품명이 가격 위·상품명 purple Bold, 2026-11-04 Stephen 지시 값 유지) -->
+          <ProductDPCard
+            variant="pick-home"
+            subCopy={prod.product_caption}
+            id={prod.id}
+            name={prod.name}
+            imageUrl={prod.image_urls?.[0] ?? '/favicon.png'}
+            price24h={prod.price_24h || null}
+            price12h={prod.price_12h || null}
+            isSaleOnly={prod.sale_only}
+            salePrice={prod.sale_price}
+            href={'/products/' + (prod.slug || prod.id)}
+            wished={wishedSet.has(prod.id)}
+            onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+          />
         {/each}
       </div>
     </div>
@@ -1824,9 +1823,9 @@
   /* 카테고리 상품 슬라이더(PC) — /products 헤더 카드 슬라이더(.d-slider-relative/.d-slider-cards/.d-feat-card) 컨테이너 값 반영(2026-09-29)
      높이 500px(세로폭 Stephen 지정, /products는 580px) · 카드 3장 균등(gap 20px, 최소 300px) · 반경 50/20/50/20 · 카드 안쪽은 기존 prod-card 스타일 유지.
      .prod-slider-wrap 범위로 한정 — 취향직격 테마 슬라이더(.theme-prod-slider)의 300×300 카드는 그대로 */
-  .prod-slider-wrap .prod-slider { gap: 20px; padding: 0; height: 500px; }
+  .prod-slider-wrap .prod-slider { gap: 30px; padding: 0; height: 500px; }   /* 카드 간 여백 20px → 30px(+50%, 2026-11-05 Stephen 지시) — 아래 카드 폭 계산(gap×2)과 짝 */
   .prod-slider-wrap .prod-card {
-    flex: 0 0 calc((100% - 40px) / 3);
+    flex: 0 0 calc((100% - 60px) / 3);   /* 3장 균등 — 60px = gap 30px × 2 */
     min-width: 300px;
     width: auto;
     height: 500px;
@@ -2091,72 +2090,23 @@
     justify-content: center;
     min-height: 80px;
   }
-  /* 좌우 스크롤 해제(요청 2026-09-29) — 2열 그리드로 화면 폭 안에 배치, 카드는 표준 174px를 최대로 폭에 맞춰 축소 */
+  /* 가로 터치 스크롤(2026-11-05 Stephen 지시 — 2026-09-29 '좌우 스크롤 해제'를 되돌림): 한 번에 카드 2장이 보이고 손가락으로 밀어 넘긴다.
+     스냅(x mandatory)으로 카드 경계에 자석처럼 멈추고, 관성 스크롤은 브라우저 기본(-webkit-overflow-scrolling). 카드 폭은 pick-home 변형이
+     트랙 폭 기준 (100% − gap 15px) / 2 로 잡는다 — 아래 gap 15px 과 짝 */
   .md-picks-track {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
     gap: 15px;
-    justify-items: center;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    /* overflow-x 만 auto 면 overflow-y 도 auto 가 되어, 가격 줄이 마지막 줄인 카드(상품카피 없음)에서 글자 하단 4px 넘침으로 트랙이 세로 스크롤돼
+       썸네일 윗부분이 잘려 보인다(/products MD 추천에서 2026-11-05 실측·수정한 것과 같은 원인) — 세로 스크롤 차단 + 하단 여유 */
+    overflow-y: hidden;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
-  /* /products "MD 추천"(모바일) 썸네일 카드 스타일 반영(요청 2026-09-29) — 찜 버튼 등 기능은 제외, 스타일만 이식 */
-  .md-pick-card {
-    width: 100%;
-    max-width: 174px;   /* 표준 상품카드 모바일 썸네일 크기(ProductDPCard 174px, front-uiux.md §14-4) — 재적용 2026-09-29 */
-    text-decoration: none;
-    display: flex;
-    flex-direction: column;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-  /* 호버: 카드 자체 확대는 트랙 overflow로 잘려 이미지만 1.04배 */
-  .md-pick-img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
-  .md-pick-card:hover .md-pick-img { transform: scale(1.04); }
-  .md-pick-img-box {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: var(--radius-lg) var(--radius-sm) var(--radius-lg) var(--radius-sm);
-    overflow: hidden;
-    position: relative;
-    background: var(--cs-lilac);
-  }
-  .mdp-info {
-    display: flex;
-    flex-direction: column;
-    gap: 10.8px;
-    padding: 14.04px 0 0;   /* 썸네일↔가격 영역 간격 10.8px → +30%(2026-11-04, Stephen 지시) */
-    width: 100%;
-    min-width: 0;
-  }
-  .mdp-price-row {
-    display: flex;
-    align-items: baseline;
-    gap: 3px;
-    color: var(--cs-purple-dark);
-    letter-spacing: -0.8px;
-    flex-wrap: wrap;
-  }
-  .mdp-price-group { display: flex; align-items: baseline; gap: 3px; }
-  .mdp-price-label { font: var(--text-m-tag-11); font-weight: 500; line-height: 1; }
-  .mdp-price-num {
-    font: var(--text-m-body-16B);
-    font-weight: 900;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    color: var(--cs-purple-light);
-  }
-  .mdp-price-sep { font: var(--text-m-script-14B); line-height: 1; color: var(--cs-purple-pale); }
-  .mdp-name {
-    font: var(--text-m-script-12);
-    font-weight: 700;          /* 2026-11-04 Stephen 지시: 볼드 적용(토큰 기본 500 → 700) */
-    color: var(--cs-purple);   /* 2026-11-04 Stephen 지시: purple-dark → 퍼플 토큰 */
-    letter-spacing: -0.5px;
-    line-height: 1.12;
-    margin: 0;
-    width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  .md-picks-track::-webkit-scrollbar { display: none; }
   /* CMS 관리 버튼 — 기존 .hero-cms-btn/.cat-cms-btn과 동일 위치·스타일 규칙 통일 */
   .md-picks-cms-btn {
     position: absolute;

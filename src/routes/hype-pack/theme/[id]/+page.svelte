@@ -46,6 +46,7 @@
         {#each data.products as prod}
           <div class="theme-prod-item">
             <ProductDPCard
+              variant="fluid-mobile"
               id={prod.id}
               name={prod.name}
               category={prod.category ?? undefined}
@@ -129,17 +130,6 @@
       min-width: 0;
       box-sizing: border-box;
     }
-    .theme-prod-item :global(.pc-card) {
-      width: 100%;
-      max-width: 100%;
-      min-width: 0;
-      flex-shrink: 1;
-    }
-    .theme-prod-item :global(.pc-img-wrap) {
-      width: 100%;
-      height: auto;
-      aspect-ratio: 1;
-      flex-shrink: 1;
-    }
+    /* 카드·이미지 폭 100% 는 ProductDPCard 의 fluid-mobile 변형이 담당(기존 :global 오버라이드 이식) */
   }
 </style>

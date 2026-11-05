@@ -1424,6 +1424,7 @@
       {:else}
         {#each popularProducts as item (item.id)}
           <ProductDPCard
+            variant="scroll-m"
             id={item.id}
             name={item.name}
             category={item.category ?? ''}
@@ -2396,16 +2397,7 @@
     .popular-scroll { padding: 0 var(--layout-pc-pad) 10px; }
   }
   /* .popular-card* 인라인 카드 CSS 제거(front-uiux.md §14-4) — ProductDPCard 표준 컴포넌트로 대체 */
-  /* 최신 등록 상품 썸네일 = /products MD추천 카드 값 적용(2026-09-29) — ProductDPCard 내부는 수정하지 않고
-     부모 래퍼 :global 오버라이드로만 처리(front-uiux.md §14-4).
-     모바일 139px(= PC 232px × 0.60) · 반경 20px 8px(MD추천 모바일), PC(≥768px) 232px(표준 290px −20%) · 반경 33px 13px.
-     이미지 호버 확대(1.04배)는 ProductDPCard 기본 동작(.pc-card:hover .pc-img)이 MD추천과 동일 */
-  .popular-section .popular-scroll :global(.pc-card)     { width: 139px; }
-  .popular-section .popular-scroll :global(.pc-img-wrap) { width: 139px; height: 139px; border-radius: 20px 8px 20px 8px; }
-  @media (min-width: 768px) {
-    .popular-section .popular-scroll :global(.pc-card)     { width: 232px; }
-    .popular-section .popular-scroll :global(.pc-img-wrap) { width: 232px; height: 232px; border-radius: 33px 13px 33px 13px; }
-  }
+  /* 최신 등록 상품 카드 크기(모바일 139px / PC 232px·반경)는 ProductDPCard 의 scroll-m 변형이 담당(기존 부모 :global 오버라이드 이식, 2026-11-05) */
 
   /* ── Reviews */
   .review-section {
