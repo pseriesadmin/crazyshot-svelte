@@ -24,7 +24,8 @@
   const heroMobile = $derived(data.bannerMap?.['hero_mobile'] ?? [])
 
   // ── 캐러셀 상태 ───────────────────────────────────────────────────
-  let pcIdx    = $state(0)
+  // PC 히어로 위치(확장 트랙 기준) — 모바일(heroPos)과 같은 방식: [마지막 복제, 1…N장, 첫 장 복제]
+  let pcPos    = $state(0)
   // 모바일 히어로 위치(확장 트랙 기준): 2장 이상이면 [마지막 복제, 1…N장, 첫 장 복제] 로 이어 붙여 좌우 무한 슬라이드. 1~N 이 실제 장, 0·N+1 은 복제 구간
   let heroPos = $state(0)
   // 캐러셀 배열 — 랜덤 모드 셔플은 서버(+page.server.ts)에서 끝낸 상태로 내려온다.
@@ -33,16 +34,86 @@
   const mobileCarousel = $derived(heroMobile)
 
   // 배너 목록이 바뀌면(재조회 등) 첫 장부터 다시 시작
-  $effect(() => { void pcCarousel; pcIdx = 0 })
+  $effect(() => { void pcCarousel; pcPos = pcCarousel.length > 1 ? 1 : 0 })
   $effect(() => { void mobileCarousel; heroPos = mobileCarousel.length > 1 ? 1 : 0 })
+
+  // PC 히어로 좌우 슬라이드 — 모바일과 같은 동작(손가락·마우스 드래그를 따라가다 놓으면 자석처럼 스냅, 양방향 무한 순환, 자동 슬라이드는 항상 왼쪽으로)
+  const pcSlides = $derived(
+    pcCarousel.length > 1
+      ? [pcCarousel[pcCarousel.length - 1], ...pcCarousel, pcCarousel[0]]
+      : pcCarousel
+  )
+  let pcDragX    = $state(0)
+  let pcDragging = $state(false)
+  let pcJump     = $state(false)
+  let pcStartX   = 0
+  let pcMoved    = false
+  let pcPointer  = -1
+  let pcPausedUntil = 0
+  let pcSettleTimer: ReturnType<typeof setTimeout> | undefined
+
+  function pcSettle(): void {
+    const n = pcCarousel.length
+    if (n <= 1) return
+    if (pcPos === 0 || pcPos === n + 1) {
+      pcJump = true
+      pcPos = pcPos === 0 ? n : 1
+      requestAnimationFrame(() => requestAnimationFrame(() => { pcJump = false }))
+    }
+  }
+  function pcGo(delta: number): void {
+    const n = pcCarousel.length
+    if (n <= 1) return
+    if (pcPos === 0 || pcPos === n + 1) return
+    pcPos += delta
+    clearTimeout(pcSettleTimer)
+    pcSettleTimer = setTimeout(pcSettle, HERO_ANIM_MS + 30)
+  }
+  function pcDown(e: PointerEvent): void {
+    if (pcCarousel.length <= 1 || pcPointer !== -1) return
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    // 배너 관리 버튼 등 위에 얹힌 컨트롤의 클릭은 가로채지 않는다
+    if ((e.target as HTMLElement).closest('button')) return
+    pcPointer = e.pointerId
+    pcStartX = e.clientX
+    pcMoved = false
+    pcDragging = true
+    pcDragX = 0
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  function pcMove(e: PointerEvent): void {
+    if (e.pointerId !== pcPointer) return
+    const dx = e.clientX - pcStartX
+    if (Math.abs(dx) > 6) pcMoved = true
+    pcDragX = dx
+  }
+  function pcUp(e: PointerEvent): void {
+    if (e.pointerId !== pcPointer) return
+    const w = (e.currentTarget as HTMLElement).clientWidth || 1280
+    const dx = e.clientX - pcStartX
+    const limit = Math.max(HERO_SWIPE_MIN_PX, w * HERO_SWIPE_RATIO)
+    pcPointer = -1
+    pcDragging = false
+    pcDragX = 0
+    if (e.type === 'pointerup' && dx <= -limit) pcGo(1)
+    else if (e.type === 'pointerup' && dx >= limit) pcGo(-1)
+    pcPausedUntil = Date.now() + HERO_PAUSE_MS
+  }
+  function pcClickCapture(e: MouseEvent): void {
+    if (!pcMoved) return
+    e.preventDefault()
+    e.stopPropagation()
+    pcMoved = false
+  }
 
   // 자동 슬라이드 (4초 인터벌)
   $effect(() => {
     if (pcCarousel.length <= 1) return
     const id = setInterval(() => {
-      pcIdx = (pcIdx + 1) % pcCarousel.length
+      if (pcDragging || Date.now() < pcPausedUntil) return
+      pcGo(1)
     }, 4000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); clearTimeout(pcSettleTimer) }
   })
 
   // 모바일 히어로 좌우 터치 슬라이드 — 손가락을 따라 이동하다 놓으면 이전/다음 장으로 스냅. 양쪽 끝 없이 계속 같은 방향으로 이어진다
@@ -369,24 +440,40 @@
 <div class="desktop-wrap">
 
   <!-- ① Hero -->
-  <div class="d-hero">
+  <div
+    class="d-hero"
+    class:swipeable={pcCarousel.length > 1}
+    class:grabbing={pcDragging}
+    onpointerdown={pcDown}
+    onpointermove={pcMove}
+    onpointerup={pcUp}
+    onpointercancel={pcUp}
+    onclickcapture={pcClickCapture}
+  >
     {#if data.isCms}
       <button class="hero-cms-btn" onclick={() => (showBannerModal = true)}>⚙ 배너 관리</button>
     {/if}
     {#if pcCarousel.length > 0}
-      {@const b = pcCarousel[pcIdx]}
-      {#if b}
-        {#if b.link_url}
-          <a href={b.link_url} class="d-hero-banner-link">
-            <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
-          </a>
-        {:else}
-          <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" />
-        {/if}
-        {#if b.sub_copy}
-          <div class="d-hero-sub-copy">{b.sub_copy}</div>
-        {/if}
-      {/if}
+      <div
+        class="d-hero-track"
+        class:dragging={pcDragging || pcJump}
+        style="transform: translate3d(calc({-pcPos * 100}% + {pcDragX}px), 0, 0)"
+      >
+        {#each pcSlides as b}
+          <div class="d-hero-slide">
+            {#if b.link_url}
+              <a href={b.link_url} class="d-hero-banner-link" draggable="false">
+                <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" draggable="false" />
+              </a>
+            {:else}
+              <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" draggable="false" />
+            {/if}
+            {#if b.sub_copy}
+              <div class="d-hero-sub-copy">{b.sub_copy}</div>
+            {/if}
+          </div>
+        {/each}
+      </div>
     {:else}
       <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
       <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
@@ -1270,6 +1357,26 @@
     justify-content: center;
     height: 936px;
     background: linear-gradient(252deg, rgb(229,193,109) 2%, rgb(164,233,225) 98%);
+  }
+  /* 좌우 슬라이드(터치·마우스 드래그): 세로 스크롤은 브라우저가, 가로 드래그는 JS가 처리 */
+  .d-hero.swipeable { touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab; }
+  .d-hero.swipeable.grabbing { cursor: grabbing; }
+  .d-hero-track {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    /* 자석처럼 끌려가 착 붙는 느낌 — 모바일(.m-hero-track)과 동일 곡선·시간(HERO_ANIM_MS 와 맞출 것) */
+    transition: transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.08);
+    will-change: transform;
+  }
+  .d-hero-track.dragging { transition: none; }
+  .d-hero-slide {
+    position: relative;
+    flex: 0 0 100%;
+    height: 100%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .d-hero-track { transition: none; }
   }
   /* DB 배너 오버레이 (마이그레이션 #45 이후) */
   .d-hero-banner-link {
