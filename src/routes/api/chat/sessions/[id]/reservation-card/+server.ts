@@ -9,7 +9,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { ensureReservationCard } from '$lib/server/chatReservationCard'
 import type { RequestHandler } from './$types'
 
-export const POST: RequestHandler = async ({ params, locals }) => {
+export const POST: RequestHandler = async ({ params, locals, request }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
@@ -32,6 +32,27 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   const cs = chatSession as { context_type: string; context_reservation_id: number | null }
   if (cs.context_type === 'reservation' && cs.context_reservation_id) {
     await ensureReservationCard(admin, params.id as string, cs.context_reservation_id)
+    return json({ ok: true })
+  }
+
+  // 고객당 대화 1개 원칙(2026-11-05): 예약 상담은 일반 대화에 이어 붙는다 — 요청 본문의 예약 번호는
+  // 본인 소유 예약일 때만 신뢰한다(타인 예약 카드를 내 대화에 넣지 못하게)
+  let reservationId = 0
+  try {
+    const body = (await request.json()) as { reservation_id?: unknown }
+    reservationId = Number(body.reservation_id)
+  } catch {
+    return json({ ok: true })
+  }
+  if (cs.context_type === 'general' && Number.isInteger(reservationId) && reservationId > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: owned } = await (admin as any)
+      .from('rental_reservations')
+      .select('id')
+      .eq('id', reservationId)
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+    if (owned) await ensureReservationCard(admin, params.id as string, reservationId)
   }
 
   return json({ ok: true })

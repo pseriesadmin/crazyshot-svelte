@@ -24,6 +24,7 @@
   import type { ChatSession, ActionPayload } from '$lib/types/chat'
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
+  import { normalizeChatContext } from '$lib/utils/chatContext'
 
   interface Props {
     /** 로그인 사용자 정보 (비로그인 시 'test-user') */
@@ -87,9 +88,17 @@
   async function initSession() {
     // effective* 값은 반드시 첫 await 이전(동기 구간)에 읽어야 $effect가 override 변경을
     // 추적해 재실행함 — ensureAuth() 뒤로 옮기면 추적이 끊긴다
-    const ctxType = effectiveContextType
-    const ctxId = effectiveContextId
-    const ctxResId = effectiveContextReservationId
+    // 고객당 대화 1개 원칙(2026-11-05): 예약 상담도 별도 세션을 만들지 않고 일반 대화에 이어 붙이고,
+    // 예약 안내 카드만 그 대화 안에 넣는다
+    const normalized = normalizeChatContext({
+      contextType: effectiveContextType,
+      contextId: effectiveContextId,
+      contextReservationId: effectiveContextReservationId,
+    })
+    const reservationForCard = normalized.reservationForCard
+    const ctxType = normalized.contextType
+    const ctxId = normalized.contextId
+    const ctxResId = normalized.contextReservationId
 
     isLoading = true
     errorMsg = null
@@ -135,8 +144,12 @@
     // 보장 — 새로 만든 세션·기존에 열려 있던 세션 둘 다 이 경로를 통과하므로 항상 호출한다
     // (이미 카드가 있으면 서버에서 idempotent하게 아무 것도 안 함). 메시지 로드 전에 await해
     // 첫 렌더부터 카드가 보이게 한다.
-    if (existing.context_type === 'reservation' && existing.context_reservation_id) {
-      await fetch(`/api/chat/sessions/${existing.id}/reservation-card`, { method: 'POST' }).catch(() => {})
+    if ((existing.context_type === 'reservation' && existing.context_reservation_id) || reservationForCard) {
+      await fetch(`/api/chat/sessions/${existing.id}/reservation-card`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reservation_id: reservationForCard ?? null }),
+      }).catch(() => {})
     }
 
     // 기존 메시지 로드 (2026-08-15: 전체 히스토리 무조건 로드 → 최근 20개만 우선 로드로 변경)

@@ -3,17 +3,6 @@
 // 호출 지점: /api/chat/sessions/[id]/reservation-card (ChatWindow가 세션 로드 직후 항상 호출)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function ensureReservationCard(admin: any, sessionId: string, reservationId: number): Promise<void> {
-  // 이미 카드가 있으면 중복 삽입 방지
-  const { data: existingCard } = await admin
-    .from('chat_messages')
-    .select('id')
-    .eq('session_id', sessionId)
-    .eq('message_type', 'action_card')
-    .contains('action_payload', { type: 'RESERVATION_STATUS_CARD' })
-    .limit(1)
-    .maybeSingle()
-  if (existingCard) return
-
   const { data: reservation } = await admin
     .from('rental_reservations')
     .select('reservation_code, product_id, start_date, end_date')
@@ -27,6 +16,23 @@ export async function ensureReservationCard(admin: any, sessionId: string, reser
     start_date: string | null
     end_date: string | null
   }
+
+  const content = r.reservation_code
+    ? `예약번호 ${r.reservation_code} 상담을 시작합니다.`
+    : '예약 상담을 시작합니다.'
+
+  // 같은 예약의 "상담 시작" 카드가 이미 있으면 중복 삽입 방지 — 한 대화에 여러 예약 상담이 이어 붙으므로 예약 단위로 판정한다.
+  // 알림 RPC 가 같은 type·예약 번호로 만드는 상태 안내 카드(취소·반납 안내 등)와 구분하려고 상담 안내 문구까지 함께 본다.
+  const { data: existingCard } = await admin
+    .from('chat_messages')
+    .select('id')
+    .eq('session_id', sessionId)
+    .eq('message_type', 'action_card')
+    .eq('content', content)
+    .contains('action_payload', { type: 'RESERVATION_STATUS_CARD', reservation_id: String(reservationId) })
+    .limit(1)
+    .maybeSingle()
+  if (existingCard) return
 
   // 상품 정보 조회(부모 기준 — products.md §4-1 동일 원칙: 자식 재고가 아닌 부모 대표명 사용)
   let productName: string | null = null
@@ -56,9 +62,7 @@ export async function ensureReservationCard(admin: any, sessionId: string, reser
     session_id: sessionId,
     sender_type: 'ai',
     message_type: 'action_card',
-    content: r.reservation_code
-      ? `예약번호 ${r.reservation_code} 상담을 시작합니다.`
-      : '예약 상담을 시작합니다.',
+    content,
     action_payload: {
       type: 'RESERVATION_STATUS_CARD',
       reservation_id: String(reservationId),

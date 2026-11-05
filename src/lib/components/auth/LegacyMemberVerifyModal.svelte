@@ -12,6 +12,8 @@
   import { goto } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import { formatKstDateDash } from '$lib/utils/kstDate'
+  import { supabase } from '$lib/services/supabase'
+  import { pickGuestToken, requestGuestChatMerge } from '$lib/utils/guestChatMerge'
 
   interface Props {
     open: boolean
@@ -232,6 +234,14 @@
   async function handleComplete(phone: string) {
     isLoading = true
     try {
+      // 인증 완료 시 서버가 새 회원 계정으로 로그인시켜 지금의 비회원(익명) 세션이 교체된다 — 교체 전에 토큰을 보관해 채팅을 합친다
+      let guestToken: string | null = null
+      try {
+        const { data: { session: beforeSession } } = await supabase.auth.getSession()
+        guestToken = pickGuestToken(beforeSession)
+      } catch {
+        // 토큰 보관 실패는 인증에 영향이 없다 — 통합만 건너뛴다
+      }
       const res = await fetch('/api/auth/legacy-claim/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -239,6 +249,8 @@
       })
       const data = await res.json()
       if (data.ok) {
+        // 비회원 채팅 → 회원 채팅 통합(로그인 흐름을 막지 않도록 기다리지 않고, 실패해도 조용히 넘어간다)
+        if (guestToken) void requestGuestChatMerge(guestToken)
         // 인증 완료 자체가 "더 이상 물어볼 필요 없음"의 충분조건이므로, Step1 체크박스
         // 선택 여부와 무관하게 무조건 영구 dismiss 기록(sp3-qa-agent GATE E 지적 — 2026-09-11
         // 수정. 이전엔 체크박스 미선택 시 인증을 완료해도 로그아웃 후 재방문마다 이 모달이
