@@ -1304,6 +1304,7 @@
     downloadUrl={manualPublicUrl(manualViewerFile.path, getSupabaseUrl())}
     downloadFilename={manualViewerFile.name}
     onclose={() => (manualViewerOpen = false)}
+    simple
   />
 {/if}
 

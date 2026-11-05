@@ -54,6 +54,8 @@
     docLabel?: string
     /** 밝은 톤 — 짙은 남색 대신 옅은 퍼플 배경(상품설명서 모달용). 기본 꺼짐(계약서 뷰어는 기존 어두운 톤 그대로) */
     light?: boolean
+    /** 단순 모드 — 도구줄 전체(쪽 목록·쪽 이동·배율·가로 맞춤·회전·내려받기·인쇄)를 숨기고 본문만 보여 준다(고객 화면 상품설명서용, 내려받기는 호출부 머리줄이 맡는다). 기본 꺼짐 */
+    simple?: boolean
   }
 
   let {
@@ -68,9 +70,11 @@
     extraActions,
     docLabel = '계약서',
     light = false,
+    simple = false,
   }: Props = $props()
 
   const PAGE_PADDING = 12 // 쪽 좌우 여백(px) — 가로 맞춤 계산에 사용
+  const SIMPLE_MIN_FIT_ZOOM = 0.25 // 단순 모드(고객 화면) 가로 맞춤 하한 — 좁은 모바일에서 A4 한 쪽(약 40%)이 폭에 맞도록
   const THUMB_WIDTH = 112
 
   /** 고객에게 그대로 보여 줘도 되는 불러오기 실패 안내 */
@@ -102,7 +106,7 @@
 
   const swapAxes = $derived(rotation % 180 !== 0)
   const firstPageWidthPt = $derived(baseSizes[0] ? (swapAxes ? baseSizes[0].h : baseSizes[0].w) : 0)
-  const zoom = $derived(zoomMode === 'fit' ? fitWidthZoom(containerWidth, firstPageWidthPt, PAGE_PADDING) : customZoom)
+  const zoom = $derived(zoomMode === 'fit' ? fitWidthZoom(containerWidth, firstPageWidthPt, PAGE_PADDING, simple ? SIMPLE_MIN_FIT_ZOOM : undefined) : customZoom)
   const zoomPercent = $derived(toDisplayPercent(zoom))
   const scale = $derived(pdfScale(zoom))
 
@@ -211,7 +215,7 @@
   // 초기 쪽 목록 표시: 넓은 화면은 열고, 좁은 화면은 닫는다(브라우저 PDF 뷰어와 동일)
   $effect(() => {
     if (!browser) return
-    sidebarOpen = window.matchMedia('(min-width: 768px)').matches
+    sidebarOpen = !simple && window.matchMedia('(min-width: 768px)').matches
   })
 
   // ───────────────────────── 쪽 그리기(보이는 쪽만) ─────────────────────────
@@ -430,7 +434,8 @@
 
   // ───────────────────────── 도구줄 동작 ─────────────────────────
   function zoomBy(direction: 'in' | 'out'): void {
-    customZoom = stepZoom(zoom, direction)
+    const next = stepZoom(zoom, direction)
+    customZoom = direction === 'out' ? Math.min(next, zoom) : next // 가로 맞춤이 50% 미만일 때 '축소'가 오히려 확대(50%로 점프)하지 않게
     zoomMode = 'custom'
   }
 
@@ -474,8 +479,9 @@
   }
 </script>
 
-<div class="pv" class:pv--light={light} role="region" aria-label={title}>
+<div class="pv" class:pv--light={light} class:pv--simple={simple} role="region" aria-label={title}>
   <!-- 도구줄: 브라우저 기본 PDF 뷰어와 같은 배치 -->
+  {#if !simple}
   <div class="pv-toolbar">
     <div class="pv-group pv-group-left">
       <button
@@ -555,6 +561,7 @@
       </button>
     </div>
   </div>
+  {/if}
 
   <div class="pv-body">
     {#if sidebarOpen && status === 'ready'}
@@ -595,6 +602,27 @@
       {/if}
     </div>
   </div>
+
+  {#if simple}
+    <!-- 단순 모드: 도구줄 대신 PDF 아래 가운데에 알약형 도구 막대(축소·배율·확대 │ 쪽 │ 내려받기)를 겹쳐 둔다 -->
+    <div class="pv-dock" role="toolbar" aria-label="PDF 보기 도구">
+      <button type="button" class="pv-icon-btn" aria-label="축소" onclick={() => zoomBy('out')} disabled={status !== 'ready'}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14" /></svg>
+      </button>
+      <span class="pv-dock-text" role="status" aria-live="polite">{status === 'ready' ? `${zoomPercent}%` : '-'}</span>
+      <button type="button" class="pv-icon-btn" aria-label="확대" onclick={() => zoomBy('in')} disabled={status !== 'ready'}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+      <span class="pv-dock-sep" aria-hidden="true"></span>
+      <span class="pv-dock-text">{status === 'ready' ? `${currentPage} / ${pageCount}` : '-'}</span>
+      {#if downloadUrl}
+        <span class="pv-dock-sep" aria-hidden="true"></span>
+        <a class="pv-icon-btn" href={downloadUrl} download={downloadFilename} aria-label="PDF 내려받기">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14" /></svg>
+        </a>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -752,9 +780,50 @@
   .pv--light .pv-thumb.active { background: var(--cs-purple-op10); }
   .pv--light .pv-link { color: var(--cs-purple); }
 
+  /* ── 단순 모드(고객 화면 상품설명서): 옅은 회색 바탕 위에 흰 종이 카드를 띄워 보여 주고, 아래에 알약형 도구 막대를 겹친다 ── */
+  .pv { position: relative; }
+  .pv--simple { background: var(--cs-surface-gray); border-radius: 0; } /* 둥근 모서리는 바깥 모달이 맡는다(안쪽 반경이 겹치면 모서리가 깨져 보임) */
+  .pv--simple .pv-body { gap: 0; padding: 0; }
+  .pv--simple .pv-scroll { background: var(--cs-surface-gray); border-radius: 0; }
+  /* 위 64px = 모달 머리줄(PdfModal .pm-head, 52px)이 겹치는 높이 + 12px, 아래 96px = 도구 막대(56px)가 가리지 않는 여유 */
+  .pv--simple .pv-pages-wrap { box-sizing: border-box; gap: 12px; padding: 64px 12px 96px; }
+  .pv--simple .pv-page { border-radius: var(--cms-radius-sm); overflow: hidden; }
+
+  .pv-dock {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 20px;
+    z-index: 1;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 6px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--cs-dark) 82%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--cs-white);
+  }
+  .pv-dock .pv-icon-btn { color: var(--cs-white); }
+  .pv-dock .pv-icon-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+  .pv-dock-text {
+    min-width: 52px;
+    padding: 0 6px;
+    text-align: center;
+    font: var(--text-pc-body-14);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .pv-dock-sep { width: 1px; height: 20px; margin: 0 6px; background: rgba(255, 255, 255, 0.24); }
+
   /* ── 모바일: 쪽 목록·파일명·가로 맞춤은 숨기고 핵심 동작만 남긴다 ── */
   @media (max-width: 640px) {
     .pv { border-radius: 20px; }
+    .pv--simple { border-radius: 0; }
     .pv-toolbar { min-height: 52px; padding: 0 4px; gap: 0; }
     .pv-hide-sm { display: none !important; }
     .pv-group-left { flex: 0 0 0; }
