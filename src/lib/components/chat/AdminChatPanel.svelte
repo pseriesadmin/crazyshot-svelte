@@ -8,6 +8,7 @@
   import ChatInput from './ChatInput.svelte'
   import CustomerDetailPanel from './CustomerDetailPanel.svelte'
   import BookmarkListView from './BookmarkListView.svelte'
+  import GuestMergeModal from './GuestMergeModal.svelte'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import ContractTemplatePreviewModal from '$lib/components/cms/ContractTemplatePreviewModal.svelte'
   import PcInquiryPanel from '$lib/components/account/PcInquiryPanel.svelte'
@@ -782,12 +783,22 @@
 
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
   let customerSummary = $state<CustomerSummary | null>(null)
+  // 비회원(익명) 상담 판별 — 요약 조회가 성공했는데 회원 프로필이 없을 때만 true(조회 실패는 비회원으로 보지 않는다)
+  let isGuestSession = $state(false)
+  let showGuestMerge = $state(false)
   $effect(() => {
     const uid = selectedUserId
+    isGuestSession = false
     if (!uid) { customerSummary = null; return }
     customerSummary = null
     fetch(`/api/cms/customers/${uid}/summary`)
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => {
+        if (!r.ok) return null
+        return r.json().then((d: CustomerSummary | null) => {
+          if (d === null && selectedUserId === uid) isGuestSession = true
+          return d
+        })
+      })
       .then((d: CustomerSummary | null) => {
         customerSummary = d
         // 블랙리스트 고객 대화를 열 때 한 번 경고(같은 고객을 연속으로 다시 열어도 세션 전환마다 1회)
@@ -1192,6 +1203,14 @@
     }
   }
 
+  // 비회원 상담 → 회원 병합 성공: 세션 목록을 새로 불러오고, 회원 쪽 상담 세션을 연다
+  async function handleGuestMerged(memberSessionId: string | null, movedMessages: number): Promise<void> {
+    showGuestMerge = false
+    csToast.success(`회원 상담으로 병합했습니다. (메시지 ${movedMessages}건 이동)`)
+    await handleRefresh()
+    selectedSessionId = memberSessionId
+  }
+
   async function handleSend(content: string, cannedResponseId?: string): Promise<void> {
     if (!selectedSessionId || isSending) return
     isSending = true
@@ -1591,6 +1610,15 @@
             aria-pressed={showBookmarks}
           >북마크 보기</button>
 
+          <!-- 비회원(익명) 상담만: 같은 고객의 회원 계정으로 대화 병합(관리자 수동, 2026-11-05) -->
+          {#if isGuestSession}
+            <button
+              class="toolbar-btn toolbar-btn--status"
+              onclick={() => { showGuestMerge = true }}
+              title="이 비회원 상담을 회원 계정으로 병합"
+            >회원 병합</button>
+          {/if}
+
           <!-- GSD-1/2: 상태 세그먼트 컨트롤 -->
           {#if selectedSession?.status !== 'open'}
             <button
@@ -1820,6 +1848,15 @@
       </div>
     </div>
   </div>
+{/if}
+
+<!-- 비회원 상담 → 회원 병합 모달 (최상위 렌더링 — fixed 모달이 조상 transform에 갇히지 않게) -->
+{#if showGuestMerge && selectedSessionId}
+  <GuestMergeModal
+    sessionId={selectedSessionId}
+    onclose={() => { showGuestMerge = false }}
+    onmerged={handleGuestMerged}
+  />
 {/if}
 
 <!-- 대화카드 CTA 레이어 모달 — .admin-panel과 형제 위치(최상위)에서 렌더링해야

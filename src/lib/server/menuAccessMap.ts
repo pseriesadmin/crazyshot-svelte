@@ -65,6 +65,8 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/chat/identity-request/direct-send',
       'src/routes/api/cms/chat/pending-inquiries',
       'src/routes/api/cms/chat/inbox',
+      'src/routes/api/cms/chat/merge-guest',
+      'src/routes/api/cms/chat/merge-guest/search',
       'src/routes/api/cms/chat/messages/[id]',
       // 크레이지챗 접수 큐(2026-10-07, S3)
       'src/routes/api/cms/chat/agent-requests',
@@ -136,6 +138,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/[id]/dhero/cancel',
       'src/routes/api/cms/reservations/[id]/dhero/return',
       'src/routes/api/cms/reservations/[id]/init-contract',
+      'src/routes/api/cms/reservations/[id]/late-fees',
       'src/routes/api/cms/reservations/[id]/locker-password',
       'src/routes/api/cms/reservations/[id]/locker-password/test-send',
       'src/routes/api/cms/reservations/[id]/options',
