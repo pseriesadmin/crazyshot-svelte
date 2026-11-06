@@ -51,8 +51,10 @@ vi.mock('$lib/server/crossLingualSynonymScan', () => ({
 }))
 
 const mockSendPushToUser = vi.fn().mockResolvedValue(undefined)
+const mockSendLifecyclePush = vi.fn().mockResolvedValue(undefined)
 vi.mock('$lib/server/push', () => ({
   sendPushToUser: (...args: unknown[]) => mockSendPushToUser(...args),
+  sendReservationLifecyclePush: (...args: unknown[]) => mockSendLifecyclePush(...args), // 2026-11-02: 파손 감지 카드와 함께 고객 푸시
   sendUrgentChatAdminPush: vi.fn().mockResolvedValue(undefined),
   sendCustomerMessageAdminPush: vi.fn().mockResolvedValue(undefined), // 2026-10-05: 고객 문의 도착 관리자 푸시
 }))
@@ -158,12 +160,29 @@ describe('/api/chat/message — 파손신고접수 카드 발송', () => {
     expect((damageCall?.args as { p_reservation_id?: number })?.p_reservation_id).toBe(777)
   })
 
+  it('파손 카드가 나가면 같은 예약으로 고객 푸시(damage_claimed)도 발송한다(2026-11-02, Stephen 지시)', async () => {
+    setup({ cannedMatch: { id: 'canned-1', content: '파손 신고 접수했습니다', category: 'damage' }, activeReservationId: 777 })
+    await POST(makeEvent())
+
+    const pushCalls = mockSendLifecyclePush.mock.calls.filter((c) => c[2] === 'damage_claimed')
+    expect(pushCalls).toHaveLength(1)
+    expect(pushCalls[0][1]).toBe(777)
+  })
+
+  it('파손 푸시 발송이 실패해도 응답은 정상(fail-soft)이다', async () => {
+    mockSendLifecyclePush.mockRejectedValueOnce(new Error('push down'))
+    setup({ cannedMatch: { id: 'canned-1', content: '파손 신고 접수했습니다', category: 'damage' }, activeReservationId: 777 })
+    const result = (await POST(makeEvent())) as unknown as { status: number }
+    expect(result.status).toBe(201)
+  })
+
   it('파손 카테고리 매칭 + 활성 예약 없음(hold뿐이거나 전혀 없음) → 카드 발송 스킵(fail-soft, 에러 없이 정상 응답)', async () => {
     setup({ cannedMatch: { id: 'canned-1', content: '파손 신고 접수했습니다', category: 'damage' }, activeReservationId: null })
     const result = (await POST(makeEvent())) as unknown as { status: number }
 
     const damageCall = rpcCalls.find((c) => c.name === 'send_rental_chat_notification')
     expect(damageCall).toBeUndefined()
+    expect(mockSendLifecyclePush.mock.calls.filter((c) => c[2] === 'damage_claimed')).toHaveLength(0)
     expect(result.status).toBe(201)
   })
 
@@ -173,5 +192,6 @@ describe('/api/chat/message — 파손신고접수 카드 발송', () => {
 
     const damageCall = rpcCalls.find((c) => c.name === 'send_rental_chat_notification')
     expect(damageCall).toBeUndefined()
+    expect(mockSendLifecyclePush.mock.calls.filter((c) => c[2] === 'damage_claimed')).toHaveLength(0)
   })
 })

@@ -109,8 +109,20 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const lockerEntrancePassword = await getLockerEntrancePassword(sb)
 
+  // 표시 순서(Migration #797 sort_order, 관리자가 드래그로 변경) — 비어 있는 신규 유형은 맨 아래(id 순).
+  // 컬럼이 아직 없는 환경(마이그레이션 미적용)에서는 조회가 실패하므로 예전 id 순 조회로 되돌린다(fail-open — 배포 순서 사고로 화면이 비는 것 방지).
+  const loadConfigRows = async () => {
+    const ordered = await sb
+      .from('push_notification_config')
+      .select('id, category, notify_type, label, push_enabled, extra_config')
+      .order('sort_order', { ascending: true, nullsFirst: false })
+      .order('id')
+    if (!ordered.error) return ordered
+    return sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled, extra_config').order('id')
+  }
+
   const [configRes, adminRes, logsRes] = await Promise.all([
-    sb.from('push_notification_config').select('id, category, notify_type, label, push_enabled, extra_config').order('id'),
+    loadConfigRows(),
     sb
       .from('user_profiles')
       .select('id, full_name, email, cms_role, admin_notify_new_reservation, admin_notify_contract_signed, admin_notify_payment_completed, admin_notify_new_session, admin_notify_urgent_chat_message, admin_notify_identity_review, admin_notify_crazychat_request, admin_notify_sms_undelivered')
@@ -176,6 +188,39 @@ export const actions: Actions = {
     const res = result as { ok: boolean; error?: string } | null
     if (!res?.ok) return fail(400, { message: res?.error ?? '저장 실패' })
     return { ok: true, action: 'updatePushConfig' as const }
+  },
+
+  // 고객 알림 목록 순서 저장(드래그로 바꾼 순서, Migration #797) — 한 분류의 전체 유형을 화면 순서대로 받아 번호를 다시 매긴다. 발송에는 영향 없음.
+  reorderPushConfig: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const category = data.get('category')
+    const rawOrder = data.get('order')
+    if ((category !== 'customer_lifecycle' && category !== 'customer_marketing') || typeof rawOrder !== 'string') {
+      return fail(400, { message: 'invalid request' })
+    }
+    let order: unknown
+    try {
+      order = JSON.parse(rawOrder)
+    } catch {
+      return fail(400, { message: 'invalid request' })
+    }
+    if (!Array.isArray(order) || order.length === 0 || order.length > 200 || !order.every((t) => typeof t === 'string' && t.length > 0 && t.length <= 80)) {
+      return fail(400, { message: 'invalid request' })
+    }
+
+    const { data: result, error } = await admin().rpc('reorder_push_notification_config', {
+      p_category: category,
+      p_notify_types: order as string[],
+    })
+    if (error) return fail(500, { message: error.message })
+    const res = result as { ok: boolean; error?: string } | null
+    if (!res?.ok) return fail(400, { message: res?.error ?? '순서 저장 실패' })
+    return { ok: true, action: 'reorderPushConfig' as const }
   },
 
   // 알림별 안내문장 저장 — 빈 문장은 기본 문구 복원. 푸시·문자 양쪽에 같은 문장이 쓰인다.
