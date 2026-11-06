@@ -134,7 +134,7 @@ export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: str
   late_fee_paid: (p) =>
     `[크레이지샷] ${p} 연체료 결제가 완료됐어요.`,
   return_notice_locker: (p) =>
-    `[크레이지샷] ${p} 반납 3시간 전이에요. 반납 후 무인함 정보를 입력해 주세요. 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!`,
+    `[크레이지샷] ${p} 반납 1시간 전이에요. 무인보관함으로도 반납할 수 있어요. 이용하셨다면 반납 사진과 무인함 번호·비밀번호를 등록해 주세요.`,
 }
 
 export interface SendLifecycleSmsParams {

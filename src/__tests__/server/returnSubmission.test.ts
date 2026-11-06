@@ -94,6 +94,33 @@ describe('제출 본문 검증 (방식별 요건 서버 재집행)', () => {
       expect(r.value.locker_number).toBeNull()
     }
   })
+
+  it('퀵: 무인함 정보는 선택 — 둘 다 입력하면 저장, 하나만 입력하거나 형식이 틀리면 거절', () => {
+    const both = validateReturnSubmit('quick', 5, { locker_number: '7', locker_password: '*1234' })
+    expect(both.ok).toBe(true)
+    if (both.ok) {
+      expect(both.value.locker_number).toBe('7')
+      expect(both.value.locker_password).toBe('*1234')
+    }
+    expect(validateReturnSubmit('quick', 5, { locker_number: '7' }).ok).toBe(false)
+    expect(validateReturnSubmit('quick', 5, { locker_password: '1234' }).ok).toBe(false)
+    expect(validateReturnSubmit('quick', 5, { locker_number: '7', locker_password: '12' }).ok).toBe(false)
+  })
+
+  it('방문: 무인함 반납과 같은 요건 — 사진 2종(무인함·장비) + 무인함 번호·비밀번호 모두 필수', () => {
+    const ok = validateReturnSubmit('visit', 5, { media: lockerAll, locker_number: '12', locker_password: '*8821' })
+    expect(ok.ok).toBe(true)
+    if (ok.ok) {
+      expect(ok.value.media).toHaveLength(2)
+      expect(ok.value.locker_number).toBe('12')
+    }
+    expect(validateReturnSubmit('visit', 5, { locker_number: '12', locker_password: '*8821' }).ok).toBe(false) // 사진 없음
+    expect(validateReturnSubmit('visit', 5, { media: [photo('locker')], locker_number: '12', locker_password: '*8821' }).ok).toBe(false) // 사진 1종만
+    expect(validateReturnSubmit('visit', 5, { media: lockerAll }).ok).toBe(false) // 번호·비밀번호 없음
+    expect(validateReturnSubmit('visit', 5, { media: lockerAll, locker_number: '12', locker_password: '12' }).ok).toBe(false)
+    // 허용되지 않은 사진 항목은 거절
+    expect(validateReturnSubmit('visit', 5, { media: [photo('body'), photo('device')], locker_number: '12', locker_password: '1234' }).ok).toBe(false)
+  })
 })
 
 describe('이용 평가(feedback) 검증 — 반납등록 미션 3단계', () => {

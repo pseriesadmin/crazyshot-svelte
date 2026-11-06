@@ -143,14 +143,17 @@
     if (method === 'quick') return handover
     return !rules.photosRequired || allPhotosFilled
   })
+  // 퀵: 무인함을 쓴 경우에만 입력하는 선택 항목 — 입력하면 번호·비밀번호 둘 다 규칙에 맞아야 한다(서버 validateReturnSubmit 과 같은 기준)
+  const quickLockerPartial = $derived(!!rules?.lockerInfoOptional && (!!lockerNumber.trim() !== (lockerPassword.trim().length > 0) || (lockerPassword.trim().length > 0 && lockerPassword.trim().length < 4)))
   const canNext2 = $derived.by(() => {
     if (!rules) return false
     if (rules.checklist) return allChecked
     if (rules.lockerInfo) return !!lockerNumber.trim() && lockerPassword.trim().length >= 4
+    if (quickLockerPartial) return false
     return true
   })
   const STEP_TITLE: Record<1 | 2 | 3, string> = { 1: '사진 등록', 2: '', 3: '이용 평가' }
-  const step2Title = $derived(method === 'courier' ? '반납상품 체크리스트' : method === 'locker' ? '무인함 정보' : '반납 안내 확인')
+  const step2Title = $derived(method === 'courier' ? '반납상품 체크리스트' : method === 'locker' || method === 'visit' ? '무인함 정보' : '반납 안내 확인')
   const step1Title = $derived(method === 'quick' ? '인계 확인' : STEP_TITLE[1])
 
   function goNext(): void {
@@ -185,6 +188,7 @@
     if (rules.checklist && !allChecked) return false
     if (rules.photosRequired && !allPhotosFilled) return false
     if (rules.lockerInfo && (!lockerNumber.trim() || lockerPassword.trim().length < 4)) return false
+    if (quickLockerPartial) return false
     return true
   })
 
@@ -475,6 +479,37 @@
                 <p class="mission-title small">{formatDate(data.rental.end_date)}{data.rental.return_time ? ` ${data.rental.return_time}` : ''}</p>
                 <p class="notice-desc">퀵 기사님이 장비를 매장에 전달한 시각이 대여 종료 시간이에요. 예정 시각을 넘기면 연체 요금이 발생할 수 있어요.</p>
               </div>
+              {#if rules?.lockerInfoOptional}
+                <!-- 무인함을 이용해 반납한 경우에만 입력(선택) — 입력하면 번호·비밀번호 둘 다 필요 -->
+                <p class="card-sub">무인함에 장비를 넣어 반납하셨다면 번호·비밀번호를 입력해 주세요. 쓰지 않았다면 비워 두셔도 돼요.</p>
+                <div class="section">
+                  <label class="field">
+                    <span class="field-label">무인함 번호 (선택)</span>
+                    <input
+                      class="cs-input"
+                      inputmode="numeric"
+                      maxlength={LOCKER_NUMBER_MAX}
+                      value={lockerNumber}
+                      oninput={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
+                      placeholder="예: 12"
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">비밀번호 (선택)</span>
+                    <input
+                      class="cs-input"
+                      inputmode="numeric"
+                      maxlength={LOCKER_PASSWORD_MAX}
+                      value={lockerPassword}
+                      oninput={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
+                      placeholder="숫자·특수문자 4~10자"
+                    />
+                  </label>
+                </div>
+                {#if quickLockerPartial}
+                  <p class="hint">무인함 번호와 비밀번호(4자 이상)를 모두 입력하거나, 둘 다 비워 주세요.</p>
+                {/if}
+              {/if}
             {/if}
 
           {:else if step === 3}
