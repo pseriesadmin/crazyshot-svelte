@@ -419,7 +419,7 @@
                   {/if}
                 </div>
               {/if}
-              <span class="cat-label" class:active={shownCategory === cat.id}>{cat.name}</span>
+              <span class="cat-label" class:active={shownCategory === cat.id} class:touch-bubble={touchBubbleId === cat.id}>{cat.name}</span>
             </button>
           {/each}
 
@@ -1001,6 +1001,20 @@
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  /* 일부 브라우저(안드로이드 삼성 인터넷·파이어폭스 등)는 버튼 자체가 아니라 자식(이미지·글자)에 터치 하이라이트·포커스 면을 그려 터치 영역에 색 BG가 보임 → 자식까지 명시 제거 */
+  .cat-btn,
+  .cat-btn *,
+  .cat-icon-box,
+  .cat-label {
+    -webkit-tap-highlight-color: transparent;
+  }
+  .cat-btn:focus:not(:focus-visible),
+  .cat-btn:active {
+    outline: none;
+    background: none;
   }
   .cat-icon-box {
     display: flex;
@@ -1089,10 +1103,12 @@
     100% { opacity: 0; }
   }
   .cat-icon-box.touch-bubble { animation: cat-touch-bubble 0.42s ease-out; }
+  .cat-label.touch-bubble { animation: cat-touch-bubble 0.42s ease-out; } /* 아이콘 상자와 같은 타이밍으로 이름도 함께 은은하게 확대 */
   .cat-btn:not(.active) .cat-icon-box.touch-bubble.has-on .cat-icon-on { animation: cat-touch-on 0.42s ease-out; }
   .cat-icon-box.touch-bubble:not(.has-on)::after { animation: cat-touch-veil 0.42s ease-out; }
   @media (prefers-reduced-motion: reduce) {
     .cat-icon-box.touch-bubble,
+    .cat-label.touch-bubble,
     .cat-btn:not(.active) .cat-icon-box.touch-bubble.has-on .cat-icon-on,
     .cat-icon-box.touch-bubble:not(.has-on)::after { animation: none; }
   }
@@ -1101,7 +1117,7 @@
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 700;
     font-size: clamp(10px, 3vw, 14px); /* 아이콘 상자가 화면 폭에 비례해 줄어드는 비율(최대 70px)에 맞춰 글자도 함께 축소, PC는 14px 상한 */
-    color: #100b32;
+    color: var(--cs-purple);
     white-space: nowrap;
     text-align: center;
     line-height: 2;
