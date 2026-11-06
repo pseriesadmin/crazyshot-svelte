@@ -180,6 +180,8 @@
     return_method: string | null
     created_at: string
     products: { name: string; product_code: string | null } | null
+    /** 이 예약의 연체료(예약당 1건) — 없으면 null */
+    late_fee?: { fee_amount: number; hours_late: number; is_paid: boolean; paid_at: string | null } | null
   }
 
   interface CustomerChatSession {
@@ -1788,6 +1790,12 @@
                   <span class="rental-days">{rental.rental_days}일</span>
                 {/if}
               </div>
+              {#if rental.late_fee}
+                <div class="rental-latefee">
+                  <span class="rental-latefee-tag" class:rental-latefee-tag--paid={rental.late_fee.is_paid}>{rental.late_fee.is_paid ? '연체료 결제완료' : '연체료 미납'}</span>
+                  <span>{rental.late_fee.fee_amount.toLocaleString('ko-KR')}원 · {rental.late_fee.hours_late}시간 연체</span>
+                </div>
+              {/if}
             </a>
           {/each}
         {/if}
@@ -3016,6 +3024,27 @@
     font-family: 'Noto Sans KR', sans-serif;
     font-size: 11px;
     color: var(--cs-text-mid);
+  }
+  /* 연체료 기록(상품대여이력 카드) — 배지 토큰(cms-uiux §7-6): 미납=error, 결제완료=active */
+  .rental-latefee {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 5px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 11px;
+    color: var(--cs-text-mid);
+  }
+  .rental-latefee-tag {
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,53,53,0.10);
+    color: var(--cs-red-badge);
+    font-weight: 700;
+  }
+  .rental-latefee-tag--paid {
+    background: rgba(16,185,129,0.12);
+    color: var(--cs-success-light);
   }
   .rental-days {
     padding: 1px 6px;

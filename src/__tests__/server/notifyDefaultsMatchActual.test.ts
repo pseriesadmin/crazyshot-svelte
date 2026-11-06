@@ -49,7 +49,7 @@ describe('화면의 문자 현재 문구 = sms.ts 고정 문구', () => {
       url: new URL('https://x.test/cms/set/push'),
     }))
     const smsTypes = NOTIFY_SPECS.filter((s) => s.sms && s.notifyType !== 'locker_guide' && s.notifyType !== 'locker_return_guide').map((s) => s.notifyType)
-    expect(smsTypes.length).toBe(17)
+    expect(smsTypes.length).toBe(19) // 2026-11-02: 연체료 결제 요청·결제 완료 문자 추가(17→19)
     for (const t of smsTypes) {
       expect(res.smsDefaults[t], t).toBeTruthy()
       expect(res.smsDefaults[t].startsWith('[크레이지샷] ')).toBe(true)

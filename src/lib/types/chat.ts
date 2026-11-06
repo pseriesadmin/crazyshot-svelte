@@ -26,6 +26,7 @@ export type ActionCardType =
   | 'coupon_issued'
   | 'contract_link'    // 전자계약 서명 링크 발송 (고객 수신)
   | 'contract_signed'  // 전자계약 서명 완료 알림 (관리자 수신)
+  | 'late_fee_paid'    // 연체료 결제 완료 알림 (고객 수신, 고객 결제·관리자 결제 확인 공용 — lateFeeNotify.ts)
   | 'refund_failed'    // 환불 RPC 실패 알림 (관리자 전용, admin_only=true)
   | 'message_deleted'  // 관리자가 삭제한 대화 표시(Migration #733, message_type='system')
   | 'coupon_duplicate_warning'  // 이미 보유한 쿠폰 재선물 경고 (관리자 전용, admin_only=true)

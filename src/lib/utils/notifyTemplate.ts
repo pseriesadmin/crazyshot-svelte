@@ -102,7 +102,8 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   { notifyType: 'contract_signed_customer', vars: ['고객이름', '예약코드'], sms: true, defaultMessage: '{{예약코드}} 예약의 서명이 정상 접수됐어요.' },
   { notifyType: 'identity_approved', vars: ['고객이름'], sms: false, defaultMessage: '본인증명정보가 정상적으로 확인됐어요.' },
   { notifyType: 'identity_request', vars: ['고객이름'], sms: false, defaultMessage: '개인정보 메뉴에서 본인증명정보를 등록해주세요.' },
-  { notifyType: 'late_fee_paid', vars: ['고객이름', '연체료'], sms: false, defaultMessage: '연체료 {{연체료}} 결제가 정상 처리됐어요.' },
+  { notifyType: 'late_fee_paid', vars: ['고객이름', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제가 정상 처리됐어요.' },
+  { notifyType: 'late_fee_request', vars: ['고객이름', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제를 요청드려요. 대여 정보에서 확인해 주세요.' },
   { notifyType: 'ai_auto_reply', vars: ['고객이름', '답변내용'], sms: false, defaultMessage: '{{답변내용}}' },
   { notifyType: 'canned_auto_reply', vars: ['고객이름', '답변내용'], sms: false, defaultMessage: '{{답변내용}}' },
 ]
