@@ -26,7 +26,7 @@ import { loadSensitiveCategoryKeys } from '$lib/server/cannedCategories'
 import { enrichActionCard } from '$lib/server/chatActionEnrich'
 import type { EnrichContext } from '$lib/server/chatActionEnrich'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
-import { sendPushToUser, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
+import { sendPushToUser, sendReservationLifecyclePush, sendUrgentChatAdminPush, sendCustomerMessageAdminPush } from '$lib/server/push'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 import { runCrazychatAgent } from '$lib/server/crazychat/agent'
 import { isAdminEngaged, evaluateAdminEngaged } from '$lib/server/crazychat/engagement'
@@ -279,10 +279,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                   .maybeSingle()
 
                 if (activeReservation) {
+                  const damageReservationId = (activeReservation as { id: number }).id
                   await admin.rpc('send_rental_chat_notification', {
-                    p_reservation_id: (activeReservation as { id: number }).id,
+                    p_reservation_id: damageReservationId,
                     p_notify_type: 'damage_claimed',
                   })
+                  // 카드와 함께 고객 푸시도 발송(2026-11-02, Stephen 지시 — CMS 푸시알림 설정 '파손 신고 접수' 스위치·안내문장 적용). 문자는 이 유형에 없음.
+                  await sendReservationLifecyclePush(admin, damageReservationId, 'damage_claimed')
                 }
               } catch (err) {
                 // fail-soft: 카드 발송 실패가 이미 저장된 캔드 자동응답 반환을 막으면 안 됨

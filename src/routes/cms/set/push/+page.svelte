@@ -4,6 +4,8 @@
   import { csToast } from '$lib/utils/toast'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import { PUSH_KINDS, OTHER_KIND, pushKindOf, mergeTabOrder } from '$lib/utils/pushKinds'
   import {
     NOTIFY_VARIABLES,
     SMS_BRAND_PREFIX,
@@ -23,13 +25,62 @@
 
   let { data }: Props = $props()
 
-  let pushConfig = $state<PushConfigRow[]>(data.pushConfig)
+  // 화면 표시 이름 보정 — DB 라벨(#736 '반납 안내(무인함 3시간 전)')은 두 무인함 알림이 헷갈려 화면에서만 구분해 보여 준다(저장·발송 키는 notify_type 그대로)
+  // 2026-11-06 교통정리(Stephen 확정): 번호+비밀번호를 보내는 알림(locker_return_guide) = '반납정보 제공안내', 방문·퀵서비스 모든 고객에게 가는 리마인드(return_notice_locker) = '반납 안내'
+  const LABEL_OVERRIDE: Record<string, string> = {
+    locker_guide: '무인보관함 수령이용 안내',
+    locker_return_guide: '무인보관함 반납정보 제공안내',
+    return_notice_locker: '무인보관함 반납 안내',
+  }
+  function withDisplayLabels(rows: PushConfigRow[]): PushConfigRow[] {
+    return rows.map((r) => (LABEL_OVERRIDE[r.notify_type] ? { ...r, label: LABEL_OVERRIDE[r.notify_type] } : r))
+  }
+
+  let pushConfig = $state<PushConfigRow[]>(withDisplayLabels(data.pushConfig))
   let adminList = $state<AdminNotifyRow[]>(data.adminList)
 
-  $effect(() => { pushConfig = data.pushConfig })
+  $effect(() => { pushConfig = withDisplayLabels(data.pushConfig) })
   $effect(() => { adminList = data.adminList })
 
   const lifecycleRows = $derived(pushConfig.filter((r) => r.category === 'customer_lifecycle'))
+  // 고객 알림 목록의 표시 순서(관리자가 손잡이를 끌어 변경, Migration #797) — 드래그 중에는 이 목록을 직접 바꾸고, 저장이 끝나면 pushConfig 도 같은 순서로 맞춘다
+  let lifecycleList = $state<PushConfigRow[]>([])
+  $effect(() => { lifecycleList = pushConfig.filter((r) => r.category === 'customer_lifecycle') })
+
+  // 종류별 서류철 탭(2026-11-06) — '전체' + 종류. 선택한 서류철의 알림만 보이고, 순서 변경은 그 서류철 안에서 하며 전체 순서에 합쳐 저장한다.
+  let activeKind = $state<string>('all')
+  const kindTabs = $derived.by(() => {
+    const tabs = [{ id: 'all', label: '전체', count: lifecycleList.length }, ...PUSH_KINDS.map((k) => ({ id: k.id, label: k.label, count: lifecycleList.filter((r) => pushKindOf(r.notify_type) === k.id).length }))]
+    const otherCount = lifecycleList.filter((r) => pushKindOf(r.notify_type) === OTHER_KIND.id).length
+    return otherCount > 0 ? [...tabs, { id: OTHER_KIND.id, label: OTHER_KIND.label, count: otherCount }] : tabs
+  })
+  let tabList = $state<PushConfigRow[]>([])
+  $effect(() => {
+    tabList = activeKind === 'all' ? lifecycleList : lifecycleList.filter((r) => pushKindOf(r.notify_type) === activeKind)
+  })
+  function onTabReorder(): void {
+    lifecycleList = mergeTabOrder(lifecycleList, tabList.map((r) => r.notify_type))
+    void saveLifecycleOrder()
+  }
+
+  async function saveLifecycleOrder(): Promise<void> {
+    const fd = new FormData()
+    fd.set('category', 'customer_lifecycle')
+    fd.set('order', JSON.stringify(lifecycleList.map((r) => r.notify_type)))
+    try {
+      const err = await postAction('?/reorderPushConfig', fd)
+      if (err) {
+        csToast.error(err)
+        lifecycleList = pushConfig.filter((r) => r.category === 'customer_lifecycle') // 저장 실패 — 화면을 저장돼 있던 순서로 되돌린다
+        return
+      }
+      pushConfig = [...lifecycleList, ...pushConfig.filter((r) => r.category !== 'customer_lifecycle')]
+      csToast.success('알림 순서를 저장했습니다.')
+    } catch {
+      csToast.error('순서 저장 중 오류가 발생했습니다.')
+      lifecycleList = pushConfig.filter((r) => r.category === 'customer_lifecycle')
+    }
+  }
   const marketingRows = $derived(pushConfig.filter((r) => r.category === 'customer_marketing'))
 
   // ─── 섹션 a·b: 고객 알림 마스터 스위치 ───
@@ -69,6 +120,72 @@
   // ─── 알림별 안내문장 편집(아코디언) ───
   // 푸시·문자 같은 문장을 쓴다. 비어 있으면 코드의 기본 문구를 그대로 쓴다.
   const ANSWER_TYPES = new Set(['admin_chat_reply', 'ai_auto_reply', 'canned_auto_reply'])
+  // 알림별 "실행 조건 / 실행 요소" 한 줄 안내 — 실제 발송 코드 기준(2026-11-02 재대조). 푸시는 기본 포함(push:false 제외), 문자는 안내문장 규격(spec.sms) 또는 sms:true.
+  // chat: 'card' = 채팅 대화카드, 'reply' = 채팅 답변 메시지, null = 채팅 발송 없음
+  const FLOW: Record<string, { cond: string; chat: 'card' | 'reply' | null; push?: false; sms?: true; manual?: string }> = {
+    reservation_hold: { cond: '대여예약 신청접수 시', chat: 'card' },
+    reservation_approval: { cond: '고객 서명·결제 완료 감지 시 (자동)', chat: 'card' },
+    shipment_notify: { cond: '[택배 출고 처리]로 배송중 전환 시', chat: 'card', manual: '[반출 알림 발송] · 계약완료 단계' },
+    rental_confirm: { cond: '[방문 출고 처리]·[수령 확인]으로 대여중 전환 시', chat: 'card' },
+    return_registration: { cond: '[반납 접수]로 반납접수 전환 시 (고객 직접 제출은 제외)', chat: 'card', manual: '[반납 정보 요청] · 반납접수 단계' },
+    return_remind: { cond: '반납예정일 당일 09:00 (방문·미지정)', chat: 'card', manual: '[반납 요청] · 대여중·반납접수 단계' },
+    rental_complete: { cond: '현재 발송 안 함 (검수 통과 알림으로 대체)', chat: 'card' },
+    reservation_cancelled: { cond: '예약 취소 실행 시', chat: 'card' },
+    damage_claimed: { cond: '고객 채팅에서 파손 신고가 감지될 때 (자동)', chat: 'card' },
+    tracking_notify: { cond: '운송장 번호 등록 시 (수동 입력·두발히어로 접수 직후)', chat: 'card' },
+    locker_guide: { cond: '수령 예정 시각 1시간 전 (자동)', chat: 'card' },
+    locker_return_guide: { cond: '반납 시각 1시간 전, 1회 (무인보관함 반납 예약 · 관리자가 반납용 무인함 번호·비밀번호를 저장한 건)', chat: 'card' },
+    return_notice_courier: { cond: '반납일 당일 09:00 (택배)', chat: 'card' },
+    return_notice_quick_5h: { cond: '반납 일시 3시간 전 (퀵)', chat: 'card' },
+    return_notice_quick_2h: { cond: '현재 발송 안 함 (퀵은 3시간 전 1회)', chat: 'card' },
+    return_notice_quick_1h: { cond: '현재 발송 안 함 (퀵은 3시간 전 1회)', chat: 'card' },
+    return_notice_locker: { cond: '반납 시각 1시간 전, 1회 (방문·퀵서비스 모든 예약 · 반납정보 미제출 건 · 무인함 반납은 선택)', chat: 'card' },
+    issue_report_request: { cond: '[CS 접수 등록] 실행 시 (계약완료~반납접수, 매니저 이상)', chat: 'card', manual: '[CS 접수 재요청] · 이미 접수된 건' },
+    inspection_pass: { cond: '검수 탭 [반납 검수 승인] 시', chat: 'card', manual: '[대여 종료 알림] · 반납접수·반납완료 단계 (검수 승인과 동일, 매니저 이상)' },
+    inspection_issue: { cond: '검수 이슈 최초 등록 시', chat: 'card' },
+    dhero_place_guide: { cond: '두발히어로 배송 접수 후 수령위치 링크가 있을 때', chat: 'card' },
+    payment_cancelled_reissue: { cond: '예약변경으로 결제 취소 후 계약서 재발송 시', chat: 'card' },
+    event_coupon_issued: { cond: '이벤트·쿠폰 발행 시', chat: 'card' },
+    admin_chat_reply: { cond: '관리자가 상담에 답장할 때', chat: 'reply' },
+    chat_unanswered: { cond: '고객 문의 후 30분간 답변이 없을 때', chat: null },
+    contract_sent: { cond: '전자계약 발송 시', chat: 'card' },
+    contract_signed_customer: { cond: '고객 전자계약 서명 완료 시', chat: 'card' },
+    identity_approved: { cond: '본인증명 서류 승인 시', chat: 'card' },
+    identity_request: { cond: '본인증명 서류 요청 실행 시', chat: 'card', sms: true },
+    late_fee_request: { cond: '연체 자동 감지(매일 00:00) 후 아침 9시 · 요청 카드는 감지 즉시', chat: 'card' },
+    late_fee_paid: { cond: '고객 결제 완료 시 또는 관리자 [결제 확인] 시', chat: 'card', manual: '[결제 확인] · 예약 상세 결제정보 탭 · 미납 연체료 (매니저 이상)' },
+    ai_auto_reply: { cond: 'AI가 상담에 자동 응답할 때', chat: 'reply' },
+    canned_auto_reply: { cond: '빠른답변이 상담에 자동 응답할 때', chat: 'reply' },
+  }
+
+  function flowElements(row: PushConfigRow): string[] {
+    const flow = FLOW[row.notify_type]
+    const out: string[] = []
+    if (flow?.chat === 'card') out.push('채팅카드')
+    if (flow?.chat === 'reply') out.push('채팅 답변')
+    if (flow?.push !== false) out.push('푸시')
+    if (flow?.sms || getNotifySpec(row.notify_type)?.sms) out.push('문자')
+    return out
+  }
+
+  // 예약 상세 하단 버튼별 실행 가이드(RentalDetailPanel 하단 버튼 · 서버 액션 기준, 2026-11-02).
+  // notices = 그 버튼이 함께 내보내는 고객 알림(위 목록의 알림 유형). 알림이 없는 버튼은 비워 둔다.
+  const BUTTON_GUIDE: ReadonlyArray<{ button: string; stage: string; result: string; notices: readonly string[] }> = [
+    { button: '방문 출고 처리', stage: '계약완료 · 수령 방식이 방문', result: '대여중으로 전환', notices: ['rental_confirm'] },
+    { button: '택배 출고 처리', stage: '계약완료 · 수령 방식이 방문 외', result: '배송중으로 전환 · 두발히어로 연동 방식은 배송 접수 자동 호출', notices: ['shipment_notify', 'tracking_notify', 'dhero_place_guide'] },
+    { button: '방문수령 확인 / 택배수령 확인', stage: '배송중', result: '대여중으로 전환', notices: ['rental_confirm'] },
+    { button: '반납 접수', stage: '대여중 · 반납 방식이 방문 외', result: '반납접수로 전환 · 두발히어로 연동 방식은 반품 접수 자동 호출', notices: ['return_registration'] },
+    { button: '방문 반납 처리', stage: '대여중 · 반납 방식이 방문', result: '반납완료로 전환 · 정시 반납 포인트 적립', notices: [] },
+    { button: '반납 처리 / 집하지 회수 확인 / 무인함 회수 확인', stage: '반납접수', result: '반납완료로 전환 · 정시 반납 포인트 적립', notices: [] },
+    { button: '반출 알림 발송', stage: '계약완료', result: '알림만 발송 (상태 변경 없음)', notices: ['shipment_notify'] },
+    { button: '반납 요청', stage: '대여중 · 반납접수', result: '알림만 발송 (상태 변경 없음)', notices: ['return_remind'] },
+    { button: '반납 정보 요청', stage: '반납접수', result: '알림만 발송 (상태 변경 없음)', notices: ['return_registration'] },
+    { button: '대여 종료 알림', stage: '반납접수 · 반납완료 (매니저 이상)', result: '검수 승인과 같이 완료로 전환 · 대여 완료 포인트 적립 · 검수 이슈가 있으면 거절', notices: ['inspection_pass'] },
+    { button: 'CS 접수 등록', stage: '계약완료~반납접수 (매니저 이상)', result: '사전 접수 표시 · 증빙 폼 링크 발급 (반납완료되면 자동으로 검수 칩)', notices: ['issue_report_request'] },
+    { button: '연체료 결제 확인', stage: '결제정보 탭 · 미납 연체료 (매니저 이상)', result: '결제 완료로 기록 · 확인한 관리자 저장', notices: ['late_fee_paid'] },
+    { button: 'CS 접수 해제', stage: '사전 접수된 건 · 반납 전', result: '사전 접수 해제', notices: [] },
+  ]
+
   const SAMPLE_LINK = 'https://crazyshot.kr/account/rental'
   const SAMPLE_VARS: NotifyVars = Object.fromEntries(Object.values(NOTIFY_VARIABLES).map((v) => [v.key, v.sample]))
 
@@ -262,6 +379,7 @@
 {#snippet pushRow(row: PushConfigRow)}
   {@const spec = getNotifySpec(row.notify_type)}
   {@const isOpen = openType === row.notify_type}
+  {@const flow = FLOW[row.notify_type]}
   <div class="push-row" class:push-row--open={isOpen}>
     <div class="push-row-head">
       <button
@@ -274,9 +392,6 @@
       >
         <ChevronIcon direction={isOpen ? 'down' : 'right'} size={7} color="var(--cs-text-mid)" />
         <span class="push-row-label">{row.label}</span>
-        {#if spec}
-          <span class="msg-badge" class:msg-badge--sms={spec.sms}>{spec.sms ? '푸시+문자' : '푸시 전용'}</span>
-        {/if}
         {#if row.message}
           <span class="msg-badge msg-badge--custom">문구 설정됨</span>
         {/if}
@@ -289,6 +404,21 @@
         onclick={() => togglePushConfig(row)}
       >{row.push_enabled ? '발송 ON' : '발송 OFF'}</button>
     </div>
+
+    {#if flow}
+      <div class="flow-line">
+        <span class="flow-item"><span class="flow-key">실행 조건</span>{flow.cond}</span>
+        <span class="flow-item">
+          <span class="flow-key">실행 요소</span>
+          {#each flowElements(row) as el (el)}
+            <span class="msg-badge" class:msg-badge--sms={el === '문자'}>{el}</span>
+          {/each}
+        </span>
+        {#if flow.manual}
+          <span class="flow-item"><span class="flow-key">수동 실행</span>{flow.manual}</span>
+        {/if}
+      </div>
+    {/if}
 
     {#if isOpen && spec}
       {@const draft = draftOf(row)}
@@ -431,10 +561,30 @@
       </div>
       <p class="section-desc">예약 신청부터 반납 완료까지 각 단계에서 고객에게 푸시알림을 발송할지 여부를 설정합니다. 알림 이름을 눌러 안내문장을 직접 바꿀 수 있고, 같은 문장이 푸시와 문자(해당 알림)에 함께 쓰입니다.</p>
 
-      <div class="push-row-list">
-        {#each lifecycleRows as row (row.id)}
-          {@render pushRow(row)}
+      <!-- 종류별 서류철 탭 — 선택한 탭만 목록에 보인다(분류는 화면 표시용, 발송과 무관) -->
+      <div class="kind-tabs" role="tablist" aria-label="알림 종류">
+        {#each kindTabs as tab (tab.id)}
+          <button
+            type="button"
+            class="kind-tab"
+            class:kind-tab--active={activeKind === tab.id}
+            role="tab"
+            id={`kind-tab-${tab.id}`}
+            aria-selected={activeKind === tab.id}
+            aria-controls="kind-panel"
+            onclick={() => { activeKind = tab.id }}
+          >{tab.label}<span class="kind-count">{tab.count}</span></button>
         {/each}
+      </div>
+      <div id="kind-panel" role="tabpanel" aria-labelledby={`kind-tab-${activeKind}`}>
+        <p class="sort-hint">각 알림 왼쪽의 점 6개 손잡이를 끌어 순서를 바꿀 수 있어요. 선택한 서류철 안에서 바꾸면 되고, 순서는 이 화면에만 적용돼요(알림 발송에는 영향 없음). 바꾸면 자동으로 저장돼요.</p>
+        <div class="push-row-list push-row-list--sortable">
+          <CmsDragList bind:items={tabList} itemKey={(r: PushConfigRow) => r.id} onreorder={onTabReorder}>
+            {#snippet renderItem(row: PushConfigRow)}
+              <div class="push-row-slot">{@render pushRow(row)}</div>
+            {/snippet}
+          </CmsDragList>
+        </div>
       </div>
     </section>
 
@@ -450,6 +600,34 @@
       <div class="push-row-list">
         {#each marketingRows as row (row.id)}
           {@render pushRow(row)}
+        {/each}
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         섹션 b-2: 예약 상세 하단 버튼 실행 가이드 (읽기 전용)
+    ══════════════════════════════════════════ -->
+    <section class="setting-section">
+      <div class="section-head">
+        <h2 class="section-title">관리자 버튼 실행 가이드</h2>
+        <span class="section-badge">{BUTTON_GUIDE.length}종</span>
+      </div>
+      <p class="section-desc">예약 상세 하단 버튼을 눌렀을 때 어느 단계에서 실행되고 무엇이 실행되는지 보여줍니다. 고객 알림이 없는 버튼은 실행 요소의 알림 칸이 비어 있습니다. 같은 주문의 상품이 여러 개면 주문 전체가 함께 처리되고 알림은 주문당 1회 나갑니다.</p>
+
+      <div class="push-row-list">
+        {#each BUTTON_GUIDE as g (g.button)}
+          <div class="push-row">
+            <div class="guide-name">{g.button}</div>
+            <div class="flow-line">
+              <span class="flow-item"><span class="flow-key">실행 조건</span>{g.stage}</span>
+              <span class="flow-item">
+                <span class="flow-key">실행 요소</span>{g.result}
+                {#each g.notices as type (type)}
+                  <span class="msg-badge" class:msg-badge--sms={getNotifySpec(type)?.sms}>{pushConfig.find((r) => r.notify_type === type)?.label ?? type}</span>
+                {/each}
+              </span>
+            </div>
+          </div>
         {/each}
       </div>
     </section>
@@ -640,6 +818,57 @@
     gap: 12px;
   }
 
+  /* 순서 변경 가능한 목록(CmsDragList) — 행 사이 간격은 일반 목록과 같게, 알림 행은 손잡이 옆 남은 폭을 채운다 */
+  .push-row-list--sortable :global(.drag-list) {
+    gap: 12px;
+  }
+  .push-row-slot {
+    flex: 1;
+    min-width: 0;
+  }
+  /* 서류철 탭 — 면(fill) 색만 쓰고 보더·그림자 없음. 목록은 탭 바로 아래에 배경 묶음 없이 그대로 이어진다. 호버는 배경색 변경만. */
+  .kind-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 4px;
+    margin-bottom: 16px;
+  }
+  .kind-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: var(--cms-radius-sm) var(--cms-radius-sm) 0 0;
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .kind-tab:hover:not(.kind-tab--active) {
+    background: var(--cs-purple-op10);
+  }
+  .kind-tab--active {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+  }
+  .kind-count {
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+  .kind-tab--active .kind-count {
+    color: var(--cs-white);
+  }
+  .sort-hint {
+    margin: 0 0 12px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
   .push-row {
     display: flex;
     flex-direction: column;
@@ -687,6 +916,39 @@
     padding: 2px 8px;
     border-radius: var(--radius-full);
     white-space: nowrap;
+  }
+
+  /* 알림별 실행 조건 / 실행 요소 한 줄 */
+  .flow-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 20px;
+    padding: 0 0 4px 17px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text-mid);
+  }
+
+  .guide-name {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding-left: 17px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text);
+  }
+
+  .flow-item {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .flow-key {
+    font-weight: 700;
+    color: var(--cs-text);
   }
 
   .msg-badge--sms {
