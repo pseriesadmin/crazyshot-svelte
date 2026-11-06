@@ -14,7 +14,7 @@ import { loadReturnInspectionItems, loadReturnPhotoItems, customerChecklistOf, c
 import { RETURN_CHECKLIST_ITEMS, RETURN_MEDIA_ITEMS } from '$lib/utils/returnNotice'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { RETURN_SUBMIT_STATUSES } from '$lib/server/returnSubmission'
-import { toReturnSubmitMethod, type ReturnSubmitMethod } from '$lib/utils/returnNotice'
+import { resolveReturnSubmitMethod, type ReturnSubmitMethod } from '$lib/utils/returnNotice'
 import { loadReturnMissionPoints } from '$lib/server/awardReturnRegisterMissionPoints'
 
 export interface RentalForReturnSubmit {
@@ -85,7 +85,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     if (productImages.length >= 5) break
   }
 
-  const method: ReturnSubmitMethod | null = toReturnSubmitMethod(rental.return_method)
+  const method: ReturnSubmitMethod | null = resolveReturnSubmitMethod(rental.return_method)
   const canSubmit = method !== null && RETURN_SUBMIT_STATUSES.has(rental.status)
 
   // 이미 제출했는지 — 제출 테이블은 RLS 정책이 없어 서버(서비스 롤)로만 읽는다. 사진 자체는 고객 화면에 내려보내지 않고 장수만 안내한다.

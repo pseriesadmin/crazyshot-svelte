@@ -149,6 +149,15 @@
     isRentalView?: boolean   // true = /cms/rentals 컨텍스트 (예약 단계 UI 숨김)
     enableQrVerify?: boolean // true일 때만 "상품 정보"에 QR 확인 아이콘 노출 (모바일 대여목록 전용)
     cmsRole?:     string | null // 무인보관함 비밀번호 입력 UI manager 이상 게이팅용(2026-08-20)
+    /** 모바일 대여현황용(2026-11-06) — cmsRole 을 넘기지 않고(매니저 전용 변경 기능은 계속 숨김) 이 역할이 매니저 이상이면
+     *  '무인보관함 배정정보'를 PC 와 같은 모양의 보기 전용으로 보여 준다(입력·시범 발송·배정 확정 없음). */
+    lockerViewRole?: string | null
+    /** 모바일 대여현황 전용(2026-11-06) — 숨길 탭 id 목록. 탭 버튼을 그리지 않고, 그 탭이 선택돼 있으면 대여정보 탭으로 돌려보낸다(접근 불가). */
+    hiddenTabs?: ReadonlyArray<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>
+    /** 모바일 대여현황 전용 — 탭 글자를 한 사이즈 크게(14px) + 볼드로 보여 준다 */
+    largeTabs?: boolean
+    /** 모바일 대여현황 전용 — 고객정보 탭의 '고객 상세 보기' 링크(PC 고객관리 화면으로 이동)를 숨긴다 */
+    hideCustomerLink?: boolean
     /** 최초 마운트 시 활성화할 탭 — 미지정 시 기존과 동일하게 'rental'(대여정보).
         컴포넌트가 마운트된 이후 row가 갱신(onrefresh)돼도 재적용되지 않음(마운트 시 1회만) —
         관리자가 이미 다른 탭으로 전환한 상태를 되돌리지 않기 위함 */
@@ -168,7 +177,7 @@
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -194,8 +203,12 @@
   // 수령 또는 반납 방식이 방문(visit)·퀵서비스(quick)이면 시간대·예약 단계와 무관하게 항상 노출(사용하지 않아도 노출).
   // 취소·만료 예약은 비밀번호가 폐기되고 저장도 거부되므로(Migration #673) 입력·저장만 비활성화한다.
   const LOCKER_FIELD_METHODS = ['visit', 'quick']
+  // 비밀번호가 보이는 화면이라 매니저 이상만: 편집 권한(cmsRole)이거나, 모바일처럼 보기 전용 역할(lockerViewRole)이 매니저 이상일 때
+  let canViewLocker = $derived(canManagePaymentAndLocker || hasSettingsAccess(lockerViewRole ?? ''))
+  // 보기 전용 = 편집 권한(cmsRole)이 없는 경우 — 입력칸은 저장된 값을 비활성으로 보여 주고 시범 발송·배정 확정 버튼은 숨긴다
+  let lockerReadOnly = $derived(!canManagePaymentAndLocker)
   let showLockerPasswordField = $derived(
-    canManagePaymentAndLocker &&
+    canViewLocker &&
     (LOCKER_FIELD_METHODS.includes(row.pickup_method ?? '') ||
      LOCKER_FIELD_METHODS.includes(row.return_method ?? ''))
   )
@@ -270,7 +283,15 @@
     }
   }
 
-  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>(initialTab ?? 'rental')
+  // 최초 마운트 시 활성 탭 — 숨긴 탭(hiddenTabs)이 initialTab 으로 지정돼도 첫 렌더부터 대여정보로 시작한다(sp3 MINOR-1)
+  function startTab(): 'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms' {
+    return initialTab && !(hiddenTabs as readonly string[]).includes(initialTab) ? initialTab : 'rental'
+  }
+  let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>(startTab())
+  // 숨긴 탭(hiddenTabs, 모바일 대여현황)은 어떤 경로로도 열리지 않는다 — 초기 탭이나 코드가 숨긴 탭을 가리키면 대여정보로 돌린다
+  $effect(() => {
+    if ((hiddenTabs as readonly string[]).includes(activeTab)) activeTab = 'rental'
+  })
   let isSubmitting = $state(false)
 
   // 헤더 버튼 이중확인 — ProductDetailPanel.svelte handleDeleteProduct 패턴
@@ -456,11 +477,15 @@
     customer_feedback?: string | null
     customer_rating?: number | null
   }
-  const EVIDENCE_METHOD_LABEL: Record<string, string> = { courier: '택배 반납', quick: '퀵서비스 반납', locker: '무인함 반납' }
+  const EVIDENCE_METHOD_LABEL: Record<string, string> = { courier: '택배 반납', quick: '퀵서비스 반납', locker: '무인함 반납', visit: '방문 반납(무인함 정보)' }
   let evFetchedFor  = $state<number | null>(null)
   let evLoading     = $state(false)
   let evError       = $state<string | null>(null)
   let evSubmission  = $state<EvidenceSubmission | null>(null)
+  // 고객이 반납 제출 화면에서 입력한 무인함 번호·비밀번호가 있는지 — 대여정보 탭 '무인보관함 배정정보'에 날짜시간과 함께 보여 준다(2026-11-06)
+  const submittedLockerInfo = $derived(
+    evSubmission !== null && (!!evSubmission.locker_number || !!evSubmission.locker_password || !!evSubmission.locker_password_hidden),
+  )
   let evGroups      = $state<EvidenceGroup[]>([])
   let evViewerIndex = $state<number | null>(null)
   interface EvidenceInspection {
@@ -493,7 +518,9 @@
 
   $effect(() => {
     // 검수 탭이거나, 헤더 [반납 검수 승인] 활성 판정이 필요한 반납요청·반납완료 단계면 조회한다(탭을 벗어나면 다음 진입 때 다시 조회 — 서명 URL 만료 대비)
-    if (activeTab !== 'inspection' && row.status !== 'return_requested' && row.status !== 'returned' && !hideChangeCancelButtons) { evFetchedFor = null; return }
+    // 대여정보 탭('무인보관함 배정정보')에 고객 제출 무인함 정보를 보여 주기 위해 대여정보 탭에서도 조회한다(2026-11-06)
+    const rentalTabNeedsSubmission = activeTab === 'rental' && ['in_use', 'return_requested', 'returned', 'completed'].includes(row.status)
+    if (activeTab !== 'inspection' && !rentalTabNeedsSubmission && row.status !== 'return_requested' && row.status !== 'returned' && !hideChangeCancelButtons) { evFetchedFor = null; return }
     if (evLoading) return
     if (evFetchedFor === row.reservation_id) return
 
@@ -2162,7 +2189,8 @@
           lockerLegReturn = sel.return
           lockerPwLoading = false
           // 방문·퀵 예약을 처음 열었는데 무인보관함 정보가 아직 없으면 설정 안내(같은 예약은 패널을 다시 열 때까지 1회)
-          if (!lockerPassword.trim() && !lockerPwClosed) {
+          // 보기 전용(모바일)은 설정 입력칸이 없으므로 안내하지 않는다(sp3 MINOR-2)
+          if (!lockerPassword.trim() && !lockerPwClosed && !lockerReadOnly) {
             csToast.warning('무인보관함 정보를 설정해주세요.', { id: 'locker-setup-needed' })
           }
         }
@@ -2505,7 +2533,7 @@
   {/if}
 
   <!-- 탭 -->
-  <div class="panel-tabs" role="tablist">
+  <div class="panel-tabs" class:panel-tabs--large={largeTabs} role="tablist">
     {#each [
       { id: 'rental',   label: '대여정보' },
       { id: 'customer', label: '고객정보' },
@@ -2513,7 +2541,7 @@
       { id: 'contract', label: '계약서'   },
       ...(showInspectionTab ? [{ id: 'inspection', label: '검수' }] : []),
       { id: 'sms',      label: '알림발송' },
-    ] as tab}
+    ].filter((t) => !(hiddenTabs as readonly string[]).includes(t.id)) as tab (tab.id)}
       <button
         class="tab"
         class:tab-active={activeTab === tab.id}
@@ -3137,6 +3165,7 @@
             {#if lockerPwError}
               <span class="tracking-error-msg">{lockerPwError}</span>
             {/if}
+            {#if !lockerReadOnly}
             <button
               type="button"
               class="btn-reassign-small"
@@ -3149,10 +3178,30 @@
               onclick={saveLockerPassword}
               disabled={lockerPwSaving || lockerPwClosed || !lockerPassword.trim() || !lockerNumber.trim() || !lockerLegs || lockerPwLoading}
             >{lockerPwSaving ? '저장 중...' : '배정 확정'}</button>
+            {/if}
           </div>
         </div>
         {#if lockerPwLoading}
           <div class="loading-box">비밀번호 정보 조회 중...</div>
+        {:else if lockerReadOnly}
+          <!-- 보기 전용(모바일 대여현황): 입력칸 없이 저장된 값만 글자로 — 비어 있으면 '-' (2026-11-06) -->
+          <div class="info-section">
+            <div class="info-row">
+              <span class="info-label">무인함 번호</span>
+              <span class="info-value">{lockerNumber || '-'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">비밀번호</span>
+              <span class="info-value">{lockerPassword || '-'}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">안내 대상</span>
+              <div class="locker-leg-group" role="group" aria-label="안내 발송 대상">
+                <button type="button" class="locker-leg-btn" class:locker-leg-btn--on={lockerLegPickup} aria-pressed={lockerLegPickup} disabled>수령</button>
+                <button type="button" class="locker-leg-btn" class:locker-leg-btn--on={lockerLegReturn} aria-pressed={lockerLegReturn} disabled>반납</button>
+              </div>
+            </div>
+          </div>
         {:else}
           <div class="info-section">
             <div class="info-row">
@@ -3165,7 +3214,7 @@
                 value={lockerNumber}
                 oninput={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
                 oncompositionend={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
-                disabled={lockerPwClosed}
+                disabled={lockerPwClosed || lockerReadOnly}
               />
               <input
                 class="tracking-input locker-input"
@@ -3175,7 +3224,7 @@
                 value={lockerPassword}
                 oninput={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
                 oncompositionend={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
-                disabled={lockerPwClosed}
+                disabled={lockerPwClosed || lockerReadOnly}
               />
               <!-- 안내 발송 대상 콤보 — 초소형 라운드 버튼형(§0-10-C) 모양 + ON/OFF 콤보(§14) 컬러. 둘 다 선택 가능 -->
               <div class="locker-leg-group" role="group" aria-label="안내 발송 대상">
@@ -3184,7 +3233,7 @@
                   class="locker-leg-btn"
                   class:locker-leg-btn--on={lockerLegPickup}
                   aria-pressed={lockerLegPickup}
-                  disabled={lockerPwClosed}
+                  disabled={lockerPwClosed || lockerReadOnly}
                   onclick={() => { lockerLegPickup = !lockerLegPickup }}
                 >수령</button>
                 <button
@@ -3192,7 +3241,7 @@
                   class="locker-leg-btn"
                   class:locker-leg-btn--on={lockerLegReturn}
                   aria-pressed={lockerLegReturn}
-                  disabled={lockerPwClosed}
+                  disabled={lockerPwClosed || lockerReadOnly}
                   onclick={() => { lockerLegReturn = !lockerLegReturn }}
                 >반납</button>
               </div>
@@ -3211,6 +3260,18 @@
             </div>
           {/if}
         {/if}
+        <!-- 고객이 반납 제출 화면에서 입력한 무인함 번호·비밀번호·제출 일시(2026-11-06) — 관리자 입력(위)과 구분해 읽기 전용으로 보여 준다 -->
+        {#if submittedLockerInfo}
+          {@render lockerSubmittedRows()}
+        {/if}
+        </div>
+      {:else if submittedLockerInfo}
+        <!-- 관리자 입력 칸이 없는 예약(예: 무인함 반납 선택)도 고객 제출 정보는 같은 제목으로 보여 준다 -->
+        <div class="locker-group">
+          <div class="section-title-row">
+            <span class="section-title">무인보관함 배정정보</span>
+          </div>
+          {@render lockerSubmittedRows()}
         </div>
       {/if}
 
@@ -3412,12 +3473,14 @@
         <div class="info-row">
           <span class="info-label">고객명</span>
           <span class="info-value fw-bold">{row.customer_name ?? '-'}</span>
+          {#if !hideCustomerLink}
           <a
             href="/cms/customers?selected={row.user_id}"
             target="_blank"
             rel="noopener noreferrer"
             class="btn-action"
           >고객 상세 보기 ↗</a>
+          {/if}
         </div>
         <div class="info-row">
           <span class="info-label">이메일</span>
@@ -4168,6 +4231,41 @@
  </div>
 </div>
 
+{#snippet lockerSubmittedRows()}
+  <!-- 고객이 반납 제출 화면에서 등록한 무인함 번호·비밀번호·제출 일시·사진(2026-11-06) — 관리자 입력과 구분되는 읽기 전용 -->
+  {#if evSubmission}
+    <div class="info-section locker-submitted">
+      <div class="info-row">
+        <span class="info-label">고객 제출 정보</span>
+        <span class="info-value">무인함 번호 {evSubmission.locker_number ?? '-'} · 비밀번호 {evSubmission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (evSubmission.locker_password ?? '-')}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">제출 일시</span>
+        <span class="info-value">{formatKstDateTime(evSubmission.submitted_at)}</span>
+      </div>
+      {#each evGroups as g (g.item_key)}
+        <div class="info-row">
+          <span class="info-label">{g.label}</span>
+          <div class="ev-thumbs">
+            {#each g.items as m (m.id)}
+              {#if !m.url}
+                <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+              {:else if m.kind === 'video'}
+                <!-- svelte-ignore a11y_media_has_caption -->
+                <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+              {:else}
+                <button type="button" class="ev-thumb ev-thumb-btn" onclick={() => (evViewerIndex = evPhotoIndex(g.item_key, m.id))} aria-label={`${g.label} 크게 보기`}>
+                  <img src={m.url} alt={g.label} />
+                </button>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#if evViewerIndex !== null && evViewerItems.length > 0}
   <MediaViewer items={evViewerItems} bind:index={evViewerIndex} title="반납 증빙" onclose={() => (evViewerIndex = null)} />
 {/if}
@@ -4333,6 +4431,8 @@
     transition: color 0.12s, border-color 0.12s;
     white-space: nowrap;
   }
+  /* 모바일 대여현황 전용(largeTabs) — 탭 글자 한 사이즈 크게(12→14px) + 볼드(--text-pc-body-14) */
+  .panel-tabs--large .tab { font: var(--text-pc-body-14); font-weight: 700; }
   .tab:hover   { color: var(--cs-purple); }
   .tab-active  { color: var(--cs-purple); border-bottom-color: var(--cs-purple); font-weight: 700; }
 

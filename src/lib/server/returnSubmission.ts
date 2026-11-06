@@ -6,6 +6,7 @@ import {
   RETURN_MEDIA_ITEMS,
   RETURN_MEDIA_MAX_PER_ITEM,
   RETURN_SUBMIT_RULES,
+  resolveReturnSubmitMethod,
   toReturnSubmitMethod,
   type ReturnSubmitMethod,
 } from '$lib/utils/returnNotice'
@@ -135,6 +136,16 @@ export function validateReturnSubmit(
     locker_password = typeof b.locker_password === 'string' ? b.locker_password.trim() : ''
     if (!isValidLockerNumber(locker_number)) return { ok: false, error: LOCKER_NUMBER_ERROR }
     if (!isValidLockerPassword(locker_password)) return { ok: false, error: LOCKER_PASSWORD_ERROR }
+  } else if (rules.lockerInfoOptional) {
+    // 선택 입력(퀵) — 둘 다 비우면 저장하지 않고, 하나라도 입력하면 둘 다 규칙에 맞아야 한다
+    const n = typeof b.locker_number === 'string' ? b.locker_number.trim() : ''
+    const p = typeof b.locker_password === 'string' ? b.locker_password.trim() : ''
+    if (n || p) {
+      if (!isValidLockerNumber(n)) return { ok: false, error: LOCKER_NUMBER_ERROR }
+      if (!isValidLockerPassword(p)) return { ok: false, error: LOCKER_PASSWORD_ERROR }
+      locker_number = n
+      locker_password = p
+    }
   }
 
   // 이용 평가 — 선택 입력, 앞뒤 공백 제거, 100자 초과는 거절(화면이 막지만 서버가 다시 집행)
@@ -157,4 +168,4 @@ export function validateReturnSubmit(
   return { ok: true, value: { checklist, locker_number, locker_password, media, feedback, rating } }
 }
 
-export { toReturnSubmitMethod }
+export { toReturnSubmitMethod, resolveReturnSubmitMethod }

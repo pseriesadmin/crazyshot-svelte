@@ -5,6 +5,7 @@ import {
   RETURN_NOTICE_NOTIFY_TYPE,
   RETURN_NOTICE_STAGES,
   RETURN_SUBMIT_RULES,
+  resolveReturnSubmitMethod,
   isReturnNoticeStage,
   mediaItemLabel,
   returnSubmitPath,
@@ -47,10 +48,20 @@ describe('반납 방식 → 제출 방식 매핑', () => {
     expect(toReturnSubmitMethod(null)).toBeNull()
   })
 
+  it('resolveReturnSubmitMethod 는 방문을 무인함 정보 전용(visit)으로 더하고 나머지는 그대로 — 마이페이지 목록 버튼은 방문을 계속 제외', () => {
+    expect(resolveReturnSubmitMethod('visit')).toBe('visit')
+    expect(resolveReturnSubmitMethod('quick')).toBe('quick')
+    expect(resolveReturnSubmitMethod('locker')).toBe('locker')
+    expect(resolveReturnSubmitMethod('epost')).toBe('courier')
+    expect(resolveReturnSubmitMethod(null)).toBeNull()
+    expect(resolveReturnSubmitMethod('pickup')).toBeNull()
+  })
+
   it('방식별 요건: 택배=사진+체크리스트, 무인함=사진+무인함 정보, 퀵=확인만', () => {
     expect(RETURN_SUBMIT_RULES.courier).toEqual({ photosRequired: true, checklist: true, lockerInfo: false })
     expect(RETURN_SUBMIT_RULES.locker).toEqual({ photosRequired: true, checklist: false, lockerInfo: true })
-    expect(RETURN_SUBMIT_RULES.quick).toEqual({ photosRequired: false, checklist: false, lockerInfo: false })
+    expect(RETURN_SUBMIT_RULES.quick).toEqual({ photosRequired: false, checklist: false, lockerInfo: false, lockerInfoOptional: true })
+    expect(RETURN_SUBMIT_RULES.visit).toEqual({ photosRequired: true, checklist: false, lockerInfo: true })
   })
 
   it('사진 항목 라벨', () => {

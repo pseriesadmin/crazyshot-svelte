@@ -221,7 +221,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // 항목 순서 = 방식별 정의 순서(사진 항목별로 묶어 정렬), 정의에 없는 항목은 뒤에
   // s.method 는 저장된 제출 방식 값('courier'|'quick'|'locker') — 예약의 return_method(epost 등)를 변환하는 toReturnSubmitMethod 를 쓰면 항상 null 이 돼
   // 체크리스트가 비고 사진 순서가 정의 순서를 따르지 않는다(2026-10-19 실테스트 발견·수정)
-  const method = s.method === 'courier' || s.method === 'quick' || s.method === 'locker' ? s.method : null
+  const method = s.method === 'courier' || s.method === 'quick' || s.method === 'locker' || s.method === 'visit' ? s.method : null
   const order = method ? (method === 'courier' ? photoMaster.active : RETURN_MEDIA_ITEMS[method]).map((i) => i.key) : []
   const keys = [...new Set([...order, ...rows.map((r) => r.item_key)])].filter((k) => rows.some((r) => r.item_key === k))
   const groups = keys.map((k) => ({

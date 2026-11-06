@@ -22,7 +22,7 @@ export const RETURN_NOTICE_BUTTON_LABEL: Record<ReturnNoticeStage, string> = {
   quick_5h: '반납 진행중',
   quick_2h: '반납 준비 확인',
   quick_1h: '반납 준비 확인',
-  locker_2h: '무인함 반납완료',
+  locker_2h: '무인함 정보 등록',
 }
 
 /** 고객 반납 제출 화면 경로 */
@@ -38,7 +38,7 @@ export function isReturnNoticeStage(value: string): value is ReturnNoticeStage {
 export const RETURN_NOTICE_ADMIN_PUSH_STAGES: ReturnNoticeStage[] = ['quick_5h']
 
 /** return_method → 고객 반납 제출 화면 방식 */
-export type ReturnSubmitMethod = 'courier' | 'quick' | 'locker'
+export type ReturnSubmitMethod = 'courier' | 'quick' | 'locker' | 'visit'
 
 const COURIER_METHODS = new Set(['epost', 'delivery', 'crazydelivery', 'airport'])
 
@@ -52,10 +52,23 @@ export function toReturnSubmitMethod(returnMethod: string | null | undefined): R
 }
 
 /** 방식별 반납 제출 요건 — 사진·체크리스트·무인함 정보 필수 여부 */
-export const RETURN_SUBMIT_RULES: Record<ReturnSubmitMethod, { photosRequired: boolean; checklist: boolean; lockerInfo: boolean }> = {
+export const RETURN_SUBMIT_RULES: Record<ReturnSubmitMethod, { photosRequired: boolean; checklist: boolean; lockerInfo: boolean; lockerInfoOptional?: boolean }> = {
   courier: { photosRequired: true, checklist: true, lockerInfo: false },
-  quick: { photosRequired: false, checklist: false, lockerInfo: false },
+  // 퀵: 무인함을 쓴 경우에만 번호·비밀번호를 입력한다(선택 — 입력하면 둘 다 필수). 쓰지 않았다면 비워 두고 제출한다.
+  quick: { photosRequired: false, checklist: false, lockerInfo: false, lockerInfoOptional: true },
   locker: { photosRequired: true, checklist: false, lockerInfo: true },
+  // 방문: 무인함 반납과 같은 요건 — 사진(무인함·장비 각 1장) + 무인함 번호·비밀번호 필수(2026-11-06 Stephen 확정). 알림 CTA 로만 들어오며 마이페이지 목록 버튼은 없다.
+  visit: { photosRequired: true, checklist: false, lockerInfo: true },
+}
+
+/**
+ * 제출 화면·API 가 쓰는 방식 판정 — toReturnSubmitMethod 에 "방문 반납(무인함 정보만)"을 더한다.
+ * 방문은 마이페이지 반납정보 등록 버튼 대상이 아니라서(toReturnSubmitMethod 는 방문을 null 로 유지) 이 함수는 알림 CTA 로 열린 화면과 제출 API 에서만 쓴다(2026-11-06).
+ */
+export function resolveReturnSubmitMethod(returnMethod: string | null | undefined): ReturnSubmitMethod | null {
+  const base = toReturnSubmitMethod(returnMethod)
+  if (base) return base
+  return returnMethod === 'visit' ? 'visit' : null
 }
 
 /** 장비 확인 체크리스트 항목(택배 반납). key 는 저장값이라 바꾸지 않는다. */
@@ -75,6 +88,11 @@ export const RETURN_MEDIA_ITEMS: Record<ReturnSubmitMethod, { key: string; label
   ],
   quick: [],
   locker: [
+    { key: 'locker', label: '무인함 사진' },
+    { key: 'device', label: '장비 사진' },
+  ],
+  // 방문 반납도 무인함 반납과 같은 사진 항목(키 동일 — 검수 탭 정렬·라벨 공용)
+  visit: [
     { key: 'locker', label: '무인함 사진' },
     { key: 'device', label: '장비 사진' },
   ],

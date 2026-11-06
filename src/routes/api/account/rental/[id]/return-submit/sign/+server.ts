@@ -14,7 +14,7 @@ import {
   RETURN_SUBMIT_STATUSES,
   allowedItemKeys,
   buildEvidencePath,
-  toReturnSubmitMethod,
+  resolveReturnSubmitMethod,
   validateMediaFile,
 } from '$lib/server/returnSubmission'
 import { loadReturnPhotoItems, customerPhotoOf } from '$lib/server/returnInspectionItems'
@@ -37,7 +37,7 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 
   const row = reservation as { status: string; return_method: string | null }
   if (!RETURN_SUBMIT_STATUSES.has(row.status)) return json({ error: '지금은 반납 정보를 등록할 수 없는 상태예요.' }, { status: 409 })
-  const method = toReturnSubmitMethod(row.return_method)
+  const method = resolveReturnSubmitMethod(row.return_method)
   if (!method) return json({ error: '이 반납 방식은 사진 등록이 필요하지 않아요.' }, { status: 400 })
 
   let body: { item_key?: unknown; content_type?: unknown; size?: unknown }

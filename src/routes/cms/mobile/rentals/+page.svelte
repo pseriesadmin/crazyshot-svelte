@@ -187,7 +187,11 @@
                   onrefresh={() => invalidateAll()}
                   isRentalView={true}
                   enableQrVerify={true}
-                  stepFilter={['confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
+                  stepFilter={['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
+                  lockerViewRole={data.cmsRole}
+                  hiddenTabs={['payment', 'contract']}
+                  largeTabs={true}
+                  hideCustomerLink={true}
                 />
               </div>
             {/if}
@@ -422,6 +426,15 @@
     padding: 12px 4px;
   }
 
+  /* 패널 정보 표(제목↔출력정보) 여백 축소 — 좁은 화면에서 제목 칸이 넓어 값이 줄바꿈되던 문제(2026-11-06).
+     모바일 대여현황에서만 적용(패널 기본값 PC: 제목 96px·간격 12px·좌우 14px). 제목 최대 6글자(상품 이미지) 기준 72px. */
+  .rental-card-detail-wrap :global(.info-row) {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .rental-card-detail-wrap :global(.info-label) {
+    flex: 0 0 72px;
+  }
   /* ── 플로팅 아이콘 메뉴 그룹 (/cms/mobile 메인 화면과 동일 스타일) ── */
   .fab-group {
     position: fixed;
