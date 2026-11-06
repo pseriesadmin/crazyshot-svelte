@@ -82,6 +82,41 @@
 <!-- ─── MOBILE BODY ────────────────────────────────────────────────── -->
 <div class="m-body">
 
+  <!-- Pack 테마목록 (모바일) -->
+  <div class="m-pack-themes">
+    <div class="theme-pick-head">
+      <h2 class="m-pack-themes-title">Pack 테마목록</h2>
+      {#if data.isCms}
+        <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
+      {/if}
+    </div>
+    <div class="m-pack-themes-list">
+      {#each displayThemeGroups as pack}
+        {#if pack.id}
+          <a href="/hype-pack/theme/{pack.id}" class="m-pack-theme-card" aria-label="{pack.name} 팩">
+            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
+            <div class="m-pack-theme-badge-wrap">
+              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
+                <span class="m-pack-theme-name">{pack.name}</span>
+              </div>
+            </div>
+          </a>
+        {:else}
+          <article class="m-pack-theme-card" aria-label="{pack.name} 팩">
+            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
+            <div class="m-pack-theme-badge-wrap">
+              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
+                <span class="m-pack-theme-name">{pack.name}</span>
+              </div>
+            </div>
+          </article>
+        {/if}
+      {/each}
+    </div>
+  </div>
+
+  <!-- 추천 HypePack 그룹 (제목·키워드 칩 + 광고 배너) — Pack 테마목록 아래 배치(2026-11-06) -->
+  <div class="m-recommend-group">
   <!-- ScrollMenuBar: 추천 HypePack + 키워드 칩 -->
   <div class="m-scroll-menu">
     <div class="m-scroll-menu-top">
@@ -144,38 +179,6 @@
       >⚙ 배너 설정</button>
     {/if}
   </div>
-
-  <!-- Pack 테마목록 (모바일) -->
-  <div class="m-pack-themes">
-    <div class="theme-pick-head">
-      <h2 class="m-pack-themes-title">Pack 테마목록</h2>
-      {#if data.isCms}
-        <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
-      {/if}
-    </div>
-    <div class="m-pack-themes-list">
-      {#each displayThemeGroups as pack}
-        {#if pack.id}
-          <a href="/hype-pack/theme/{pack.id}" class="m-pack-theme-card" aria-label="{pack.name} 팩">
-            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
-            <div class="m-pack-theme-badge-wrap">
-              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
-                <span class="m-pack-theme-name">{pack.name}</span>
-              </div>
-            </div>
-          </a>
-        {:else}
-          <article class="m-pack-theme-card" aria-label="{pack.name} 팩">
-            <img src={pack.img} alt={pack.name} class="m-pack-theme-img" />
-            <div class="m-pack-theme-badge-wrap">
-              <div class="m-pack-theme-badge" style="background-color: {pack.label}; opacity: 0.88;">
-                <span class="m-pack-theme-name">{pack.name}</span>
-              </div>
-            </div>
-          </article>
-        {/if}
-      {/each}
-    </div>
   </div>
 
   <!-- SubView 섹션 (보라 배경) -->
@@ -216,8 +219,39 @@
 <!-- ─── DESKTOP BODY ───────────────────────────────────────────────── -->
 <div class="d-body">
 
-  <!-- 추천 Package 섹션 -->
+  <!-- Pack 테마목록 섹션 -->
   <section class="d-section">
+    <div class="d-section-inner">
+      <div class="d-title-bar theme-pick-head">
+        <h2 class="d-section-title">Pack 테마목록</h2>
+        {#if data.isCms}
+          <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
+        {/if}
+      </div>
+      <div class="d-pack-grid">
+        {#each displayThemeGroups as pack}
+          {#if pack.id}
+            <a href="/hype-pack/theme/{pack.id}" class="d-pack-card" aria-label="{pack.name} 팩">
+              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
+              <div class="d-pack-card-label" style="background: {pack.label};">
+                <span class="d-pack-card-label-text">{pack.name}</span>
+              </div>
+            </a>
+          {:else}
+            <article class="d-pack-card" aria-label="{pack.name} 팩">
+              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
+              <div class="d-pack-card-label" style="background: {pack.label};">
+                <span class="d-pack-card-label-text">{pack.name}</span>
+              </div>
+            </article>
+          {/if}
+        {/each}
+      </div>
+    </div>
+  </section>
+
+  <!-- 추천 Package 섹션 -->
+  <section class="d-section d-recommend-section">
     <div class="d-section-inner">
       <!-- 광고 배너 (AdPack) -->
       <div class="d-ad-banner">
@@ -274,38 +308,6 @@
     </div>
   </section>
 
-  <!-- Pack 테마목록 섹션 -->
-  <section class="d-section">
-    <div class="d-section-inner">
-      <div class="d-title-bar theme-pick-head">
-        <h2 class="d-section-title">Pack 테마목록</h2>
-        {#if data.isCms}
-          <button class="theme-cms-btn" onclick={() => { activeModal = 'themeGroups' }}>⚙ 테마그룹 관리</button>
-        {/if}
-      </div>
-      <div class="d-pack-grid">
-        {#each displayThemeGroups as pack}
-          {#if pack.id}
-            <a href="/hype-pack/theme/{pack.id}" class="d-pack-card" aria-label="{pack.name} 팩">
-              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
-              <div class="d-pack-card-label" style="background: {pack.label};">
-                <span class="d-pack-card-label-text">{pack.name}</span>
-              </div>
-            </a>
-          {:else}
-            <article class="d-pack-card" aria-label="{pack.name} 팩">
-              <img src={pack.img} alt="" class="d-pack-card-bg" aria-hidden="true" />
-              <div class="d-pack-card-label" style="background: {pack.label};">
-                <span class="d-pack-card-label-text">{pack.name}</span>
-              </div>
-            </article>
-          {/if}
-        {/each}
-      </div>
-    </div>
-  </section>
-
-
 </div><!-- /d-body -->
 
 <BottomTabBar />
@@ -343,6 +345,9 @@
     padding-top: var(--layout-mob-gnb-offset);
     overflow-x: hidden;
   }
+
+  /* ── 추천 HypePack 그룹 (제목·칩 + 배너, 테마목록 아래) ── */
+  .m-recommend-group { padding-bottom: 60px; }
 
   /* ── ScrollMenuBar ── */
   .m-scroll-menu {
@@ -455,7 +460,7 @@
   /* ── Pack 테마목록 (모바일 전용) ── */
   .m-pack-themes {
     background: var(--cs-lilac);
-    padding: 75px 25px 60px; /* 배너-테마목록 사이 여백 50% 증가(50px→75px) */
+    padding: 0 25px 75px; /* 테마목록이 최상단(GNB 아래 간격은 .m-body padding-top) — 아래 추천 HypePack 그룹과의 간격 75px(2026-11-06) */
   }
   .m-pack-themes .theme-pick-head {
     display: flex;
@@ -671,6 +676,7 @@
   }
 
   .d-section { width: 100%; }
+  .d-recommend-section { margin-top: var(--layout-section-gap); } /* 테마목록 아래로 이동(2026-11-06) — 위 섹션과 간격 */
   .d-section-inner {
     max-width: 1240px;
     margin: 0 auto;
