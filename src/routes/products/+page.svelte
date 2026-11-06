@@ -1097,10 +1097,10 @@
     .cat-icon-box.touch-bubble:not(.has-on)::after { animation: none; }
   }
   .cat-label {
-    display: none;
+    display: block;
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 700;
-    font-size: 14px;
+    font-size: clamp(10px, 3vw, 14px); /* 아이콘 상자가 화면 폭에 비례해 줄어드는 비율(최대 70px)에 맞춰 글자도 함께 축소, PC는 14px 상한 */
     color: #100b32;
     white-space: nowrap;
     text-align: center;
