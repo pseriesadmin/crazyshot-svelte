@@ -62,5 +62,22 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   // 자식 재고의 이름은 부모 값을 따른다(품번은 자식 고유값 — 자식 재고 부모 참조 전환 Phase 3-D)
   await applyParentFieldsToRowProducts(data ?? [], ['name'], admin)
 
-  return json(data ?? [])
+  // 연체료 기록(2026-11-03, Stephen 지시) — 대여 카드마다 그 예약의 연체료(예약당 1건)를 붙인다. 조회 실패는 이력 표시를 막지 않는다(연체료만 빠짐).
+  const reservations = (data ?? []) as Array<{ id: number }>
+  const lateFeeByReservation = new Map<number, { fee_amount: number; hours_late: number; is_paid: boolean; paid_at: string | null }>()
+  if (reservations.length > 0) {
+    const { data: lateFees, error: lateFeeError } = await admin
+      .from('late_fees')
+      .select('reservation_id, fee_amount, hours_late, is_paid, paid_at')
+      .in('reservation_id', reservations.map((r) => r.id))
+    if (lateFeeError) {
+      console.error('[cms/customers/rentals] 연체료 조회 실패(fail-soft):', lateFeeError.message)
+    } else {
+      for (const fee of (lateFees ?? []) as Array<{ reservation_id: number; fee_amount: number; hours_late: number; is_paid: boolean; paid_at: string | null }>) {
+        lateFeeByReservation.set(fee.reservation_id, { fee_amount: Number(fee.fee_amount), hours_late: fee.hours_late, is_paid: fee.is_paid, paid_at: fee.paid_at })
+      }
+    }
+  }
+
+  return json((data ?? []).map((row: { id: number }) => ({ ...row, late_fee: lateFeeByReservation.get(row.id) ?? null })))
 }

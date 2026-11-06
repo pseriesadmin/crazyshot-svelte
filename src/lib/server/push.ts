@@ -466,10 +466,10 @@ export async function sendReservationLifecyclePush(
  */
 export async function sendCardSms(
   admin: SupabaseClient,
-  params: { userId: string; reservationId: number | null | undefined; notifyType: string; link?: string; force?: boolean },
-): Promise<void> {
+  params: { userId: string; reservationId: number | null | undefined; notifyType: string; link?: string; force?: boolean; vars?: NotifyVars },
+): Promise<boolean> {
   try {
-    if (params.reservationId == null) return
+    if (params.reservationId == null) return false
     const [{ data: profile }, { data: resv }] = await Promise.all([
       admin.from('user_profiles').select('phone, full_name').eq('id', params.userId).maybeSingle(),
       admin
@@ -480,7 +480,7 @@ export async function sendCardSms(
     ])
     const profileRow = profile as { phone?: string | null; full_name?: string | null } | null
     const phone = profileRow?.phone
-    if (!phone) return
+    if (!phone) return false
     await applyParentFieldsToRowProducts([resv], ['name'], admin)
     const productsField = (resv as { products?: { name?: string } | { name?: string }[] | null } | null)?.products
     const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
@@ -494,10 +494,12 @@ export async function sendCardSms(
           상품명: productName,
           ...(profileRow?.full_name ? { 고객이름: profileRow.full_name } : {}),
           ...(reservationCode ? { 예약코드: reservationCode } : {}),
+          ...(params.vars ?? {}),
         }) || null
       : null
 
-    await sendLifecycleSms(admin, {
+    // 반환: 문자가 나갔거나(sent) 오늘 이미 나간 건(duplicate)이면 true — 호출부의 재시도 판단용(기존 호출부는 반환값을 무시해도 동작 동일)
+    const smsResult = await sendLifecycleSms(admin, {
       phone,
       userId: params.userId,
       notifyType: params.notifyType,
@@ -507,8 +509,10 @@ export async function sendCardSms(
       force: params.force,
       customMessage,
     })
+    return smsResult.sent || smsResult.reason === 'duplicate'
   } catch {
     // SMS 보조 발송 실패는 호출부 흐름에 영향 없음
+    return false
   }
 }
 

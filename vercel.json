@@ -25,6 +25,10 @@
       "schedule": "0 0 * * *"
     },
     {
+      "path": "/api/cron/late-fee-notice",
+      "schedule": "0 0 * * *"
+    },
+    {
       "path": "/api/cron/point-expiry",
       "schedule": "0 1 * * *"
     },

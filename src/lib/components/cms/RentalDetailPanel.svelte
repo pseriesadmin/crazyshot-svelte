@@ -9,6 +9,7 @@
   import { sanitizeLockerInput, legsFromSelection, selectionFromLegs } from '$lib/utils/lockerFields'
   import RentalContractViewer from '$lib/components/cms/RentalContractViewer.svelte'
   import CustomerDocRows from '$lib/components/cms/CustomerDocRows.svelte'
+  import LateFeeSection from '$lib/components/cms/LateFeeSection.svelte'
   import { isReturnDue } from '$lib/utils/returnDue'
   import RentalJourneyStepper from '$lib/components/common/RentalJourneyStepper.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
@@ -3737,6 +3738,11 @@
           </div>
         </div>
       {/if}
+
+      <!-- 연체료(2026-11-02, Stephen 지시) — 목록 + 매니저 이상 [결제 확인]. 연체료가 없으면 아무것도 그리지 않는다. -->
+      {#key row.reservation_id}
+        <LateFeeSection reservationId={row.reservation_id} canConfirm={canManagePaymentAndLocker} />
+      {/key}
     {/if}
 
     <!-- ─── Tab 4: 계약서 ─── -->

@@ -137,6 +137,7 @@
       case 'coupon_issued':          return { label: '쿠폰 확인하기', color: 'purple' }
       case 'contract_link':          return { label: '전자계약서명', color: 'purple' }
       case 'contract_signed':        return { label: '전자계약완료', color: 'purple' }
+      case 'late_fee_paid':          return { label: '대여 정보 확인', color: 'purple' }
       case 'refund_failed':          return { label: '환불실패확인', color: 'red' }
       case 'INQUIRY_REPLY_CARD':     return { label: '답변 확인하기', color: 'purple' }
       case 'INQUIRY_NEW_CARD':       return { label: '빠른문의 답변등록', color: 'purple' }

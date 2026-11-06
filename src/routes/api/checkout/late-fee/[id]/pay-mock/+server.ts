@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { validateLateFeeAccess } from '$lib/server/lateFeeUtils'
-import { sendPushToUser } from '$lib/server/push'
+import { notifyLateFeePaid } from '$lib/server/lateFeeNotify'
 import type { RequestHandler } from './$types'
 
 // 연체료 결제 (임시 자동승인)
@@ -49,33 +49,15 @@ export const POST: RequestHandler = async ({ params, locals }) => {
     return json({ success: false, error: result?.error ?? '결제 실패' }, { status })
   }
 
-  // 결제 완료 채팅 안내 메시지 삽입 — 세션 조회는 find_or_create_general_chat_session RPC
-  // 경유(결함A/B-2·coupon-gift와 동일 유형의 세션단절 버그 방지: context_type='general' 필터 +
-  // pending/closed→open 자동 승격 + 세션 자체가 없으면 신규 생성까지 전부 이 RPC가 보장하므로
-  // 메시지가 유실되지 않음, reservation-rental-execution.md §0-3)
-  const { data: chatSessionId, error: sessionErr } = await admin.rpc('find_or_create_general_chat_session', {
-    p_user_id:         session.user.id,
-    p_reservation_id:  validation.lateFee.reservation_id,
+  // 결제 완료 알림 — 채팅 대화카드 + 푸시 + 문자(공용 함수, 2026-11-02 Stephen 지시). 세션 조회는 공용 함수 안에서
+  // find_or_create_general_chat_session RPC 경유(결함A/B-2·coupon-gift와 동일 유형의 세션단절 방지, reservation-rental-execution.md §0-3).
+  // 모든 단계가 fail-soft라 알림 실패가 결제 응답에 영향을 주지 않는다.
+  await notifyLateFeePaid(admin, {
+    lateFeeId:     lateFeeId,
+    reservationId: validation.lateFee.reservation_id,
+    feeAmount:     validation.lateFee.fee_amount,
+    userId:        session.user.id,
   })
-
-  if (sessionErr) {
-    console.error('[late-fee/pay-mock] find_or_create_general_chat_session 실패:', sessionErr)
-  } else if (chatSessionId) {
-    await admin.from('chat_messages').insert({
-      session_id:   chatSessionId,
-      sender_type:  'admin',
-      content:      `연체료 결제가 완료됐습니다. (${(validation.lateFee.fee_amount).toLocaleString()}원)`,
-      message_type: 'text',
-      is_read:      false,
-    })
-
-    // 고객 브라우저 푸시 (2026-08-19 전역감사로 발견된 공백 보완, service-operations.md §15)
-    await sendPushToUser(session.user.id, 'late_fee_paid', {
-      title: '연체료 결제가 완료됐어요',
-      body: `연체료 ${validation.lateFee.fee_amount.toLocaleString()}원 결제가 정상 처리됐어요.`,
-      link: '/',
-    }, { vars: { 연체료: `${validation.lateFee.fee_amount.toLocaleString()}원` } })
-  }
 
   return json({
     success:    true,
