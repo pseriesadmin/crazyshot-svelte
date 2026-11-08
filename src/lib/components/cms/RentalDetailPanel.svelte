@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { untrack, tick } from 'svelte'
   import { enhance } from '$app/forms'
   import type { SubmitFunction } from '@sveltejs/kit'
   import { goto } from '$app/navigation'
@@ -27,6 +27,7 @@
   } from '$lib/utils/inspection'
   import type { MediaViewerItem } from '$lib/types/media-viewer'
   import { nextStatus, nextLabel } from '$lib/utils/rentalTransition'
+  import { revertTarget, revertLabel } from '$lib/utils/rentalRevert'
   import { summarizeOrderTransition } from '$lib/utils/orderStatusTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
   import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
@@ -634,6 +635,30 @@
   })
   const priorOn = $derived(priorOverride ?? !!row.prior_issue)
   const canPriorIssue = $derived(canManagePaymentAndLocker && PRIOR_ISSUE_STATUSES.includes(row.status))
+
+  // 단계 되돌리기(Migration #799, 2026-11-08) — 사유를 받아 폼에 실어 보낸다. 서버·DB 가 허용표·차단 조건을 최종 집행한다.
+  /** 하단 액션 타일 글자 — 공백이 있으면 글자 수 기준 가운데에 가장 가까운 공백에서 두 행으로 나눈다(공백이 없으면 한 행) */
+  function tileLines(label: string): string[] {
+    const t = label.trim()
+    const mid = t.length / 2
+    let cut = -1
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === ' ' && (cut < 0 || Math.abs(i - mid) < Math.abs(cut - mid))) cut = i
+    }
+    return cut < 0 ? [t] : [t.slice(0, cut), t.slice(cut + 1)]
+  }
+  let revertReason = $state('')
+  let revertFormEl = $state<HTMLFormElement | null>(null)
+  async function askRevert(): Promise<void> {
+    const label = revertLabel(row.status, row.pickup_method)
+    const reason = window.prompt(`${label}\n\n되돌리는 사유를 입력해 주세요. (필수, 2자 이상)\n고객에게 알림은 가지 않습니다.`)
+    if (reason == null) return
+    if (reason.trim().length < 2) { csToast.warning('되돌리는 사유를 2자 이상 입력해 주세요.'); return }
+    if (isMultiOrder && !window.confirm('같은 주문에서 같은 단계인 상품이 모두 함께 되돌아갑니다. 진행할까요?')) return
+    revertReason = reason.trim()
+    await tick() // 숨은 입력칸에 사유가 반영된 뒤 제출
+    revertFormEl?.requestSubmit()
+  }
 
   async function runPriorIssue(action: 'register' | 'cancel'): Promise<void> {
     if (priorBusy) return
@@ -4103,7 +4128,7 @@
          상태 전환·파손 신고·채팅 알림·이슈 사전 접수 버튼을 모두 노출하고, 현재 상태칩 단계에 따라 활성/비활성만 바뀐다. -->
     <div class="panel-action-bar">
       <!-- 상태 액션 버튼 -->
-      <div class="action-section" class:action-section-end={row.status === 'hold' && !isRentalView}>
+      <div class="action-section" class:action-section-end={row.status === 'hold' && !isRentalView} class:action-section-tiles={isRentalView}>
         <!-- 예약 단계: 승인하기 / 거부 — reservation 뷰 전용 -->
         {#if row.status === 'hold' && !isRentalView}
           {#if orderSiblings.length > 0}
@@ -4161,7 +4186,7 @@
               disabled={isSubmitting}
               title={isMultiOrder ? `같은 주문의 ${row.order_item_count}개 상품이 함께 처리됩니다${row.status_mixed ? ' (이미 더 진행된 상품은 그대로 둡니다)' : ''}` : undefined}
             >
-              {nextLabel(row.status, row.pickup_method, row.return_method)}
+              {@render tileText(nextLabel(row.status, row.pickup_method, row.return_method))}
             </button>
           </form>
         {/if}
@@ -4209,7 +4234,7 @@
                   }
                 }}
               >
-                {nb.label}
+                {@render tileText(nb.label)}
               </button>
             </form>
           {/each}
@@ -4222,14 +4247,48 @@
           disabled={priorBusy || !canPriorIssue}
           title={canPriorIssue ? undefined : '계약완료~반납요청 단계에서 매니저 이상이 사용할 수 있어요'}
           onclick={() => runPriorIssue('register')}
-        >{priorOn ? 'CS 접수 재요청' : 'CS 접수 등록'}</button>
+        >{@render tileText(priorOn ? 'CS 접수 재요청' : 'CS 접수 등록')}</button>
         {#if priorOn && canPriorIssue}
-          <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('cancel')}>CS 접수 해제</button>
+          <button type="button" class="btn-notify" disabled={priorBusy} onclick={() => runPriorIssue('cancel')}>{@render tileText('CS 접수 해제')}</button>
+        {/if}
+
+        <!-- 단계 되돌리기(2026-11-08, Stephen 확정 A안) — 반납중→대여중 / 대여중→반출중·계약완료. 반출중 되돌리기는 제외. 매니저 이상만(모바일 CMS 는 cmsRole 미전달로 숨김) -->
+        {#if canManagePaymentAndLocker && isRentalView && revertTarget(row.status, row.pickup_method)}
+          <form
+            bind:this={revertFormEl}
+            method="POST"
+            action="/cms/reservation?/revertStatus"
+            use:enhance={() => {
+              isSubmitting = true
+              return async ({ result, update }) => {
+                isSubmitting = false
+                if (result.type === 'success') {
+                  const data = (result.data ?? {}) as { failed?: { id: number; message: string }[] }
+                  if (data.failed && data.failed.length > 0) csToast.warning(`일부 상품은 되돌리지 못했어요: ${data.failed[0].message}`)
+                  else csToast.success('이전 단계로 되돌렸어요.')
+                  rentalSiblingsFetchedForId = null
+                  onrefresh()
+                } else {
+                  csToast.error(actionErrorMessage(result))
+                }
+                await update()
+              }
+            }}
+          >
+            <input type="hidden" name="reservation_id" value={row.reservation_id} />
+            <input type="hidden" name="status" value={row.status} />
+            <input type="hidden" name="reason" value={revertReason} />
+            <button type="button" class="btn-notify btn-revert" disabled={isSubmitting} onclick={askRevert}>{@render tileText(revertLabel(row.status, row.pickup_method))}</button>
+          </form>
         {/if}
       </div>
     </div>
  </div>
 </div>
+
+{#snippet tileText(label: string)}
+  {#each tileLines(label) as line, i}{#if i > 0}{' '}<br />{/if}{line}{/each}
+{/snippet}
 
 {#snippet lockerSubmittedRows()}
   <!-- 고객이 반납 제출 화면에서 등록한 무인함 번호·비밀번호·제출 일시·사진(2026-11-06) — 관리자 입력과 구분되는 읽기 전용 -->
@@ -5412,15 +5471,38 @@
     align-items: center;
     height: 34px;
     padding: 0 16px;
-    background: transparent;
+    background: var(--cs-lilac);
     color: var(--cs-purple);
-    border: 1px solid var(--cs-purple);
+    border: none;
     border-radius: var(--cms-radius-sm);
     font: var(--text-pc-script-12);
     font-weight: 700;
     cursor: pointer;
     transition: background 0.12s, color 0.12s;
   }
-  .btn-notify:hover    { background: rgba(59,47,138,0.08); }
+  .btn-notify:hover    { background: var(--cs-purple-op10); }
   .btn-notify:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* 단계 되돌리기 — 아웃라인 없이 극연한 레드 면(--cs-red-xlight), 호버는 배경색만 변경 */
+  .btn-revert { border: none; background: var(--cs-red-xlight); }
+  .btn-revert:hover { background: var(--cs-red-light); }
+
+  /* 대여현황 하단 액션 버튼 — 전부 같은 크기(88×88)·같은 간격(8px)의 라운드 정사각형, 글자는 가운데 정렬로 줄바꿈 */
+  /* 타일이 아닌 곳(예약 화면)에서는 줄바꿈을 숨겨 한 줄 알약 버튼 그대로 유지 */
+  .btn-action :global(br), .btn-notify :global(br) { display: none; }
+  .action-section-tiles .btn-action :global(br), .action-section-tiles .btn-notify :global(br) { display: inline; }
+  .action-section-tiles { gap: 8px; align-items: flex-start; }
+  /* 비활성 타일 — 투명도 70%(opacity 0.3)로 활성 버튼과 확실히 구분 */
+  .action-section-tiles .btn-notify:disabled { opacity: 0.3; }
+  .action-section-tiles .btn-action,
+  .action-section-tiles .btn-notify {
+    width: 88px;
+    height: 88px;
+    padding: 8px;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.35;
+    white-space: normal;
+    word-break: keep-all;
+    border-radius: var(--cms-radius-md);
+  }
 </style>

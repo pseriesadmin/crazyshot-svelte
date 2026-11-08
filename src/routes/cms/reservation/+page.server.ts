@@ -25,6 +25,8 @@ import { autoIssueContractOnApproval, hasAutoIssueTemplate, type AutoIssueResult
 import { listOrderReservationIds, joinProductNames, isDheroBooking } from '$lib/server/dheroOrderUnits'
 import { isAlreadyCanceledError } from '$lib/server/dheroCancelErrors'
 import { planOrderTransition, ORDER_LIFECYCLE_TARGETS, type OrderUnit } from '$lib/utils/orderStatusTransition'
+import { revertTarget, normalizeRevertReason } from '$lib/utils/rentalRevert'
+import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 
 export interface RentalListRow {
   /** 고객이 취소했고 관리자 취소확인 전("예약취소" 배지·헤더 [예약취소]=취소확인) — /cms/rentals 로더가 부착 */
@@ -901,6 +903,72 @@ export const actions: Actions = {
       ...(plan.skippedIds.length > 0 ? { skipped: plan.skippedIds } : {}),
       ...(dh.dheroBookFailedMsg ? { dhero_book_failed: dh.dheroBookFailedMsg } : {}),
     }
+  },
+
+  // 단계 되돌리기(2026-11-08, Stephen 확정 A안) — 반납중→대여중 / 대여중→반출중(배송형)·계약완료(방문 수령). 반출중 되돌리기는 제외.
+  //  · 매니저 이상 + 사유 필수. 같은 주문에서 "화면이 보던 상태와 같은 상태"인 상품을 함께 되돌린다(주문 단위, 더 진행/덜 진행된 상품은 그대로).
+  //  · 고객 알림·두발히어로 호출은 하지 않는다. 연체료·검수 이슈·반품 접수번호가 있는 예약은 DB 함수가 거절한다(Migration #799).
+  //  · 일부 실패해도 성공한 상품은 유지하고 실패한 상품을 알린다(updateOrderStatus 와 같은 방식, 롤백 없음).
+  revertStatus: async ({ request, locals }) => {
+    const denied = await requireMenuAccessAction(locals, 'rental.reservation')
+    if (denied) return denied
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const admin = makeStatusAdmin()
+    const data = await request.formData()
+    const reservationId = Number(data.get('reservation_id'))
+    const expectedStatus = String(data.get('status') ?? '')
+    const reason = normalizeRevertReason(data.get('reason'))
+    if (!Number.isInteger(reservationId) || reservationId <= 0) return fail(400, { message: '예약 정보가 올바르지 않습니다.' })
+    if (!reason) return fail(400, { message: '되돌리는 사유를 2자 이상 200자 이하로 입력해 주세요.' })
+
+    const ids = await listOrderReservationIds(admin, reservationId)
+    const { data: unitRows, error: unitErr } = await admin
+      .from('rental_reservations')
+      .select('id, status, pickup_method')
+      .in('id', ids)
+    if (unitErr || !unitRows || unitRows.length === 0) return fail(404, { message: '예약을 찾을 수 없습니다.' })
+
+    const units = unitRows as { id: number; status: string; pickup_method: string | null }[]
+    const self = units.find((u) => u.id === reservationId)
+    if (!self || self.status !== expectedStatus) {
+      return fail(409, { message: '예약 단계가 그 사이에 바뀌었어요. 화면을 새로고침해 현재 단계를 확인해 주세요.' })
+    }
+    if (!revertTarget(self.status, self.pickup_method)) {
+      return fail(400, { message: '이 단계는 되돌릴 수 없습니다. (반납접수·대여중 단계만 가능)' })
+    }
+    const targets = units.filter((u) => u.status === expectedStatus && revertTarget(u.status, u.pickup_method))
+
+    const processed: number[] = []
+    const failed: { id: number; message: string }[] = []
+    for (const u of targets) {
+      const { data: rpcData, error: rpcErr } = await admin.rpc('revert_reservation_status', {
+        p_reservation_id:  u.id,
+        p_expected_status: expectedStatus,
+        p_admin_id:        session.user.id,
+        p_reason:          reason,
+      })
+      const r = rpcData as { ok?: boolean; error?: string; from?: string; to?: string; user_id?: string | null } | null
+      if (rpcErr || !r?.ok) {
+        failed.push({ id: u.id, message: rpcErr?.message ?? r?.error ?? '되돌리기 실패' })
+        continue
+      }
+      processed.push(u.id)
+      await insertCmsAdminAuditLog(admin, {
+        actorId: session.user.id,
+        actionType: 'status_revert',
+        targetUserId: r.user_id ?? null,
+        beforeValue: { reservation_id: u.id, status: r.from ?? expectedStatus },
+        afterValue: { reservation_id: u.id, status: r.to ?? null, reason },
+      })
+    }
+    if (processed.length === 0) {
+      return fail(400, { message: failed[0]?.message ?? '되돌리기 실패', failed })
+    }
+    return { ok: true, processed, ...(failed.length > 0 ? { failed } : {}) }
   },
 
   clearIssuedContract: async ({ request, locals }) => {
