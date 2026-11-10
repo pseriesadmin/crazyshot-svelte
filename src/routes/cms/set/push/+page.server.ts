@@ -12,6 +12,21 @@ import { validateNotifyMessage, NOTIFY_SPECS, NOTIFY_VARIABLES } from '$lib/util
 import { LIFECYCLE_SMS_COPY } from '$lib/server/sms'
 import { getLockerEntrancePassword, LOCKER_ENTRANCE_KEY } from '$lib/server/lockerEntrance'
 import { isValidLockerPassword } from '$lib/utils/lockerFields'
+import { CONSULT_HOURS_KEY, getConsultHours } from '$lib/server/consultHours'
+import { validateConsultHours } from '$lib/utils/consultHours'
+
+// 상담 응대시간 행이 알림 목록 안에서 놓이는 자리(2026-11-10) — 어느 알림 바로 아래인지(notify_type), ''는 맨 위. 설정이 없으면 목록 맨 아래.
+const CONSULT_ROW_AFTER_KEY = 'push_consult_row_after'
+
+async function getConsultRowAfter(sb: ReturnType<typeof admin>): Promise<string | null> {
+  try {
+    const { data } = await sb.from('cms_settings').select('value').eq('key', CONSULT_ROW_AFTER_KEY).maybeSingle()
+    const after = (data as { value?: { after?: unknown } | null } | null)?.value?.after
+    return typeof after === 'string' ? after : null
+  } catch {
+    return null
+  }
+}
 
 export interface PushConfigRow {
   id: number
@@ -108,6 +123,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   logsQuery = logsQuery.range(from, from + LOGS_PER_PAGE - 1)
 
   const lockerEntrancePassword = await getLockerEntrancePassword(sb)
+  const consultHours = await getConsultHours(sb)
+  const consultRowAfter = await getConsultRowAfter(sb)
 
   // 표시 순서(Migration #797 sort_order, 관리자가 드래그로 변경) — 비어 있는 신규 유형은 맨 아래(id 순).
   // 컬럼이 아직 없는 환경(마이그레이션 미적용)에서는 조회가 실패하므로 예전 id 순 조회로 되돌린다(fail-open — 배포 순서 사고로 화면이 비는 것 방지).
@@ -158,6 +175,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     ),
     adminList: (adminRes.data ?? []) as AdminNotifyRow[],
     lockerEntrancePassword,
+    consultHours,
+    consultRowAfter,
     logs,
     smsDefaults: buildSmsDefaultSamples(),
     logPage,
@@ -300,6 +319,66 @@ export const actions: Actions = {
       afterValue: { setting: LOCKER_ENTRANCE_KEY, set: password !== '' },
     })
     return { ok: true, action: 'updateLockerEntrance' as const }
+  },
+
+  // 상담 응대시간 안내 저장(2026-11-10) — 채팅창 노출 문구 + 자동 노출 시간대(KST). 문구를 비워 저장하면 설정 삭제(노출 없음).
+  updateConsultHours: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const message = data.get('message')
+    const start = data.get('start')
+    const end = data.get('end')
+    if (typeof message !== 'string') return fail(400, { message: 'invalid request' })
+
+    const sb = admin()
+    const before = await getConsultHours(sb)
+
+    if (message.trim() === '') {
+      const { error } = await sb.from('cms_settings').delete().eq('key', CONSULT_HOURS_KEY)
+      if (error) return fail(500, { message: error.message })
+      await insertCmsAdminAuditLog(sb, {
+        actorId: session.user.id,
+        actionType: 'push_message_change',
+        targetUserId: null,
+        beforeValue: { setting: CONSULT_HOURS_KEY, value: before },
+        afterValue: { setting: CONSULT_HOURS_KEY, value: null },
+      })
+      return { ok: true, action: 'updateConsultHours' as const, cleared: true }
+    }
+
+    // 서버 재검증 — 화면 검증과 같은 함수
+    const v = validateConsultHours({ message, start, end })
+    if (!v.ok) return fail(400, { message: v.error })
+
+    const { error } = await sb.from('cms_settings').upsert({ key: CONSULT_HOURS_KEY, value: v.value, updated_at: new Date().toISOString() })
+    if (error) return fail(500, { message: error.message })
+    await insertCmsAdminAuditLog(sb, {
+      actorId: session.user.id,
+      actionType: 'push_message_change',
+      targetUserId: null,
+      beforeValue: { setting: CONSULT_HOURS_KEY, value: before },
+      afterValue: { setting: CONSULT_HOURS_KEY, value: v.value },
+    })
+    return { ok: true, action: 'updateConsultHours' as const, cleared: false }
+  },
+
+  // 상담 응대시간 행의 목록 내 위치 저장(드래그 결과) — 표시 위치만 바꾼다
+  updateConsultRowAfter: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const after = (await request.formData()).get('after')
+    if (typeof after !== 'string' || after.length > 80) return fail(400, { message: 'invalid request' })
+
+    const { error } = await admin().from('cms_settings').upsert({ key: CONSULT_ROW_AFTER_KEY, value: { after }, updated_at: new Date().toISOString() })
+    if (error) return fail(500, { message: error.message })
+    return { ok: true, action: 'updateConsultRowAfter' as const }
   },
 
   updateAdminNotify: async ({ request, locals }) => {

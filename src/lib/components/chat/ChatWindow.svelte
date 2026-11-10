@@ -344,6 +344,28 @@
   let overlayTopH = $state(0)
   let overlayBottomH = $state(0)
 
+  // 상담 응대시간 안내(2026-11-10) — CMS '상담 응대시간' 설정의 노출 시간대(KST)에만 입력창 위에 문구를 보인다. 서버가 시간대를 판정하므로 1분마다 다시 확인한다.
+  let consultNotice = $state<string | null>(null)
+  $effect(() => {
+    let alive = true
+    async function loadNotice(): Promise<void> {
+      try {
+        const res = await fetch('/api/chat/consult-notice')
+        if (!res.ok || !alive) return
+        const body = (await res.json()) as { message?: unknown }
+        if (alive) consultNotice = typeof body.message === 'string' && body.message !== '' ? body.message : null
+      } catch {
+        // 안내 문구 조회 실패는 채팅 사용에 영향을 주지 않는다
+      }
+    }
+    void loadNotice()
+    const timer = setInterval(loadNotice, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  })
+
   // ── 액션 카드 핸들러 ──
   function handleAction(payload: ActionPayload) {
     void payload
@@ -389,6 +411,9 @@
 
   <!-- 입력 바 (모바일: 대화 목록 위에 겹치는 반투명 영역) -->
   <div class="overlay-bottom" bind:clientHeight={overlayBottomH}>
+    {#if consultNotice}
+      <p class="consult-notice" role="status">{consultNotice}</p>
+    {/if}
     <ChatInput
       disabled={isSending || isLoading || isUploading || !session}
       placeholder={isUploading ? '업로드 중...' : isSending ? '응답 중...' : '메시지를 입력하세요...'}
@@ -441,6 +466,18 @@
   .overlay-bottom {
     bottom: 0;
     background: linear-gradient(to top, var(--chat-bg) 0%, var(--chat-bg) 55%, transparent 100%);
+  }
+
+  /* 상담 응대시간 안내 — 면(fill)만 사용, 보더·그림자 없음 */
+  .consult-notice {
+    margin: 0 0 10px;
+    padding: 9px 14px;
+    border-radius: var(--radius-md);
+    background: var(--cs-purple-op10);
+    color: var(--cs-purple);
+    font: var(--text-m-script-14B);
+    text-align: center;
+    word-break: keep-all;
   }
 
   /* 로딩 닷 애니메이션 */

@@ -5,6 +5,7 @@
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
+  import CmsTimePicker from '$lib/components/cms/CmsTimePicker.svelte'
   import { PUSH_KINDS, OTHER_KIND, pushKindOf, mergeTabOrder } from '$lib/utils/pushKinds'
   import {
     NOTIFY_VARIABLES,
@@ -16,6 +17,7 @@
     type NotifyVars,
   } from '$lib/utils/notifyTemplate'
   import { isValidLockerPassword, sanitizeLockerInput } from '$lib/utils/lockerFields'
+  import { CONSULT_NOTICE_MAX, sanitizeConsultNotice, validateConsultHours } from '$lib/utils/consultHours'
   import type { PageData } from './$types'
   import type { PushConfigRow, AdminNotifyRow, PushLogRow } from './+page.server'
 
@@ -50,17 +52,54 @@
   // 종류별 서류철 탭(2026-11-06) — '전체' + 종류. 선택한 서류철의 알림만 보이고, 순서 변경은 그 서류철 안에서 하며 전체 순서에 합쳐 저장한다.
   let activeKind = $state<string>('all')
   const kindTabs = $derived.by(() => {
-    const tabs = [{ id: 'all', label: '전체', count: lifecycleList.length }, ...PUSH_KINDS.map((k) => ({ id: k.id, label: k.label, count: lifecycleList.filter((r) => pushKindOf(r.notify_type) === k.id).length }))]
+    const tabs: { id: string; label: string; count: number }[] = [{ id: 'all', label: '전체', count: lifecycleList.length }, ...PUSH_KINDS.map((k) => ({ id: k.id, label: k.label, count: lifecycleList.filter((r) => pushKindOf(r.notify_type) === k.id).length }))]
     const otherCount = lifecycleList.filter((r) => pushKindOf(r.notify_type) === OTHER_KIND.id).length
-    return otherCount > 0 ? [...tabs, { id: OTHER_KIND.id, label: OTHER_KIND.label, count: otherCount }] : tabs
+    if (otherCount > 0) tabs.push({ id: OTHER_KIND.id, label: OTHER_KIND.label, count: otherCount })
+    return tabs
   })
+  // 상담 응대시간 행(2026-11-10) — '전체'·'상담 응답' 서류철의 알림 목록 안에 한 줄로 끼어 있고, 다른 알림과 같이 끌어서 위치를 바꾼다.
+  // 위치는 '어느 알림 바로 아래인지'로 저장한다(''=맨 위, 저장값 없음=맨 아래).
+  const CONSULT_ROW_KEY = '__consult_hours__'
+  const CONSULT_ROW: PushConfigRow = { id: -1, category: 'customer_lifecycle', notify_type: CONSULT_ROW_KEY, label: '', push_enabled: false, message: null }
+  let consultAfter = $state<string | null>(null)
+  $effect(() => { consultAfter = data.consultRowAfter })
+  function withConsultRow(rows: PushConfigRow[]): PushConfigRow[] {
+    if (activeKind !== 'all' && activeKind !== 'chat') return rows
+    if (consultAfter === '') return [CONSULT_ROW, ...rows]
+    const at = consultAfter === null ? -1 : rows.findIndex((r) => r.notify_type === consultAfter)
+    return at < 0 ? [...rows, CONSULT_ROW] : [...rows.slice(0, at + 1), CONSULT_ROW, ...rows.slice(at + 1)]
+  }
+
   let tabList = $state<PushConfigRow[]>([])
   $effect(() => {
-    tabList = activeKind === 'all' ? lifecycleList : lifecycleList.filter((r) => pushKindOf(r.notify_type) === activeKind)
+    tabList = withConsultRow(activeKind === 'all' ? lifecycleList : lifecycleList.filter((r) => pushKindOf(r.notify_type) === activeKind))
   })
   function onTabReorder(): void {
-    lifecycleList = mergeTabOrder(lifecycleList, tabList.map((r) => r.notify_type))
-    void saveLifecycleOrder()
+    const ci = tabList.findIndex((r) => r.notify_type === CONSULT_ROW_KEY)
+    const real = tabList.filter((r) => r.notify_type !== CONSULT_ROW_KEY).map((r) => r.notify_type)
+    const prevOrder = lifecycleList.map((r) => r.notify_type).join(',')
+    if (ci >= 0) void saveConsultAfter(ci === 0 ? '' : tabList[ci - 1].notify_type)
+    lifecycleList = mergeTabOrder(lifecycleList, real)
+    if (lifecycleList.map((r) => r.notify_type).join(',') !== prevOrder) void saveLifecycleOrder()
+  }
+
+  async function saveConsultAfter(after: string): Promise<void> {
+    const previous = consultAfter
+    consultAfter = after
+    const fd = new FormData()
+    fd.set('after', after)
+    try {
+      const err = await postAction('?/updateConsultRowAfter', fd)
+      if (err) {
+        csToast.error(err)
+        consultAfter = previous
+        return
+      }
+      csToast.success('상담 응대시간 위치를 저장했습니다.')
+    } catch {
+      csToast.error('위치 저장 중 오류가 발생했습니다.')
+      consultAfter = previous
+    }
   }
 
   async function saveLifecycleOrder(): Promise<void> {
@@ -281,6 +320,49 @@
     }
   }
 
+  // ─── 상담 응대시간(2026-11-10) — 고객 채팅창에 노출할 문구 + 자동 노출 시간대(KST). 문구를 비워 저장하면 설정 삭제 ───
+  let consultMsgDraft = $state<string | null>(null)
+  let consultStartDraft = $state<string | null>(null)
+  let consultEndDraft = $state<string | null>(null)
+  let savingConsult = $state(false)
+  let consultOpen = $state(false)
+  const consultSaved = $derived(data.consultHours)
+  const consultMsg = $derived(consultMsgDraft ?? consultSaved?.message ?? '')
+  const consultStart = $derived(consultStartDraft ?? consultSaved?.start ?? '')
+  const consultEnd = $derived(consultEndDraft ?? consultSaved?.end ?? '')
+  const consultDirty = $derived(
+    consultMsg.trim() !== (consultSaved?.message ?? '') || (consultMsg.trim() !== '' && (consultStart !== (consultSaved?.start ?? '') || consultEnd !== (consultSaved?.end ?? ''))),
+  )
+  const consultError = $derived.by(() => {
+    if (consultMsg.trim() === '') return '' // 비어 있으면 '삭제' 또는 '미설정' — 오류 아님
+    const v = validateConsultHours({ message: consultMsg, start: consultStart, end: consultEnd })
+    return v.ok ? '' : v.error
+  })
+
+  async function saveConsult(): Promise<void> {
+    savingConsult = true
+    const fd = new FormData()
+    fd.set('message', consultMsg.trim())
+    fd.set('start', consultStart)
+    fd.set('end', consultEnd)
+    try {
+      const err = await postAction('?/updateConsultHours', fd)
+      if (err) {
+        csToast.error(err)
+        return
+      }
+      consultMsgDraft = null
+      consultStartDraft = null
+      consultEndDraft = null
+      csToast.success(consultMsg.trim() === '' ? '상담 응대시간 안내를 삭제했습니다.' : '상담 응대시간 안내를 저장했습니다.')
+      await invalidateAll()
+    } catch {
+      csToast.error('저장에 실패했습니다.')
+    } finally {
+      savingConsult = false
+    }
+  }
+
   // ─── 섹션 c: 관리자 알림 수신 중앙관리 ───
   const ADMIN_EVENTS = [
     { key: 'new_reservation', label: '예약신청', field: 'admin_notify_new_reservation' as const },
@@ -375,6 +457,68 @@
     return `${kst.getUTCFullYear()}.${pad(kst.getUTCMonth() + 1)}.${pad(kst.getUTCDate())} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`
   }
 </script>
+
+{#snippet consultForm()}
+  <div class="push-row" class:push-row--open={consultOpen}>
+    <div class="push-row-head">
+      <button type="button" class="push-row-main" aria-expanded={consultOpen} aria-controls="consult-hours-panel" onclick={() => (consultOpen = !consultOpen)}>
+        <ChevronIcon direction={consultOpen ? 'down' : 'right'} size={7} color="var(--cs-text-mid)" />
+        <span class="push-row-label">상담 응대시간</span>
+      </button>
+    </div>
+
+    <div class="flow-line">
+      <span class="flow-item"><span class="flow-key">실행 조건</span>설정한 시간대에 고객이 상담 메시지를 보낼 때</span>
+      <span class="flow-item"><span class="flow-key">실행 요소</span><span class="msg-badge">채팅 답변</span></span>
+    </div>
+
+    {#if consultOpen}
+    <div class="entrance-box" id="consult-hours-panel">
+      <span class="msg-field-title">채팅창 노출 문구</span>
+      <div class="entrance-row">
+        <input
+          type="text"
+          class="msg-input"
+          maxlength={CONSULT_NOTICE_MAX}
+          value={consultMsg}
+          oninput={(e) => { consultMsgDraft = sanitizeConsultNotice(e.currentTarget.value); e.currentTarget.value = consultMsgDraft }}
+          placeholder="예) 지금은 상담 시간이 아니에요. 남겨주시면 영업시간에 답변드릴게요."
+          aria-label="채팅창 노출 문구"
+          disabled={savingConsult}
+        />
+      </div>
+      <span class="msg-meta">{consultMsg.length} / {CONSULT_NOTICE_MAX}자</span>
+
+      <span class="msg-field-title consult-gap">자동 노출 시간 (한국 시간)</span>
+      <div class="entrance-row">
+        <label class="consult-time">
+          <span class="consult-time-label">시작</span>
+          <span class="consult-time-input">
+            <CmsTimePicker value={consultStart} title="시작 시각 설정" ariaLabel="노출 시작 시각" disabled={savingConsult} onchange={(v) => { consultStartDraft = v }} />
+          </span>
+        </label>
+        <span class="consult-tilde" aria-hidden="true">~</span>
+        <label class="consult-time">
+          <span class="consult-time-label">종료</span>
+          <span class="consult-time-input">
+            <CmsTimePicker value={consultEnd} title="종료 시각 설정" ariaLabel="노출 종료 시각" disabled={savingConsult} onchange={(v) => { consultEndDraft = v }} />
+          </span>
+        </label>
+        <button
+          type="button"
+          class="btn-save-inline"
+          class:dirty={consultDirty && !consultError}
+          disabled={savingConsult || !consultDirty || !!consultError}
+          onclick={saveConsult}
+        >저장</button>
+      </div>
+      {#if consultError}
+        <p class="msg-error" role="alert">{consultError}</p>
+      {/if}
+    </div>
+    {/if}
+  </div>
+{/snippet}
 
 {#snippet pushRow(row: PushConfigRow)}
   {@const spec = getNotifySpec(row.notify_type)}
@@ -559,7 +703,6 @@
         <h2 class="section-title">고객 알림 — 예약~대여~반납</h2>
         <span class="section-badge">{lifecycleRows.length}종</span>
       </div>
-      <p class="section-desc">예약 신청부터 반납 완료까지 각 단계에서 고객에게 푸시알림을 발송할지 여부를 설정합니다. 알림 이름을 눌러 안내문장을 직접 바꿀 수 있고, 같은 문장이 푸시와 문자(해당 알림)에 함께 쓰입니다.</p>
 
       <!-- 종류별 서류철 탭 — 선택한 탭만 목록에 보인다(분류는 화면 표시용, 발송과 무관) -->
       <div class="kind-tabs" role="tablist" aria-label="알림 종류">
@@ -577,11 +720,12 @@
         {/each}
       </div>
       <div id="kind-panel" role="tabpanel" aria-labelledby={`kind-tab-${activeKind}`}>
-        <p class="sort-hint">각 알림 왼쪽의 점 6개 손잡이를 끌어 순서를 바꿀 수 있어요. 선택한 서류철 안에서 바꾸면 되고, 순서는 이 화면에만 적용돼요(알림 발송에는 영향 없음). 바꾸면 자동으로 저장돼요.</p>
         <div class="push-row-list push-row-list--sortable">
           <CmsDragList bind:items={tabList} itemKey={(r: PushConfigRow) => r.id} onreorder={onTabReorder}>
             {#snippet renderItem(row: PushConfigRow)}
-              <div class="push-row-slot">{@render pushRow(row)}</div>
+              <div class="push-row-slot">
+                {#if row.notify_type === CONSULT_ROW_KEY}{@render consultForm()}{:else}{@render pushRow(row)}{/if}
+              </div>
             {/snippet}
           </CmsDragList>
         </div>
@@ -595,7 +739,6 @@
       <div class="section-head">
         <h2 class="section-title">이벤트·쿠폰 발행 알림</h2>
       </div>
-      <p class="section-desc">전체 고객 대상 이벤트·쿠폰 발행 시 푸시알림 발송 여부를 설정합니다. 개별 고객의 수신 동의(혜택 알림 허용)와 함께 적용됩니다.</p>
 
       <div class="push-row-list">
         {#each marketingRows as row (row.id)}
@@ -612,7 +755,6 @@
         <h2 class="section-title">관리자 버튼 실행 가이드</h2>
         <span class="section-badge">{BUTTON_GUIDE.length}종</span>
       </div>
-      <p class="section-desc">예약 상세 하단 버튼을 눌렀을 때 어느 단계에서 실행되고 무엇이 실행되는지 보여줍니다. 고객 알림이 없는 버튼은 실행 요소의 알림 칸이 비어 있습니다. 같은 주문의 상품이 여러 개면 주문 전체가 함께 처리되고 알림은 주문당 1회 나갑니다.</p>
 
       <div class="push-row-list">
         {#each BUTTON_GUIDE as g (g.button)}
@@ -640,7 +782,6 @@
         <h2 class="section-title">관리자 알림 수신 설정</h2>
         <span class="section-badge">{adminList.length}명</span>
       </div>
-      <p class="section-desc">고객의 예약신청·전자서명·결제완료·본인증명 등록(승인 요청) 등 행위 발생 시 각 관리자 계정이 푸시알림을 받을지 설정합니다.</p>
 
       {#if adminList.length > 0}
         <div class="admin-table-wrap">
@@ -690,7 +831,6 @@
       <div class="section-head">
         <h2 class="section-title">푸시알림 발송 로그</h2>
       </div>
-      <p class="section-desc">발송 성공·스킵·실패 이력을 확인합니다.</p>
 
       <div class="log-filter-row">
         <select
@@ -786,7 +926,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 6px;
+    margin-bottom: 24px; /* 설명 문단을 없앤 자리 — 제목과 본문 사이 여백 */
   }
 
   .section-title {
@@ -803,12 +943,6 @@
     padding: 2px 10px;
     border-radius: var(--radius-full);
     white-space: nowrap;
-  }
-
-  .section-desc {
-    font: var(--text-pc-body-14);
-    color: var(--cs-text-mid);
-    margin: 0 0 32px;
   }
 
   /* ─── 섹션 a·b: 알림 마스터 스위치 목록 ─── */
@@ -862,11 +996,6 @@
   }
   .kind-tab--active .kind-count {
     color: var(--cs-white);
-  }
-  .sort-hint {
-    margin: 0 0 12px;
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
   }
 
   .push-row {
@@ -1021,6 +1150,28 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+
+  .consult-gap {
+    margin-top: 10px;
+  }
+  .consult-time {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .consult-time-label {
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text-mid);
+  }
+  .consult-time-input {
+    display: block;
+    flex: none;
+    width: 140px;
+  }
+  .consult-tilde {
+    color: var(--cs-text-mid);
   }
 
   .msg-input {

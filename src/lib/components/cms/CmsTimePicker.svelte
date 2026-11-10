@@ -1,0 +1,361 @@
+<script lang="ts">
+  // CmsTimePicker — CMS 시각 선택(시·분 스크롤 휠 + 저장, 우측 상단 닫기 ✕), 2026-11-10
+  // 구조 출처: Figma "Time picker" (시:분 휠 · 저장; 제목·취소 버튼은 빼고 CMS 표준 닫기 ✕ 사용). 색·반경·버튼은 CMS 표준 토큰으로 대체(보더 대신 면 채움).
+  // 값 형식은 24시간 'HH:MM'. 팝업 배치는 CmsDatePicker 와 같은 방식(position:fixed + 트리거 측정 — 스크롤 조상에 클리핑되지 않음).
+  interface Props {
+    value?: string
+    placeholder?: string
+    title?: string
+    disabled?: boolean
+    ariaLabel?: string
+    onchange?: (hhmm: string) => void
+  }
+
+  let { value = '', placeholder = '시각 선택', title = '시간 설정', disabled = false, ariaLabel = '시각 선택', onchange }: Props = $props()
+
+  const ROW = 26 // 휠 한 줄 높이(px) — 아래 CSS --tp-row 와 같다
+  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
+  const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
+
+  let open = $state(false)
+  let triggerEl = $state<HTMLButtonElement | null>(null)
+  let hour = $state(0)
+  let minute = $state(0)
+
+  function openPopup(): void {
+    if (disabled) return
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
+    hour = m ? Number(m[1]) : 9
+    minute = m ? Number(m[2]) : 0
+    open = true
+  }
+  function close(): void {
+    open = false
+    triggerEl?.focus()
+  }
+  function commit(): void {
+    const next = `${HOURS[hour]}:${MINUTES[minute]}`
+    open = false
+    triggerEl?.focus()
+    onchange?.(next)
+  }
+
+  // 휠: 열릴 때 선택값이 가운데 줄에 오도록 스크롤하고, 스크롤이 멈추는 위치를 선택값으로 읽는다.
+  function wheel(node: HTMLDivElement, opts: { count: number; get: () => number; set: (i: number) => void }) {
+    node.scrollTop = opts.get() * ROW
+    function onScroll(): void {
+      const idx = Math.max(0, Math.min(opts.count - 1, Math.round(node.scrollTop / ROW)))
+      if (idx !== opts.get()) opts.set(idx)
+    }
+    node.addEventListener('scroll', onScroll, { passive: true })
+    return { destroy: () => node.removeEventListener('scroll', onScroll) }
+  }
+  function pick(node: HTMLElement | null, idx: number): void {
+    node?.scrollTo({ top: idx * ROW, behavior: 'smooth' })
+  }
+  function onWheelKey(e: KeyboardEvent, current: number, count: number, set: (i: number) => void): void {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+    e.preventDefault()
+    const next = Math.max(0, Math.min(count - 1, current + (e.key === 'ArrowDown' ? 1 : -1)))
+    set(next)
+    pick(e.currentTarget as HTMLElement, next)
+  }
+  function onKeydown(e: KeyboardEvent): void {
+    if (!open) return
+    if (e.key === 'Escape') close()
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      commit()
+    }
+  }
+
+  function positionPopup(node: HTMLDivElement) {
+    const trigger = triggerEl
+    if (!trigger) return
+    const margin = 2
+    const viewportMargin = 8
+    function reposition(): void {
+      const rect = trigger!.getBoundingClientRect()
+      const popupRect = node.getBoundingClientRect()
+      const w = popupRect.width || 176
+      const h = popupRect.height
+      let top = rect.bottom + margin
+      if (top + h > window.innerHeight - viewportMargin) {
+        const above = rect.top - margin - h
+        top = above >= viewportMargin ? above : Math.max(viewportMargin, window.innerHeight - viewportMargin - h)
+      }
+      let left = rect.left
+      if (left + w > window.innerWidth - viewportMargin) left = window.innerWidth - viewportMargin - w
+      node.style.top = `${top}px`
+      node.style.left = `${Math.max(viewportMargin, left)}px`
+      node.style.visibility = 'visible'
+    }
+    reposition()
+    function onAncestorScroll(e: Event): void {
+      if (node.contains(e.target as Node)) return // 휠 내부 스크롤은 재배치 대상이 아니다
+      reposition()
+    }
+    function onOutside(e: PointerEvent): void {
+      const t = e.target as Node
+      if (node.contains(t) || trigger!.contains(t)) return
+      open = false
+    }
+    window.addEventListener('scroll', onAncestorScroll, true)
+    document.addEventListener('pointerdown', onOutside, true)
+    return {
+      destroy() {
+        window.removeEventListener('scroll', onAncestorScroll, true)
+        document.removeEventListener('pointerdown', onOutside, true)
+      },
+    }
+  }
+
+  let hourEl = $state<HTMLDivElement | null>(null)
+  let minuteEl = $state<HTMLDivElement | null>(null)
+</script>
+
+<svelte:window onkeydown={onKeydown} />
+
+<div class="tp-wrap" class:tp-open={open}>
+  <button
+    type="button"
+    class="tp-trigger"
+    bind:this={triggerEl}
+    {disabled}
+    aria-label={ariaLabel}
+    aria-haspopup="dialog"
+    aria-expanded={open}
+    onclick={() => (open ? (open = false) : openPopup())}
+  >
+    <span class="tp-value" class:tp-placeholder={!value}>{value || placeholder}</span>
+    <svg class="tp-clock" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <circle cx="7" cy="7" r="5.75" stroke="currentColor" stroke-width="1.5" />
+      <path d="M7 4v3.2l2.1 1.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  </button>
+
+  {#if open}
+    <div class="tp-popup" role="dialog" aria-label={title} use:positionPopup>
+      <button type="button" class="tp-close" aria-label="패널 닫기" onclick={close}>✕</button>
+
+      <div class="tp-wheels">
+        <div class="tp-band" aria-hidden="true"></div>
+
+        <div
+          class="tp-col"
+          role="listbox"
+          tabindex="0"
+          aria-label="시"
+          bind:this={hourEl}
+          use:wheel={{ count: 24, get: () => hour, set: (i) => (hour = i) }}
+          onkeydown={(e) => onWheelKey(e, hour, 24, (i) => (hour = i))}
+        >
+          {#each HOURS as h, i (h)}
+            <button type="button" class="tp-item" class:tp-item-sel={i === hour} role="option" aria-selected={i === hour} tabindex="-1" onclick={() => { hour = i; pick(hourEl, i) }}>{h}</button>
+          {/each}
+        </div>
+
+        <span class="tp-colon" aria-hidden="true">:</span>
+
+        <div
+          class="tp-col"
+          role="listbox"
+          tabindex="0"
+          aria-label="분"
+          bind:this={minuteEl}
+          use:wheel={{ count: 60, get: () => minute, set: (i) => (minute = i) }}
+          onkeydown={(e) => onWheelKey(e, minute, 60, (i) => (minute = i))}
+        >
+          {#each MINUTES as m, i (m)}
+            <button type="button" class="tp-item" class:tp-item-sel={i === minute} role="option" aria-selected={i === minute} tabindex="-1" onclick={() => { minute = i; pick(minuteEl, i) }}>{m}</button>
+          {/each}
+        </div>
+      </div>
+
+      <div class="tp-actions">
+        <button type="button" class="tp-btn" onclick={commit}>저장</button>
+      </div>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .tp-wrap {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+  }
+
+  /* 트리거 — CmsDatePicker 와 같은 면(fill) 입력 스타일 */
+  .tp-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--cs-white);
+    cursor: pointer;
+    text-align: left;
+  }
+  .tp-trigger:focus-visible,
+  .tp-open .tp-trigger {
+    outline: 2px solid var(--cs-focus-ring);
+    outline-offset: -2px;
+  }
+  .tp-trigger:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .tp-value {
+    flex: 1;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+  .tp-placeholder {
+    color: var(--cs-text-placeholder);
+  }
+  .tp-clock {
+    flex-shrink: 0;
+    color: var(--cs-text-mid);
+  }
+
+  .tp-popup {
+    --tp-row: 26px;
+    position: fixed;
+    visibility: hidden;
+    z-index: 50;
+    width: 176px;
+    box-sizing: border-box;
+    padding: 32px 12px 10px; /* 위쪽은 우측 상단 닫기 버튼 자리 */
+    background: var(--cs-white);
+    border-radius: var(--cms-radius-md);
+    box-shadow: 0 8px 24px rgba(16, 11, 50, 0.12);
+  }
+  /* 닫기 — CMS 표준 close-red(§0-10-A) 절대배치 변형: ✕ 문자, hover 레드 */
+  .tp-close {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 2;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--cs-text-light);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .tp-close:hover {
+    background: rgba(255, 53, 53, 0.08);
+    color: var(--cs-red-badge);
+  }
+
+  /* 휠 영역: 3줄(위·가운데·아래)이 보이고 가운데 줄이 선택값 — 선 대신 면(fill) 띠로 표시 */
+  .tp-wheels {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: calc(var(--tp-row) * 3);
+    margin-bottom: 8px;
+  }
+  .tp-band {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: var(--tp-row);
+    height: var(--tp-row);
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-lilac);
+    pointer-events: none;
+  }
+  .tp-col {
+    position: relative;
+    z-index: 1;
+    width: 56px;
+    height: calc(var(--tp-row) * 3);
+    overflow-y: auto;
+    scroll-snap-type: y mandatory;
+    padding: var(--tp-row) 0; /* 처음·끝 값도 가운데 줄에 올 수 있게 */
+    box-sizing: border-box;
+    scrollbar-width: none;
+    outline: none;
+  }
+  .tp-col::-webkit-scrollbar {
+    display: none;
+  }
+  .tp-col:focus-visible {
+    border-radius: var(--cms-radius-sm);
+    outline: 2px solid var(--cs-focus-ring);
+    outline-offset: -2px;
+  }
+  .tp-item {
+    display: block;
+    width: 100%;
+    height: var(--tp-row);
+    padding: 0;
+    border: none;
+    background: transparent;
+    scroll-snap-align: center;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-light);
+    cursor: pointer;
+    text-align: center;
+  }
+  .tp-item:hover:not(.tp-item-sel) {
+    color: var(--cs-text-mid);
+  }
+  .tp-item-sel {
+    color: var(--cs-text);
+  }
+  .tp-colon {
+    position: relative;
+    z-index: 1;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+  }
+
+  /* 저장 — 소형 실행 버튼 크기·반경(cms-uiux §0-10-F)에 버튼 아웃라인 회피 원칙(§0-10 공통)을 적용: 아웃라인 없이 면 색만 쓰고, 호버·터치는 배경 토큰 변경으로 표현 (팝업 안에서는 가운데 정렬 — Stephen 지시) */
+  .tp-actions {
+    display: flex;
+    justify-content: center;
+  }
+  .tp-btn {
+    min-width: 78px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+    padding: 8px 14px;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: var(--cs-lilac);
+    color: var(--cs-text-mid);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  @media (hover: hover) {
+    .tp-btn:hover {
+      background: var(--cs-text-mid);
+      color: var(--cs-white);
+    }
+  }
+  .tp-btn:active {
+    background: var(--cs-text-mid);
+    color: var(--cs-white);
+  }
+</style>
