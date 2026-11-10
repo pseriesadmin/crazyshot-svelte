@@ -183,15 +183,9 @@
     <!-- 노출 방식 -->
     <div class="hcp-section">
       <p class="hcp-label">노출 방식</p>
-      <div class="hcp-radio-row">
-        <label class="hcp-radio">
-          <input type="radio" name="hcp-mode-{categoryId}" value="fixed"  checked={mode === 'fixed'}  onchange={() => (mode = 'fixed')}  />
-          <span>고정 순서</span>
-        </label>
-        <label class="hcp-radio">
-          <input type="radio" name="hcp-mode-{categoryId}" value="random" checked={mode === 'random'} onchange={() => (mode = 'random')} />
-          <span>랜덤 노출</span>
-        </label>
+      <div class="hcp-chips">
+        <button type="button" class="hcp-chip" class:hcp-chip--on={mode === 'fixed'} aria-pressed={mode === 'fixed'} onclick={() => (mode = 'fixed')}>고정 순서</button>
+        <button type="button" class="hcp-chip" class:hcp-chip--on={mode === 'random'} aria-pressed={mode === 'random'} onclick={() => (mode = 'random')}>랜덤 노출</button>
       </div>
     </div>
 
@@ -365,17 +359,31 @@
     color: var(--cs-text-light);
   }
 
-  .hcp-radio-row {
+  /* 옵션 선택 콤보버튼 — cms-uiux.md §7-12-B(mk-chip) 표준 그대로 */
+  .hcp-chips {
     display: flex;
-    gap: 16px;
+    gap: 8px;
   }
-  .hcp-radio {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+  .hcp-chip {
+    height: 32px;
+    padding: 0 14px;
+    border: 1.5px solid var(--cs-lilac);
+    border-radius: var(--cms-radius-xl, 30px);
+    background: var(--cs-white);
+    color: var(--cs-text-mid);
     font: var(--text-pc-script-12);
-    color: var(--cs-text);
+    font-weight: 600;
     cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .hcp-chip--on {
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-color: var(--cs-purple);
+  }
+  .hcp-chip:not(.hcp-chip--on):hover {
+    border-color: var(--cs-purple);
+    color: var(--cs-purple);
   }
 
   .hcp-picker-wrap { position: relative; }

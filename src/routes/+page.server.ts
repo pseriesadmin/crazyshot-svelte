@@ -79,7 +79,10 @@ export const load: PageServerLoad = async ({ locals }) => {
     .eq('key', 'home_hero_banner_settings')
     .maybeSingle()
 
-  type HeroBannerSettings = { pc_mode: 'random' | 'fixed'; mobile_mode: 'random' | 'fixed' }
+  type HeroBannerSettings = {
+    pc_mode: 'random' | 'fixed'; mobile_mode: 'random' | 'fixed'
+    pc_first_id?: string | null; mobile_first_id?: string | null   // '먼저 노출' 배너 — 순서·랜덤과 무관하게 맨 앞
+  }
   const heroBannerSettings: HeroBannerSettings =
     ((heroBannerSettingsRow as { value: unknown } | null)?.value as HeroBannerSettings | null) ??
     { pc_mode: 'fixed', mobile_mode: 'fixed' }
@@ -95,6 +98,14 @@ export const load: PageServerLoad = async ({ locals }) => {
   }
   if (bannerMap['hero_pc'] && heroBannerSettings.pc_mode === 'random') bannerMap['hero_pc'] = shuffled(bannerMap['hero_pc'])
   if (bannerMap['hero_mobile'] && heroBannerSettings.mobile_mode === 'random') bannerMap['hero_mobile'] = shuffled(bannerMap['hero_mobile'])
+  // '먼저 노출' 배너를 맨 앞으로(노출 기간·활성 필터를 통과한 배너일 때만)
+  const withFirst = <T extends { id: string }>(list: T[] | undefined, firstId: string | null | undefined): T[] | undefined => {
+    if (!list || !firstId) return list
+    const hit = list.find((b) => b.id === firstId)
+    return hit ? [hit, ...list.filter((b) => b.id !== firstId)] : list
+  }
+  if (bannerMap['hero_pc']) bannerMap['hero_pc'] = withFirst(bannerMap['hero_pc'], heroBannerSettings.pc_first_id) ?? []
+  if (bannerMap['hero_mobile']) bannerMap['hero_mobile'] = withFirst(bannerMap['hero_mobile'], heroBannerSettings.mobile_first_id) ?? []
 
   // BUG-FIX(2026-08-10): 홈 화면 카테고리 탭이 하드코딩 배열(CATEGORY_TABS)로 고정돼
   // 있었음 — /products와 동일하게 백오피스(code_mapping_groups) 값으로 통일. RLS가
