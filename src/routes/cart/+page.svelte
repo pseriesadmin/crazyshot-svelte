@@ -533,7 +533,8 @@
     bulkReturnTime = seedSource.returnTime
     if (isDeliveryTypeMethod(seedSource.opts.rentalMethod)) {
       if (!bulkTime) bulkTime = '00:00'
-      if (!bulkReturnTime) bulkReturnTime = '24:00'
+      // 2026-09-21~11-10 에 반납 시간을 자유 선택해 담아 둔 옛 장바구니 값(예: 10:00)도 24:00 으로 맞춘다 — 화면은 24:00 고정 표시이므로 저장값과 어긋나지 않게(rental-policy.md §1-1)
+      bulkReturnTime = '24:00'
       // ⛔ 2026-09-02 QA 발견·Stephen 확정: 여기서 applyBulkToItems()를 호출하면 사용자가
       // 통합설정 패널을 건드리기도 전에, 마운트하는 것만으로 다른 상품(itemsState의 2번째
       // 이후 항목)이 개별적으로 갖고 있던 자기 자신의 수령방식·시간까지 첫 상품 값으로
@@ -547,6 +548,12 @@
       // 브로드캐스트)만 여기서 차단하는 것이지, CartItemUiState의 개별 필드나 updateItem()
       // 같은 하부 로직은 절대 삭제하지 않는다.
       updateItem(seedSource.id, { rentalTime: bulkTime, returnTime: bulkReturnTime })
+    }
+    // 건별 설정(상품마다 고유 수령방식·시간)이 남은 옛 항목도: 수령이 배송이면 반납 시간을 24:00 으로 정정(날짜·시간이 이미 있는 항목만 — 다른 개별값은 보존, 브로드캐스트 아님)
+    for (const it of itemsState) {
+      if (it.id !== seedSource.id && !it.deleted && isDeliveryTypeMethod(it.opts.rentalMethod) && (it.returnDate || it.returnTime) && it.returnTime !== '24:00') {
+        updateItem(it.id, { returnTime: '24:00' })
+      }
     }
     // ⛔ 2026-09-07(같은 날 3차 후속, Stephen 명시적 확정) — 한때 여기서 "seedSource에
     // 날짜가 있으면 날짜·시간·방식이 없는 나머지 상품에도 자동으로 채워준다"는 백필
@@ -2766,10 +2773,8 @@
                            접힌 요약 바에도 적용: 반납 자체가 배송·택배의존이 아니면 정상
                            인터랙티브 버튼, 그 외(반납이 배송 또는 택배의존)는 시간 UI 자체를
                            숨김.
-                           2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간 24:00 고정"
-                           분기를 폐기(위 RentalForm과 동일 이유 — 요금은 그대로 1day 강제청구
-                           유지, UI 잠금만 해제). 이제 반납 leg 자신의 locked/courierRestricted
-                           여부만으로 판정. -->
+                           2026-11-10 복원(Stephen 재지시, rental-policy.md §1-1) — 수령이 배송이면 반납 시간은 24:00 고정이다. 이 접힌 요약 바는 저장값
+                           (bulkReturnTime=24:00)을 그대로 보여 주고 누르면 입력 폼을 여는 버튼이라 별도 잠금 분기는 없다(고정·토스트는 열린 폼 RentalForm 에서 처리). -->
                       {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
                         <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => { bulkOpen = true; bulkOpenAcc = 'return_' }}>
                           <div class="datetime-btn-left">
@@ -3968,9 +3973,8 @@
             </button>
             <!-- 2026-09-16(Stephen 지시) — 열린 상태(RentalForm)와 동일한 정책을 접힌 요약
                  바에도 적용(위 bulk-collapsed-group 반납 시간 블록과 동일 로직).
-                 2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간 24:00 고정" 분기
-                 폐기(위 두 블록과 동일 이유). 반납 leg 자신의 locked/courierRestricted
-                 여부만으로 판정. -->
+                 2026-11-10 복원(Stephen 재지시, rental-policy.md §1-1) — 수령이 배송이면 반납 시간은 24:00 고정이다. 이 접힌 요약 바는 저장값(bulkReturnTime=24:00)을
+                 그대로 보여 주고 누르면 입력 폼을 여는 버튼이라 별도 잠금 분기는 없다(고정·토스트는 열린 폼 RentalForm 의 반납 시간 버튼에서 처리). -->
             {#if !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod)}
               <button class="datetime-btn datetime-btn-mid datetime-btn-time-selected" onclick={() => bulkOpenAcc = 'return_'}>
                 <div class="datetime-btn-left">
@@ -4332,13 +4336,15 @@
                    UI는 원래대로 복원하고, 대신 datesSet 쪽에서 이 방식일 때 시간을 필수
                    항목에서 제외하도록 수정했다(datesSet 정의부 주석 참고) — 여기는 절대
                    다시 건드리지 말 것.
-                   2026-09-21(Stephen 재지시) — "수령이 배송이면 반납 시간을 24:00으로 잠금"
-                   정책(구 returnTimeForcedByDelivery 분기, 2026-09-08 도입)을 폐기. 요금
-                   계산(1day 강제청구, rental-fee-policy.md §1 ②)은 시각을 그대로 무시하고
-                   그대로 유지되지만, 고객이 방문 반납 시간을 직접 정해 움직이는 옵션 자체를
-                   막을 이유는 없다는 판단 — 반납 시간 UI는 이제 반납 leg 자신의 locked/
-                   courierRestricted(반납 자체가 배송·택배의존인지)만으로 판정한다. -->
-              <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime} onclick={() => {
+                   2026-09-08 도입 → 2026-09-21 폐기 → 2026-11-10(Stephen 재지시) 복원: 수령이 배송(is_delivery_type)이고 반납 방식이 배송이 아니면 반납 시간은
+                   24:00 고정(선택 불가, 아래 returnTimeFixed). 요금(1day 강제청구, rental-policy.md §1 ②)은 시각을 무시하며 그대로이고, 고정은 표시·저장값을 요금 기준에 맞추는
+                   것이다. 반납 자체가 배송·택배의존(locked/courierRestricted)이면 시간 UI 자체가 없다(이 분기 위 조건). -->
+              <!-- 2026-11-10(Stephen 재지시) — 수령이 배송(is_delivery_type)이고 반납이 방문 등 배송이 아닌 경우: 배송 시간을 고려해 수령일·반납일 모두 온전한
+                   대여일로 청구되고(1day 강제청구) 방문 반납은 그 다음 날 이루어지므로, 반납 시간은 24:00 고정(선택 불가). 저장값은 bulkHandleMethod/
+                   bulkHandleReturnMethod 가 24:00 으로 확정한다. -->
+              {@const returnTimeFixed = props.type === 'return' && isDeliveryTypeMethod(bulkOpts.rentalMethod)}
+              <button class="datetime-btn datetime-btn-mid" class:datetime-btn-time-selected={!!props.selectedTime || returnTimeFixed} class:datetime-btn-fixed={returnTimeFixed} aria-disabled={returnTimeFixed} onclick={() => {
+                if (returnTimeFixed) { csToast.warning('배송수령은 반납 시간이 24시간 요금으로 적용됩니다.'); return }
                 if (!props.method) { csToast.error('수령(반납) 형태를 선택해주세요.'); return }
                 openTime(props.timeId)
               }}>
@@ -4346,7 +4352,7 @@
                   <svg width="23" height="23" viewBox="0 0 22.5 22.5" fill="none">
                     <path d="M11.25 0C13.69 0 15.95 0.78 17.8 2.1L19 0.5C19.41 -0.05 20.2 -0.16 20.75 0.25C21.3 0.66 21.41 1.45 21 2L19.66 3.78C21.43 5.77 22.5 8.38 22.5 11.25C22.5 17.46 17.46 22.5 11.25 22.5C5.04 22.5 0 17.46 0 11.25C0 8.33 1.11 5.68 2.93 3.68L1.55 2.06C1.1 1.54 1.16 0.75 1.69 0.3C2.21 -0.15 3 -0.09 3.45 0.44L4.81 2.03C6.63 0.75 8.85 0 11.25 0ZM11 5C10.31 5 9.75 5.56 9.75 6.25V12.17C9.75 12.64 10.01 13.07 10.42 13.28L14.42 15.36C15.04 15.68 15.79 15.44 16.11 14.83C16.43 14.21 16.19 13.46 15.58 13.14L12.25 11.41V6.25C12.25 5.56 11.69 5 11 5Z" fill="var(--cs-white)"/>
                   </svg>
-                  <span class="datetime-btn-label">{props.selectedTime || timeLabel}</span>
+                  <span class="datetime-btn-label">{returnTimeFixed ? '24:00' : (props.selectedTime || timeLabel)}</span>
                 </div>
               </button>
             {/if}
@@ -5637,9 +5643,10 @@
     transition: filter 0.2s;
   }
   .datetime-btn:hover { filter: brightness(1.1); }
-  /* 2026-09-08 도입 — 2026-09-21 폐기: "수령=배송 시 반납 시간 24:00 고정" 정책이 없어져
-     이 비인터랙티브 버튼 변형(.datetime-btn-fixed)을 쓰는 곳이 더 이상 없다(사용처 3곳
-     전부 위 returnTimeForcedByDelivery 폐기와 함께 제거됨) — 죽은 셀렉터라 삭제. */
+  /* 수령=배송 + 반납=방문 등: 반납 시간 24:00 고정(선택 불가) */
+  .datetime-btn-fixed { cursor: default; }
+  .datetime-btn-fixed:hover { filter: none; }
+  /* 수령=배송 + 반납=방문 등일 때 반납 시간 24:00 고정(비인터랙티브) 버튼 변형 — 2026-09-08 도입, 2026-09-21 폐기, 2026-11-10 복원(rental-policy.md §1-1). 위 두 규칙 참고. */
   /* 2026-09-21(Stephen 지시) — 날짜/시간 버튼 가로폭 점유 비율 조정: 기존 .datetime-btn의
      flex:1(50:50 균등분할)을 이 두 클래스에서 각각 재정의. 최초 65:35(날짜 +30%, 시간
      -30%)로 적용했으나, 이번엔 반대로 시간 라벨이 말줄임(…) 처리되는 것으로 확인돼

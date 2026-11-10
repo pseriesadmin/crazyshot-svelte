@@ -12,9 +12,11 @@ import { env } from '$env/dynamic/private'
 import { createClient } from '@supabase/supabase-js'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import {
+  DheroApiError,
   getDeliveryByBookId,
   isDheroTerminalStatus,
 } from '$lib/server/dhero'
+import { isNotFoundSkipped, withNotFoundMark, NOT_FOUND_CONFIRM_COUNT } from '$lib/server/dheroSyncNotFound'
 import { isDheroBooking } from '$lib/server/dheroOrderUnits'
 import { dheroStatusLabel } from '$lib/utils/dheroLabels'
 import { maybeAutoAdvanceOnDheroDelivered } from '$lib/server/dheroAutoAdvance'
@@ -44,7 +46,7 @@ export const GET: RequestHandler = async ({ request }) => {
   // 종료 status(completed/returned/cancelled/damage_claimed) 아닌 예약만 대상
   const { data: rows, error: fetchErr } = await admin
     .from('rental_reservations')
-    .select('id, tracking_number, courier_code, dhero_return_book_id, dhero_status_code, dhero_dong_group, dhero_meta, status, pickup_method, return_method')
+    .select('id, tracking_number, courier_code, dhero_return_book_id, dhero_status, dhero_status_code, dhero_dong_group, dhero_meta, status, pickup_method, return_method')
     .not('status', 'in', `(${TERMINAL_RESERVATION_STATUSES.map(s => `"${s}"`).join(',')})`)
     .not('tracking_number', 'is', null)  // tracking_number 있는 건만 (발송 leg 기준)
 
@@ -77,6 +79,8 @@ export const GET: RequestHandler = async ({ request }) => {
     }
     // P3-2: 두발히어로 접수번호가 아닌 운송장(타 택배사 수동 입력)은 동기화 제외
     if (!isDheroBooking(row.courier_code as string | null | undefined)) return false
+    // 두발히어로가 "존재하지 않는 배송건"(404)이라고 연속 확정한 접수번호는 12시간 동안 재조회하지 않는다(10분마다 같은 오류가 쌓이던 것 방지, dheroSyncNotFound.ts) — 표시를 남긴 접수번호와 지금 접수번호가 같을 때만
+    if (isNotFoundSkipped(row.dhero_meta as Record<string, unknown> | null, row.tracking_number as string | null)) return false
     return true
   })
 
@@ -126,6 +130,22 @@ export const GET: RequestHandler = async ({ request }) => {
     } catch (e) {
       console.error(`[dhero-sync] fail-soft for ${reservationId}:`, e instanceof Error ? e.message : e)
       failed++
+      // HTTP 404(존재하지 않는 배송건)만 표시한다 — 메시지 문구 비교 금지(dhero-delivery-api.md GATE C). 기존 상태·접수번호는 그대로 두고 메타에만 연속 횟수를 남긴다.
+      if (e instanceof DheroApiError && e.statusCode === 404) {
+        const mark = withNotFoundMark(r.dhero_meta as Record<string, unknown> | null, bookId)
+        const { error: markErr } = await admin.rpc('update_reservation_dhero_shipment', {
+          p_reservation_id:  reservationId,
+          p_tracking_number: bookId,
+          p_courier_code:    '두발히어로',
+          p_status:          (r.dhero_status as string | null | undefined) ?? null,
+          p_status_code:     (r.dhero_status_code as number | null | undefined) ?? null,
+          p_dong_group:      (r.dhero_dong_group as string | null | undefined) ?? null,
+          p_meta:            mark,
+          p_return_book_id:  null,
+        })
+        if (markErr) console.error(`[dhero-sync] 404 표시 저장 실패 ${reservationId}:`, markErr.message)
+        else if (mark.syncNotFoundAt) console.error(`[dhero-sync] 접수번호 ${bookId}(예약 ${reservationId})가 ${NOT_FOUND_CONFIRM_COUNT}회 연속 404 — 12시간 동안 조회를 건너뜁니다(관리자 확인 필요)`)
+      }
     }
   }
 
