@@ -31,18 +31,21 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // 1시간 이상 비활성 open 세션 → pending 자동 전환 (호출 시마다 실행)
   await admin.rpc('auto_pending_inactive_sessions')
 
-  // CS-A3: 30분 이상 관리자 미응답 세션 → 고객 FCM 푸시 (fire-and-forget)
+  // CS-A3: 30분 이상 관리자 미응답 세션 → 고객 FCM 푸시
   // get_and_mark_unanswered_sessions()가 동시에 unanswered_notified_at을 갱신해 중복 발송 방지
-  ;(async () => {
+  // 2026-11-10 수정: 이 RPC는 RETURNS TABLE(user_id uuid)라 [{ user_id }] 행 배열을 돌려주는데, 예전 코드는 행 객체를 그대로 사용자 ID로 넘겨
+  // 푸시가 한 번도 발송·기록되지 않았다(실서비스에서 대상 표시 5건, 발송 기록 0). 표시된 세션은 다시 대상이 되지 않으므로 응답 직후 서버리스가 멈춰도 발송이 시작되도록 최대 1.5초만 기다린다(끝까지 기다리지는 않음).
+  // 실패는 목록 응답에 영향 없음(아래 catch).
+  const unansweredTask = (async () => {
     try {
-      const { data: userIds, error: unansweredErr } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: string[] | null; error: { message?: string } | null }
+      const { data: userIds, error: unansweredErr } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: { user_id: string }[] | null; error: { message?: string } | null }
       if (unansweredErr) {
         console.error('[chat/sessions] get_and_mark_unanswered_sessions 실패(fail-soft):', unansweredErr.message)
       }
       if (userIds && userIds.length > 0) {
         await Promise.allSettled(
-          userIds.map((uid) =>
-            sendPushToUser(uid, 'chat_unanswered', {
+          userIds.map((row) =>
+            sendPushToUser(row.user_id, 'chat_unanswered', {
               title: '아직 답변을 기다리고 있어요',
               body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.',
               link: '/',
@@ -54,6 +57,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       // 발송 실패는 세션 목록 응답에 영향 주지 않음
     }
   })()
+  // 끝까지 기다리지 않는다 — 최대 1.5초만 기다리고 목록 응답을 보낸다(대상이 없으면 조회만 끝나는 즉시 진행). 남은 발송은 백그라운드로 이어진다.
+  await Promise.race([unansweredTask, new Promise<void>((resolve) => setTimeout(resolve, 1500))])
 
   const status = url.searchParams.get('status')
   const page  = Math.max(1, parseInt(url.searchParams.get('page')  ?? '1',   10))
