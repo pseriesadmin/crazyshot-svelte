@@ -53,6 +53,9 @@
   let { items, index = $bindable(0), title = '이미지', onclose, onDelete, downloadable = true, onSave, startInEdit = false, onMobileCreate }: Props = $props()
 
   const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+  const ZOOM_MIN = ZOOM_STEPS[0]
+  const ZOOM_MAX = ZOOM_STEPS[ZOOM_STEPS.length - 1]
+  const WHEEL_ZOOM_SENSITIVITY = 0.0006   // 휠 1틱(deltaY 100) ≈ 6%
 
   let zoom = $state(1)
   let rotation = $state(0)
@@ -146,7 +149,18 @@
   function onWheel(e: WheelEvent): void {
     if (!isImage || gridMode) return
     e.preventDefault()
-    if (e.deltaY < 0) zoomIn(); else zoomOut()
+    // 휠 이동량에 비례한 연속 배율 — 트랙패드의 잔잔한 스크롤은 미세하게, 마우스 휠 한 칸은 약 6%씩
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
+    const delta = Math.max(-120, Math.min(120, e.deltaY * unit))
+    const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom * Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY)))
+    if (Math.abs(next - zoom) < 0.0005) return
+    // 커서가 가리키는 지점이 제자리에 머물도록 이동값 보정
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const cx = e.clientX - (rect.left + rect.width / 2)
+    const cy = e.clientY - (rect.top + rect.height / 2)
+    const ratio = next / zoom
+    zoom = next
+    if (next <= 1) { panX = 0; panY = 0 } else { panX = cx - (cx - panX) * ratio; panY = cy - (cy - panY) * ratio }
   }
 
 
