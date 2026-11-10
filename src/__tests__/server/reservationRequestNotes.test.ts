@@ -39,12 +39,16 @@ const GET = handler.GET as unknown as (e: unknown) => Promise<{ status: number; 
 // select 컬럼명으로 조회 경로를 구분: 'id, notes...' → .in() 반환 / 'pickup_frontdoor_password' → .eq().maybeSingle()
 let mockInRows: { data: Record<string, unknown>[] | null; error: unknown } = { data: [], error: null }
 const mockFrontdoorSingle = vi.fn()
+const mockAddressSingle = vi.fn()
+const mockReturnAddressSingle = vi.fn()
 
 beforeEach(() => {
   mockGuard.mockReset().mockResolvedValue(null)
   mockRole.mockReset().mockResolvedValue('manager')
   mockSingle.mockReset()
   mockFrontdoorSingle.mockReset().mockResolvedValue({ data: null, error: null })
+  mockAddressSingle.mockReset().mockResolvedValue({ data: null, error: null })
+  mockReturnAddressSingle.mockReset().mockResolvedValue({ data: null, error: null })
   mockInRows = { data: [], error: null }
 
   mockFrom.mockReset().mockImplementation((table: string) => {
@@ -54,6 +58,14 @@ beforeEach(() => {
     // rental_reservations: select 컬럼으로 경로 구분
     return {
       select: vi.fn().mockImplementation((cols: string) => {
+        if (cols.includes('return_address_road')) {
+          // 반납 주소 전용 조회 경로 — .eq().maybeSingle()
+          return { eq: vi.fn().mockReturnValue({ maybeSingle: mockReturnAddressSingle }) }
+        }
+        if (cols.includes('pickup_address_road')) {
+          // 수령 주소 전용 조회 경로 — .eq().maybeSingle()
+          return { eq: vi.fn().mockReturnValue({ maybeSingle: mockAddressSingle }) }
+        }
         if (cols.includes('pickup_frontdoor_password')) {
           // frontdoor 전용 조회 경로 — .eq().maybeSingle()
           return { eq: vi.fn().mockReturnValue({ maybeSingle: mockFrontdoorSingle }) }
@@ -79,7 +91,7 @@ describe('GET /api/cms/reservations/[id]/request-notes', () => {
     mockFrontdoorSingle.mockResolvedValue({ data: null, error: null })
     const res = await GET({ params: { id: '5' }, locals: {} })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ notes: '공동현관 0418*', pickup_request_note: '경비실 호출', return_request_note: null, pickup_frontdoor_password: null })
+    expect(await res.json()).toEqual({ notes: '공동현관 0418*', pickup_request_note: '경비실 호출', return_request_note: null, pickup_frontdoor_password: null, pickup_address: null, return_address: null })
   })
 
   it('RN-5: 공동현관 출입번호는 manager 이상에게만 내려주고 partner 에는 null 이다', async () => {
@@ -90,6 +102,30 @@ describe('GET /api/cms/reservations/[id]/request-notes', () => {
     const res = await GET({ params: { id: '5' }, locals: {} })
     expect(res.status).toBe(200)
     expect((await res.json()).pickup_frontdoor_password).toBeNull()
+  })
+
+  it('RN-6: 수령 주소는 (우편번호) 도로명 상세로 이어 붙이고, 일부만 있어도 있는 것만 보여주며, partner 에게도 내려준다', async () => {
+    mockInRows = { data: [{ id: 5, notes: null, pickup_request_note: null, return_request_note: null, product_id: null }], error: null }
+    mockAddressSingle.mockResolvedValue({ data: { pickup_address_road: ' 서울 송파구 올림픽로 300 ', pickup_address_detail: '9층', pickup_postal_code: '05551' }, error: null })
+    mockRole.mockResolvedValue('partner')
+    expect((await (await GET({ params: { id: '5' }, locals: {} })).json()).pickup_address).toBe('(05551) 서울 송파구 올림픽로 300 9층')
+    mockAddressSingle.mockResolvedValue({ data: { pickup_address_road: '서울 송파구 올림픽로 300', pickup_address_detail: null, pickup_postal_code: null }, error: null })
+    expect((await (await GET({ params: { id: '5' }, locals: {} })).json()).pickup_address).toBe('서울 송파구 올림픽로 300')
+    mockAddressSingle.mockResolvedValue({ data: { pickup_address_road: null, pickup_address_detail: ' ', pickup_postal_code: '05551' }, error: null })
+    expect((await (await GET({ params: { id: '5' }, locals: {} })).json()).pickup_address).toBeNull()
+  })
+
+  it('RN-8: 반납 주소도 같은 형식으로 내려주고, 반납 주소 칸이 없는 환경(조회 실패)에서도 수령 주소는 그대로 내려준다', async () => {
+    mockInRows = { data: [{ id: 5, notes: null, pickup_request_note: null, return_request_note: null, product_id: null }], error: null }
+    mockAddressSingle.mockResolvedValue({ data: { pickup_address_road: '서울 송파구 올림픽로 300', pickup_address_detail: null, pickup_postal_code: '05551' }, error: null })
+    mockReturnAddressSingle.mockResolvedValue({ data: { return_address_road: '서울 강서구 양천로 418', return_address_detail: '2층', return_postal_code: '07590' }, error: null })
+    const ok = await (await GET({ params: { id: '5' }, locals: {} })).json()
+    expect(ok.return_address).toBe('(07590) 서울 강서구 양천로 418 2층')
+    expect(ok.pickup_address).toBe('(05551) 서울 송파구 올림픽로 300')
+    mockReturnAddressSingle.mockRejectedValue(new Error('column return_address_road does not exist'))
+    const soft = await (await GET({ params: { id: '5' }, locals: {} })).json()
+    expect(soft.return_address).toBeNull()
+    expect(soft.pickup_address).toBe('(05551) 서울 송파구 올림픽로 300')
   })
 
   it('RN-3: 잘못된 ID 는 400, 없는 예약은 404, 조회 오류는 500(내부 메시지 미노출)', async () => {
@@ -121,5 +157,16 @@ describe('RentalDetailPanel — 고객 요청사항 표시 배선', () => {
     expect(panel).toContain('{#if trackingApplicable === true && canManagePaymentAndLocker}')
     expect(panel).toContain('requestNotes?.pickup_request_note')
     expect(api).not.toMatch(/export const (POST|PATCH|PUT|DELETE)/)
+  })
+
+  it('RN-7: 대여 방법 영역에 수령 주소·반납 주소 행이 있고, 택배류 방식이면 값이 없어도 \'-\'로 보인다', () => {
+    const pi = panel.indexOf('<span class="info-label">수령 주소</span>')
+    expect(pi).toBeGreaterThan(panel.indexOf('<span class="info-label">수령 일시</span>'))
+    expect(pi).toBeLessThan(panel.indexOf('<span class="info-label">반납방식</span>'))
+    const ri = panel.indexOf('<span class="info-label">반납 주소</span>')
+    expect(ri).toBeGreaterThan(panel.indexOf('<span class="info-label">반납 일시</span>'))
+    expect(panel).toContain("const ADDRESS_METHODS = new Set(['delivery', 'crazydelivery', 'epost'])")
+    expect(panel).toContain("requestNotes?.return_address ?? '-'")
+    expect(panel).toContain("requestNotes?.pickup_address ?? '-'")
   })
 })

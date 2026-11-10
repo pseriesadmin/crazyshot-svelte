@@ -4,6 +4,7 @@
  * 장바구니 "요청 사항" 입력(공동현관 출입번호·경비실 호출 등 안내 문구 포함)은 수령용(pickup_request_note)·
  * 반납용(return_request_note)으로 나뉘어 예약에 저장된다(Migration 476). 과거 단일 요청사항(notes)이 있는 예약도 함께 돌려준다.
  * 수령 공동현관 출입번호(pickup_frontdoor_password, Migration #774)는 별도 전용 칸이라 manager 이상에게만 내려준다(무인보관함 비밀번호와 같은 수준).
+ * 수령 주소(pickup_address_*)와 반납 주소(return_address_*, Migration #806)도 같이 돌려준다(2026-11-10) — 대여 방법 영역의 '수령 주소' 행. 요청한 예약(reservationId)의 값만, 메뉴 접근 권한이 있는 CMS 직원 전체에게(배송 담당이 주소를 알아야 한다).
  * RentalDetailPanel(/cms/rentals·/cms/reservation 공유)의 대여정보 탭이 lazy-fetch 로 읽어 표시한다.
  *
  * P3-4 (2026-10-27): 같은 주문(listOrderReservationIds)의 모든 예약 요청사항을 합쳐 반환.
@@ -24,6 +25,13 @@ import type { RequestHandler } from './$types'
 
 function cleanNote(v: unknown): string | null {
   return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+}
+
+/** 도로명·상세·우편번호를 '(우편번호) 도로명 상세'로 이어 붙인다. 도로명·상세가 모두 비면 null(우편번호만 있는 경우는 주소가 아니다) */
+function joinAddress(road: unknown, detail: unknown, postal: unknown): string | null {
+  const line = [cleanNote(road), cleanNote(detail)].filter(Boolean).join(' ')
+  const zip = cleanNote(postal)
+  return line ? (zip ? `(${zip}) ${line}` : line) : null
 }
 
 /**
@@ -114,10 +122,35 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     } catch { /* fail-soft — 출입번호만 비어 보인다 */ }
   }
 
+  // 수령·반납 주소(2026-11-10) — 요청한 예약의 값만. 도로명·상세가 모두 비면 null(방문·무인보관함 등 주소 없는 방식)
+  // 반납 주소 칸(Migration #806)이 아직 없는 환경에서도 수령 주소는 보이도록 두 조회를 따로 하고, 각각 fail-soft 로 둔다.
+  let pickupAddress: string | null = null
+  let returnAddress: string | null = null
+  try {
+    const { data: ad } = await admin
+      .from('rental_reservations')
+      .select('pickup_address_road, pickup_address_detail, pickup_postal_code')
+      .eq('id', reservationId)
+      .maybeSingle()
+    const a = ad as Record<string, unknown> | null
+    pickupAddress = joinAddress(a?.pickup_address_road, a?.pickup_address_detail, a?.pickup_postal_code)
+  } catch { /* fail-soft — 수령 주소 행만 보이지 않는다 */ }
+  try {
+    const { data: rd } = await admin
+      .from('rental_reservations')
+      .select('return_address_road, return_address_detail, return_postal_code')
+      .eq('id', reservationId)
+      .maybeSingle()
+    const r = rd as Record<string, unknown> | null
+    returnAddress = joinAddress(r?.return_address_road, r?.return_address_detail, r?.return_postal_code)
+  } catch { /* fail-soft — 반납 주소 행만 보이지 않는다 */ }
+
   return json({
     notes:               mergedNotes,
     pickup_request_note: mergedPickup,
     return_request_note: mergedReturn,
     pickup_frontdoor_password: frontdoor, // manager 이상만(partner 는 null)
+    pickup_address:      pickupAddress,
+    return_address:      returnAddress,
   })
 }
