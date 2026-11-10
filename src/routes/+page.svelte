@@ -5,6 +5,8 @@
   import { untrack } from 'svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import HomeBannerModal from '$lib/components/home/admin/HomeBannerModal.svelte'
+  import HeroMedia from '$lib/components/home/HeroMedia.svelte'
+  import { heroBannerMediaKind } from '$lib/utils/heroBannerMedia'
   import HomeThemeGroupModal from '$lib/components/home/admin/HomeThemeGroupModal.svelte'
   import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
   import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
@@ -53,6 +55,17 @@
   $effect(() => { void mobileCarousel; heroPos = mobileCarousel.length > 1 ? 1 : 0 })
 
   // PC 히어로 좌우 슬라이드 — 모바일과 같은 동작(손가락·마우스 드래그를 따라가다 놓으면 자석처럼 스냅, 양방향 무한 순환, 자동 슬라이드는 항상 왼쪽으로)
+  // 무한 순환용 앞뒤 복제 칸의 영상·HTML 은 화면에 들어올 때만 재생한다(같은 배너가 동시에 2~3개 돌지 않도록)
+  function slotActive(i: number, total: number, realCount: number, pos: number): boolean {
+    if (realCount <= 1) return true
+    const isClone = i === 0 || i === total - 1
+    return !isClone || pos === i
+  }
+  // 이 칸이 지금 보이는(또는 막 들어오는) 칸인지 — 복제 칸이 보일 때는 그 원본 칸도 같은 순간에 시작해 점프 후에도 이어지게 한다
+  function slotCurrent(i: number, realCount: number, pos: number): boolean {
+    if (realCount <= 1) return true
+    return pos === i || (i === realCount && pos === 0) || (i === 1 && pos === realCount + 1)
+  }
   const pcSlides = $derived(
     pcCarousel.length > 1
       ? [pcCarousel[pcCarousel.length - 1], ...pcCarousel, pcCarousel[0]]
@@ -121,15 +134,36 @@
     pcMoved = false
   }
 
-  // 자동 슬라이드 (4초 인터벌)
+  // 자동 슬라이드 — 기본 4초. 현재 칸이 모션 HTML·영상이면 그 재생이 끝날 때까지 기다렸다가(끝난 뒤 1.5초 머문 뒤) 넘어간다
+  // (HeroMedia 의 onhold 로 재생 중 개수를 받는다 — 최대 대기 시간은 HeroMedia 에 있음)
+  const HERO_AUTO_MS       = 4000
+  const HERO_AFTER_MEDIA_MS = 1500
+  let pcHoldN = 0                 // 일반 변수로 세고(읽기와 쓰기가 같은 효과 안에서 섞이지 않게) 화면 갱신용 상태에는 값만 복사
+  let pcHolds = $state(0)
+  let pcAfterMedia = false
+  function pcHold(d: 1 | -1): void {
+    pcHoldN = Math.max(0, pcHoldN + d)
+    pcHolds = pcHoldN
+    if (d === -1 && pcHoldN === 0) pcAfterMedia = true
+  }
   $effect(() => {
     if (pcCarousel.length <= 1) return
-    const id = setInterval(() => {
-      if (pcDragging || Date.now() < pcPausedUntil) return
-      pcGo(1)
-    }, 4000)
-    return () => { clearInterval(id); clearTimeout(pcSettleTimer) }
+    void pcPos
+    if (pcHolds > 0) return
+    let id: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number): void => {
+      id = setTimeout(() => {
+        if (pcDragging || Date.now() < pcPausedUntil) { arm(1000); return }
+        pcAfterMedia = false
+        const before = pcPos
+        pcGo(1)
+        if (pcPos === before) arm(500)   // 직전 이동의 복제 구간 정리 중이면 곧 다시 시도
+      }, ms)
+    }
+    arm(pcAfterMedia ? HERO_AFTER_MEDIA_MS : HERO_AUTO_MS)
+    return () => clearTimeout(id)
   })
+  $effect(() => () => clearTimeout(pcSettleTimer))   // 복제 구간 정리 타이머는 이동마다 지우면 안 되므로 언마운트 때만 정리
 
   // 모바일 히어로 좌우 터치 슬라이드 — 손가락을 따라 이동하다 놓으면 이전/다음 장으로 스냅. 양쪽 끝 없이 계속 같은 방향으로 이어진다
   // (세로 스크롤은 touch-action: pan-y 로 브라우저에 맡김)
@@ -205,14 +239,32 @@
     heroMoved = false
   }
 
+  let heroHoldN = 0
+  let heroHolds = $state(0)
+  let heroAfterMedia = false
+  function heroHold(d: 1 | -1): void {
+    heroHoldN = Math.max(0, heroHoldN + d)
+    heroHolds = heroHoldN
+    if (d === -1 && heroHoldN === 0) heroAfterMedia = true
+  }
   $effect(() => {
     if (mobileCarousel.length <= 1) return
-    const id = setInterval(() => {
-      if (heroDragging || Date.now() < heroPausedUntil) return
-      heroGo(1)   // 항상 왼쪽으로 밀려 다음 장이 들어온다(마지막 → 첫 장도 같은 방향)
-    }, 4000)
-    return () => { clearInterval(id); clearTimeout(heroSettleTimer) }
+    void heroPos
+    if (heroHolds > 0) return
+    let id: ReturnType<typeof setTimeout> | undefined
+    const arm = (ms: number): void => {
+      id = setTimeout(() => {
+        if (heroDragging || Date.now() < heroPausedUntil) { arm(1000); return }
+        heroAfterMedia = false
+        const before = heroPos
+        heroGo(1)   // 항상 왼쪽으로 밀려 다음 장이 들어온다(마지막 → 첫 장도 같은 방향)
+        if (heroPos === before) arm(500)
+      }, ms)
+    }
+    arm(heroAfterMedia ? HERO_AFTER_MEDIA_MS : HERO_AUTO_MS)
+    return () => clearTimeout(id)
   })
+  $effect(() => () => clearTimeout(heroSettleTimer))
 
   // ── CMS 배너 관리 모달 ──────────────────────────────────────────────
   let showBannerModal         = $state(false)
@@ -474,14 +526,20 @@
         class:dragging={pcDragging || pcJump}
         style="transform: translate3d(calc({-pcPos * 100}% + {pcDragX}px), 0, 0)"
       >
-        {#each pcSlides as b}
+        {#each pcSlides as b, i}
           <div class="d-hero-slide">
             {#if b.link_url}
               <a href={b.link_url} class="d-hero-banner-link" draggable="false">
-                <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" draggable="false" />
+                {#if heroBannerMediaKind(b.image_url) === 'image'}
+                  <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" draggable="false" />
+                {:else}
+                  <HeroMedia kind={heroBannerMediaKind(b.image_url) as 'video' | 'html'} src={b.image_url} alt={b.title ?? ''} active={slotActive(i, pcSlides.length, pcCarousel.length, pcPos)} current={slotCurrent(i, pcCarousel.length, pcPos)} loop={pcCarousel.length <= 1} onhold={pcHold} />
+                {/if}
               </a>
-            {:else}
+            {:else if heroBannerMediaKind(b.image_url) === 'image'}
               <img src={b.image_url} alt={b.title ?? ''} class="d-hero-banner-img" draggable="false" />
+            {:else}
+              <HeroMedia kind={heroBannerMediaKind(b.image_url) as 'video' | 'html'} src={b.image_url} alt={b.title ?? ''} active={slotActive(i, pcSlides.length, pcCarousel.length, pcPos)} current={slotCurrent(i, pcCarousel.length, pcPos)} loop={pcCarousel.length <= 1} onhold={pcHold} />
             {/if}
             {#if b.sub_copy}
               <div class="d-hero-sub-copy">{b.sub_copy}</div>
@@ -815,14 +873,20 @@
         class:dragging={heroDragging || heroJump}
         style="transform: translate3d(calc({-heroPos * 100}% + {heroDragX}px), 0, 0)"
       >
-        {#each heroSlides as b}
+        {#each heroSlides as b, i}
           <div class="m-hero-slide">
             {#if b.link_url}
               <a href={b.link_url} class="m-hero-banner-link" draggable="false">
-                <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" draggable="false" />
+                {#if heroBannerMediaKind(b.image_url) === 'image'}
+                  <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" draggable="false" />
+                {:else}
+                  <HeroMedia kind={heroBannerMediaKind(b.image_url) as 'video' | 'html'} src={b.image_url} alt={b.title ?? ''} active={slotActive(i, heroSlides.length, mobileCarousel.length, heroPos)} current={slotCurrent(i, mobileCarousel.length, heroPos)} loop={mobileCarousel.length <= 1} onhold={heroHold} />
+                {/if}
               </a>
-            {:else}
+            {:else if heroBannerMediaKind(b.image_url) === 'image'}
               <img src={b.image_url} alt={b.title ?? ''} class="m-hero-bg" draggable="false" />
+            {:else}
+              <HeroMedia kind={heroBannerMediaKind(b.image_url) as 'video' | 'html'} src={b.image_url} alt={b.title ?? ''} active={slotActive(i, heroSlides.length, mobileCarousel.length, heroPos)} current={slotCurrent(i, mobileCarousel.length, heroPos)} loop={mobileCarousel.length <= 1} onhold={heroHold} />
             {/if}
             {#if b.sub_copy}
               <div class="m-hero-sub-copy">{b.sub_copy}</div>
@@ -1131,6 +1195,8 @@
     mobileBanners={data.heroBannerRowsRaw?.hero_mobile ?? []}
     pcMode={data.heroBannerSettings?.pc_mode ?? 'fixed'}
     mobileMode={data.heroBannerSettings?.mobile_mode ?? 'fixed'}
+    pcFirstId={data.heroBannerSettings?.pc_first_id ?? null}
+    mobileFirstId={data.heroBannerSettings?.mobile_first_id ?? null}
     onclose={() => (showBannerModal = false)}
   />
 {/if}
