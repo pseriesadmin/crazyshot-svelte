@@ -1735,6 +1735,19 @@
     if (error) csToast.warning('공동현관 출입번호를 저장하지 못했습니다. 예약 후 채팅으로 알려주세요.')
   }
 
+  // 반납 주소 저장(Migration #806, 2026-11-10) — 배송형(is_delivery_type) 반납에서만. 관리자 화면 '반납 주소' 표시용 스냅샷이라 실패해도 예약신청은 막지 않는다(출입번호와 같은 fail-soft).
+  // 주소가 비어 있으면 호출하지 않는다(DB 적용 전 배포·주소 없는 방식에서 불필요한 왕복·허위 경고 방지).
+  async function saveReturnAddress(resId: string | undefined, return_: DeliveryMethod | null, road: string, detail: string, postal: string): Promise<void> {
+    if (!resId || !isDeliveryTypeMethod(return_) || !(road.trim() || detail.trim())) return
+    const { error } = await (supabase.rpc as unknown as RpcFn)('set_reservation_return_address', {
+      p_reservation_id: Number(resId),
+      p_road:           road || null,
+      p_detail:         detail || null,
+      p_postal_code:    postal || null,
+    })
+    if (error) csToast.warning('반납 주소를 저장하지 못했습니다. 예약 후 채팅으로 알려주세요.')
+  }
+
   // 옵션상품 수량 변경 — set_reservation_options는 전체 옵션 목록을 통째로 교체(delete+insert)하는
   // RPC라, 바뀐 항목 하나만이 아니라 이 예약의 옵션 전체를 다시 보내야 함(상품상세 handleReserve와
   // 동일한 페이로드 형태 재사용). 성공 시 invalidateAll()로 서버 실값(금액 포함) 재조회 — 로컬
@@ -3278,6 +3291,7 @@
                     return
                   }
                   await saveFrontdoorPassword(reservationId, pickupMethodSafe, effectiveForms(it).rental.frontdoor)
+                  await saveReturnAddress(reservationId, returnMethodSafe, effectiveForms(it).ret.addr, effectiveForms(it).ret.addrDetail, effectiveForms(it).ret.postalCode)
                   const { error: durationErrorCo } = await (supabase.rpc as unknown as DurationRpcFnCo)('set_reservation_duration', {
                     p_reservation_id: Number(reservationId),
                     p_duration_type:  durationTypeCo,

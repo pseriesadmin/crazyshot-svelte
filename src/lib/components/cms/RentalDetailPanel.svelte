@@ -1101,7 +1101,7 @@
 
   // 고객 요청사항(2026-10-27, Stephen 지시) — 장바구니 "요청 사항"(공동현관 출입번호 등)은 수령용·반납용으로 예약에 저장되지만 관리자 화면에 표시되지 않던 것을
   // 대여정보 탭에 읽기 전용으로 노출한다. 결제정보 탭과 같은 lazy-fetch 패턴.
-  interface RequestNotes { notes: string | null; pickup_request_note: string | null; return_request_note: string | null; pickup_frontdoor_password: string | null }
+  interface RequestNotes { notes: string | null; pickup_request_note: string | null; return_request_note: string | null; pickup_frontdoor_password: string | null; pickup_address: string | null; return_address: string | null }
   let requestNotesFetchedForId = $state<number | null>(null)
   let requestNotes             = $state<RequestNotes | null>(null)
   let requestNotesLoading      = $state(false)
@@ -1123,7 +1123,7 @@
         const d = await r.json().catch(() => ({})) as Partial<RequestNotes> & { error?: string }
         if (requestNotesFetchedForId !== id) return
         if (!r.ok) requestNotesError = d.error ?? '요청사항을 불러오지 못했습니다.'
-        else requestNotes = { notes: d.notes ?? null, pickup_request_note: d.pickup_request_note ?? null, return_request_note: d.return_request_note ?? null, pickup_frontdoor_password: d.pickup_frontdoor_password ?? null }
+        else requestNotes = { notes: d.notes ?? null, pickup_request_note: d.pickup_request_note ?? null, return_request_note: d.return_request_note ?? null, pickup_frontdoor_password: d.pickup_frontdoor_password ?? null, pickup_address: d.pickup_address ?? null, return_address: d.return_address ?? null }
         requestNotesLoading = false
       })
       .catch(() => {
@@ -1779,6 +1779,9 @@
   let rowStatusLabel = $derived(
     row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status),
   )
+
+  // 주소를 받는 방식(택배류) — 대여 방법 영역에 수령·반납 주소 행을 둔다(값이 없으면 '-')
+  const ADDRESS_METHODS = new Set(['delivery', 'crazydelivery', 'epost'])
 
   const PICKUP_LABELS: Record<string, string> = {
     crazydelivery: '크레이지샷 배송',
@@ -3136,6 +3139,12 @@
           <span class="info-label">수령 일시</span>
           <span class="info-value">{formatDate(row.rental_start)}{row.pickup_time ? ' ' + row.pickup_time : ''}</span>
         </div>
+        {#if (row.pickup_method && ADDRESS_METHODS.has(row.pickup_method)) || requestNotes?.pickup_address}
+          <div class="info-row info-row-note">
+            <span class="info-label">수령 주소</span>
+            <span class="info-value info-value-note">{requestNotes?.pickup_address ?? '-'}</span>
+          </div>
+        {/if}
         <div class="info-row">
           <span class="info-label">반납방식</span>
           <span class="info-value">{row.return_method ? (PICKUP_LABELS[row.return_method] ?? row.return_method) : '-'}{row.return_point_name ? ` (${row.return_point_name})` : ''}</span>
@@ -3144,6 +3153,12 @@
           <span class="info-label">반납 일시</span>
           <span class="info-value">{formatDate(row.rental_end)}{row.return_time ? ' ' + row.return_time : ''}</span>
         </div>
+        {#if (row.return_method && ADDRESS_METHODS.has(row.return_method)) || requestNotes?.return_address}
+          <div class="info-row info-row-note">
+            <span class="info-label">반납 주소</span>
+            <span class="info-value info-value-note">{requestNotes?.return_address ?? '-'}</span>
+          </div>
+        {/if}
       </div>
       </div>
 
