@@ -1780,8 +1780,9 @@
     row.status === 'cancelled' && row.payment_status === 'cancelled' ? '취소·환불' : (STATUS_LABEL[row.status] ?? row.status),
   )
 
-  // 주소를 받는 방식(택배류) — 대여 방법 영역에 수령·반납 주소 행을 둔다(값이 없으면 '-')
-  const ADDRESS_METHODS = new Set(['delivery', 'crazydelivery', 'epost'])
+  // 배송지 주소를 받는 방식(택배류·퀵) — 대여 방법 영역에 수령·반납 주소 행을 둔다(값이 없으면 '-').
+  // ⛔ 방문·무인보관함은 행을 두지 않는다: 장바구니가 이 방식에서도 '고객 주소 정보'(계약서 {{주소}} 정본)를 받아 pickup_address_* 에 저장하지만 이는 고객 본인 주소이지 수령·반납 주소가 아니다(2026-11-10 오표시 수정)
+  const ADDRESS_METHODS = new Set(['delivery', 'crazydelivery', 'epost', 'quick'])
 
   const PICKUP_LABELS: Record<string, string> = {
     crazydelivery: '크레이지샷 배송',
@@ -3139,7 +3140,7 @@
           <span class="info-label">수령 일시</span>
           <span class="info-value">{formatDate(row.rental_start)}{row.pickup_time ? ' ' + row.pickup_time : ''}</span>
         </div>
-        {#if (row.pickup_method && ADDRESS_METHODS.has(row.pickup_method)) || requestNotes?.pickup_address}
+        {#if row.pickup_method && ADDRESS_METHODS.has(row.pickup_method)}
           <div class="info-row info-row-note">
             <span class="info-label">수령 주소</span>
             <span class="info-value info-value-note">{requestNotes?.pickup_address ?? '-'}</span>
@@ -3153,7 +3154,7 @@
           <span class="info-label">반납 일시</span>
           <span class="info-value">{formatDate(row.rental_end)}{row.return_time ? ' ' + row.return_time : ''}</span>
         </div>
-        {#if (row.return_method && ADDRESS_METHODS.has(row.return_method)) || requestNotes?.return_address}
+        {#if row.return_method && ADDRESS_METHODS.has(row.return_method)}
           <div class="info-row info-row-note">
             <span class="info-label">반납 주소</span>
             <span class="info-value info-value-note">{requestNotes?.return_address ?? '-'}</span>
