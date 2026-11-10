@@ -30,6 +30,8 @@ import { sendPushToUser, sendReservationLifecyclePush, sendUrgentChatAdminPush, 
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 import { runCrazychatAgent } from '$lib/server/crazychat/agent'
 import { isAdminEngaged, evaluateAdminEngaged } from '$lib/server/crazychat/engagement'
+import { getConsultHours } from '$lib/server/consultHours'
+import { activeConsultNotice } from '$lib/utils/consultHours'
 
 const ANTHROPIC_ENABLED = false
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
@@ -160,6 +162,59 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       { user_message: userMessage as ChatMessage, ai_message: null, intent_log: null },
       { status: 201 },
     )
+  }
+
+  // 상담 응대시간 자동응답(2026-11-10, Stephen 지시) — CMS '상담 응대시간' 노출 시간대(KST) 안에 고객이 보낸 메시지에는 설정한 문구를 자동응답으로 먼저 보낸다.
+  // 빠른답변·AI 답변은 응대시간대 안팎과 무관하게 각 기능 설정(ON)대로 이어서 동작한다(긴급·파손 감지와 관리자 긴급 푸시도 평소대로).
+  // 안내를 보내지 않는 경우: ① 관리자가 10분 안에 응대한 세션 ② 같은 문구를 10분 안에 이미 보낸 세션 ③ 같은 대화에 동시에 들어온 다른 메시지가 이미 선점한 경우(세션 갱신 시각 선점 — 중복 대신 생략 쪽으로 기운다).
+  // 조회·저장 실패는 안내만 생략하고 평소 흐름으로 진행한다(fail-soft). 안내 메시지는 실시간 구독으로 화면에 들어온다.
+  if (admin) {
+    try {
+      const notice = activeConsultNotice(await getConsultHours(admin))
+      if (notice) {
+        const sessionAdminId = (chatSession as { admin_id?: string | null }).admin_id
+        let engaged = false
+        if (sessionAdminId) {
+          const { data: lastAdminMsg } = await admin
+            .from('chat_messages')
+            .select('created_at')
+            .eq('session_id', body.session_id)
+            .eq('sender_type', 'admin')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          engaged = evaluateAdminEngaged(sessionAdminId, (lastAdminMsg as { created_at?: string } | null)?.created_at ?? null, new Date(), 10)
+        }
+        if (!engaged) {
+          const { data: lastReply } = await admin
+            .from('chat_messages')
+            .select('content, created_at')
+            .eq('session_id', body.session_id)
+            .neq('sender_type', 'user')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          const last = lastReply as { content: string | null; created_at: string } | null
+          const alreadySent = !!last && last.content === notice && Date.now() - new Date(last.created_at).getTime() < 10 * 60 * 1000
+          if (!alreadySent) {
+            // 동시 선점: 읽어 둔 세션 갱신 시각이 그대로일 때만 갱신에 성공한다 — 먼저 성공한 한 건만 안내를 보낸다
+            const { data: sessRow } = await admin.from('chat_sessions').select('updated_at').eq('id', body.session_id).maybeSingle()
+            const seenAt = (sessRow as { updated_at?: string } | null)?.updated_at
+            const { data: claimed } = seenAt
+              ? await admin.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', body.session_id).eq('updated_at', seenAt).select('id')
+              : { data: null }
+            if (claimed && claimed.length > 0) {
+              const { error: noticeErr } = await admin
+                .from('chat_messages')
+                .insert({ session_id: body.session_id, sender_type: 'ai', content: notice, message_type: 'text' })
+              if (noticeErr) throw new Error(noticeErr.message)
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[chat/message] 상담 응대시간 자동응답 실패(fail-soft, 안내만 생략):', err instanceof Error ? err.message : err)
+    }
   }
 
   // 1-a. 하이브리드 자동답변 1단계 — 키워드 매칭을 AI보다 먼저 시도
