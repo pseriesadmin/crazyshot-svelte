@@ -5490,7 +5490,7 @@
   /* 타일이 아닌 곳(예약 화면)에서는 줄바꿈을 숨겨 한 줄 알약 버튼 그대로 유지 */
   .btn-action :global(br), .btn-notify :global(br) { display: none; }
   .action-section-tiles .btn-action :global(br), .action-section-tiles .btn-notify :global(br) { display: inline; }
-  .action-section-tiles { gap: 8px; align-items: flex-start; }
+  .action-section-tiles { gap: 10.4px; align-items: flex-start; justify-content: center; }
   /* 비활성 타일 — 투명도 70%(opacity 0.3)로 활성 버튼과 확실히 구분 */
   .action-section-tiles .btn-notify:disabled { opacity: 0.3; }
   .action-section-tiles .btn-action,
