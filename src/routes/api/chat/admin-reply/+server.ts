@@ -8,6 +8,7 @@ import type { RequestHandler } from './$types'
 import { recordSynonymLearning } from '$lib/server/synonymLearning'
 import { sendPushToUser } from '$lib/server/push'
 import { registerCrossLingualCandidates } from '$lib/server/crossLingualSynonymScan'
+import { judgeReplyCandidate } from '$lib/server/crazychat/replyCandidateFilter'
 import { buildCannedCtaPayload } from '$lib/server/cannedCtaPayload'
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -130,13 +131,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
       if (!lastCustomerMsg?.content) return
 
+      // 2026-11-10: 등록 전 자동 선별 — 재사용 가치 없는 쌍은 사유와 함께 '거부'로 기록(개인정보 포함 건은 원문 대신 자리표시)
+      let verdict: { reason: string | null } = { reason: null }
+      try {
+        verdict = judgeReplyCandidate(lastCustomerMsg.content, content)
+      } catch {
+        // 판정 실패 시 기존과 동일하게 대기 후보로 등록(유실 방지)
+      }
+      const masked = verdict.reason === 'personal_info'
       await admin.rpc('record_chat_reply_candidate', {
         p_session_id: sessionId,
         p_customer_message_id: lastCustomerMsg.id,
-        p_customer_message: lastCustomerMsg.content,
+        p_customer_message: masked ? '[개인정보 포함으로 원문 미보관]' : lastCustomerMsg.content,
         p_admin_message_id: message.id,
-        p_admin_reply: content,
+        p_admin_reply: masked ? '[개인정보 포함으로 원문 미보관]' : content,
         p_admin_id: session.user.id,
+        p_reject_reason: verdict.reason,
       })
     })().catch(() => {})
   }

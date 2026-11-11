@@ -7,6 +7,7 @@ import { redirect, fail } from '@sveltejs/kit'
 import { loadCannedCategories } from '$lib/server/cannedCategories'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { EXCLUSION_LABEL, type ExclusionReason } from '$lib/server/crazychat/replyCandidateFilter'
 import type { PageServerLoad, Actions } from './$types'
 
 // §D-2: 동의어 후보 테이블 타입 (cross_lingual_pattern + query_reformulation)
@@ -78,7 +79,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     synonym_groups: { canonical_term: string } | null
   }
 
-  const [itemsResult, autoReplyResult, candidatesResult, replyCandidatesResult, zeroResultResult] = await Promise.all([
+  const [itemsResult, autoReplyResult, candidatesResult, replyCandidatesResult, zeroResultResult, autoExcludedResult] = await Promise.all([
     admin
       .from('canned_responses')
       .select('id, title, content, category, help_category, shortcut, match_keywords, usage_count, created_at, image_url, cta_label, cta_url, pending_review')
@@ -110,6 +111,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       .returns<ReplyCandidateRow[]>(),
     // NLSearch B안(2026-09-03): 0건 검색어 갭 — 최근 30일, 빈도순 상위 50건
     admin.rpc('get_zero_result_search_terms', { p_lookback_days: 30, p_limit: 50 }),
+    // 자동 선별로 제외된 후보(사유 기록분) — 사유별 건수 요약용
+    admin.from('chat_reply_candidates').select('reject_reason').eq('status', 'rejected').not('reject_reason', 'is', null).limit(10000),
   ])
 
   // 조회 실패를 빈 목록으로만 바꾸면 컬럼 오류 같은 결함이 오래 숨는다 — 실패는 서버 로그에 남긴다
@@ -119,6 +122,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     ['synonym_group_members', candidatesResult.error],
     ['chat_reply_candidates', replyCandidatesResult.error],
     ['get_zero_result_search_terms', zeroResultResult.error],
+    ['chat_reply_candidates(auto_excluded)', autoExcludedResult.error],
   ]
   for (const [name, err] of queryFailures) {
     if (err) console.error(`[cms/chat/qna] ${name} 조회 실패:`, err.message)
@@ -145,6 +149,13 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   }))
 
   const replyCandidates = (replyCandidatesResult.error ? [] : (replyCandidatesResult.data ?? [])) as ReplyCandidateRow[]
+  const excludedTally = new Map<string, number>()
+  for (const r of (autoExcludedResult.error ? [] : (autoExcludedResult.data ?? [])) as Array<{ reject_reason: string | null }>) {
+    if (r.reject_reason) excludedTally.set(r.reject_reason, (excludedTally.get(r.reject_reason) ?? 0) + 1)
+  }
+  const autoExcluded = [...excludedTally.entries()]
+    .map(([reason, count]) => ({ label: EXCLUSION_LABEL[reason as ExclusionReason] ?? reason, count }))
+    .sort((x, y) => y.count - x.count)
   const zeroResultTerms = (zeroResultResult.error ? [] : (zeroResultResult.data ?? [])) as ZeroResultTermRow[]
 
   return {
@@ -156,6 +167,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     cmsRole,
     synonymCandidates,
     replyCandidates,
+    autoExcluded,
     zeroResultTerms,
     categories: await loadCannedCategories(admin),
   }

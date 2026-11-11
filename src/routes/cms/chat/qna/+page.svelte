@@ -635,6 +635,9 @@
     <div class="toolbar-left">
       <h2 class="page-title">빠른답변 후보</h2>
       <span class="count-badge">{data.replyCandidates.length}건</span>
+      {#if data.autoExcluded.length > 0}
+        <span class="auto-excluded">자동 제외 {data.autoExcluded.reduce((n, x) => n + x.count, 0)}건 ({data.autoExcluded.map((x) => `${x.label} ${x.count}`).join(' · ')})</span>
+      {/if}
     </div>
   </div>
 
@@ -1346,6 +1349,11 @@
     color: var(--cs-text-mid, #666);
     margin: 0;
   }
+  .auto-excluded {
+    font: 400 12px/1.4 'Noto Sans KR', sans-serif;
+    color: var(--cs-text-light, #aaa);
+  }
+
   .cand-empty-sub {
     font: 400 13px/1.6 'Noto Sans KR', sans-serif !important;
     color: var(--cs-text-light, #aaa) !important;
