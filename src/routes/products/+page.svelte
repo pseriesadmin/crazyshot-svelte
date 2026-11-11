@@ -1305,8 +1305,8 @@
 
   /* ── DESKTOP SLIDER – hidden on mobile ── */
   .d-load-sentinel { height: 1px; }
-  /* --dock-peek: 도크가 접힌 상태에서 보이는 높이 — 모바일은 '제목 + 카드 썸네일 전체'가 잘리지 않는 고정값 240px(제목 39~65 · 썸네일 95~234 + 여유, 2026-11-06), PC는 기존 30% */
-  .bottom-dock { display: contents; --dr: 30px; --dock-peek: 240px; }  /* 모바일 카드 대 30px */
+  /* --dock-peek: 도크가 접힌 상태에서 보이는 높이 — 모바일은 '제목 + 카드 썸네일 + 상품명·요금(가격 두 줄 줄바꿈 포함, 도크 상단 기준 ~295px)'이 탭바에 가려지지 않는 고정값 320px(2026-11-11, 구 240px), PC는 기존 30% */
+  .bottom-dock { display: contents; --dr: 30px; --dock-peek: 320px; }  /* 모바일 카드 대 30px */  /* 모바일 카드 대 30px */
   /* 모바일 MD추천↔브랜드 슬라이드 사이 여백 50% 축소: 위 하단 패딩 −20px + 브랜드 상단 내부 여백 −27px(합계 약 −47px, 기존 약 95px) — PC는 @media에서 해제 */
   .bottom-dock :global(.brand-marquee-wrap) { margin-top: -27px; }
   /* 모바일 일반 배치(목록 끝, 도크 아님): 위 상품 목록 영역과의 여백 +50% (상단 패딩 26px → 39px). 도크로 뜬 상태는 26px 유지 */
