@@ -4,6 +4,7 @@ import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import type { RequestHandler } from './$types'
 
 export const DELETE: RequestHandler = async ({ params, locals }) => {
@@ -26,6 +27,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 
   const p = profile as { cms_role: string | null } | null
   if (!p?.cms_role) return json({ error: '관리자 권한이 필요합니다.' }, { status: 403 })
+  // 정책 결정 2026-11-11(Stephen): 상담 세션(대화·CS 기록) 완전 삭제는 매니저 이상만 — 파트너 불가
+  if (!hasSettingsAccess(p.cms_role)) return json({ error: '상담 세션 삭제는 매니저 이상만 할 수 있습니다.' }, { status: 403 })
 
   const sessionId = params.id
 

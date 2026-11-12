@@ -48,6 +48,8 @@ export type ActionCardType =
   | 'cancel_request'
   // 예약 취소 문의 (고객 발신, 배송형 배송 당일 09시 이후·반출 후 — 고객 CTA 는 대여 정보, 관리자 CTA 는 예약 패널)
   | 'cancel_inquiry'
+  // 고객 반납정보 등록 완료 알림 (고객 발신 — 고객·관리자 양쪽 채팅에 노출, 관리자 CTA 는 예약 패널의 검수 탭, 고객은 안내 문구만)
+  | 'return_submitted'
 
 export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 
@@ -61,7 +63,7 @@ export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 //   'coupon'              → CouponTabContent — 고객 확인용 쿠폰함 화면
 //   'empty'               → CMS에서 보여줄 화면이 없음 안내
 export type CtaModalRequest =
-  | { kind: 'reservation'; title: string; reservationId: number; menuUrl: string | null; initialTab?: 'rental' | 'contract' }
+  | { kind: 'reservation'; title: string; reservationId: number; menuUrl: string | null; initialTab?: 'rental' | 'contract' | 'inspection' }
   | { kind: 'contract-preview'; title: string; contractId: string; reservationId: number }
   | { kind: 'inquiry'; title: string }
   | { kind: 'inquiry-reply-form'; title: string; postId: string }

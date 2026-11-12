@@ -3,6 +3,7 @@
   import { enhance } from '$app/forms'
   import type { SubmitFunction } from '@sveltejs/kit'
   import { goto } from '$app/navigation'
+  import { page } from '$app/state'
   import { csToast } from '$lib/utils/toast'
   import { slide } from 'svelte/transition'
   import { RETURN_CHECKLIST_ITEMS } from '$lib/utils/returnNotice'
@@ -184,6 +185,12 @@
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
   let canManagePaymentAndLocker = $derived(hasSettingsAccess(cmsRole ?? ''))
 
+  // 정책 결정 2026-11-11(Stephen): 파트너는 '결제정보'·'계약서' 탭에 접근할 수 없다(대여정보·고객정보·검수·알림발송은 가능).
+  // cmsRole prop 이 없는 화면(상담 채팅·간트 등)도 CMS 레이아웃이 내려주는 역할로 판정한다 — 서버(API)도 같은 기준으로 막는다.
+  const PARTNER_HIDDEN_TABS = ['payment', 'contract'] as const
+  let panelRole = $derived(cmsRole ?? (page.data as { cmsRole?: string | null } | undefined)?.cmsRole ?? null)
+  let effectiveHiddenTabs = $derived<readonly string[]>(panelRole === 'partner' ? [...hiddenTabs, ...PARTNER_HIDDEN_TABS] : hiddenTabs)
+
   // Stage 4 확장 기능 권한 게이트:
   // canEditProducts — hold 상태이고 결제 미완료(payment_confirmed_at IS NULL)인 경우만 상품 추가/삭제 허용
   // ⛔ 2026-10-06 정책: 예약 구성(상품·재고·옵션) 관리자 직접 편집은 막는다 — 고객이 확인한 금액·계약과 달라지기 때문
@@ -286,12 +293,12 @@
 
   // 최초 마운트 시 활성 탭 — 숨긴 탭(hiddenTabs)이 initialTab 으로 지정돼도 첫 렌더부터 대여정보로 시작한다(sp3 MINOR-1)
   function startTab(): 'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms' {
-    return initialTab && !(hiddenTabs as readonly string[]).includes(initialTab) ? initialTab : 'rental'
+    return initialTab && !effectiveHiddenTabs.includes(initialTab) ? initialTab : 'rental'
   }
   let activeTab   = $state<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>(startTab())
   // 숨긴 탭(hiddenTabs, 모바일 대여현황)은 어떤 경로로도 열리지 않는다 — 초기 탭이나 코드가 숨긴 탭을 가리키면 대여정보로 돌린다
   $effect(() => {
-    if ((hiddenTabs as readonly string[]).includes(activeTab)) activeTab = 'rental'
+    if (effectiveHiddenTabs.includes(activeTab)) activeTab = 'rental'
   })
   let isSubmitting = $state(false)
 
@@ -488,6 +495,9 @@
     evSubmission !== null && (!!evSubmission.locker_number || !!evSubmission.locker_password || !!evSubmission.locker_password_hidden),
   )
   let evGroups      = $state<EvidenceGroup[]>([])
+  // 같은 주문의 다른 상품(예약)의 고객 제출 — 제출은 예약 1건마다 따로 저장되고 목록은 주문 1건 = 1행(대표 예약)이라 따로 받아 보여 준다(2026-11-11)
+  interface EvidenceSiblingSub { reservation_id: number; product_name: string | null; submission: EvidenceSubmission; groups: EvidenceGroup[] }
+  let evSiblingSubs = $state<EvidenceSiblingSub[]>([])
   let evViewerIndex = $state<number | null>(null)
   interface EvidenceInspection {
     reservation_status: string
@@ -533,15 +543,39 @@
       .then(async (r) => ({ ok: r.ok, body: await r.json() }))
       .then(({ ok, body }) => {
         if (evFetchedFor !== id) return
-        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; evAdminEntries = []; return }
-        evSubmission = body.submission ?? null
-        evInspection = body.inspection ?? null
-        evGroups = body.groups ?? []
-        evAdminEntries = body.admin_entries ?? []
-        if (Array.isArray(body.inspection_items) && body.inspection_items.length > 0) evChecklistItems = body.inspection_items
+        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; evSiblingSubs = []; evAdminEntries = []; return }
+        applyEvidenceBody(body)
       })
       .catch(() => { if (evFetchedFor === id) evError = '네트워크 오류로 조회하지 못했습니다.' })
       .finally(() => { evLoading = false })
+  })
+
+  function applyEvidenceBody(body: Record<string, unknown>): void {
+    evSubmission = (body.submission as EvidenceSubmission | null | undefined) ?? null
+    evInspection = (body.inspection as typeof evInspection | undefined) ?? null
+    evGroups = (body.groups as EvidenceGroup[] | undefined) ?? []
+    evSiblingSubs = (body.sibling_submissions as EvidenceSiblingSub[] | undefined) ?? []
+    evAdminEntries = (body.admin_entries as typeof evAdminEntries | undefined) ?? []
+    if (Array.isArray(body.inspection_items) && body.inspection_items.length > 0) evChecklistItems = body.inspection_items as typeof evChecklistItems
+  }
+
+  // 고객이 모바일(채팅 안내 → 반납정보 등록)에서 제출을 마치면 열려 있는 패널에도 반영한다(2026-11-11) —
+  // 검수 탭이 열려 있고 대여중·반납요청 단계인 동안 15초마다(화면이 보일 때만) 깜빡임 없이 다시 읽는다. 목록의 단계 칩은 따로 새로 읽지 않는다(칩이 바뀌어 열린 패널이 닫히는 것을 막기 위해).
+  $effect(() => {
+    if (activeTab !== 'inspection' || !['in_use', 'return_requested'].includes(row.status)) return
+    const id = row.reservation_id
+    const timer = setInterval(async () => {
+      if (document.visibilityState !== 'visible' || evLoading || evFetchedFor !== id) return
+      try {
+        const r = await fetch(`/api/cms/reservations/${id}/return-evidence`)
+        if (!r.ok || row.reservation_id !== id) return
+        const body = (await r.json()) as Record<string, unknown>
+        applyEvidenceBody(body)
+      } catch {
+        // 주기 갱신 실패는 조용히 넘긴다 — 다음 주기에 다시 시도
+      }
+    }, 15000)
+    return () => clearInterval(timer)
   })
 
   // 뷰어에는 사진만 넘긴다(영상은 카드 안에서 바로 재생). 화면의 사진 순서 = 뷰어 순서.
@@ -569,7 +603,7 @@
   const canInspect = $derived(canManagePaymentAndLocker && evInspection !== null)
   const canApproveStage = $derived(row.status === 'returned' || row.status === 'return_requested') // 검수 승인(완료 처리) 가능 단계
   // 헤더 [반납 검수 승인] 활성 조건: 반납요청·반납완료 단계 + 고객 반납 제출 정보 또는 CS 접수 정보가 등록돼 있고 이슈 검수중이 아닐 때
-  const hasInspectionInfo = $derived(evSubmission !== null || evAdminEntries.length > 0 || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
+  const hasInspectionInfo = $derived(evSubmission !== null || evSiblingSubs.length > 0 || evAdminEntries.length > 0 || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
   const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
   // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
   // 헤더 여정 현재 단계(2026-10-22, Stephen 확정 A안): 반납 일시가 지났거나 반납 안내가 발송된 대여중은 목록 '반납중' 칩과 맞춰 '반납중' 단계로 강조한다(표시용 — 실제 상태는 대여중 그대로)
@@ -2427,7 +2461,7 @@
         <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
           <input type="hidden" name="reservation_id" value={row.reservation_id} />
           <input type="hidden" name="status" value="cancelled" />
-          <button type="submit" class="btn-header-action btn-header-action--danger" disabled={isSubmitting}>예약취소</button>
+          <button type="submit" class="btn-header-action btn-header-action--danger" disabled={isSubmitting || !canChangeOrCancelReservation} title={!canChangeOrCancelReservation ? '예약변경 및 취소 권한이 없습니다' : undefined}>예약취소</button>
         </form>
       {/if}
       {#if canManagePaymentAndLocker && !isTerminal(row.status) && row.status !== 'hold' && row.status !== 'draft' && !hideChangeCancel}
@@ -2535,8 +2569,8 @@
         <button
           type="button"
           class="btn-header-action btn-header-action--danger"
-          disabled={isConfirmingCancel || confirmCancelDone || !canChangeOrCancelReservation}
-          title={!canChangeOrCancelReservation
+          disabled={isConfirmingCancel || confirmCancelDone || !canChangeOrCancelReservation || !canManagePaymentAndLocker}
+          title={!canChangeOrCancelReservation || !canManagePaymentAndLocker
             ? '예약변경 및 취소 권한이 없습니다'
             : '고객이 취소한 예약입니다. 눌러서 취소를 확인하면 고객 마이페이지에서 "취소" 화면으로 이동합니다'}
           onclick={handleConfirmCustomerCancel}
@@ -2570,7 +2604,7 @@
       { id: 'contract', label: '계약서'   },
       ...(showInspectionTab ? [{ id: 'inspection', label: '검수' }] : []),
       { id: 'sms',      label: '알림발송' },
-    ].filter((t) => !(hiddenTabs as readonly string[]).includes(t.id)) as tab (tab.id)}
+    ].filter((t) => !effectiveHiddenTabs.includes(t.id)) as tab (tab.id)}
       <button
         class="tab"
         class:tab-active={activeTab === tab.id}
@@ -3919,9 +3953,10 @@
         <div class="sms-empty">제출 내용을 불러오는 중…</div>
       {:else if evError}
         <div class="sms-empty" role="alert">{evError}</div>
-      {:else if !evSubmission}
+      {:else if !evSubmission && evSiblingSubs.length === 0}
         <div class="sms-empty">고객이 등록한 반납 정보가 아직 없습니다.</div>
       {:else}
+        {#if evSubmission}
         <div class="ev-meta">제출 일시 {smsDateLabel(evSubmission.submitted_at)}</div>
 
         {#if evSubmission.checklist.length > 0}
@@ -3970,6 +4005,38 @@
         {#if evGroups.length === 0}
           <div class="sms-empty">첨부된 사진이 없습니다.</div>
         {/if}
+        {/if}
+
+        <!-- 같은 주문의 다른 상품(예약)의 고객 제출 — 상품 이름으로 구분(사진은 새 창으로 열림) -->
+        {#each evSiblingSubs as sib (sib.reservation_id)}
+          <div class="ev-block">
+            <div class="ev-block-title">{sib.product_name ?? `예약 ${sib.reservation_id}`} · 제출 {smsDateLabel(sib.submission.submitted_at)}</div>
+            {#each sib.submission.checklist as c (c.key)}
+              <div class="ev-check" class:ev-check-off={!c.checked}>{c.checked ? '✓' : '－'} {c.label}</div>
+            {/each}
+            {#if sib.submission.locker_number || sib.submission.locker_password || sib.submission.locker_password_hidden}
+              <div class="ev-check">무인함 번호 {sib.submission.locker_number ?? '-'} · 비밀번호 {sib.submission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (sib.submission.locker_password ?? '-')}</div>
+            {/if}
+            {#if sib.submission.customer_feedback || sib.submission.customer_rating}
+              <div class="ev-check">이용 평가{sib.submission.customer_rating ? ` ${sib.submission.customer_rating}/5점` : ''}{sib.submission.customer_feedback ? ` · ${sib.submission.customer_feedback}` : ''}</div>
+            {/if}
+            {#each sib.groups as g (g.item_key)}
+              <div class="ev-block-title">{g.label} ({g.items.length})</div>
+              <div class="ev-thumbs">
+                {#each g.items as m (m.id)}
+                  {#if !m.url}
+                    <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                  {:else if m.kind === 'video'}
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                  {:else}
+                    <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt={g.label} /></a>
+                  {/if}
+                {/each}
+              </div>
+            {/each}
+          </div>
+        {/each}
       {/if}
 
       <!-- 관리자 직접 등록 목록 카드 — 등록한 관리자 이름 배지로 고객 제출과 구분, 카드를 눌러 상세를 펼친다 -->
@@ -4160,7 +4227,7 @@
           <form method="POST" action="/cms/reservation?/updateStatus" use:enhance={rejectEnhance}>
             <input type="hidden" name="reservation_id" value={row.reservation_id} />
             <input type="hidden" name="status" value="cancelled" />
-            <button type="submit" class="btn-danger-sm" disabled={isSubmitting}>예약취소</button>
+            <button type="submit" class="btn-danger-sm" disabled={isSubmitting || !canChangeOrCancelReservation} title={!canChangeOrCancelReservation ? '예약변경 및 취소 권한이 없습니다' : undefined}>예약취소</button>
           </form>
 
         <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 (2026-10-27 ④, Stephen 확정 — 하단 버튼 하나).

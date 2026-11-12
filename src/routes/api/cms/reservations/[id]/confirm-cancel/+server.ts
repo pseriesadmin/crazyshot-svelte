@@ -9,6 +9,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cmsMenus'
 
 export const POST: RequestHandler = async ({ params, locals }) => {
@@ -18,6 +19,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
   if (!session) return json({ ok: false, error: '인증 필요' }, { status: 401 })
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ ok: false, error: '권한 없음' }, { status: 403 })
+  // 정책 결정 2026-11-11(Stephen): 파트너가 취소할 수 있는 것은 결제 전 신청대기뿐 — 계약완료 예약의 고객 취소 확인(환불 처리 후 표식)은 매니저 이상만
+  if (!hasSettingsAccess(cmsRole)) return json({ ok: false, error: '취소 확인은 매니저 이상만 할 수 있습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {

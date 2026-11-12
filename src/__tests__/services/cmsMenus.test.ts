@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CMS_MENUS,
   hasMenuAccess,
+  isMenuGrantableToRole,
   findCmsMenuByKey,
   findCmsMenuKeyForPath,
   roleAllowsMenuByDefault,
@@ -219,8 +220,20 @@ describe('rental.change_cancel — 서버 액션 권한 체크 정합성 (2026-0
     expect(hasMenuAccess('manager', overrides, 'rental.change_cancel')).toBe(true);
   });
 
-  it('allowed=true 오버라이드는 partner에게 rental.change_cancel을 열어주지 않는다(좁히기 전용)', () => {
-    const overrides = [{ menu_key: 'rental.change_cancel', allowed: true }];
-    expect(hasMenuAccess('partner', overrides, 'rental.change_cancel')).toBe(false);
+  it('partner는 allowed=true 오버라이드가 있을 때만 rental.change_cancel이 열린다(2026-11-11 계정별 허용, 기본 OFF)', () => {
+    expect(hasMenuAccess('partner', [], 'rental.change_cancel')).toBe(false);
+    expect(hasMenuAccess('partner', [{ menu_key: 'rental.change_cancel', allowed: true }], 'rental.change_cancel')).toBe(true);
+    expect(hasMenuAccess('partner', [{ menu_key: 'rental.change_cancel', allowed: false }], 'rental.change_cancel')).toBe(false);
+  });
+
+  it('계정별 허용은 예약변경 및 취소 1건에만 적용된다 — 다른 메뉴는 allowed=true 여도 partner에게 열리지 않는다(좁히기 전용 유지)', () => {
+    expect(isMenuGrantableToRole('partner', 'rental.change_cancel')).toBe(true);
+    expect(isMenuGrantableToRole('partner', 'settings.admin')).toBe(false);
+    expect(isMenuGrantableToRole('partner', 'customers.membership')).toBe(false);
+    expect(isMenuGrantableToRole('partner', 'rental.contracts')).toBe(false);
+    expect(isMenuGrantableToRole('', 'rental.change_cancel')).toBe(false);
+    expect(hasMenuAccess('partner', [{ menu_key: 'rental.contracts', allowed: true }], 'rental.contracts')).toBe(false);
+    const grantable = CMS_MENUS.flatMap((m) => m.subMenus).filter((s) => s.grantableToLowerRole).map((s) => s.menu_key);
+    expect(grantable).toEqual(['rental.change_cancel']);
   });
 });

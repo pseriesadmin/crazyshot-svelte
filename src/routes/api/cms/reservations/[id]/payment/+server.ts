@@ -18,6 +18,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  // 정책 결정 2026-11-11(Stephen): 결제정보 탭은 파트너 접근 불가 — 결제 상세(PG 원문 포함)는 매니저 이상만
+  if (!hasSettingsAccess(cmsRole)) return json({ error: '결제정보는 매니저 이상만 볼 수 있습니다.' }, { status: 403 })
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 

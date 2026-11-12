@@ -20,6 +20,7 @@ import {
 } from '$lib/server/returnSubmission'
 import { sendPushToAdmins } from '$lib/server/push'
 import { registerDheroReturn } from '$lib/server/registerDheroReturn'
+import { postReturnRegisteredCard } from '$lib/server/returnRegisteredCard'
 import { loadReturnInspectionItems, loadReturnPhotoItems, customerChecklistOf, customerPhotoOf } from '$lib/server/returnInspectionItems'
 import type { RequestHandler } from './$types'
 
@@ -169,6 +170,14 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
     } catch {
       // 정리 실패는 무시
     }
+  }
+
+  // 고객 채팅 세션에 '반납등록 확인' 대화카드(고객 발신 return_submitted) — 관리자는 이 카드의 [반납등록 확인]으로 검수 탭을 바로 연다(2026-11-12, Stephen 지시).
+  // 실패해도 제출은 성공 처리(fail-soft) — 카드는 같은 예약에 한 번만 남는다.
+  try {
+    await postReturnRegisteredCard(admin, session.user.id, reservationId)
+  } catch (e) {
+    console.error('[return-submit] 반납등록 카드 기록 실패:', e instanceof Error ? e.message : e)
   }
 
   // 관리자에게 '반납 등록' 알림 — 고객이 반납 이력정보를 등록(재제출 포함)하면 CMS 직원에게 푸시한다(2026-10-19).

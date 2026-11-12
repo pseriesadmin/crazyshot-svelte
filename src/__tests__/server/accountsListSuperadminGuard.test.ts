@@ -424,3 +424,30 @@ describe('/cms/accounts/list — 대상(target)이 superadmin일 때만 발동�
     });
   });
 });
+
+describe('관리자 계정만 처리 — 고객 uuid 직접 전송 차단 (2026-11-11 전수 점검 MAJOR-7)', () => {
+  const CUSTOMER_ID = 'plain-customer-uid';
+  const actionsToCheck: [string, Record<string, string>][] = [
+    ['updateName', { full_name: '새이름' }],
+    ['updatePhone', { phone: '01011112222' }],
+    ['updateRole', { cms_role: 'manager' }],
+    ['toggleConcurrent', { current: 'true' }],
+    ['toggleSession', { current: '0' }],
+    ['toggleSuspend', { is_suspended: 'false' }],
+  ];
+
+  for (const [name, extra] of actionsToCheck) {
+    it(`${name}: 관리자(cms_role) 프로필이 없는 일반 고객 uuid 는 400 으로 거절하고 아무 것도 바꾸지 않는다`, async () => {
+      vi.clearAllMocks();
+      mockAdminStub = makeAdminStub({ rpc: { data: null, error: null } });
+      wireProfiles({ [CALLER_ID]: { cms_role: 'manager' }, [CUSTOMER_ID]: { cms_role: null } });
+      const result = await (actions as ActionMap)[name]({
+        request: makeRequest({ user_id: CUSTOMER_ID, ...extra }),
+        locals: makeAuthLocals(),
+      });
+      expect(result).toMatchObject({ status: 400 });
+      expect(mockAdminStub.rpc).not.toHaveBeenCalled();
+      expect(mockAdminStub.auth.admin.updateUserById).not.toHaveBeenCalled();
+    });
+  }
+});

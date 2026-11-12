@@ -53,12 +53,14 @@ describe('모바일 대여현황 패널 — 탭 메뉴', () => {
   })
 
   it('패널은 숨긴 탭 버튼을 그리지 않고, 숨긴 탭이 선택되면 대여정보로 되돌린다', () => {
-    expect(panel).toContain(".filter((t) => !(hiddenTabs as readonly string[]).includes(t.id))")
-    expect(panel).toMatch(/if \(\(hiddenTabs as readonly string\[\]\)\.includes\(activeTab\)\) activeTab = 'rental'/)
+    // 2026-11-11: 파트너 숨김 탭(결제정보·계약서)을 합친 effectiveHiddenTabs 로 판정한다(원래 hiddenTabs 를 포함)
+    expect(panel).toContain(".filter((t) => !effectiveHiddenTabs.includes(t.id))")
+    expect(panel).toMatch(/if \(effectiveHiddenTabs\.includes\(activeTab\)\) activeTab = 'rental'/)
+    expect(panel).toContain('[...hiddenTabs, ...PARTNER_HIDDEN_TABS]')
   })
 
   it('숨긴 탭이 초기 탭으로 지정돼도 첫 렌더부터 대여정보로 시작한다(첫 프레임에 숨긴 탭이 그려지지 않음)', () => {
-    expect(panel).toMatch(/function startTab\(\)[^{]*\{\s*return initialTab && !\(hiddenTabs as readonly string\[\]\)\.includes\(initialTab\) \? initialTab : 'rental'\s*\}/)
+    expect(panel).toMatch(/function startTab\(\)[^{]*\{\s*return initialTab && !effectiveHiddenTabs\.includes\(initialTab\) \? initialTab : 'rental'\s*\}/)
     expect(panel).toMatch(/let activeTab\s+= \$state<[^>]*>\(startTab\(\)\)/)
   })
 

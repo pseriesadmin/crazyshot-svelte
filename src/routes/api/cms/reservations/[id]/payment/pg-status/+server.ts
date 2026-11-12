@@ -10,6 +10,7 @@ import { env } from '$env/dynamic/private'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { findOrderPaymentTransaction } from '$lib/server/findOrderPaymentTransaction'
 import { summarizeTossPayment, type TossPaymentLike } from '$lib/utils/pgCancelStatus'
 
@@ -18,6 +19,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  // 정책 결정 2026-11-11(Stephen): 결제정보 탭은 파트너 접근 불가 — 이 탭이 호출하는 조회 API도 매니저 이상만
+  if (!hasSettingsAccess(cmsRole)) return json({ error: '결제정보는 매니저 이상만 볼 수 있습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
