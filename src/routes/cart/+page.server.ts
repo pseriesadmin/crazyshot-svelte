@@ -16,6 +16,7 @@ import { loadPointUseRules } from '$lib/server/pointUseSettings'
 import type { PageServerLoad } from './$types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { attachZipRanges } from '$lib/utils/deliveryArea'
+import { parseEditParam, loadCartEditContext, excludeSubmittedReservations, editRedirectLocation, type CartEditContext } from '$lib/server/cartEditLoader'
 
 // database.ts에 rental_guide_settings 미등록 상태 — cms/set/rental/+page.server.ts와 동일 패턴
 // (generate_typescript_types 이후 제거)
@@ -23,7 +24,7 @@ function untypedFrom(sb: SupabaseClient, table: string) {
   return (sb as unknown as { from: (t: string) => ReturnType<SupabaseClient['from']> }).from(table)
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
   const supabase = locals.supabase
 
   // 2026-10-09(Stephen 지시 — 플로팅 메뉴에서 장바구니 도착이 느림): 아래 공개 설정 조회 8개와 세션 확인은 서로 의존하지 않는데
@@ -159,6 +160,17 @@ export const load: PageServerLoad = async ({ locals }) => {
   // 담긴 항목이 없는 빈 장바구니를 볼 이유도 없다.
   if (!session || !isRealMemberSession(session)) {
     throw redirect(303, '/auth/login?redirect=/cart')
+  }
+
+  // 예약정보 수정 모드(/cart?edit=<예약 id>) — 수정 가능 여부는 DB 판정(get_reservation_edit_state)만 쓴다.
+  // 불가·타인 주문·조회 오류는 전부 마이페이지 목록으로 돌려보내며 사유 코드를 editError 로 전달한다. edit 가 없으면 아래는 전혀 실행되지 않는다.
+  let editContext: CartEditContext | null = null
+  const editParam = parseEditParam(url.searchParams.get('edit'))
+  if (editParam.present) {
+    if (editParam.id === null) throw redirect(303, editRedirectLocation('BAD_REQUEST'))
+    const editResult = await loadCartEditContext(supabase, session.user.id, editParam.id)
+    if (!editResult.ok) throw redirect(303, editRedirectLocation(editResult.reason))
+    editContext = editResult
   }
 
   const FIRST_RENTAL_EXCLUDE = ['hold', 'draft', 'cancelled', 'expired'] as const
@@ -315,7 +327,12 @@ export const load: PageServerLoad = async ({ locals }) => {
       ((linkedOrderItems ?? []) as Array<{ reservation_id: number | string }>)
         .map(row => String(row.reservation_id))
     )
-    rawReservations = rawReservationsUnfiltered.filter(r => !alreadySubmittedIds.has(String(r.id)))
+    // 수정 모드에서는 수정 대상 주문의 예약만 면제(editContext 가 없으면 기존 동작 그대로)
+    rawReservations = excludeSubmittedReservations(
+      rawReservationsUnfiltered,
+      alreadySubmittedIds,
+      new Set(editContext?.editOrderReservationIds ?? []),
+    )
   }
   // id는 Stage DB bigint이지만 CalculateCartTotalArgs는 string[] — String() 변환으로 호환
   const reservationIds  = rawReservations.map(r => String(r.id))
@@ -729,6 +746,14 @@ export const load: PageServerLoad = async ({ locals }) => {
     docLanding:     docLandingKind(profileResult.data as ProfileRow | null),
     userCoupons:     filteredCoupons as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
+    // 예약정보 수정 모드 — edit 파라미터가 없으면 전부 기본값(isEditMode=false)
+    isEditMode:             editContext !== null,
+    editReservationId:      editContext?.editReservationId ?? null,
+    editOrderId:            editContext?.editOrderId ?? null,
+    editOrderReservationIds: editContext?.editOrderReservationIds ?? ([] as string[]),
+    initialPoints:          editContext?.initialPoints ?? null,
+    initialCouponIds:       editContext?.initialCouponIds ?? ([] as string[]),
+    editReservationDetails: editContext?.reservationDetails ?? ({} as Record<string, import('$lib/server/cartEditLoader').EditReservationDetail>),
     hasUserAddress,
     // "회원정보 반영" 체크박스 자동채움용 — 체크 시 이 값으로 폼 필드를 덮어씀(BND: front-uiux 검수
     // 2026-08-17 발견 — 기존엔 체크박스가 토글만 될 뿐 실제 반영 로직이 전혀 없었음)

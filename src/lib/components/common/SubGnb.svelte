@@ -17,6 +17,8 @@
     backHref?: string
     /** backHref 이동 시 기록을 새로 쌓지 않고 현재 항목을 교체한다(순환 방지) */
     backReplace?: boolean
+    /** 모바일 뒤로가기 화살표 대신 '+ 상품 더담기'를 보이고 /products 로 이동 — 장바구니 전용 */
+    addProduct?: boolean
   }
 
   let {
@@ -28,7 +30,8 @@
     noGnbOffset = false,
     titleLocale = 'kr',
     backHref,
-    backReplace = false
+    backReplace = false,
+    addProduct = false
   }: Props = $props()
 
   let moreMenuOpen = $state(false)
@@ -236,11 +239,18 @@
 <div class="sub-gnb-mobile-wrap" bind:this={wrapEl}>
 <div class="sub-gnb-mobile" class:floating class:stuck class:m-hidden={mHidden} class:idle-hidden={idleHidden} class:no-anim={noAnim} style:top={stuckTop} bind:this={barEl}>
   <div class="gnb-pill">
+    {#if addProduct}
+      <button class="add-btn" onclick={() => goto('/products')} aria-label="상품 더담기">
+        <span aria-hidden="true">+</span>
+        <span>상품 더담기</span>
+      </button>
+    {:else}
     <button class="back-btn" onclick={goBack} aria-label="뒤로가기">
       <svg width="15" height="10" viewBox="0 0 17 12" fill="none" aria-hidden="true">
         <path d="M1 6H16M1 6L6 1M1 6L6 11" stroke="#444444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
+    {/if}
     <span class="gnb-title">{title}</span>
     <button class="menu-btn" onclick={() => moreMenuOpen = true} aria-label="더보기 메뉴">
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
@@ -468,6 +478,26 @@
     padding: 0;
     margin: -8px;
   }
+
+  .add-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 44px;
+    min-width: 44px;
+    margin: -8px;
+    padding: 0 8px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    flex-shrink: 0;
+    font: var(--text-m-script-14B);
+    color: var(--cs-text);
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .add-btn:hover { background: var(--cs-lilac); }
 
   .gnb-title {
     font: var(--text-m-body-16B);

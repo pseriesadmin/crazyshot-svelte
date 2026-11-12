@@ -41,6 +41,8 @@ export interface ReservationAmount {
   deposit:      number
 }
 
+type EditStateRpc = (fn: string, args: { p_reservation_id: number }) => Promise<{ data: unknown; error: unknown }>
+
 export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { session } = await locals.safeGetSession()
   // 익명(채팅 게스트) 세션은 가입 전 계정이라 로그인으로 보낸다(빈 화면 방지, 2026-10-27)
@@ -143,5 +145,30 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
       }
     : null
 
-  return { reservation, options, amount }
+  // 예약정보 수정 버튼 — 신청대기 예약만 DB 판정(get_reservation_edit_state)으로 확인하고, 장바구니에는 같은 주문의 대표(최소 신청대기) 예약 id 를 넘긴다
+  let canEdit = false
+  let editTargetId: string | null = null
+  if (typedRaw.status === 'hold') {
+    try {
+      const { data: own } = await locals.supabase.from('order_items').select('order_id').eq('reservation_id', reservationId).limit(1)
+      const orderId = (own as Array<{ order_id: number }> | null)?.[0]?.order_id
+      let targetId = reservationId
+      if (typeof orderId === 'number') {
+        const { data: sibs } = await locals.supabase.from('order_items').select('reservation_id').eq('order_id', orderId)
+        const sibIds = ((sibs ?? []) as Array<{ reservation_id: number }>).map(s => s.reservation_id)
+        if (sibIds.length > 0) {
+          const { data: holds } = await locals.supabase.from('rental_reservations').select('id').in('id', sibIds).eq('status', 'hold').eq('user_id', session.user.id)
+          const holdIds = ((holds ?? []) as Array<{ id: number }>).map(h => h.id)
+          if (holdIds.length > 0) targetId = Math.min(...holdIds)
+        }
+      }
+      const { data: state, error: stateError } = await (locals.supabase.rpc as unknown as EditStateRpc)('get_reservation_edit_state', { p_reservation_id: targetId })
+      canEdit = !stateError && typeof state === 'object' && state !== null && (state as { can_edit?: unknown }).can_edit === true
+      if (canEdit) editTargetId = String(targetId)
+    } catch {
+      canEdit = false
+    }
+  }
+
+  return { reservation, options, amount, canEdit, editTargetId }
 }

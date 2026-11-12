@@ -2141,7 +2141,8 @@
     color: #ff3535; letter-spacing: -0.5px;
   }
   .m-prod-price .price-label { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
-  .m-prod-price .price-num   { font-family: var(--font-kr); font-size: 21px; font-weight: 900; }
+  /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(D-DIN, 한글 대체 포함) 적용 — 크기(21px)·굵기·색 기존 유지 */
+  .m-prod-price .price-num   { font-family: 'D-DIN Exp', var(--font-kr); font-size: 21px; font-weight: 900; -webkit-text-stroke: 0.5px currentColor; /* D-DIN 최대 웨이트 700 → 900 보정 */ }
   .m-prod-price .price-sep   { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
   .m-prod-desc { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
 

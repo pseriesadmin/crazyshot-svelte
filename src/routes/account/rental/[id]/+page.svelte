@@ -181,13 +181,13 @@
     {/if}
 
     <!-- 예약신청수정 버튼 — 계약 서명 전(hold 상태) 카드 수정 가능 -->
-    {#if !res.has_signed_contract && res.status === 'hold'}
+    {#if data.canEdit && data.editTargetId}
       <button
         type="button"
         class="action-btn"
-        onclick={() => goto('/cart')}
+        onclick={() => goto(`/cart?edit=${data.editTargetId}`)}
       >
-        예약신청 수정하기
+        예약정보 수정
       </button>
       <p class="action-hint">장바구니에서 날짜·방식을 수정한 뒤 다시 신청할 수 있어요.</p>
     {/if}

@@ -285,6 +285,10 @@
   .pc-price-num {
     font: var(--text-m-body-16B);          /* 16px Bold → Black 오버라이드 */
     font-weight: 900;
+    /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(--text-m-num-18B 와 같은 D-DIN, 한글 대체 포함) 적용 — 크기(16px)·색은 기존 유지, PC 는 아래 @media 의 font 축약형이 그대로 덮어써 무변경 */
+    font-family: 'D-DIN Exp', var(--font-kr-heading);
+    /* D-DIN 은 700 이 최대 웨이트라 900 만으로는 Bold(700) 로 렌더 — 장바구니와 같은 방식으로 같은 색 0.5px 외곽선을 더해 900 만큼 굵게(Stephen 지시 '900 이 반영되지 않음'). PC 는 아래 @media 에서 해제 */
+    -webkit-text-stroke: 0.5px currentColor;
     line-height: 1;
     font-variant-numeric: tabular-nums;
     /* purple-60 컬러토큰 반영 */
@@ -338,7 +342,7 @@
     .pc-price-group{ gap: 5px; }
     .pc-price-row   { flex-wrap: nowrap; gap: 5px; letter-spacing: -0.5px; }
     .pc-price-label { font: var(--text-pc-body-14); font-weight: 700; line-height: 1; }     /* 14px Bold */
-    .pc-price-num   { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; } /* 18px Bold */
+    .pc-price-num   { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; -webkit-text-stroke: 0; } /* 18px Bold — 모바일 전용 외곽선 해제 */
     .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; color: inherit; }     /* 14px Bold */
     /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
     .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
