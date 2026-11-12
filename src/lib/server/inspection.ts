@@ -117,7 +117,32 @@ export async function ensureReturnedForInspection(admin: AnyClient, reservationI
   return { ok: true }
 }
 
+/**
+ * 반납 기록(고객 제출·관리자 대리 등록)이 없는 같은 주문 상품 id 목록 — 소급 면제(return_record_exempt) 제외 (Migration #813).
+ * 조회에 실패하면 null — 호출한 쪽이 승인을 진행하지 않는다(확인 못 한 채 상태부터 바꾸는 일이 없게, fail-closed).
+ */
+export async function listMissingReturnRecords(admin: AnyClient, reservationId: number): Promise<number[] | null> {
+  try {
+    const { data, error } = await admin.rpc('return_records_missing', { p_reservation_id: reservationId })
+    if (error || !Array.isArray(data)) {
+      console.error('[inspection] return_records_missing 조회 실패:', error?.message ?? 'not array')
+      return null
+    }
+    return (data as unknown[]).map((v) => Number(v)).filter((n) => Number.isInteger(n))
+  } catch (e) {
+    console.error('[inspection] return_records_missing 조회 예외:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
+export const RETURN_RECORD_MISSING_ERROR = '반납 정보가 등록되지 않은 상품이 있어요. 모든 상품의 반납 정보를 등록한 뒤 승인해 주세요.'
+export const RETURN_RECORD_CHECK_FAILED_ERROR = '반납 정보 등록 여부를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.'
+
 export async function approveInspection(admin: AnyClient, reservationId: number, adminId: string): Promise<InspectionResult> {
+  // 상품별 반납 기록 확인(2026-11-12, Stephen 지시) — 상태를 바꾸기 전에 먼저 막는다(DB 승인 함수도 같은 규칙으로 한 번 더 막는다)
+  const missing = await listMissingReturnRecords(admin, reservationId)
+  if (missing === null) return { ok: false, error: RETURN_RECORD_CHECK_FAILED_ERROR }
+  if (missing.length > 0) return { ok: false, error: RETURN_RECORD_MISSING_ERROR }
   const ready = await ensureReturnedForInspection(admin, reservationId)
   if (!ready.ok) return ready
   const { data, error } = await admin.rpc('approve_return_inspection', { p_reservation_id: reservationId, p_admin_id: adminId })

@@ -75,7 +75,7 @@ describe('연결 지점 소스 가드', () => {
     expect(s).toContain("import { postReturnRegisteredCard } from '$lib/server/returnRegisteredCard'")
     const call = s.indexOf('await postReturnRegisteredCard(')
     expect(call).toBeGreaterThan(s.indexOf("p_new_status: 'return_requested'"))
-    expect(call).toBeLessThan(s.indexOf("return json({ ok: true })"))
+    expect(call).toBeLessThan(s.lastIndexOf("return json({ ok: true, registered"))
     expect(s.slice(call - 40, call + 200)).toMatch(/try \{[\s\S]*postReturnRegisteredCard[\s\S]*\} catch/)
   })
   it('관리자 CTA 는 검수 탭으로, 고객 화면은 CTA 없이 안내만', () => {

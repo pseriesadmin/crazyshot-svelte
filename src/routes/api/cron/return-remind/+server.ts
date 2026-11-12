@@ -79,13 +79,15 @@ export const GET: RequestHandler = async ({ request }) => {
         const { error: chatErr } = await admin.rpc('send_rental_chat_notification', {
           p_reservation_id: row.reservation_id,
           p_notify_type:    'return_remind',
+          // 묶음이면 '대표 상품명 외 N개 상품'(Migration #819 — 카드 본문·상품명 표기)
+          p_product_label:  row.product_name,
         })
         if (chatErr) throw new Error(`채팅카드 발송 실패: ${chatErr.message}`)
 
         // ④ 브라우저 푸시 + SMS (fail-soft: 내부에서 예외를 catch하므로 여기서 throw 없음)
         // SMS도 이 허브가 함께 발송한다(2026-10-10) — 푸시와 같은 안내문장(CMS 편집값 또는 기본 문구)을 쓰도록
         // 이 크론이 별도 문구로 직접 보내던 경로를 없앴다. 같은 날 중복 방지·발송 로그는 허브(sendLifecycleSms)가 처리한다.
-        await sendReservationLifecyclePush(admin, row.reservation_id, 'return_remind')
+        await sendReservationLifecyclePush(admin, row.reservation_id, 'return_remind', { productNameOverride: row.product_name ?? undefined })
 
         succeeded++
       } catch (err) {

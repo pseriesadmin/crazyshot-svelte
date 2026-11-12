@@ -1,5 +1,5 @@
 // 반납 방식별 단계 알림 정의 (2026-10-17, Migration #722) — 크론(/api/cron/return-notice)과 테스트가 공유하는 순수 모듈.
-// 발송 시각(Migration #736): 택배류=반납일 09:00 / 퀵=반납 일시 3시간 전(quick_5h 키) / 무인함=반납 일시 3시간 전(locker_2h 키) / 방문=기존 09시 크론. 단계 키 이름은 기존 로그 호환을 위해 유지한다.
+// 발송 시각(Migration #736): 택배류=반납일 09:00 / 퀵=반납 일시 3시간 전(quick_5h 키) / 무인함 안내(locker_2h 키)=방문·퀵 예약의 반납 일시 1시간 전(Migration #796, Stephen 2026-11-06 확정 — 이전 #736 의 3시간 전에서 변경) / 방문은 기존 09시 return_remind 도 함께. 단계 키 이름은 기존 로그 호환을 위해 유지한다.
 // 단계 산출(시각·방식)은 DB 함수 claim_return_notice_targets 가 하고, 여기서는 단계 → 알림 유형·카드 버튼·이동 주소만 정한다.
 // 푸시·문자 문구는 push.ts CUSTOMER_LIFECYCLE_PUSH_COPY / sms.ts LIFECYCLE_SMS_COPY 가 정본이다(같은 유형 키).
 

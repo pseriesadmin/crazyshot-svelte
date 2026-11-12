@@ -3,6 +3,7 @@
    * /account/rental/[id]/return-submit — 고객 반납 제출 화면 (Migration #722)
    * 반납 방식별 안내 알림 CTA(택배 [반납요청] · 무인함 [무인함 반납완료] · 퀵 [반납 진행중])의 착지 화면.
    * UI: return-method 화면과 같은 최소 헤더 패턴 · 체크 버튼 = front-uiux.md §17 · 업로드 = §15(영상은 반납 증빙 전용 확장)
+   * 2026-11-12(Stephen 지시): 한 주문에 상품이 여러 개면 상품별(data.units)로 사진·체크리스트·무인함 정보를 각각 받는다 — 모든 상품이 채워져야 [다음]·제출이 열린다. 이용 평가는 주문 전체에 1번.
    * 2026-10-22: 카드 슬롯 5장(소개 → 1단계 → 2단계 → 3단계 이용 평가 → 완료) + 반납등록 미션 포인트(Migration #739). 제출은 3단계에서 한 번만 POST.
    * Svelte 5 Runes 전용 — Svelte 4 문법 금지
    */
@@ -17,6 +18,7 @@
   import {
     RETURN_MEDIA_ITEMS,
     RETURN_SUBMIT_RULES,
+    type ReturnSubmitMethod,
   } from '$lib/utils/returnNotice'
   import type { PageData } from './$types'
 
@@ -32,9 +34,15 @@
   interface Uploaded { path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }
 
   const method = $derived(data.method)
-  const rules = $derived(method ? RETURN_SUBMIT_RULES[method] : null)
-  const mediaItems = $derived(method === 'courier' ? data.courierPhotoItems : method ? RETURN_MEDIA_ITEMS[method] : [])
-  const reservationId = $derived(data.rental.id)
+  // 등록할 상품들 — 상품마다 자기 반납 방식의 요건(사진·체크·무인함 정보)으로 각각 받는다
+  const units = $derived(data.units)
+  const multi = $derived(units.length > 1)
+  const hasQuick = $derived(units.some((u) => u.method === 'quick'))
+  const firstLockerId = $derived(units.find((u) => rulesOf(u.method).lockerInfo)?.id ?? null)
+  const firstQuickId = $derived(units.find((u) => u.method === 'quick')?.id ?? null)
+  function rulesOf(m: ReturnSubmitMethod) { return RETURN_SUBMIT_RULES[m] }
+  function mediaItemsOf(m: ReturnSubmitMethod): { key: string; label: string }[] { return m === 'courier' ? data.courierPhotoItems : RETURN_MEDIA_ITEMS[m] }
+  const kk = (id: number, key: string): string => `${id}:${key}`
   // 소개 화면 배경 폴라로이드 — 상품 이미지가 적으면 같은 사진을 돌려 써서 5장을 채운다
   const polaroids = $derived(data.productImages.length ? Array.from({ length: 6 }, (_, i) => data.productImages[i % data.productImages.length]) : [])
   // 폴라로이드 배치 — 화면을 열 때마다 기준 자리(배경을 덮는 6곳)에서 위치·기울기·겹침 순서가 조금씩 무작위로 달라진다.
@@ -59,11 +67,12 @@
     })
   })
 
+  // 상품별 입력 — 체크·사진은 `${예약id}:${항목키}`, 무인함 정보는 예약 id 로 구분한다
   let checked = $state<Record<string, boolean>>({})
   let uploads = $state<Record<string, Uploaded[]>>({})
   let uploadingCount = $state(0)
-  let lockerNumber = $state('')
-  let lockerPassword = $state('')
+  let lockerNumber = $state<Record<number, string>>({})
+  let lockerPassword = $state<Record<number, string>>({})
   let isSaving = $state(false)
   let errorMsg = $state<string | null>(null)
 
@@ -134,27 +143,26 @@
   const slideMs = reduceMotion ? 0 : 260
 
   const checklistItems = $derived(data.checklistItems)
-  const allChecked = $derived(checklistItems.every((i) => checked[i.key]))
-  // 사진이 필수인 방식은 화면에 나온 사진 항목을 모두 채워야 한다(항목마다 1장 이상)
-  const allPhotosFilled = $derived(mediaItems.every((i) => (uploads[i.key] ?? []).length > 0))
-  // 단계별 [다음] 활성 조건 — 서버 검증(validateReturnSubmit)과 같은 요건을 화면에서 먼저 안내
-  const canNext1 = $derived.by(() => {
-    if (!rules || uploadingCount > 0) return false
-    if (method === 'quick') return handover
-    return !rules.photosRequired || allPhotosFilled
-  })
+  const allCheckedOf = (id: number): boolean => checklistItems.every((i) => checked[kk(id, i.key)])
+  // 사진이 필수인 방식은 화면에 나온 사진 항목을 모두 채워야 한다(항목마다 1장 이상) — 상품마다
+  const allPhotosFilledOf = (id: number, m: ReturnSubmitMethod): boolean => mediaItemsOf(m).every((i) => (uploads[kk(id, i.key)] ?? []).length > 0)
+  const lockerNo = (id: number): string => (lockerNumber[id] ?? '').trim()
+  const lockerPw = (id: number): string => (lockerPassword[id] ?? '').trim()
   // 퀵: 무인함을 쓴 경우에만 입력하는 선택 항목 — 입력하면 번호·비밀번호 둘 다 규칙에 맞아야 한다(서버 validateReturnSubmit 과 같은 기준)
-  const quickLockerPartial = $derived(!!rules?.lockerInfoOptional && (!!lockerNumber.trim() !== (lockerPassword.trim().length > 0) || (lockerPassword.trim().length > 0 && lockerPassword.trim().length < 4)))
-  const canNext2 = $derived.by(() => {
-    if (!rules) return false
-    if (rules.checklist) return allChecked
-    if (rules.lockerInfo) return !!lockerNumber.trim() && lockerPassword.trim().length >= 4
-    if (quickLockerPartial) return false
-    return true
-  })
+  const quickPartialOf = (id: number, m: ReturnSubmitMethod): boolean => !!rulesOf(m).lockerInfoOptional && (!!lockerNo(id) !== (lockerPw(id).length > 0) || (lockerPw(id).length > 0 && lockerPw(id).length < 4))
+  const unit1Ok = (u: { id: number; method: ReturnSubmitMethod }): boolean => u.method === 'quick' ? true : !rulesOf(u.method).photosRequired || allPhotosFilledOf(u.id, u.method)
+  const unit2Ok = (u: { id: number; method: ReturnSubmitMethod }): boolean => {
+    const r = rulesOf(u.method)
+    if (r.checklist) return allCheckedOf(u.id)
+    if (r.lockerInfo) return !!lockerNo(u.id) && lockerPw(u.id).length >= 4
+    return !quickPartialOf(u.id, u.method)
+  }
+  // 단계별 [다음] 활성 조건 — 서버 검증(validateOrderReturnSubmit)과 같은 요건(모든 상품)을 화면에서 먼저 안내
+  const canNext1 = $derived(units.length > 0 && uploadingCount === 0 && (!hasQuick || handover) && units.every(unit1Ok))
+  const canNext2 = $derived(units.length > 0 && units.every(unit2Ok))
   const STEP_TITLE: Record<1 | 2 | 3, string> = { 1: '사진 등록', 2: '', 3: '이용 평가' }
-  const step2Title = $derived(method === 'courier' ? '반납상품 체크리스트' : method === 'locker' || method === 'visit' ? '무인함 정보' : '반납 안내 확인')
-  const step1Title = $derived(method === 'quick' ? '인계 확인' : STEP_TITLE[1])
+  const step2Title = $derived(units.every((u) => u.method === 'courier') ? '반납상품 체크리스트' : units.every((u) => u.method === 'locker' || u.method === 'visit') ? '무인함 정보' : units.every((u) => u.method === 'quick') ? '반납 안내 확인' : '반납 정보 확인')
+  const step1Title = $derived(units.every((u) => u.method === 'quick') ? '인계 확인' : STEP_TITLE[1])
 
   function goNext(): void {
     errorMsg = null
@@ -182,15 +190,7 @@
     else window.close()
   }
 
-  const canConfirm = $derived.by(() => {
-    if (!rules || isSaving || uploadingCount > 0) return false
-    if (method === 'quick' && !handover) return false
-    if (rules.checklist && !allChecked) return false
-    if (rules.photosRequired && !allPhotosFilled) return false
-    if (rules.lockerInfo && (!lockerNumber.trim() || lockerPassword.trim().length < 4)) return false
-    if (quickLockerPartial) return false
-    return true
-  })
+  const canConfirm = $derived(units.length > 0 && !isSaving && uploadingCount === 0 && canNext1 && canNext2)
 
   function formatDate(dt: string | null): string {
     return dt ? dt.slice(0, 10) : '-'
@@ -215,15 +215,15 @@
     }
   }
 
-  async function onPick(itemKey: string, event: Event): Promise<void> {
+  async function onPick(unitId: number, unitMethod: ReturnSubmitMethod, itemKey: string, event: Event): Promise<void> {
     const input = event.currentTarget as HTMLInputElement
     const files = Array.from(input.files ?? [])
     input.value = ''
     errorMsg = null
     for (const file of files) {
       // 여러 장을 한 번에 고르면 누른 칸부터 시작해 비어 있는 다음 칸에 차례로 채운다(항목마다 1장)
-      const order = [itemKey, ...mediaItems.map((i) => i.key).filter((k) => k !== itemKey)]
-      const targetKey = order.find((k) => (uploads[k] ?? []).length < 1)
+      const order = [itemKey, ...mediaItemsOf(unitMethod).map((i) => i.key).filter((k) => k !== itemKey)]
+      const targetKey = order.find((k) => (uploads[kk(unitId, k)] ?? []).length < 1)
       if (!targetKey) break // 빈 칸이 없으면 남는 파일은 조용히 무시(안내 문구 없음)
       if (!MIME_OK.has(file.type)) {
         errorMsg = 'JPEG, PNG, WebP, HEIC 사진 또는 MP4, MOV, WebM 영상만 올릴 수 있어요.'
@@ -239,7 +239,7 @@
       try {
         const blob = await prepareFile(file)
         const contentType = blob.type || file.type
-        const signRes = await fetch(`/api/account/rental/${reservationId}/return-submit/sign`, {
+        const signRes = await fetch(`/api/account/rental/${unitId}/return-submit/sign`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ item_key: targetKey, content_type: contentType, size: blob.size }),
@@ -254,8 +254,8 @@
           errorMsg = '파일을 올리지 못했어요. 네트워크를 확인하고 다시 시도해 주세요.'
           continue
         }
-        uploads[targetKey] = [
-          ...(uploads[targetKey] ?? []),
+        uploads[kk(unitId, targetKey)] = [
+          ...(uploads[kk(unitId, targetKey)] ?? []),
           { path: sign.path, kind: sign.kind ?? (isVideo ? 'video' : 'photo'), previewUrl: URL.createObjectURL(blob), name: file.name },
         ]
       } catch {
@@ -266,11 +266,11 @@
     }
   }
 
-  function removeUpload(itemKey: string, index: number): void {
-    const list = uploads[itemKey] ?? []
+  function removeUpload(unitId: number, itemKey: string, index: number): void {
+    const list = uploads[kk(unitId, itemKey)] ?? []
     const target = list[index]
     if (target) URL.revokeObjectURL(target.previewUrl)
-    uploads[itemKey] = list.filter((_, i) => i !== index)
+    uploads[kk(unitId, itemKey)] = list.filter((_, i) => i !== index)
   }
 
   async function submit(): Promise<void> {
@@ -278,20 +278,20 @@
     isSaving = true
     errorMsg = null
     try {
-      const media = mediaItems.flatMap((item) =>
-        (uploads[item.key] ?? []).map((u) => ({ item_key: item.key, path: u.path, kind: u.kind })),
-      )
-      const res = await fetch(`/api/account/rental/${reservationId}/return-submit`, {
+      // 상품마다 사진·체크·무인함 정보를 따로 담아 한 번에 제출 — 서버가 모든 상품이 채워졌는지 다시 확인한다
+      const unitBodies = units.map((u) => ({
+        reservation_id: u.id,
+        checklist: checklistItems.filter((i) => checked[kk(u.id, i.key)]).map((i) => i.key),
+        locker_number: lockerNo(u.id) || null,
+        locker_password: lockerPw(u.id) || null,
+        media: mediaItemsOf(u.method).flatMap((item) =>
+          (uploads[kk(u.id, item.key)] ?? []).map((up) => ({ item_key: item.key, path: up.path, kind: up.kind })),
+        ),
+      }))
+      const res = await fetch(`/api/account/rental/${data.rental.id}/return-submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          checklist: checklistItems.filter((i) => checked[i.key]).map((i) => i.key),
-          locker_number: lockerNumber.trim() || null,
-          locker_password: lockerPassword.trim() || null,
-          feedback: feedback.trim() || null,
-          rating: rating || null,
-          media,
-        }),
+        body: JSON.stringify({ units: unitBodies, feedback: feedback.trim() || null, rating: rating || null }),
       })
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
@@ -328,7 +328,7 @@
   {/if}
 
   <div class="content">
-    {#if !method}
+    {#if !data.canSubmit && !method}
       <div class="rental-card">
         {#if data.rental.product_name}<p class="product-name">{data.rental.product_name}</p>{/if}
         {#if data.rental.reservation_code}<p class="reservation-code">{data.rental.reservation_code}</p>{/if}
@@ -354,7 +354,7 @@
           {#if step === 'intro'}
             <!-- 소개 카드 — 상품 정보 + 미션 카피 -->
             <div class="rental-card">
-              {#if data.rental.product_name}<p class="product-name">{data.rental.product_name}</p>{/if}
+              {#each units as u (u.id)}<p class="product-name">{u.product_name ?? '상품'}</p>{/each}
               {#if data.rental.reservation_code}<p class="reservation-code">{data.rental.reservation_code}</p>{/if}
               <div class="date-row">
                 <span class="date-label">반납 예정</span>
@@ -372,7 +372,7 @@
 
           {:else if step === 1}
             <h2 class="card-title" tabindex="-1">{step1Title}</h2>
-            {#if method === 'quick'}
+            {#if hasQuick}
               <div class="notice-banner">
                 <p class="notice-title">퀵서비스로 반납을 진행 중이신가요?</p>
                 <p class="notice-desc">대여 종료 시간은 매장 도착 기준이에요. 퀵 기사님께 장비를 인계하셨다면 아래에서 확인해 주세요.</p>
@@ -387,130 +387,140 @@
                   <span class="check-label">퀵 기사님께 장비를 인계했어요</span>
                 </button>
               </div>
-            {:else}
-              {#each mediaItems as item (item.key)}
-                <!-- 항목마다 1장: 등록하면 추가 타일은 사라지고 썸네일(✕로 삭제 후 다시 등록)만 보인다 -->
-                {@const canAdd = (uploads[item.key] ?? []).length < 1}
-                <div class="section">
-                  <div class="thumb-row">
-                    {#each uploads[item.key] ?? [] as up, i (up.path)}
-                      <div class="thumb">
-                        {#if up.kind === 'video'}
-                          <!-- svelte-ignore a11y_media_has_caption -->
-                          <video src={up.previewUrl} muted playsinline></video>
-                        {:else}
-                          <img src={up.previewUrl} alt={`${item.label} ${i + 1}`} />
-                        {/if}
-                        <button type="button" class="thumb-remove close-red" onclick={() => removeUpload(item.key, i)} aria-label="삭제">✕</button>
-                      </div>
-                    {/each}
-                    {#if canAdd}
-                      <label class="thumb add">
-                        <!-- 사진·영상 추가 — Stephen 제공 카메라+체크 SVG(2026-10-22) -->
-                        <svg class="thumb-camera" xmlns="http://www.w3.org/2000/svg" width="27" height="25" viewBox="0 0 27 25" fill="none" aria-hidden="true">
-                  <path d="M14.083 0C15.0796 0 16.0825 0.510281 16.8076 1.08594C17.3317 1.50199 17.8735 2.08307 18.1973 2.77051C18.7549 2.77311 19.1759 2.781 19.5166 2.82324C20.0975 2.89531 20.4701 3.05912 20.8975 3.27246C21.789 3.71752 22.5186 4.43027 22.9775 5.3125C23.2763 5.88697 23.3939 6.49644 23.4482 7.14746C23.4926 7.67972 23.4962 8.31411 23.4971 9.05762C22.6042 9.19279 21.7367 9.57013 21 10.2002V9.50391C21 8.52267 20.9994 7.86328 20.957 7.35547C20.916 6.86347 20.8423 6.62573 20.7598 6.4668C20.5476 6.05875 20.2058 5.72218 19.7803 5.50977C19.4594 5.3496 19.3812 5.32606 19.209 5.30469C18.9293 5.27001 18.5009 5.26758 17.4775 5.26758C16.6201 5.26758 16.0935 4.59686 15.9912 3.99414C15.9626 3.8265 15.7506 3.43909 15.2529 3.04395C14.7617 2.65403 14.2968 2.5 14.083 2.5H9.41699C9.22466 2.5 8.82636 2.63517 8.4043 3.00488C7.9844 3.37274 7.78504 3.75905 7.75391 3.96777C7.66059 4.5972 7.12088 5.26758 6.2666 5.26758C4.22993 5.26758 4.1544 5.29277 3.71973 5.50977C3.29423 5.72218 2.95244 6.05875 2.74023 6.4668C2.65766 6.62573 2.58401 6.86347 2.54297 7.35547C2.50062 7.86328 2.5 8.52267 2.5 9.50391V13.7637C2.5 14.7448 2.50062 15.4043 2.54297 15.9121C2.58402 16.4041 2.65764 16.6419 2.74023 16.8008C2.95244 17.2088 3.29423 17.5454 3.71973 17.7578C3.85975 17.8277 4.05467 17.8873 4.39941 17.9297C4.19279 18.7586 4.20268 19.626 4.42285 20.4453C3.77485 20.3916 3.17177 20.2793 2.60254 19.9951C1.7109 19.55 0.981366 18.8365 0.522461 17.9541C0.223736 17.3796 0.106052 16.7702 0.0517578 16.1191C-0.00122524 15.4835 -2.17245e-07 14.7026 0 13.7637V9.50391C-7.53113e-08 8.56475 -0.00126103 7.78324 0.0517578 7.14746C0.106074 6.49644 0.223705 5.88697 0.522461 5.3125C0.981373 4.43026 1.71104 3.71751 2.60254 3.27246C3.51258 2.81816 4.17018 2.77361 5.52344 2.76953C5.80576 2.11761 6.27189 1.54887 6.75684 1.12402C7.4369 0.528329 8.39914 9.07538e-07 9.41699 0H14.083ZM11.75 7.33984C14.3491 7.33984 16.4999 9.41043 16.5 12.0186C16.5 13.9575 15.3107 15.5983 13.6328 16.3135L12.5039 15.3467C11.1195 14.1601 9.27318 13.8628 7.66113 14.4014C7.24222 13.7057 7 12.8925 7 12.0186C7.00009 9.41043 9.15093 7.33985 11.75 7.33984Z" style="fill: var(--cs-purple)"/>
-                  <path d="M9.25 19.1429L13.75 23L24.25 14" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--cs-purple-pale)"/>
-                </svg>
-                        <span class="thumb-label">{item.label}{rules?.photosRequired ? '' : ' (선택)'}</span>
-                        <input type="file" accept={ACCEPT} multiple aria-label={`${item.label} 추가`} onchange={(e) => onPick(item.key, e)} />
-                      </label>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
             {/if}
+            {#each units.filter((x) => x.method !== 'quick') as u (u.id)}
+              <div class="unit-block">
+                {#if multi}<p class="section-label">{u.product_name ?? '상품'}</p>{/if}
+                {#each mediaItemsOf(u.method) as item (item.key)}
+                  <!-- 항목마다 1장: 등록하면 추가 타일은 사라지고 썸네일(✕로 삭제 후 다시 등록)만 보인다 -->
+                  {@const canAdd = (uploads[kk(u.id, item.key)] ?? []).length < 1}
+                  <div class="section">
+                    <div class="thumb-row">
+                      {#each uploads[kk(u.id, item.key)] ?? [] as up, i (up.path)}
+                        <div class="thumb">
+                          {#if up.kind === 'video'}
+                            <!-- svelte-ignore a11y_media_has_caption -->
+                            <video src={up.previewUrl} muted playsinline></video>
+                          {:else}
+                            <img src={up.previewUrl} alt={`${item.label} ${i + 1}`} />
+                          {/if}
+                          <button type="button" class="thumb-remove close-red" onclick={() => removeUpload(u.id, item.key, i)} aria-label="삭제">✕</button>
+                        </div>
+                      {/each}
+                      {#if canAdd}
+                        <label class="thumb add">
+                          <!-- 사진·영상 추가 — Stephen 제공 카메라+체크 SVG(2026-10-22) -->
+                          <svg class="thumb-camera" xmlns="http://www.w3.org/2000/svg" width="27" height="25" viewBox="0 0 27 25" fill="none" aria-hidden="true">
+                    <path d="M14.083 0C15.0796 0 16.0825 0.510281 16.8076 1.08594C17.3317 1.50199 17.8735 2.08307 18.1973 2.77051C18.7549 2.77311 19.1759 2.781 19.5166 2.82324C20.0975 2.89531 20.4701 3.05912 20.8975 3.27246C21.789 3.71752 22.5186 4.43027 22.9775 5.3125C23.2763 5.88697 23.3939 6.49644 23.4482 7.14746C23.4926 7.67972 23.4962 8.31411 23.4971 9.05762C22.6042 9.19279 21.7367 9.57013 21 10.2002V9.50391C21 8.52267 20.9994 7.86328 20.957 7.35547C20.916 6.86347 20.8423 6.62573 20.7598 6.4668C20.5476 6.05875 20.2058 5.72218 19.7803 5.50977C19.4594 5.3496 19.3812 5.32606 19.209 5.30469C18.9293 5.27001 18.5009 5.26758 17.4775 5.26758C16.6201 5.26758 16.0935 4.59686 15.9912 3.99414C15.9626 3.8265 15.7506 3.43909 15.2529 3.04395C14.7617 2.65403 14.2968 2.5 14.083 2.5H9.41699C9.22466 2.5 8.82636 2.63517 8.4043 3.00488C7.9844 3.37274 7.78504 3.75905 7.75391 3.96777C7.66059 4.5972 7.12088 5.26758 6.2666 5.26758C4.22993 5.26758 4.1544 5.29277 3.71973 5.50977C3.29423 5.72218 2.95244 6.05875 2.74023 6.4668C2.65766 6.62573 2.58401 6.86347 2.54297 7.35547C2.50062 7.86328 2.5 8.52267 2.5 9.50391V13.7637C2.5 14.7448 2.50062 15.4043 2.54297 15.9121C2.58402 16.4041 2.65764 16.6419 2.74023 16.8008C2.95244 17.2088 3.29423 17.5454 3.71973 17.7578C3.85975 17.8277 4.05467 17.8873 4.39941 17.9297C4.19279 18.7586 4.20268 19.626 4.42285 20.4453C3.77485 20.3916 3.17177 20.2793 2.60254 19.9951C1.7109 19.55 0.981366 18.8365 0.522461 17.9541C0.223736 17.3796 0.106052 16.7702 0.0517578 16.1191C-0.00122524 15.4835 -2.17245e-07 14.7026 0 13.7637V9.50391C-7.53113e-08 8.56475 -0.00126103 7.78324 0.0517578 7.14746C0.106074 6.49644 0.223705 5.88697 0.522461 5.3125C0.981373 4.43026 1.71104 3.71751 2.60254 3.27246C3.51258 2.81816 4.17018 2.77361 5.52344 2.76953C5.80576 2.11761 6.27189 1.54887 6.75684 1.12402C7.4369 0.528329 8.39914 9.07538e-07 9.41699 0H14.083ZM11.75 7.33984C14.3491 7.33984 16.4999 9.41043 16.5 12.0186C16.5 13.9575 15.3107 15.5983 13.6328 16.3135L12.5039 15.3467C11.1195 14.1601 9.27318 13.8628 7.66113 14.4014C7.24222 13.7057 7 12.8925 7 12.0186C7.00009 9.41043 9.15093 7.33985 11.75 7.33984Z" style="fill: var(--cs-purple)"/>
+                    <path d="M9.25 19.1429L13.75 23L24.25 14" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--cs-purple-pale)"/>
+                  </svg>
+                          <span class="thumb-label">{item.label}{rulesOf(u.method).photosRequired ? '' : ' (선택)'}</span>
+                          <input type="file" accept={ACCEPT} multiple aria-label={`${item.label} 추가`} onchange={(e) => onPick(u.id, u.method, item.key, e)} />
+                        </label>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/each}
 
           {:else if step === 2}
             <h2 class="card-title" tabindex="-1">{step2Title}</h2>
-            {#if rules?.checklist}
+            {#if units.some((x) => rulesOf(x.method).checklist)}
               <p class="card-sub">반납하실 상품과 체크 항목을 비교해 해당되는 항목의 체크버튼을 선택해주세요.</p>
             {/if}
-            {#if rules?.checklist}
-              <div class="check-list">
-                {#each checklistItems as item (item.key)}
-                  <button type="button" class="check-row" onclick={() => (checked[item.key] = !checked[item.key])} aria-pressed={!!checked[item.key]}>
-                    <span class="checkbox-btn checkbox-btn-terms" class:checked={!!checked[item.key]}>
-                      <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                    <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-                  </svg>
-                    </span>
-                    <span class="check-label">{item.label}</span>
-                  </button>
-                {/each}
-              </div>
-            {:else if rules?.lockerInfo}
-              <div class="warn-banner" role="alert">
-                <p class="warn-title">대여 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!</p>
-                <p class="notice-desc">무인함에 장비를 넣은 뒤 무인함 번호·비밀번호를 꼭 입력해 주세요.</p>
-              </div>
-              <div class="section">
-                <label class="field">
-                  <span class="field-label">무인함 번호</span>
-                  <input
-                    class="cs-input"
-                    inputmode="numeric"
-                    maxlength={LOCKER_NUMBER_MAX}
-                    value={lockerNumber}
-                    oninput={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
-                    placeholder="예: 12"
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">비밀번호</span>
-                  <input
-                    class="cs-input"
-                    inputmode="numeric"
-                    maxlength={LOCKER_PASSWORD_MAX}
-                    value={lockerPassword}
-                    oninput={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
-                    placeholder="숫자·특수문자 4~10자"
-                  />
-                </label>
-              </div>
-              <!-- 무인함 반납 시간 연장 요청 — 고객용 연장 기능이 없어 이 예약 컨텍스트의 크레이지챗으로 연결(플랜 기본값). 연체 요금은 종료 시간 기준으로 발생할 수 있다 -->
-              <div class="extend-wrap">
-                <a class="extend-link" href={`/chat?context=reservation&id=${reservationId}`} target="_blank" rel="noopener noreferrer">반납 시간 연장 요청 (크레이지챗)</a>
-                <p class="hint">종료 시간까지 반납이 어려우면 먼저 채팅으로 연장을 요청해 주세요. 요청 없이 늦으면 연체 요금이 발생할 수 있어요.</p>
-              </div>
-            {:else}
-              <!-- 퀵: 읽기 전용 반납 안내 -->
-              <div class="rental-card">
-                <p class="product-name">반납 예정 시각</p>
-                <p class="mission-title small">{formatDate(data.rental.end_date)}{data.rental.return_time ? ` ${data.rental.return_time}` : ''}</p>
-                <p class="notice-desc">퀵 기사님이 장비를 매장에 전달한 시각이 대여 종료 시간이에요. 예정 시각을 넘기면 연체 요금이 발생할 수 있어요.</p>
-              </div>
-              {#if rules?.lockerInfoOptional}
-                <!-- 무인함을 이용해 반납한 경우에만 입력(선택) — 입력하면 번호·비밀번호 둘 다 필요 -->
-                <p class="card-sub">무인함에 장비를 넣어 반납하셨다면 번호·비밀번호를 입력해 주세요. 쓰지 않았다면 비워 두셔도 돼요.</p>
+            {#each units as u (u.id)}
+              {@const r = rulesOf(u.method)}
+              <div class="unit-block">
+                {#if multi}<p class="section-label">{u.product_name ?? '상품'}</p>{/if}
+              {#if r.checklist}
+                <div class="check-list">
+                  {#each checklistItems as item (item.key)}
+                    <button type="button" class="check-row" onclick={() => (checked[kk(u.id, item.key)] = !checked[kk(u.id, item.key)])} aria-pressed={!!checked[kk(u.id, item.key)]}>
+                      <span class="checkbox-btn checkbox-btn-terms" class:checked={!!checked[kk(u.id, item.key)]}>
+                        <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                      <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                    </svg>
+                      </span>
+                      <span class="check-label">{item.label}</span>
+                    </button>
+                  {/each}
+                </div>
+              {:else if r.lockerInfo}
+                {#if u.id === firstLockerId}<div class="warn-banner" role="alert">
+                  <p class="warn-title">대여 종료 시간까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요!</p>
+                  <p class="notice-desc">무인함에 장비를 넣은 뒤 무인함 번호·비밀번호를 꼭 입력해 주세요.</p>
+                </div>{/if}
                 <div class="section">
                   <label class="field">
-                    <span class="field-label">무인함 번호 (선택)</span>
+                    <span class="field-label">무인함 번호</span>
                     <input
                       class="cs-input"
                       inputmode="numeric"
                       maxlength={LOCKER_NUMBER_MAX}
-                      value={lockerNumber}
-                      oninput={(e) => { lockerNumber = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber }}
+                      value={lockerNumber[u.id] ?? ''}
+                      oninput={(e) => { lockerNumber[u.id] = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber[u.id] }}
                       placeholder="예: 12"
                     />
                   </label>
                   <label class="field">
-                    <span class="field-label">비밀번호 (선택)</span>
+                    <span class="field-label">비밀번호</span>
                     <input
                       class="cs-input"
                       inputmode="numeric"
                       maxlength={LOCKER_PASSWORD_MAX}
-                      value={lockerPassword}
-                      oninput={(e) => { lockerPassword = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword }}
+                      value={lockerPassword[u.id] ?? ''}
+                      oninput={(e) => { lockerPassword[u.id] = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword[u.id] }}
                       placeholder="숫자·특수문자 4~10자"
                     />
                   </label>
                 </div>
-                {#if quickLockerPartial}
-                  <p class="hint">무인함 번호와 비밀번호(4자 이상)를 모두 입력하거나, 둘 다 비워 주세요.</p>
+                <!-- 무인함 반납 시간 연장 요청 — 고객용 연장 기능이 없어 이 예약 컨텍스트의 크레이지챗으로 연결(플랜 기본값). 연체 요금은 종료 시간 기준으로 발생할 수 있다 -->
+                <div class="extend-wrap">
+                  <a class="extend-link" href={`/chat?context=reservation&id=${u.id}`} target="_blank" rel="noopener noreferrer">반납 시간 연장 요청 (크레이지챗)</a>
+                  <p class="hint">종료 시간까지 반납이 어려우면 먼저 채팅으로 연장을 요청해 주세요. 요청 없이 늦으면 연체 요금이 발생할 수 있어요.</p>
+                </div>
+              {:else}
+                <!-- 퀵: 읽기 전용 반납 안내 — 주문당 1번만 -->
+                {#if u.id === firstQuickId}<div class="rental-card">
+                  <p class="product-name">반납 예정 시각</p>
+                  <p class="mission-title small">{formatDate(data.rental.end_date)}{data.rental.return_time ? ` ${data.rental.return_time}` : ''}</p>
+                  <p class="notice-desc">퀵 기사님이 장비를 매장에 전달한 시각이 대여 종료 시간이에요. 예정 시각을 넘기면 연체 요금이 발생할 수 있어요.</p>
+                </div>{/if}
+                {#if r.lockerInfoOptional}
+                  <!-- 무인함을 이용해 반납한 경우에만 입력(선택) — 입력하면 번호·비밀번호 둘 다 필요 -->
+                  <p class="card-sub">무인함에 장비를 넣어 반납하셨다면 번호·비밀번호를 입력해 주세요. 쓰지 않았다면 비워 두셔도 돼요.</p>
+                  <div class="section">
+                    <label class="field">
+                      <span class="field-label">무인함 번호 (선택)</span>
+                      <input
+                        class="cs-input"
+                        inputmode="numeric"
+                        maxlength={LOCKER_NUMBER_MAX}
+                        value={lockerNumber[u.id] ?? ''}
+                        oninput={(e) => { lockerNumber[u.id] = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerNumber[u.id] }}
+                        placeholder="예: 12"
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">비밀번호 (선택)</span>
+                      <input
+                        class="cs-input"
+                        inputmode="numeric"
+                        maxlength={LOCKER_PASSWORD_MAX}
+                        value={lockerPassword[u.id] ?? ''}
+                        oninput={(e) => { lockerPassword[u.id] = sanitizeLockerInput(e.currentTarget.value); e.currentTarget.value = lockerPassword[u.id] }}
+                        placeholder="숫자·특수문자 4~10자"
+                      />
+                    </label>
+                  </div>
+                  {#if quickPartialOf(u.id, u.method)}
+                    <p class="hint">무인함 번호와 비밀번호(4자 이상)를 모두 입력하거나, 둘 다 비워 주세요.</p>
+                  {/if}
                 {/if}
               {/if}
-            {/if}
+              </div>
+            {/each}
 
           {:else if step === 3}
             <h2 class="card-title" tabindex="-1">{STEP_TITLE[3]}</h2>
@@ -580,7 +590,7 @@
     {/if}
   </div>
 
-  {#if method && data.canSubmit}
+  {#if data.canSubmit}
     <div class="bottom-cta" class:with-hand={step === 1 || step === 2 || step === 3}>
       {#if step === 'intro'}
         <div class="intro-cta">
@@ -640,6 +650,7 @@
   .warn-title { font: 900 15px/1.4 'Noto Sans KR', sans-serif; color: var(--cs-red-badge, #FF3535); margin: 0; }
 
   .section { display: flex; flex-direction: column; gap: 12px; }
+  .unit-block { display: flex; flex-direction: column; gap: 12px; }
   .section-label { font: 700 14px/1 'Noto Sans KR', sans-serif; color: var(--cs-text, #100B32); margin: 0; padding: 0 4px; }
 
   /* 체크 항목은 한 줄씩 떨어진 카드로 배치(2026-10-22, Stephen 지시) — 목록 컨테이너는 배경 없이 간격만, 각 항목이 흰 카드 */

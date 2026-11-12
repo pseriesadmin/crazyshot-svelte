@@ -1,6 +1,6 @@
 // 반납등록 미션(return_register_mission) 포인트 자동적립 — fail-soft 헬퍼 (Migration #739, 2026-10-22).
 // 지급 시점(2026-10-22 Stephen 확정): 고객이 반납정보를 등록한 즉시가 아니라 **관리자 검수 승인 후** — approveInspection 이 호출한다.
-// 예약당 1회 — 멱등·동시 호출 방지는 DB(ref_type/ref_id 유일 인덱스 + 예약 단위 잠금, Migration #741)가 보장.
+// 주문당 1회(대표 예약 기준) — 멱등·동시 호출 방지는 DB(ref_type/ref_id 유일 인덱스 + 예약 단위 잠금, Migration #741)가 보장.
 // H-01: 직접 DML 금지 — award_return_register_mission_points RPC 경유만 허용(service_role 전용).
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,8 +43,9 @@ export async function awardReturnMissionForApproved(admin: AnyClient, reservatio
   if (reservationIds.length === 0) return
   try {
     const { data } = await admin.from('reservation_return_submissions').select('reservation_id').in('reservation_id', reservationIds)
-    const registered = ((data ?? []) as Array<{ reservation_id: number }>).map((r) => r.reservation_id)
-    for (const id of registered) await awardReturnRegisterMissionPoints(admin, id)
+    const registered = ((data ?? []) as Array<{ reservation_id: number }>).map((r) => r.reservation_id).sort((a, b) => a - b)
+    // 상품별 제출(2026-11-12)이 되면서 한 주문에 제출이 여러 건 — 미션은 주문(같은 승인 묶음)당 1회라 대표 1건에만 지급한다
+    if (registered.length > 0) await awardReturnRegisterMissionPoints(admin, registered[0])
   } catch (e) {
     console.error('[return-mission] approve award failed:', e instanceof Error ? e.message : e)
   }

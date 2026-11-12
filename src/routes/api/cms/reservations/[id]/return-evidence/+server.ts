@@ -10,6 +10,7 @@ import { RETURN_EVIDENCE_BUCKET } from '$lib/server/returnSubmission'
 import { RETURN_MEDIA_ITEMS, mediaItemLabel } from '$lib/utils/returnNotice'
 import { loadReturnInspectionItems, loadReturnPhotoItems } from '$lib/server/returnInspectionItems'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
+import { listMissingReturnRecords } from '$lib/server/inspection'
 
 // 고객 반납 제출 내용 조회(조회 전용) — RentalDetailPanel '검수' 탭이 사용(Migration #722, 2026-10-17).
 // 사진·영상은 비공개 버킷(return-evidence)이라 클릭 시점에 만료가 짧은 서명 URL을 서버가 만들어 내려준다(공개 URL 없음).
@@ -272,31 +273,53 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
   // 같은 주문의 다른 상품(예약)의 고객 제출 — 상품 이름과 함께(제출한 상품만)
   const siblingIds = (await orderReservationIds(admin, reservationId)).filter((id) => id !== reservationId)
-  const sibling_submissions: { reservation_id: number; product_name: string | null; submission: unknown; groups: unknown[] }[] = []
+  const sibling_submissions: { reservation_id: number; product_name: string | null; product_code: string | null; submission: unknown; groups: unknown[] }[] = []
   if (siblingIds.length > 0) {
     const nameById = new Map<number, string | null>()
+    const codeById = new Map<number, string | null>() // 품번 = 예약에 배정된 재고(자식)의 품번 — 상품 이름은 부모 값(applyParentFieldsToRowProducts)
     const { data: nameRows } = await admin
       .from('rental_reservations')
-      .select('id, product_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+      .select('id, product_id, products!rental_reservations_product_id_fkey(name, product_code, parent_product_id)')
       .in('id', siblingIds)
     const nr = Array.isArray(nameRows) ? nameRows : []
     await applyParentFieldsToRowProducts(nr, ['name'])
-    for (const r of nr as { id: number; products?: { name?: string | null } | { name?: string | null }[] | null }[]) {
+    for (const r of nr as { id: number; products?: { name?: string | null; product_code?: string | null } | { name?: string | null; product_code?: string | null }[] | null }[]) {
       const prod = Array.isArray(r.products) ? r.products[0] : r.products
       nameById.set(r.id, prod?.name ?? null)
+      codeById.set(r.id, prod?.product_code ?? null)
     }
     for (const sid of siblingIds) {
       const sib = await loadSubmission(sid)
       if (!sib) continue
       // 다른 상품 제출 조회 실패는 건너뛴다(fail-soft) — 대표 예약 제출·검수 정보까지 500 으로 막지 않는다(sp3 MINOR-3)
       if ('error' in sib) { console.error('[return-evidence] 같은 주문 다른 상품 제출 조회 실패:', sid, sib.error); continue }
-      sibling_submissions.push({ reservation_id: sid, product_name: nameById.get(sid) ?? null, ...sib })
+      sibling_submissions.push({ reservation_id: sid, product_name: nameById.get(sid) ?? null, product_code: codeById.get(sid) ?? null, ...sib })
     }
   }
+
+  // 상품별 반납 기록 현황(2026-11-12, Stephen 지시 — 모든 상품이 고객 제출 또는 관리자 대리 등록을 가져야 검수 승인) — 같은 주문의 대여중·반납요청·반납완료 상품
+  const order_units: { reservation_id: number; product_name: string | null; status: string; has_record: boolean; exempt: boolean }[] = []
+  const unitIds = await orderReservationIds(admin, reservationId)
+  const { data: unitRows } = await admin
+    .from('rental_reservations')
+    .select('id, status, return_record_exempt, product_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+    .in('id', unitIds)
+    .in('status', ['in_use', 'return_requested', 'returned'])
+  const unitList = Array.isArray(unitRows) ? unitRows : []
+  await applyParentFieldsToRowProducts(unitList, ['name'])
+  // 조회에 실패하면(null) 상품별 현황을 알 수 없으므로 목록을 비운다 — 모든 상품이 '등록됨'으로 잘못 보이지 않게(승인은 별도로 막힌다)
+  const missingList = await listMissingReturnRecords(admin, reservationId)
+  const missingIds = new Set(missingList ?? [])
+  for (const r of (missingList === null ? [] : unitList) as { id: number; status: string; return_record_exempt?: boolean | null; products?: { name?: string | null } | { name?: string | null }[] | null }[]) {
+    const prod = Array.isArray(r.products) ? r.products[0] : r.products
+    order_units.push({ reservation_id: r.id, product_name: prod?.name ?? null, status: r.status, has_record: !missingIds.has(r.id), exempt: !!r.return_record_exempt })
+  }
+  order_units.sort((a, b) => a.reservation_id - b.reservation_id)
 
   return json({
     submission: own?.submission ?? null,
     groups: own?.groups ?? [],
+    order_units,
     sibling_submissions,
     inspection,
     admin_entries,

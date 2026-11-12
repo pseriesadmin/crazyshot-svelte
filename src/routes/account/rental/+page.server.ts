@@ -146,6 +146,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     const admin = createClient(getSupabaseUrl(), serviceRoleKey)
     const { data: subs } = await admin.from('reservation_return_submissions').select('reservation_id').in('reservation_id', submittableIds)
     for (const x of (subs ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
+    // 관리자가 CMS에서 대신 등록한 상품도 등록 완료로 본다(2026-11-12, Stephen — 누가 등록했든 같다)
+    const { data: entries } = await admin.from('reservation_return_admin_entries').select('reservation_id').in('reservation_id', submittableIds)
+    for (const x of (entries ?? []) as Array<{ reservation_id: number }>) submittedIds.add(String(x.reservation_id))
   }
 
   const rows: Array<Omit<MyRental, 'items' | 'returnTargetId' | 'payment' | 'journeyDetails'>> = (data ?? []).map((r: Record<string, unknown>) => {
