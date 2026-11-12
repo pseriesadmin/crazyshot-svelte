@@ -524,6 +524,12 @@
   let adminRetMedia  = $state<{ path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }[]>([])
   let adminRetUploading = $state(0)
   let adminEntryOpen = $state<Record<number, boolean>>({})
+  // 상품별 반납 기록 현황(2026-11-12, Stephen 지시) — 같은 주문의 모든 상품이 고객 제출 또는 관리자 대리 등록을 가져야 검수 승인
+  interface EvidenceOrderUnit { reservation_id: number; product_name: string | null; status: string; has_record: boolean; exempt: boolean }
+  let evOrderUnits = $state<EvidenceOrderUnit[]>([])
+  let adminRetTarget = $state<number | null>(null) // 직접 등록 대상 상품(예약 id) — 상품이 여러 개일 때 칩으로 고른다
+  const missingUnits = $derived(evOrderUnits.filter((u) => !u.has_record))
+  const adminRetTargetId = $derived(adminRetTarget ?? missingUnits[0]?.reservation_id ?? row.reservation_id)
   // 등록 가능한 상태(대여중·반납요청·반납완료)에서만 [+] 노출 — 반납 방식과 무관
   const canRegisterAdminReturn = $derived(['in_use', 'return_requested', 'returned'].includes(row.status))
 
@@ -543,7 +549,7 @@
       .then(async (r) => ({ ok: r.ok, body: await r.json() }))
       .then(({ ok, body }) => {
         if (evFetchedFor !== id) return
-        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; evSiblingSubs = []; evAdminEntries = []; return }
+        if (!ok) { evError = body.error ?? '조회에 실패했습니다.'; evSubmission = null; evInspection = null; evGroups = []; evSiblingSubs = []; evAdminEntries = []; evOrderUnits = []; return }
         applyEvidenceBody(body)
       })
       .catch(() => { if (evFetchedFor === id) evError = '네트워크 오류로 조회하지 못했습니다.' })
@@ -556,6 +562,7 @@
     evGroups = (body.groups as EvidenceGroup[] | undefined) ?? []
     evSiblingSubs = (body.sibling_submissions as EvidenceSiblingSub[] | undefined) ?? []
     evAdminEntries = (body.admin_entries as typeof evAdminEntries | undefined) ?? []
+    evOrderUnits = (body.order_units as EvidenceOrderUnit[] | undefined) ?? []
     if (Array.isArray(body.inspection_items) && body.inspection_items.length > 0) evChecklistItems = body.inspection_items as typeof evChecklistItems
   }
 
@@ -767,7 +774,7 @@
       if (adminRetMedia.length >= INSPECTION_MEDIA_MAX) { csToast.warning(`사진·영상은 최대 ${INSPECTION_MEDIA_MAX}개까지 올릴 수 있어요.`); break }
       adminRetUploading++
       try {
-        const signRes = await fetch(`/api/cms/reservations/${row.reservation_id}/return-entries/sign`, {
+        const signRes = await fetch(`/api/cms/reservations/${adminRetTargetId}/return-entries/sign`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content_type: file.type, size: file.size }),
@@ -795,7 +802,7 @@
     if (adminRetBusy || adminRetUploading > 0) return
     adminRetBusy = true
     try {
-      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/return-entries`, {
+      const res = await fetch(`/api/cms/reservations/${adminRetTargetId}/return-entries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ memo: adminRetMemo, checklist: adminRetChecks, media: adminRetMedia.map((m) => ({ path: m.path, kind: m.kind })) }),
@@ -809,6 +816,7 @@
       for (const m of adminRetMedia) URL.revokeObjectURL(m.previewUrl)
       adminRetMedia = []
       adminRetOpen = false
+      adminRetTarget = null
       evFetchedFor = null // 탭 effect 가 새 목록을 다시 조회한다
       onrefresh?.()       // 대여중 → 반납중 전환이 목록·헤더에 반영되도록 새로 고친다
     } catch {
@@ -3922,6 +3930,13 @@
       {#if adminRetOpen && canRegisterAdminReturn}
         <div class="ev-block cs-form admin-ret-form" transition:slide={{ duration: 200 }}>
           <div class="ev-block-title">반납정보 직접 등록</div>
+          {#if evOrderUnits.length > 1}
+            <div class="ev-chips">
+              {#each evOrderUnits as u (u.reservation_id)}
+                <button type="button" class="ev-chip" class:ev-chip-on={adminRetTargetId === u.reservation_id} aria-pressed={adminRetTargetId === u.reservation_id} onclick={() => (adminRetTarget = u.reservation_id)}>{u.product_name ?? `예약 ${u.reservation_id}`}{u.has_record ? ' ✓' : ''}</button>
+              {/each}
+            </div>
+          {/if}
           <div class="ev-thumbs">
             {#each adminRetMedia as m, i (m.path)}
               <div class="ev-thumb">
@@ -3948,6 +3963,9 @@
             <button type="button" class="btn-primary" disabled={adminRetBusy || adminRetUploading > 0 || (adminRetMedia.length === 0 && !adminRetMemo.trim())} onclick={submitAdminReturn}>등록완료</button>
           </div>
         </div>
+      {/if}
+      {#if !evLoading && !evError && missingUnits.length > 0}
+        <div class="sms-empty" role="alert">반납 정보 미등록 상품: {missingUnits.map((u) => u.product_name ?? `예약 ${u.reservation_id}`).join(', ')} — 모든 상품을 등록해야 검수 승인할 수 있어요.</div>
       {/if}
       {#if evLoading}
         <div class="sms-empty">제출 내용을 불러오는 중…</div>

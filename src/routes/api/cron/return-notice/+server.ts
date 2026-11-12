@@ -90,7 +90,8 @@ export const GET: RequestHandler = async ({ request }) => {
         }
 
         // 푸시+문자(fail-soft — 내부에서 예외를 삼킨다)
-        await sendReservationLifecyclePush(admin, row.reservation_id, notifyType)
+        // 묶음이면 '대표 상품명 외 N개 상품' — 푸시·문자도 채팅카드와 같은 표기로 보낸다(허브는 기본으로 예약 1건의 상품명만 읽는다)
+        await sendReservationLifecyclePush(admin, row.reservation_id, notifyType, { productNameOverride: row.product_name ?? undefined })
 
         if (RETURN_NOTICE_ADMIN_PUSH_STAGES.includes(stage)) {
           try {

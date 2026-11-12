@@ -30,7 +30,12 @@ import { approveInspection, registerInspectionIssue, resolveInspectionIssue } fr
 import { INSPECTION_ISSUE_TYPES, normalizeInspectionStatus, validateIssueInput } from '$lib/utils/inspection'
 
 function makeAdmin(rpcImpl: (fn: string, args: Record<string, unknown>) => unknown) {
-  const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => rpcImpl(fn, args))
+  // 상품별 반납 기록 확인(return_records_missing)은 기본적으로 '모두 등록됨'(빈 목록)으로 답한다 — 개별 시험에서 rpcImpl 이 따로 답하면 그쪽이 우선
+  const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => {
+    const r = rpcImpl(fn, args) as { data?: unknown } | undefined
+    if (fn === 'return_records_missing' && (r === undefined || !Array.isArray(r.data) && !(r as { error?: unknown }).error)) return { data: [], error: null }
+    return r
+  })
   const chain: Record<string, unknown> = {}
   for (const m of ['select', 'eq']) chain[m] = () => chain
   chain.maybeSingle = async () => ({ data: { status: 'returned', products: { name: 'SONY FX3' } } }) // status: 회수 확인 전 전환 보조(ensureReturnedForInspection)는 이미 반납완료로 보아 통과
@@ -69,9 +74,35 @@ describe('approveInspection', () => {
   })
 
   it('DB 트리거의 INSPECTION_REQUIRED 접두어는 화면 문구에서 제거한다', async () => {
-    const admin = makeAdmin(() => ({ data: null, error: { message: 'INSPECTION_REQUIRED: 반납 검수 승인 없이는 완료 처리할 수 없습니다.' } }))
+    const admin = makeAdmin((fn) => fn === 'return_records_missing' ? { data: [], error: null } : { data: null, error: { message: 'INSPECTION_REQUIRED: 반납 검수 승인 없이는 완료 처리할 수 없습니다.' } })
     const r = await approveInspection(admin, 10, 'admin-1')
     expect(r.error).toBe('반납 검수 승인 없이는 완료 처리할 수 없습니다.')
+  })
+})
+
+describe('approveInspection — 상품별 반납 기록 확인(#813)', () => {
+  it('기록 없는 상품이 있으면 상태를 바꾸기 전에 거절한다(승인 RPC·포인트·알림 없음)', async () => {
+    const admin = makeAdmin((fn) => {
+      if (fn === 'return_records_missing') return { data: [11], error: null }
+      return { data: { ok: true, completed_ids: [10] }, error: null }
+    })
+    const r = await approveInspection(admin, 10, 'admin-1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('등록되지 않은 상품')
+    expect(admin.rpc).not.toHaveBeenCalledWith('approve_return_inspection', expect.anything())
+    expect(mockAward).not.toHaveBeenCalled()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('확인 조회가 실패하면 승인하지 않는다(fail-closed)', async () => {
+    const admin = makeAdmin((fn) => {
+      if (fn === 'return_records_missing') return { data: null, error: { message: 'boom' } }
+      return { data: { ok: true, completed_ids: [10] }, error: null }
+    })
+    const r = await approveInspection(admin, 10, 'admin-1')
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('확인하지 못했어요')
+    expect(admin.rpc).not.toHaveBeenCalledWith('approve_return_inspection', expect.anything())
   })
 })
 

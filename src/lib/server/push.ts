@@ -360,7 +360,7 @@ export async function sendReservationLifecyclePush(
   admin: SupabaseClient,
   reservationId: number,
   notifyType: string,
-  options?: { skipSmsFallback?: boolean; skipSms?: boolean; smsLink?: string; forceSms?: boolean; bodyOverride?: string },
+  options?: { skipSmsFallback?: boolean; skipSms?: boolean; smsLink?: string; forceSms?: boolean; bodyOverride?: string; productNameOverride?: string },
 ): Promise<void> {
   try {
     const copy = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]
@@ -389,7 +389,9 @@ export async function sendReservationLifecyclePush(
     // 자식 재고의 이름은 부모 값을 따른다(자식 재고 부모 참조 전환 Phase 3-C)
     await applyParentFieldsToRowProducts([row], ['name'], admin)
     const productsField = row.products
-    const productName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
+    const dbProductName = (Array.isArray(productsField) ? productsField[0]?.name : productsField?.name) ?? '상품'
+    // 한 주문의 여러 상품을 대표 1건으로 보내는 안내(반납 안내 크론)는 '대표 상품명 외 N개 상품'을 넘겨 푸시·문자·안내문장 변수(상품명)가 모두 같은 표기를 쓴다(2026-11-12, Stephen)
+    const productName = options?.productNameOverride?.trim() || dbProductName
 
     const { data: userProfile } = await admin
       .from('user_profiles')
