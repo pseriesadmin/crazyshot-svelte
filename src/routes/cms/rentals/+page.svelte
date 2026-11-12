@@ -29,7 +29,7 @@
     { label: '신청대기', value: 'hold', arrow: true },
     { label: '계약대기', value: 'hold', contractPending: true, arrow: true },
     { label: '계약완료', value: 'confirmed', arrow: true },
-    { label: '배송중',   value: 'shipped', arrow: true },
+    { label: '반출중',   value: 'shipped', arrow: true },
     { label: '대여중',   value: 'in_use', arrow: true },
     // 반납요청 + 반납완료(검수 대기)를 하나로 통합(2026-10-19) — 행 배지로 반납요청 예정/발송·반납등록을 구분
     { label: '반납중',   value: 'returning', arrow: true },
