@@ -113,25 +113,26 @@ describe('/cms/rentals — 취소·환불 칩', () => {
     expect(list?.p_include_statuses).toEqual(['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed'])
   })
 
-  it('CV-9 완료 상태가 된 CS 접수 건은 완료 칩에서 빠지고 총 건수도 줄어든다', async () => {
+  it('CV-9 완료된 건은 CS·이슈 이력이 있어도 완료 칩에 그대로 남고 총 건수도 줄지 않는다(2026-11-12)', async () => {
     csIdList = [11]
     const r = await load('http://x/cms/rentals?status=completed') as { rentals: Array<{ reservation_id: number }>; totalCount: number }
-    expect(r.rentals.map(x => x.reservation_id)).toEqual([12])
-    expect(r.totalCount).toBe(59)
+    expect(r.rentals.map(x => x.reservation_id)).toEqual([11, 12])
+    expect(r.totalCount).toBe(60)
   })
 
-  it('CV-10 취소·환불·CS 칩 1페이지는 완료된 CS 접수 건을 맨 앞에 붙이고 총 건수에 더한다', async () => {
+  it('CV-10 취소·환불·CS 칩 1페이지는 완료된 건을 붙이지 않는다', async () => {
     csIdList = [77]
     pendingMarkIds = [77]
     oneRowStatus = 'completed'
     const r = await load('http://x/cms/rentals?status=cancelled_refunded') as { rentals: Array<{ reservation_id: number }>; totalCount: number }
-    expect(r.rentals[0].reservation_id).toBe(77)
-    expect(r.totalCount).toBe(61)
+    expect(r.rentals.map(x => x.reservation_id)).toEqual([11, 12])
+    expect(r.totalCount).toBe(60)
   })
 
-  it('CV-11 완료 칩으로 연 CS 접수 건 링크는 취소·환불·CS 칩으로 전환한다', async () => {
+  it('CV-11 완료 칩으로 연 완료 건 링크는 이슈 이력이 있어도 취소·환불·CS 칩으로 전환하지 않는다', async () => {
     csIdList = [88]
     selectedStatus = 'completed'
-    await expect(load('http://x/cms/rentals?status=completed&selected=88')).rejects.toMatchObject({ status: 303, location: '/cms/rentals?status=cancelled_refunded&selected=88' })
+    const r = await load('http://x/cms/rentals?status=completed&selected=88') as { status: string }
+    expect(r.status).toBe('completed')
   })
 })

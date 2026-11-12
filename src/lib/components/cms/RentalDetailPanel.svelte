@@ -178,8 +178,10 @@
     /** rental.change_cancel 메뉴권한 허용 여부(per-account 오버레이 반영).
      *  미지정(undefined) = 기본 허용(true)으로 동작 — 기존 동작 무회귀 보장. */
     canChangeOrCancelReservation?: boolean
+    /** 헤더 [반납 검수 승인] 숨김 — '검수' 칩 목록(이슈 검수중)에서는 [완료 처리(추가청구)]가 완료까지 처리하므로 승인 버튼을 두지 않는다(2026-11-12) */
+    hideInspectionApprove?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, hideInspectionApprove = false, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -496,8 +498,18 @@
   )
   let evGroups      = $state<EvidenceGroup[]>([])
   // 같은 주문의 다른 상품(예약)의 고객 제출 — 제출은 예약 1건마다 따로 저장되고 목록은 주문 1건 = 1행(대표 예약)이라 따로 받아 보여 준다(2026-11-11)
-  interface EvidenceSiblingSub { reservation_id: number; product_name: string | null; submission: EvidenceSubmission; groups: EvidenceGroup[] }
+  interface EvidenceSiblingSub { reservation_id: number; product_name: string | null; product_code?: string | null; submission: EvidenceSubmission; groups: EvidenceGroup[] }
   let evSiblingSubs = $state<EvidenceSiblingSub[]>([])
+  // '고객 반납정보 등록' 목록 — 상품(예약) 1건 = 아코디언 카드 1개(2026-11-12, Stephen 지시): 헤더에 상품 이름 + 품번, 펼치면 체크리스트·무인함·이용 평가·사진.
+  // 상품이 1개뿐이면 처음부터 펼쳐 두고, 2개 이상이면 접어서 목록으로 보여 준다. 대표 예약(목록 행) 제출은 이 화면의 row 이름·품번을 쓴다.
+  interface EvSubItem { rid: number; name: string; code: string | null; submission: EvidenceSubmission; groups: EvidenceGroup[]; isOwn: boolean }
+  let evSubOpen = $state<Record<number, boolean>>({})
+  const evSubItems = $derived.by((): EvSubItem[] => {
+    const list: EvSubItem[] = []
+    if (evSubmission) list.push({ rid: row.reservation_id, name: row.product_name ?? `예약 ${row.reservation_id}`, code: row.product_code ?? null, submission: evSubmission, groups: evGroups, isOwn: true })
+    for (const sib of evSiblingSubs) list.push({ rid: sib.reservation_id, name: sib.product_name ?? `예약 ${sib.reservation_id}`, code: sib.product_code ?? null, submission: sib.submission, groups: sib.groups, isOwn: false })
+    return list.sort((a, b) => a.rid - b.rid)
+  })
   let evViewerIndex = $state<number | null>(null)
   interface EvidenceInspection {
     reservation_status: string
@@ -537,7 +549,8 @@
     // 검수 탭이거나, 헤더 [반납 검수 승인] 활성 판정이 필요한 반납요청·반납완료 단계면 조회한다(탭을 벗어나면 다음 진입 때 다시 조회 — 서명 URL 만료 대비)
     // 대여정보 탭('무인보관함 배정정보')에 고객 제출 무인함 정보를 보여 주기 위해 대여정보 탭에서도 조회한다(2026-11-06)
     const rentalTabNeedsSubmission = activeTab === 'rental' && ['in_use', 'return_requested', 'returned', 'completed'].includes(row.status)
-    if (activeTab !== 'inspection' && !rentalTabNeedsSubmission && row.status !== 'return_requested' && row.status !== 'returned' && !hideChangeCancelButtons) { evFetchedFor = null; return }
+    const inspectionBadgeStage = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned'].includes(row.status) // 검수 탭 수량 배지 계산용 — 탭을 열지 않아도 조회
+    if (activeTab !== 'inspection' && !rentalTabNeedsSubmission && !inspectionBadgeStage && !hideChangeCancelButtons) { evFetchedFor = null; return }
     if (evLoading) return
     if (evFetchedFor === row.reservation_id) return
 
@@ -611,6 +624,13 @@
   const canApproveStage = $derived(row.status === 'returned' || row.status === 'return_requested') // 검수 승인(완료 처리) 가능 단계
   // 헤더 [반납 검수 승인] 활성 조건: 반납요청·반납완료 단계 + 고객 반납 제출 정보 또는 CS 접수 정보가 등록돼 있고 이슈 검수중이 아닐 때
   const hasInspectionInfo = $derived(evSubmission !== null || evSiblingSubs.length > 0 || evAdminEntries.length > 0 || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
+  // '검수' 탭 수량 배지(2026-11-12, Stephen 지시) — 승인·해소 전에 등록된 반납 검수 항목 합계: 고객 반납 제출(대표+같은 주문 다른 상품) + 관리자 직접 등록 + 고객 사전접수 증빙(제출 완료분) + 미해소 검수 이슈.
+  // 종료 단계(완료·취소·만료·파손신고)·임시예약은 0(배지 숨김). 열람 여부는 저장하지 않으므로 '미확인'은 마감(승인·해소) 전 등록 건을 뜻한다. 고객 입력 대기(미제출) 증빙은 세지 않는다.
+  const inspectionBadgeCount = $derived.by((): number => {
+    if (['completed', 'cancelled', 'expired', 'damage_claimed', 'draft'].includes(row.status)) return 0
+    if (evFetchedFor !== row.reservation_id) return 0
+    return (evSubmission !== null ? 1 : 0) + evSiblingSubs.length + evAdminEntries.length + csItems.filter((c) => !c.done && !c.pending).length
+  })
   const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
   // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
   // 헤더 여정 현재 단계(2026-10-22, Stephen 확정 A안): 반납 일시가 지났거나 반납 안내가 발송된 대여중은 목록 '반납중' 칩과 맞춰 '반납중' 단계로 강조한다(표시용 — 실제 상태는 대여중 그대로)
@@ -621,7 +641,10 @@
   const journeyStatus = $derived(
     row.status === 'in_use' && (isReturnDue(row.rental_end, row.return_time) || row.return_stage === 'notice_sent' || row.return_stage === 'registered')
       ? 'return_requested'
-      : (row.status === 'hold' && hasContractSent ? 'contract_sent' : row.status))
+      // '반납완료' 단계는 검수 이슈 등록 이력이 없거나 이슈가 해결된 뒤에만 강조한다(2026-11-12, Stephen 지시) — 이슈 검수중(returned + issue)은 '반납중'에 둔다
+      : row.status === 'returned' && inspStatus === 'issue'
+        ? 'return_requested'
+        : (row.status === 'hold' && hasContractSent ? 'contract_sent' : row.status))
   // 헤더 여정(슬림 스텝퍼) 노출 — 임시예약(draft)·취소 건 제외
   const showHeaderJourney = $derived(row.status !== 'cancelled' && row.status !== 'expired' && row.status !== 'draft' && row.status !== 'damage_claimed')
   const hideChangeCancel = $derived(
@@ -1961,7 +1984,6 @@
     { type: 'shipment_notify',     label: '반출 알림 발송',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
     { type: 'return_remind',       label: '반납 요청',       statuses: ['in_use', 'return_requested'],     stageHint: '대여중·반납접수 단계에서 사용할 수 있어요' },
     { type: 'return_registration', label: '반납 정보 요청',  statuses: ['return_requested'],               stageHint: '반납접수 단계에서 사용할 수 있어요' },
-    { type: 'rental_complete',     label: '대여 종료 알림',  statuses: ['return_requested', 'returned'],    stageHint: '반납접수·반납완료 단계에서 사용할 수 있어요 (검수 승인과 같이 완료 처리돼요)' },
   ]
   // 예약 단계(hold·draft·pending)는 예약승인·취소 버튼이 이 자리를 쓰므로 제외. 종료 상태(완료·취소 등)에서는 모든 알림 버튼을 비활성으로 보여준다.
   const NOTIFY_VISIBLE = $derived(!['hold', 'draft', 'pending'].includes(row.status))
@@ -2562,7 +2584,7 @@
           >{isCancelling ? '처리 중...' : cancelPending ? '한번 더 누르면 취소' : '예약취소'}</button>
         </form>
       {/if}
-      {#if canManagePaymentAndLocker && (row.status === 'return_requested' || row.status === 'returned' || hideChangeCancelButtons)}
+      {#if canManagePaymentAndLocker && !hideInspectionApprove && (row.status === 'return_requested' || row.status === 'returned' || hideChangeCancelButtons)}
         <!-- 반납 검수 승인 — 예약취소 우측(헤더). 반납 제출 정보 또는 CS 접수 정보가 등록돼야 활성 -->
         <button
           type="button"
@@ -2619,7 +2641,7 @@
         role="tab"
         aria-selected={activeTab === tab.id}
         onclick={() => activeTab = tab.id as typeof activeTab}
-      >{tab.label}</button>
+      >{tab.label}{#if tab.id === 'inspection' && inspectionBadgeCount > 0}<span class="tab-count-badge" aria-label="검수 항목 {inspectionBadgeCount}건">{inspectionBadgeCount}</span>{/if}</button>
     {/each}
   </div>
 
@@ -3971,88 +3993,62 @@
         <div class="sms-empty">제출 내용을 불러오는 중…</div>
       {:else if evError}
         <div class="sms-empty" role="alert">{evError}</div>
-      {:else if !evSubmission && evSiblingSubs.length === 0}
+      {:else if evSubItems.length === 0}
         <div class="sms-empty">고객이 등록한 반납 정보가 아직 없습니다.</div>
       {:else}
-        {#if evSubmission}
-        <div class="ev-meta">제출 일시 {smsDateLabel(evSubmission.submitted_at)}</div>
-
-        {#if evSubmission.checklist.length > 0}
-          <div class="ev-block">
-            <div class="ev-block-title">장비 확인 체크리스트</div>
-            {#each evSubmission.checklist as c (c.key)}
-              <div class="ev-check" class:ev-check-off={!c.checked}>{c.checked ? '✓' : '－'} {c.label}</div>
-            {/each}
-          </div>
-        {/if}
-
-        {#if evSubmission.locker_number || evSubmission.locker_password || evSubmission.locker_password_hidden}
-          <div class="ev-block">
-            <div class="ev-block-title">무인함 정보 (고객 입력)</div>
-            <div class="ev-check">무인함 번호 {evSubmission.locker_number ?? '-'}</div>
-            <div class="ev-check">비밀번호 {evSubmission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (evSubmission.locker_password ?? '-')}</div>
-          </div>
-        {/if}
-
-        {#if evSubmission.customer_feedback || evSubmission.customer_rating}
-          <div class="ev-block">
-            <div class="ev-block-title">고객 이용 평가{evSubmission.customer_rating ? ` · ${evSubmission.customer_rating}/5점` : ''}</div>
-            {#if evSubmission.customer_feedback}<div class="ev-check">{evSubmission.customer_feedback}</div>{/if}
-          </div>
-        {/if}
-
-        {#each evGroups as g (g.item_key)}
-          <div class="ev-block">
-            <div class="ev-block-title">{g.label} ({g.items.length})</div>
-            <div class="ev-thumbs">
-              {#each g.items as m (m.id)}
-                {#if !m.url}
-                  <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
-                {:else if m.kind === 'video'}
-                  <!-- svelte-ignore a11y_media_has_caption -->
-                  <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
-                {:else}
-                  <button type="button" class="ev-thumb ev-thumb-btn" onclick={() => (evViewerIndex = evPhotoIndex(g.item_key, m.id))} aria-label={`${g.label} 크게 보기`}>
-                    <img src={m.url} alt={g.label} />
-                  </button>
+        <!-- 상품(예약)별 고객 제출 — 아코디언 목록: 헤더 = 상품 이름 · 품번 + 제출 일시, 펼치면 체크리스트·무인함 정보·이용 평가·사진 -->
+        {#each evSubItems as it (it.rid)}
+          {@const open = evSubOpen[it.rid] ?? evSubItems.length === 1}
+          <div class="ev-block ev-block-sm cs-card">
+            <button type="button" class="cs-card-head" aria-expanded={open} onclick={() => (evSubOpen[it.rid] = !open)}>
+              <span class="cs-title">{it.name}{#if it.code}<span class="cs-title-code"> · {it.code}</span>{/if}</span>
+              <span class="cs-date">제출 {smsDateLabel(it.submission.submitted_at)}</span>
+              <ChevronIcon direction={open ? 'up' : 'down'} size={7} />
+            </button>
+            {#if open}
+              <div class="cs-card-body">
+                {#if it.submission.checklist.length > 0}
+                  <div class="ev-block-title">장비 확인 체크리스트</div>
+                  {#each it.submission.checklist as c (c.key)}
+                    <div class="ev-check" class:ev-check-off={!c.checked}>{c.checked ? '✓' : '－'} {c.label}</div>
+                  {/each}
                 {/if}
-              {/each}
-            </div>
-          </div>
-        {/each}
-        {#if evGroups.length === 0}
-          <div class="sms-empty">첨부된 사진이 없습니다.</div>
-        {/if}
-        {/if}
 
-        <!-- 같은 주문의 다른 상품(예약)의 고객 제출 — 상품 이름으로 구분(사진은 새 창으로 열림) -->
-        {#each evSiblingSubs as sib (sib.reservation_id)}
-          <div class="ev-block">
-            <div class="ev-block-title">{sib.product_name ?? `예약 ${sib.reservation_id}`} · 제출 {smsDateLabel(sib.submission.submitted_at)}</div>
-            {#each sib.submission.checklist as c (c.key)}
-              <div class="ev-check" class:ev-check-off={!c.checked}>{c.checked ? '✓' : '－'} {c.label}</div>
-            {/each}
-            {#if sib.submission.locker_number || sib.submission.locker_password || sib.submission.locker_password_hidden}
-              <div class="ev-check">무인함 번호 {sib.submission.locker_number ?? '-'} · 비밀번호 {sib.submission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (sib.submission.locker_password ?? '-')}</div>
-            {/if}
-            {#if sib.submission.customer_feedback || sib.submission.customer_rating}
-              <div class="ev-check">이용 평가{sib.submission.customer_rating ? ` ${sib.submission.customer_rating}/5점` : ''}{sib.submission.customer_feedback ? ` · ${sib.submission.customer_feedback}` : ''}</div>
-            {/if}
-            {#each sib.groups as g (g.item_key)}
-              <div class="ev-block-title">{g.label} ({g.items.length})</div>
-              <div class="ev-thumbs">
-                {#each g.items as m (m.id)}
-                  {#if !m.url}
-                    <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
-                  {:else if m.kind === 'video'}
-                    <!-- svelte-ignore a11y_media_has_caption -->
-                    <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
-                  {:else}
-                    <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt={g.label} /></a>
-                  {/if}
+                {#if it.submission.locker_number || it.submission.locker_password || it.submission.locker_password_hidden}
+                  <div class="ev-block-title">무인함 정보 (고객 입력)</div>
+                  <div class="ev-check">무인함 번호 {it.submission.locker_number ?? '-'}</div>
+                  <div class="ev-check">비밀번호 {it.submission.locker_password_hidden ? '매니저 이상만 확인할 수 있어요' : (it.submission.locker_password ?? '-')}</div>
+                {/if}
+
+                {#if it.submission.customer_feedback || it.submission.customer_rating}
+                  <div class="ev-block-title">고객 이용 평가{it.submission.customer_rating ? ` · ${it.submission.customer_rating}/5점` : ''}</div>
+                  {#if it.submission.customer_feedback}<div class="ev-check">{it.submission.customer_feedback}</div>{/if}
+                {/if}
+
+                {#each it.groups as g (g.item_key)}
+                  <div class="ev-block-title">{g.label} ({g.items.length})</div>
+                  <div class="ev-thumbs">
+                    {#each g.items as m (m.id)}
+                      {#if !m.url}
+                        <div class="ev-thumb ev-thumb-missing">불러올 수 없음</div>
+                      {:else if m.kind === 'video'}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video class="ev-thumb" src={m.url} controls preload="metadata"></video>
+                      {:else if it.isOwn}
+                        <button type="button" class="ev-thumb ev-thumb-btn" onclick={() => (evViewerIndex = evPhotoIndex(g.item_key, m.id))} aria-label={`${g.label} 크게 보기`}>
+                          <img src={m.url} alt={g.label} />
+                        </button>
+                      {:else}
+                        <a class="ev-thumb ev-thumb-btn" href={m.url} target="_blank" rel="noopener noreferrer"><img src={m.url} alt={g.label} /></a>
+                      {/if}
+                    {/each}
+                  </div>
                 {/each}
+                {#if it.groups.length === 0}
+                  <div class="ev-check ev-check-off">첨부된 사진이 없습니다.</div>
+                {/if}
               </div>
-            {/each}
+            {/if}
           </div>
         {/each}
       {/if}
@@ -4305,12 +4301,7 @@
                 isSubmitting = true
                 return async ({ result, update }) => {
                   isSubmitting = false
-                  if (result.type === 'success' && nb.type === 'rental_complete') {
-                    // 대여 종료 알림 = 검수 승인과 같은 완료 처리 — 완료 칩으로 옮겨 같은 예약 패널을 다시 연다
-                    csToast.success('대여 종료 처리했습니다. 고객에게 완료가 안내됩니다.')
-                    markNotifySent(row.reservation_id, nb.type)
-                    if (oninspectionchange) await oninspectionchange(row.reservation_id, 'completed')
-                  } else if (result.type === 'success') {
+                  if (result.type === 'success') {
                     csToast.success('채팅 알림을 발송했습니다.')
                     markNotifySent(row.reservation_id, nb.type)
                   } else {
@@ -4593,6 +4584,15 @@
   }
   /* 모바일 대여현황 전용(largeTabs) — 탭 글자 한 사이즈 크게(12→14px) + 볼드(--text-pc-body-14) */
   .panel-tabs--large .tab { font: var(--text-pc-body-14); font-weight: 700; }
+  /* 탭 수량 배지 — 단계 칩 숫자 배지(rentals/+page.svelte .chip-count)·상품 패널 탭 배지와 같은 스타일: 18px 알약·descript-10·red-xlight 면/red 글자 */
+  .tab-count-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; margin-left: 5px; padding: 0 5px;
+    border-radius: var(--radius-full, 99px);
+    font: var(--text-pc-descript-10); line-height: 18px;
+    background: var(--cs-red-xlight); color: var(--cs-red);
+    vertical-align: middle;
+  }
   .tab:hover   { color: var(--cs-purple); }
   .tab-active  { color: var(--cs-purple); border-bottom-color: var(--cs-purple); font-weight: 700; }
 
@@ -4667,12 +4667,17 @@
   .ev-block { background: var(--cs-surface-gray); border-radius: var(--cms-radius-sm); padding: 14px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
   .ev-block-title { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 700; }
   .ev-check { font: var(--text-pc-body-14); color: var(--cs-text); }
+  /* 검수 탭 '고객 반납정보 등록' 영역 블록(체크리스트·무인함·이용 평가·사진 그룹·같은 주문 다른 상품 제출)은 제목·항목 글자를 한 사이즈 작게(14px → 12px, 굵기 유지; 2026-11-12 Stephen 지시) */
+  .ev-block-sm .ev-block-title { font: var(--text-pc-script-12); font-weight: 700; }
+  /* 항목 글자(✓ 체크리스트·이용 평가·무인함 번호 등)는 볼드 없음 — 토큰 기본 굵기 400(2026-11-12 Stephen 지시) */
+  .ev-block-sm .ev-check { font: var(--text-pc-script-12); }
   .ev-check-off { color: var(--cs-text-light); }
   .ev-thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
   .ev-thumb { width: 96px; height: 96px; border-radius: var(--cms-radius-sm); object-fit: cover; background: var(--cs-white); overflow: hidden; display: flex; align-items: center; justify-content: center; }
   .ev-thumb-btn { padding: 0; border: none; cursor: pointer; }
   .ev-thumb-btn img { width: 100%; height: 100%; object-fit: cover; }
-  .ev-insp-title { margin-top: 20px; }
+  /* 고객 반납정보 등록 영역과 CS 접수 검수(CS 처리 완료 블록 포함) 영역을 분명히 나눈다 — 기존 20px → 32px → 48px(32px의 +50%, 2026-11-12 Stephen 지시) */
+  .ev-insp-title { margin-top: 48px; }
   /* CS 접수 등록 폼 — 칩 + 내용 한 줄(100자) */
   .cs-input-row { display: flex; align-items: center; gap: 8px; }
   .cs-input-row .cancel-reason-input { flex: 1; min-width: 0; }
@@ -4684,7 +4689,9 @@
   .cs-badge { flex-shrink: 0; display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: var(--radius-sm); font: var(--text-pc-script-12); font-weight: 700; white-space: nowrap; }
   .cs-badge-customer { background: var(--cs-red-xlight); color: var(--cs-red); }
   .cs-badge-admin { background: var(--cs-purple-op10); color: var(--cs-purple); }
-  .cs-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--text-pc-body-14); font-weight: 700; }
+  /* CS 목록 카드 제목 14px → 12px 한 사이즈 작게(굵기 유지, 2026-11-12 Stephen 지시) */
+  .cs-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--text-pc-script-12); font-weight: 700; }
+  .cs-title-code { color: var(--cs-text-light); font-weight: 400; } /* 아코디언 제목의 품번 — 상품 이름과 구분되게 옅은 글자 */
   .cs-date { flex-shrink: 0; font: var(--text-pc-script-12); color: var(--cs-text-light); }
   .cs-card-body { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
   .cs-card-done .cs-title { color: var(--cs-text-light); }

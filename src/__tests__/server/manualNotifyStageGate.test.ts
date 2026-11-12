@@ -9,7 +9,6 @@ const RULES: Record<string, string[]> = {
   shipment_notify: ['confirmed'],
   return_remind: ['in_use', 'return_requested'],
   return_registration: ['return_requested'],
-  rental_complete: ['return_requested', 'returned'],
 }
 
 describe('수동 알림 단계 규칙', () => {
@@ -20,6 +19,10 @@ describe('수동 알림 단계 규칙', () => {
       expect(server).toMatch(new RegExp(`${type}:\\s*\\[${list}\\]`))
     })
   }
+  it("'대여 종료 알림' 버튼은 없다 — 완료 안내는 [반납 검수 승인] 때 자동 발송(2026-11-12, Stephen 확정)", () => {
+    expect(panel).not.toContain("type: 'rental_complete'")
+    expect(panel).not.toContain('대여 종료 알림')
+  })
   it('해당 단계가 아닌 버튼은 비활성이고 서버가 현재 상태를 다시 검사한다', () => {
     expect(panel).toContain('disabled={isSubmitting || !stageOk}')
     expect(server).toContain('현재 예약 단계에서 보낼 수 없습니다')
