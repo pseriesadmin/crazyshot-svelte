@@ -26,6 +26,7 @@
   import { calcRentalDays, calcRentalFee, calcFirstDayFee, hasFullRentalDay, calcRentalPeriodParts, computeCartTotalMinutes, calcHolidayExtension, calcHolidayExtraFee, calcOptionsHolidayExtraFee } from '$lib/utils/cartRentalFee';
   import { toDeliveryMethod, isMethodSelectionValid } from '$lib/utils/cartMethodSelection';
   import { fireAndLog } from '$lib/utils/fireAndLog';
+  import { buildEditOrderLines, buildEditOrderBody, formatAmountChangedToast, type EditLineInput, type EditLineValues } from '$lib/utils/cartEditMode';
   import { planFollowOptionSync, withFollowOptionQty } from '$lib/utils/followOptionSync';
   import { deriveCartMode, getPurchaseReservationDates, isRentalLine } from '$lib/utils/cartPurchaseMode';
   import {
@@ -198,6 +199,8 @@
   // 카트에서 상품 삭제 — 서버에 취소(cancelled) 반영 후 재로드
   async function removeItem(item: CartItemUiState) {
     updateItem(item.id, { deleted: true })
+    // 예약정보 수정 모드: 서버에서 바로 취소하지 않고 화면에서만 숨긴다 — 실제 취소는 저장(edit-order) 때 목록에서 빠진 예약으로 처리된다
+    if (data.isEditMode) return
     try {
       const res = await fetch('/api/checkout/remove-item', {
         method: 'POST',
@@ -421,6 +424,11 @@
         csToast.error('예약 가능한 재고가 없습니다.')
         return
       }
+    } else if (nextQty < 1 && data.isEditMode) {
+      // 예약정보 수정 모드: 마지막 1개를 빼면 카드를 화면에서만 숨긴다(저장 전까지 서버 무변경)
+      const target = itemsState.find(it => it.id === id)
+      if (target) void removeItem(target)
+      return
     } else if (nextQty < 1) {
       // 마지막 1개 취소(=카드 전체 삭제)는 디바운스 대상 밖 — 쌓인 변경을 먼저 확정한 뒤
       // 기존 삭제 흐름(removeItem)을 그대로 사용한다(이번 스코프는 카드삭제 자체는 다루지 않음).
@@ -449,6 +457,8 @@
     const nextDelta = { ...pendingDelta, [id]: (pendingDelta[id] ?? 0) + direction }
     if (nextDelta[id] === 0) delete nextDelta[id]
     pendingDelta = nextDelta
+    // 예약정보 수정 모드: 수량은 화면 상태(pendingDelta)로만 들고 있다가 저장 때 줄 수량으로 보낸다 — 서버 반영 예약 생성·취소 호출 없음
+    if (data.isEditMode) return
     clearTimeout(debounceTimers[id])
     debounceTimers[id] = setTimeout(() => { void flushQtyChange(id) }, DEBOUNCE_MS)
   }
@@ -1028,6 +1038,8 @@
   // 등)이 실제로 invalidateAll()을 부르면 아래 동기화 이펙트가 오버라이드를 전부 비워
   // 서버값으로 정합화한다.
   let qtyOverrides = $state<Record<string, { qty: number; reservationIds: string[] }>>({})
+  // 예약정보 수정 모드 전용 — 옵션 수량·삭제는 저장 전까지 서버에 반영하지 않고 화면 상태로만 들고 있는다(일반 모드에서는 항상 비어 있음)
+  let editOptionOverrides = $state<Record<string, CartLineItemOption[]>>({})
   // 연타 디바운스(2026-09-02, Stephen "3번" 승인) — 아직 서버에 반영 전인 클릭 누적분(±).
   // groupsById가 이걸 읽으므로 반드시 groupsById보다 먼저 선언돼야 한다(TDZ 방지).
   let pendingDelta = $state<Record<string, number>>({})
@@ -1043,7 +1055,9 @@
   // (groupsBaseById)만 넘기고, 표시는 항상 groupsById(확정값+미확정 델타)로 일관되게 유지한다.
   const groupsBaseById = $derived(new Map(effectiveLineGroups.map(g => {
     const ov = qtyOverrides[g.canonicalReservationId]
-    return [g.canonicalReservationId, ov ? { ...g, qty: ov.qty, reservationIds: ov.reservationIds } : g]
+    const oo = editOptionOverrides[g.canonicalReservationId]
+    const base = oo ? { ...g, options: oo } : g
+    return [g.canonicalReservationId, ov ? { ...base, qty: ov.qty, reservationIds: ov.reservationIds } : base]
   })))
   // 서버에서 불러온 그룹 본상품 수량(수량 변경·미확정 델타 반영 전) — 연동 옵션 표시 보정의 기준
   const serverMainQtyById = $derived(new Map(effectiveLineGroups.map(g => [g.canonicalReservationId, g.qty] as [string, number])))
@@ -1082,12 +1096,176 @@
     // 낙관적 오버라이드·미확정 디바운스 델타가 더 이상 필요 없다 — 전부 비워 서버값으로
     // 정합화(2026-09-02).
     qtyOverrides = {}
+    editOptionOverrides = {}
     for (const id of Object.keys(debounceTimers)) {
       clearTimeout(debounceTimers[id])
       delete debounceTimers[id]
     }
     pendingDelta = {}
   })
+
+  // ═══ 예약정보 수정 모드(/cart?edit=<예약 id>) — 일반 모드에서는 아래 어느 것도 동작하지 않는다 ═══
+  // ① 쿠폰·포인트 초기값: $state(prop) 초기화 금지 규칙에 따라 $effect 로 주문 id 가 바뀔 때 1회만 채운다.
+  let editInitAppliedFor: number | null = null
+  $effect(() => {
+    if (!data.isEditMode) return
+    const orderId = data.editOrderId
+    const couponIds = data.initialCouponIds
+    const points = data.initialPoints
+    untrack(() => {
+      if (editInitAppliedFor === orderId) return
+      editInitAppliedFor = orderId
+      otSelectedCouponIds = new Set(couponIds)
+      otPointsUsed = points ?? 0
+    })
+  })
+
+  // 저장된 수령·반납 주소·요청사항·방문지점으로 통합 폼을 미리 채운다 — 고객이 아무것도 안 바꾸면 모든 줄이 '변경 없음'으로 판정되게 하는 기준값이다.
+  // 이름·전자메일·휴대번호는 예약에 저장돼 있지 않아 회원 정보로 채운다(제출 게이트용, 줄 변경 판정에는 쓰이지 않음).
+  // 공동현관 출입번호는 고객 화면 어디에도 노출하지 않는 값이라 채우지 않고, 변경 판정에서도 기준이 비어 있어 영향이 없다.
+  // $state(prop) 초기화 금지 규칙에 따라 $effect + 주문 id 키로 1회만 실행.
+  let editFormsPrefilledFor: number | null = null
+  $effect(() => {
+    if (!data.isEditMode) return
+    const orderId = data.editOrderId
+    const details = data.editReservationDetails
+    const profile = sdUserProfileInfo
+    untrack(() => {
+      if (editFormsPrefilledFor === orderId) return
+      const ids = Object.keys(details).sort((a, b) => Number(a) - Number(b))
+      if (ids.length === 0) return
+      editFormsPrefilledFor = orderId
+      const d = details[ids[0]]
+      const person = { name: profile?.name ?? '', email: profile?.email ?? '', phone: profile?.phone ?? '' }
+      bulkRentalForm = { ...bulkRentalForm, ...person, addr: d.pickupAddressRoad ?? '', addrDetail: d.pickupAddressDetail ?? '', postalCode: d.pickupPostalCode ?? '', notes: d.pickupRequestNote ?? '', pickupPointId: d.pickupPointId ?? '' }
+      bulkReturnForm = { ...bulkReturnForm, ...person, addr: d.returnAddressRoad ?? '', addrDetail: d.returnAddressDetail ?? '', postalCode: d.returnPostalCode ?? '', notes: d.returnRequestNote ?? '', pickupPointId: d.returnPointId ?? '' }
+    })
+  })
+
+  // 대여 기간 유형 — 재발행(reissue) 경로와 같은 720분(12시간) 기준. 구매 상품은 'purchase'
+  function editDurationType(isSale: boolean, startDate: string, endDate: string, pickupTime: string | null, returnTime: string | null): string {
+    if (isSale) return 'purchase'
+    const [ph, pm] = (pickupTime || '00:00').split(':')
+    const [rh, rm] = (returnTime || '00:00').split(':')
+    const sameDayMins = (parseInt(rh ?? '0', 10) * 60 + parseInt(rm ?? '0', 10)) - (parseInt(ph ?? '0', 10) * 60 + parseInt(pm ?? '0', 10))
+    return startDate === endDate && sameDayMins > 0 && sameDayMins <= 720 ? '12h' : '24h'
+  }
+  const editOrderIdSet = $derived(new Set<string>(data.editOrderReservationIds ?? []))
+  // ② 수정 모드 진입 시점의 값(서버값) 스냅샷 — 예약 id 별로 1회만 기록한다(주소·요청사항 등 폼 값은 예약에서 불러오지 않으므로 빈 값이 기준)
+  const editOriginals = new Map<string, EditLineValues>()
+  $effect(() => {
+    if (!data.isEditMode) return
+    const groups = effectiveLineGroups
+    untrack(() => {
+      for (const g of groups) {
+        const orderIds = g.reservationIds.filter((id) => editOrderIdSet.has(id))
+        if (orderIds.length === 0 || orderIds.every((id) => editOriginals.has(id))) continue
+        const d = data.editReservationDetails?.[orderIds[0]]
+        // 화면이 처음 열릴 때 거는 값 보정과 같은 규칙으로 기준값을 만든다 — 방식은 화면 변환 함수, 배송형 수령은 시간 00:00~24:00 고정
+        const pm = toDeliveryMethod(g.pickupMethod, null)
+        const rm = toDeliveryMethod(g.returnMethod, null)
+        const deliveryPickup = isDeliveryTypeMethod(pm)
+        const pt = deliveryPickup ? (g.pickupTime || '00:00') : g.pickupTime
+        const rt = deliveryPickup ? '24:00' : g.returnTime
+        const original: EditLineValues = {
+          startDate: g.startDate, endDate: g.endDate,
+          pickupMethod: pm, returnMethod: rm,
+          pickupTime: pt, returnTime: rt,
+          durationType: editDurationType(g.product?.sale_only === true, g.startDate, g.endDate, pt, rt),
+          pickupAddressRoad: d?.pickupAddressRoad ?? null, pickupAddressDetail: d?.pickupAddressDetail ?? null, pickupPostalCode: d?.pickupPostalCode ?? null,
+          returnAddressRoad: d?.returnAddressRoad ?? null, returnAddressDetail: d?.returnAddressDetail ?? null, returnPostalCode: d?.returnPostalCode ?? null,
+          pickupRequestNote: d?.pickupRequestNote ?? null, returnRequestNote: d?.returnRequestNote ?? null,
+          pickupPointId: d?.pickupPointId ?? null, returnPointId: d?.returnPointId ?? null, frontdoorPassword: null,
+          qty: orderIds.length,
+          options: g.options.map((o) => ({ optionProductId: o.optionProductId, name: o.name, qty: o.qty })),
+        }
+        for (const id of orderIds) editOriginals.set(id, original)
+      }
+    })
+  })
+
+  // ③ 저장 — 기존 reissue-reservation·create-order 흐름을 대체해 edit-order 를 1회 호출한다. 성공하면 true
+  async function submitEditOrder(): Promise<boolean> {
+    const reservationId = data.editReservationId
+    if (reservationId === null) return false
+    // 삭제 보류(화면에서만 숨김) 줄의 예약 id — 저장 목록에서 빠지면 서버가 취소 처리한다
+    const deletedIds = new Set<string>(itemsState.filter((it) => it.deleted).flatMap((it) => [it.id, ...it.reservationIds]))
+    const inputs: EditLineInput[] = []
+    const strayIds: string[] = []
+    for (const it of itemsState) {
+      if (it.deleted) continue
+      const g = groupsById.get(it.id)
+      if (!g) continue
+      const orderIds = it.reservationIds.filter((id) => editOrderIdSet.has(id))
+      const isOrderLine = orderIds.length > 0
+      // 수정 대상 주문이 아닌 줄(일반 장바구니의 hold/draft)은 체크한 것만 새 줄로 포함
+      if (!isOrderLine && !it.checked) continue
+      const ef = effectiveForms(it)
+      const isSale = g.product?.sale_only === true
+      // 배송형 수령은 시간이 요금·예약에 쓰이지 않아 00:00~24:00 으로 고정 취급(기준값과 같은 규칙)
+      const deliveryPickup = isDeliveryTypeMethod(it.opts.rentalMethod)
+      const curPickupTime = deliveryPickup ? (it.rentalTime || '00:00') : (it.rentalTime || null)
+      const curReturnTime = deliveryPickup ? '24:00' : (it.returnTime || null)
+      const current: EditLineValues = {
+        startDate: it.rentalDate, endDate: it.returnDate,
+        pickupMethod: it.opts.rentalMethod, returnMethod: it.opts.returnMethod,
+        pickupTime: curPickupTime, returnTime: curReturnTime,
+        durationType: editDurationType(isSale, it.rentalDate, it.returnDate, curPickupTime, curReturnTime),
+        pickupAddressRoad: ef.rental.addr || null, pickupAddressDetail: ef.rental.addrDetail || null, pickupPostalCode: ef.rental.postalCode || null,
+        returnAddressRoad: ef.ret.addr || null, returnAddressDetail: ef.ret.addrDetail || null, returnPostalCode: ef.ret.postalCode || null,
+        pickupRequestNote: ef.rental.notes || null, returnRequestNote: ef.ret.notes || null,
+        pickupPointId: ef.rental.pickupPointId || null, returnPointId: ef.ret.pickupPointId || null,
+        frontdoorPassword: ef.rental.frontdoor || null,
+        // 화면 수량(서버값 + 저장 전 ± 누적분) — 수정 모드의 ±는 서버에 반영하지 않으므로 저장 때 이 값으로 새 줄을 만든다
+        qty: g.qty,
+        options: g.options.map((o) => ({ optionProductId: o.optionProductId, name: o.name, qty: o.qty })),
+      }
+      // 수정 대상 주문 소속이 아닌 일반 장바구니 예약은 이 줄이 새로 만들어지면 중복이 되므로 저장 성공 뒤 정리한다
+      strayIds.push(...it.reservationIds.filter((id) => !editOrderIdSet.has(id)))
+      inputs.push({
+        key: it.id,
+        // create_hold_reservation 은 '부모 상품 id' 를 받아 그 아래 재고(자식)를 배정한다 → 부모 id 로 보낸다
+        productId: resolveParentProductId(g.product) ?? g.productId,
+        reservationIds: orderIds,
+        current,
+        original: isOrderLine ? (editOriginals.get(orderIds[0]) ?? null) : null,
+      })
+    }
+    const body = buildEditOrderBody({
+      reservationId,
+      expectedReservationIds: data.editOrderReservationIds,
+      lines: buildEditOrderLines(inputs, deletedIds),
+      selectedCouponIds: otSelectedCouponIds,
+      selectedPoints: otPointsUsed,
+    })
+    const res = await fetch('/api/reservations/edit-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => null)
+    if (!res) {
+      csToast.error('네트워크 오류가 발생했습니다.')
+      return false
+    }
+    const json = await res.json().catch(() => null) as { success?: boolean; error?: string; previous_final_amount?: number | null; final_amount?: number | null; dropped_coupons?: unknown[] } | null
+    if (!res.ok || json?.success !== true) {
+      csToast.error(json?.error ?? '예약 수정을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.')
+      if (res.status === 409) {
+        // 낡은 화면(STALE 등) — 서버 최신값으로 다시 불러온다(화면 값·기준값 초기화)
+        editOriginals.clear()
+        itemsState = []
+        await invalidateAll()
+      }
+      return false
+    }
+    const amountMessage = formatAmountChangedToast(json.previous_final_amount ?? null, json.final_amount ?? null)
+    if (amountMessage) csToast.success(amountMessage)
+    const dropped = json.dropped_coupons ?? []
+    if (dropped.length > 0) csToast.warning(`사용 조건에 맞지 않는 쿠폰 ${dropped.length}장이 제외됐어요.`)
+    // 일반 장바구니에서 새 줄로 옮겨 담은 예약은 주문 안에 새로 만들어졌으므로 원래 장바구니 예약은 정리한다(중복 방지, 실패해도 흐름 유지)
+    for (const id of strayIds) fireAndLog('edit-order-stray-cleanup', '/api/checkout/remove-item', { reservationId: Number(id) })
+    return true
+  }
 
   // ── Footer + canProceed 5조건 가드
   // 필수 동의문 항목(rental_consent_items)이 등록돼 있으면 각 항목을 개별 체크해야 하고,
@@ -1770,6 +1948,11 @@
       csToast.error('예약 가능한 재고가 없습니다.')
       return
     }
+    if (data.isEditMode) {
+      // 예약정보 수정 모드: 서버에 바로 저장하지 않고 화면 상태에만 반영(저장 때 줄의 옵션으로 전송)
+      editOptionOverrides = { ...editOptionOverrides, [line.canonicalReservationId]: line.options.map(o => o.optionProductId === optionProductId ? { ...o, qty: newQty } : o) }
+      return
+    }
     const key = `${reservationId}:${optionProductId}`
     pendingOptionKey = key
     try {
@@ -1804,6 +1987,10 @@
   // 필수 옵션은 삭제 버튼을 노출하지 않는다. 담긴 뒤 CMS에서 필수/최소선택 설정이 바뀌어 장바구니와 달라져도 그대로 두고, 최종 값은 제출·결제 단계에서 서버가 적용한다.
   async function removeOption(reservationId: string, line: CartLineGroup | undefined, optionProductId: string | null) {
     if (!line) return
+    if (data.isEditMode) {
+      editOptionOverrides = { ...editOptionOverrides, [line.canonicalReservationId]: line.options.filter(o => o.optionProductId !== optionProductId) }
+      return
+    }
     const key = `${reservationId}:${optionProductId}`
     if (pendingOptionKey) return
     pendingOptionKey = key
@@ -2562,7 +2749,7 @@
 </svelte:head>
 
 <!-- ══ 공통 Sub GNB (PC + 모바일) ══ -->
-<SubGnb title="Cart" mobileOnly />
+<SubGnb title="Cart" mobileOnly addProduct />
 
 <!-- ═══════════════════════ MAIN ═══════════════════════ -->
 <div class="cart-root">
@@ -2570,12 +2757,10 @@
   <header class="sub-gnb-b">
     <div class="sub-gnb-b-inner">
       <!-- Back + Cart pill -->
-      <button type="button" class="sub-gnb-b-pill" onclick={() => history.back()} aria-label="뒤로 가기, 장바구니">
+      <button type="button" class="sub-gnb-b-pill" onclick={() => goto('/products')} aria-label="상품 더담기">
         <div class="sub-gnb-b-pill-left">
-          <svg class="sub-gnb-b-arrow" viewBox="0 0 21.3844 17.1421" fill="none" aria-hidden="true">
-            <path d="M19.8844 8.5707L1.5 8.57107M8.57107 1.5L1.5 8.57107L8.57107 15.6421" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="3"/>
-          </svg>
-          <span class="sub-gnb-b-back">Back</span>
+          <span class="sub-gnb-b-plus" aria-hidden="true">+</span>
+          <span class="sub-gnb-b-back">상품 더담기</span>
         </div>
         <span class="sub-gnb-b-title">Order items</span>
       </button>
@@ -2602,6 +2787,8 @@
               </svg>
               <p class="empty-text">대여예약 중인 상품이 없습니다.</p>
             </div>
+          {:else}
+            <button type="button" class="add-product-btn" onclick={() => goto('/products')}>+ 상품 더담기</button>
           {/if}
         </div>
 
@@ -2625,6 +2812,7 @@
                   {/if}
                 {/each}
               </div>
+              <button type="button" class="add-product-btn" onclick={() => goto('/products')}>+ 상품 더담기</button>
             {/if}
           </div>
 
@@ -3080,10 +3268,15 @@
             // 수량(±) 디바운스 창이 남아있는 상태로 제출하면 방금 누른 클릭이 실제 예약행으로
             // 반영되기 전에 checkedIds가 먼저 계산돼 최신 수량이 누락될 수 있다 — 반드시 먼저
             // 확정한다(2026-09-02).
-            await flushAllPendingQtyChanges()
+            if (!data.isEditMode) await flushAllPendingQtyChanges()
             // 체크 해제한 상품은 이번 결제 확정 대상에서 제외 — 2026-08-28: 그룹 병합 이후
             // 카드 1개가 여러 실제 예약id를 가질 수 있어, 그룹의 canonical id가 아니라
             // 그룹 내 모든 reservationIds를 펼쳐서 전송해야 한다.
+            // 예약정보 수정 모드: 기존 재발행·주문 생성 흐름 대신 edit-order 1회 호출로 저장하고 마이페이지로 돌아간다
+            if (data.isEditMode) {
+              if (await submitEditOrder()) await goto('/account/rental')
+              return
+            }
             const checkedItemsState = itemsState.filter(it => !it.deleted && it.checked)
             let checkedIds = checkedItemsState.flatMap(it => it.reservationIds)
             // 판매전용 "단독" 카트(2026-10-01, Stephen 확정): 주문 생성 직후 곧바로 PG 결제 페이지로 이동한다.
@@ -4601,6 +4794,36 @@
     width: 11px;
     height: 9px;
     flex-shrink: 0;
+  }
+  .sub-gnb-b-plus {
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  /* 상품 목록 바로 아래 '+ 상품추가하기' — front-uiux §5 보조 버튼(.cs-btn-secondary) 값 복사 */
+  .add-product-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 50px;
+    margin-top: 30px;
+    padding: 0 30px;
+    /* 2026-11-12(Stephen 지시 '좀 더 옅게'): purple-60(--cs-purple-light) → purple-20(--cs-purple-pale). 옅은 배경에 흰 글자는 대비가 부족해 글자색을 --cs-purple-dark 로 함께 지정 */
+    background: var(--cs-purple-pale);
+    color: var(--cs-purple-dark);
+    border: none;
+    border-radius: var(--radius-xl);
+    font: var(--text-pc-title-16);
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .add-product-btn:hover { background: var(--cs-purple-op10); }
+  @media (max-width: 640px) {
+    /* 2026-11-12(Stephen 지시): 모바일 마지막 상품 카드↔'+ 상품추가하기' 사이 여백 축소 — 리스트 gap 30px + 버튼 margin-top 30px = 60px → (30% 축소) 42px(margin-top 12px) → (20% 추가 축소) 33.6px(margin-top 3.6px) */
+    .add-product-btn { height: 44px; padding: 0 20px; font: var(--text-m-body-16B); margin-top: 3.6px; }
   }
   .sub-gnb-b-back {
     font: var(--text-pc-body-14);
@@ -6462,6 +6685,7 @@
     }
     .sub-gnb-b-pill-left { gap: 6px; }
     .sub-gnb-b-arrow { width: 18px; height: 15px; }
+    .sub-gnb-b-plus { font: var(--text-m-body-16B); }
     .sub-gnb-b-back { font: var(--text-m-body-16B); }
     .sub-gnb-b-title { font: var(--text-m-title-18B); font-family: var(--font-en-display); font-weight: 400; }
     .cart-main { padding: 30px 0; }
@@ -6477,6 +6701,18 @@
        축소(30px → 21px) — order-card-inner의 gap은 체크박스행 등 다른 형제 간격에도
        공유되므로 건드리지 않고, 이 한 지점만 margin-top으로 상쇄(-9px) */
     .option-subcard-list { margin-top: -9px; }
+    /* 2026-11-12(Stephen 지시): 모바일 카드 상단 행(체크·삭제)↔본상품 행(.product-row) 사이 여백 30% 축소(30px → 21px) —
+       gap 은 다른 형제 간격과 공유되므로 위와 같은 방식으로 이 지점만 margin-top 으로 상쇄(-9px) */
+    .product-row { margin-top: -9px; }
+    /* 2026-11-12(Stephen 지시): 모바일 본상품 카드의 Day/12H 가격 사이 구분 '/' 제거(숨김) — 옵션 카드(.dual-price-row--opt)는 제외, 모바일만, PC 는 유지 */
+    .dual-price-row:not(.dual-price-row--opt) .price-sep { display: none; }
+    /* 2026-11-12(Stephen 지시): 모바일 상품 카드 가격(Day/12H) 자간 -0.5px 해제(기본 자간으로 복원) — 한 행 유지용 줄바꿈 금지만 남김 */
+    .dual-price-row:not(.dual-price-row--opt) .price-unit { white-space: nowrap; }
+    /* 2026-11-12(Stephen 지시): 모바일 본상품 금액 숫자를 숫자 전용 폰트 토큰(--font-en-d-din, D-DIN Exp)으로 교체 + 볼드 최대(등록된 최대 웨이트 700 — Bold 가 가장 높음).
+       D-DIN 은 한글 글리프가 없으므로 '요금 미정' 같은 한글이 .price-amount 에 들어가도 깨지지 않게 기존 한글 헤딩 폰트를 뒤에 대체로 둔다 */
+    .dual-price-row:not(.dual-price-row--opt) .price-amount { font: var(--text-m-num-18B); /* 2026-11-12: 등록한 모바일 숫자 전용 토큰(app.css) — 900·18px·D-DIN, 한글 대체 폰트 포함 */ -webkit-text-stroke: 0.5px currentColor; /* 2026-11-12(Stephen 지시 '더 굵게'): D-DIN 은 700 이 최대 웨이트라 900 지정만으로는 변화가 없어 같은 색 0.5px 외곽선으로 굵기를 더함 */ }
+    /* 2026-11-12(Stephen 지시): 모바일 Day·12H 두 금액을 항상 한 행으로(줄바꿈 금지) — 한 행 폭 확보를 위해 두 금액 사이 간격만 8px → 6px */
+    .dual-price-row:not(.dual-price-row--opt) { flex-wrap: nowrap; gap: 6px; }
     /* 2026-08-19(재정정): 가로 1열 재배치는 Stephen이 요청한 적 없는 임의 변경이었음 —
        PC와 동일한 세로중앙정렬 구조(column/center)로 되돌리고, 패딩만 카드 크기에 맞춰
        축소 유지. 2026-09-28: 빈 상태 아이콘 84px→42px(50% 축소), 안내텍스트
@@ -6492,7 +6728,8 @@
     /* 2026-08-18: 이미지~정보그룹 여백 축소(20px → 12px) + 이미지 상단 정렬(기존
        align-items:center는 .product-row 기본 규칙 — 이미지 축소 후 정보그룹과 세로
        중앙정렬되면 어색해 보여 상단 기준으로 변경) */
-    .product-row { gap: 12px; align-items: flex-start; }
+    /* 2026-11-12(Stephen 지시): 모바일 상품 이미지↔상품명·가격 영역 좌우 여백 20% 추가(12px → 14.4px) */
+    .product-row { gap: 14.4px; align-items: flex-start; }
     /* 2026-08-17: min-width:0(PC 기본값)이라 좁은 화면에서 이미지 옆에서 한없이 짜부라져
        대여기간 배지("12H"/"24H"/"1일"/"구매")·가격 텍스트가 세로로 쪼개져 보이던 결함
        수정 — 폭이 부족하면 이미지 아래 새 줄로 완전히 내려가도록 최소폭 확보(.product-row는
@@ -6503,7 +6740,7 @@
     /* 2026-08-18: PC .item-name과 동일 계열(htitle, 900 Black)로 통일 — 모바일 카드
        규모에 맞춰 신설된 --text-m-htitle-20B(20px Black) 적용(기존 --text-m-body-16B
        16px Bold보다 한 단계 더 굵고 큼) */
-    .product-name { font: var(--text-m-htitle-20B); }
+    .product-name { font: var(--text-m-htitle-20B); margin-bottom: 6.5px; /* 2026-11-12(Stephen 지시): 상품명↔가격 행 세로 여백 30% 추가(5px → 6.5px), 모바일만 */ }
     /* 2026-08-17: 옵션상품 하위카드도 본상품과 동일한 원인(min-width:0 무한축소)으로 상품명이
        "SONY PXW-" / "Z90"처럼 쪼개져 보이던 결함 — 동일하게 최소폭 확보 + 줄바꿈 허용 */
     /* 2026-08-18: 기존 width:100%(기본 규칙)가 margin-left:28px에 더해져 카드 우측이
@@ -6528,8 +6765,14 @@
        클래스를 쓰는 마크업이 없음). 아이콘 자체가 작아진 만큼 패딩을 10px → 16px로
        늘려, 버튼 전체 터치 영역이 여전히 44×44px 이상을 유지하도록 보정
        (19.8+16×2=51.8px, 13.2+16×2=45.2px — 가로·세로 모두 44px 이상 확보). */
+    /* 2026-11-12(Stephen 지시): 모바일 카드 상단 행(체크·삭제)의 상하 여백(버튼 패딩 16px) 30% 축소 → 위·아래 각 4.8px.
+       버튼 패딩 자체를 줄이면 터치 영역이 44px 아래로 내려가므로(ui-mobile.md 44×44 기준) 패딩은 유지하고 행에 음수 상하 margin 으로 상쇄 */
+    .card-top-row { margin-block: -4.8px; }
     .card-top-row .checkbox-btn { padding: 16px; }
-    .card-top-row .delete-btn { padding: 14px; }
+    /* 2026-11-12(Stephen 지시): 터치 영역(버튼)과 아이콘의 중앙 정렬 — 삭제 X 는 인라인 svg 라 줄 높이(글자 기준선)만큼 위로 치우쳐 있어 flex 중앙 정렬로 고정(체크는 이미 flex 중앙). line-height:0 으로 글자 높이 영향 제거 */
+    .card-top-row .delete-btn { padding: 14px; display: flex; align-items: center; justify-content: center; line-height: 0; }
+    .card-top-row .checkbox-btn { line-height: 0; }
+    .card-top-row .delete-btn svg { display: block; }
     .card-top-row .delete-btn svg { width: 16px; height: 16px; }
     .qty-ctrl { gap: 16px; }
     .qty-num { padding: 6px 14px; font-size: 13px; }
@@ -6678,6 +6921,8 @@
        Stephen 확정 — .order-card/.item-card와 같은 "카드(대)" 계열, PC값 50px는 여기 해당 없음) */
     border-radius: 30px;
     margin-bottom: 12px;
+    /* 2026-11-12(Stephen 지시): '+ 상품추가하기' 버튼↔이 카드 사이 여백 40% 추가(섹션 gap 30px + 12px = 42px). PC 에서는 이 패널이 숨겨져 모바일 전용 */
+    margin-top: 12px;
     overflow: hidden;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
   }

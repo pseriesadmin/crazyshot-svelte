@@ -158,6 +158,9 @@
   --text-m-script-14: 500 14px/160% var(--font-kr);
   --text-m-script-12: 500 12px/160% var(--font-kr);
   --text-m-tag-11:    700 11px/160% var(--font-kr);               /* 카테고리 태그·배지 레이블 */
+  /* 2026-11-12(Stephen 지시): 숫자 전용 폰트(D-DIN Exp) 모바일 금액 숫자 — 18px·900. D-DIN 은 700 이 최대 웨이트라 실제 렌더는 Bold(700)이고,
+     굵게 보이게 하는 -webkit-text-stroke 는 font 축약형에 담을 수 없어 사용처에서 별도 지정. 한글 글리프가 없어 한글 헤딩 폰트를 대체로 둔다 */
+  --text-m-num-18B:   900 18px/160% 'D-DIN Exp', var(--font-kr-heading);
 
   /* ── 이펙트 (그림자) ── */
   /* outsh1: 강한 다크 그림자 (텍스트 강조) */

@@ -9,7 +9,8 @@
   import ReturnSubmitModal from '$lib/components/account/ReturnSubmitModal.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { authState } from '$lib/stores/auth'
-  import { goto, invalidateAll } from '$app/navigation'
+  import { goto, invalidateAll, replaceState } from '$app/navigation'
+  import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { MyRental } from './+page.server'
 
@@ -37,6 +38,13 @@
   const IN_PROGRESS = new Set(['hold', 'confirmed', 'shipped', 'in_use', 'return_requested'])
   let bounceId = $state<string | null>(null)
   onMount(() => {
+    // 예약정보 수정 진입 실패로 돌아온 경우(?editError=) — 안내 토스트 1회 후 주소에서 파라미터 제거
+    if (data.editErrorMessage) {
+      csToast.warning(data.editErrorMessage)
+      const clean = new URL(window.location.href)
+      clean.searchParams.delete('editError')
+      replaceState(clean, {})
+    }
     const focus = new URLSearchParams(window.location.search).get('focus')
     const target = focus ? data.rentals.find(r => String(r.id) === focus || (r.items ?? []).some(i => String(i.id) === focus)) : undefined
     if (target) requestAnimationFrame(() => document.getElementById(`rental-card-${target.id}`)?.scrollIntoView({ block: 'start' }))

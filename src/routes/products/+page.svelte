@@ -1297,6 +1297,9 @@
   .m-feat-pnum {
     font: var(--text-m-htitle-20B);
     font-weight: 900;
+    /* 2026-11-12(Stephen 지시): 모바일 MD추천 금액 숫자에 숫자 전용 폰트(D-DIN, 한글 대체 포함) 적용 — 크기(20px)·색 기존 유지. D-DIN 최대 웨이트가 700 이라 같은 색 0.5px 외곽선으로 900 굵기 보정(장바구니·썸네일과 동일) */
+    font-family: 'D-DIN Exp', var(--font-kr);
+    -webkit-text-stroke: 0.5px currentColor;
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
@@ -1680,6 +1683,10 @@
   .m-prod-price-num {
     font: var(--text-m-body-16B);
     font-weight: 900;
+    /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(D-DIN, 한글 대체 포함) 적용 — 크기·색 기존 유지 */
+    font-family: 'D-DIN Exp', var(--font-kr-heading);
+    /* D-DIN 최대 웨이트가 700 이라 900 이 반영되지 않는 문제 보정 — 같은 색 0.5px 외곽선(장바구니·상품 카드와 동일) */
+    -webkit-text-stroke: 0.5px currentColor;
     line-height: 1;
     font-variant-numeric: tabular-nums;
     color: var(--cs-purple-light);

@@ -16,6 +16,7 @@ import { createClient } from '@supabase/supabase-js'
 import { toReturnSubmitMethod } from '$lib/utils/returnNotice'
 import { RETURN_SUBMIT_STATUSES } from '$lib/server/returnSubmission'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
+import { mapEditOrderFailure } from '$lib/server/reservationEditOrder'
 
 export interface MyRental {
   id:                     string
@@ -55,6 +56,18 @@ export interface MyRental {
   returnSubmitted:        boolean
 }
 
+// /cart?edit= 진입 실패 시 돌아오는 ?editError=<사유코드> — 허용 목록의 코드만 문구로 바꾼다
+const EDIT_ERROR_CODES = new Set(['SIGNED', 'PAID', 'CANCEL_REQUESTED', 'EXPIRED', 'DIRECT_PAY', 'NOT_HOLD', 'NOT_OWNER', 'UNAUTHENTICATED', 'ERROR', 'NOT_SUBMITTED', 'STALE', 'BAD_REQUEST'])
+// 기존 고객용 문구 표(reservationEditOrder FAILURES)에 있는 코드는 그 문구를 재사용하고, 표에 없는 코드(조회 오류·잘못된 요청 등)와 알 수 없는 코드는 일반 문구
+const EDIT_ERROR_GENERIC = '예약정보를 지금은 수정할 수 없어요. 잠시 후 다시 시도해 주세요.'
+const EDIT_ERROR_REUSE = new Set(['SIGNED', 'PAID', 'CANCEL_REQUESTED', 'EXPIRED', 'DIRECT_PAY', 'NOT_HOLD', 'NOT_OWNER', 'UNAUTHENTICATED', 'STALE'])
+function editErrorMessage(code: string | null): string | null {
+  if (code === null) return null
+  if (EDIT_ERROR_CODES.has(code) && EDIT_ERROR_REUSE.has(code)) return mapEditOrderFailure(code).error
+  return EDIT_ERROR_GENERIC
+}
+
+
 export const load: PageServerLoad = async ({ locals, url }) => {
   const { session } = await locals.safeGetSession()
   // 익명(채팅 게스트) 세션은 가입 전 계정이라 예약이 없다 — 빈 목록 대신 로그인으로 보낸다(문자·알림 링크를 게스트 세션 브라우저로 열 때, 2026-10-27)
@@ -71,7 +84,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     .limit(50)
 
   if (error) {
-    return { rentals: [] as MyRental[] }
+    return { rentals: [] as MyRental[], editErrorMessage: editErrorMessage(url.searchParams.get('editError')) }
   }
 
   // 두발히어로 쪽에서 취소된 접수번호는 고객에게 운송장으로 보여주지 않는다(취소돼도 번호는 남아 있음 — CMS 재접수 시 새 번호로 바뀜, 2026-10-27)
@@ -188,5 +201,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     }
   })
 
-  return { rentals }
+  return { rentals, editErrorMessage: editErrorMessage(url.searchParams.get('editError')) }
 }

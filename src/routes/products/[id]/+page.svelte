@@ -1638,10 +1638,14 @@
   }
   .price-amount {
     font: var(--text-m-ad-kr-24);
+    /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900 적용 — 크기(24px)·색 기존 유지. D-DIN 최대 웨이트가 700 이라 같은 색 0.5px 외곽선으로 900 굵기 보정 */
+    font-family: 'D-DIN Exp', var(--font-kr-heading);
+    font-weight: 900;
+    -webkit-text-stroke: 0.5px currentColor;
     line-height: 1;
   }
   @media (min-width: 641px) {
-    .price-amount { font: var(--text-pc-ad-kr-35); line-height: 1; }
+    .price-amount { font: var(--text-pc-ad-kr-35); -webkit-text-stroke: 0; line-height: 1; }
   }
   .price-currency { font: var(--text-m-script-14); }
   @media (min-width: 641px) { .price-currency { font: var(--text-pc-ad-kr-22); } }
