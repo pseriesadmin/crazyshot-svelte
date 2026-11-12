@@ -60,8 +60,26 @@ describe('파손 신고·대여 종료 알림 흐름 — 소스 점검', () => {
     expect(panel).not.toContain('파손 신고 접수 처리</button>')
     expect(panel).not.toContain("action: 'damage'")
   })
-  it("'대여 종료 알림'은 검수 승인(approveInspection)으로 완료 처리한다", () => {
-    expect(rentals).toContain("notifyType === 'rental_complete'")
-    expect(rentals).toContain('approveInspection(admin, reservationId')
+  it("'검수' 탭에 수량 배지가 있고 종료 단계에서는 세지 않는다(승인·해소 전 등록 항목 합계)", () => {
+    expect(panel).toContain('inspectionBadgeCount')
+    expect(panel).toContain("tab.id === 'inspection' && inspectionBadgeCount > 0")
+    expect(panel).toContain("['completed', 'cancelled', 'expired', 'damage_claimed', 'draft'].includes(row.status)")
+  })
+  it("'고객 반납정보 등록'은 상품별 아코디언이고 헤더에 상품 이름·품번을 보인다", () => {
+    expect(panel).toContain('{#each evSubItems as it (it.rid)}')
+    expect(panel).toContain('evSubOpen[it.rid] ?? evSubItems.length === 1')
+    expect(panel).toContain('<span class="cs-title-code"> · {it.code}</span>')
+    const api = readFileSync('src/routes/api/cms/reservations/[id]/return-evidence/+server.ts', 'utf-8')
+    expect(api).toContain('product_code: codeById.get(sid) ?? null')
+  })
+  it("'검수' 칩 목록에서는 헤더 [반납 검수 승인]을 숨긴다([완료 처리(추가청구)]가 완료까지 처리)", () => {
+    const page = readFileSync('src/routes/cms/rentals/+page.svelte', 'utf-8')
+    expect(page).toContain("hideInspectionApprove={(data.status ?? '') === 'inspection'}")
+    expect(panel).toContain('!hideInspectionApprove &&')
+  })
+  it("'대여 종료 알림' 수동 버튼은 제거됐고 서버도 완료 처리를 하지 않는다(완료는 검수 승인으로만)", () => {
+    expect(panel).not.toContain("type: 'rental_complete'")
+    expect(rentals).toContain("notifyType === 'rental_complete') return fail(400")
+    expect(rentals).not.toContain('approveInspection(')
   })
 })

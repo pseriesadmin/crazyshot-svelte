@@ -7,6 +7,7 @@
 import { awardReturnMissionForApproved } from '$lib/server/awardReturnRegisterMissionPoints'
 import { awardRentalCompletePoints } from '$lib/server/awardRentalCompletePoints'
 import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
+import { recordReturnHistoryForCompleted } from '$lib/server/recordReturnHistory'
 import { registerPriorIssue } from '$lib/server/priorIssue'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { CUSTOMER_LIFECYCLE_PUSH_COPY, sendPushToAdmins, sendReservationLifecyclePush } from '$lib/server/push'
@@ -118,6 +119,30 @@ export async function ensureReturnedForInspection(admin: AnyClient, reservationI
 }
 
 /**
+ * 승인 대상 예약 선정 — 목록·패널은 주문 1건을 대표 예약(주문 내 최소 id) 1행으로 보여준다.
+ * 대표가 이미 완료(예: 이슈 해소로 대표만 먼저 완료)됐는데 같은 주문의 다른 상품이 아직 반납완료·검수 대기이면,
+ * 대표로 승인을 요청해도 DB 가 "반납완료 상태에서만" 거절해 나머지 상품을 완료할 길이 없었다(2026-11-12, 392 주문).
+ * 이때만 같은 주문의 검수 대기 형제(이슈 검수중 제외) 중 가장 앞선 예약을 대신 대상으로 삼는다 — DB 승인 함수는 대상이 속한 주문의
+ * 반납완료 예약을 한꺼번에 완료한다. 대표가 반납요청·반납완료이거나 고를 형제가 없으면 요청한 예약을 그대로 돌려준다(거절 사유는 DB 가 안내).
+ */
+export async function resolveApprovalTargetId(admin: AnyClient, reservationId: number): Promise<number> {
+  const { data: self } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+  const selfStatus = (self as { status?: string } | null)?.status
+  // 대표가 이미 '완료'일 때만 형제를 탐색한다 — 반납 전·취소·파손 등 다른 상태의 대표는 기존대로 DB 가 거절 사유를 안내한다(QA M1, 2026-11-12)
+  if (selfStatus !== 'completed') return reservationId
+
+  const { data: oi } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle()
+  const orderId = (oi as { order_id?: number | null } | null)?.order_id
+  if (orderId == null) return reservationId
+  const { data: sibs } = await admin.from('order_items').select('reservation_id').eq('order_id', orderId)
+  const sibIds = ((sibs ?? []) as { reservation_id: number | null }[]).map((r) => r.reservation_id).filter((v): v is number => v != null && v !== reservationId)
+  if (sibIds.length === 0) return reservationId
+  const { data: pending } = await admin.from('rental_reservations').select('id, status, inspection_status').in('id', sibIds).in('status', ['returned']).order('id', { ascending: true })
+  const target = ((pending ?? []) as { id: number; inspection_status?: string | null }[]).find((r) => (r.inspection_status ?? 'pending') !== 'issue')
+  return target ? target.id : reservationId
+}
+
+/**
  * 반납 기록(고객 제출·관리자 대리 등록)이 없는 같은 주문 상품 id 목록 — 소급 면제(return_record_exempt) 제외 (Migration #813).
  * 조회에 실패하면 null — 호출한 쪽이 승인을 진행하지 않는다(확인 못 한 채 상태부터 바꾸는 일이 없게, fail-closed).
  */
@@ -143,15 +168,18 @@ export async function approveInspection(admin: AnyClient, reservationId: number,
   const missing = await listMissingReturnRecords(admin, reservationId)
   if (missing === null) return { ok: false, error: RETURN_RECORD_CHECK_FAILED_ERROR }
   if (missing.length > 0) return { ok: false, error: RETURN_RECORD_MISSING_ERROR }
-  const ready = await ensureReturnedForInspection(admin, reservationId)
+  const targetId = await resolveApprovalTargetId(admin, reservationId)
+  const ready = await ensureReturnedForInspection(admin, targetId)
   if (!ready.ok) return ready
-  const { data, error } = await admin.rpc('approve_return_inspection', { p_reservation_id: reservationId, p_admin_id: adminId })
+  const { data, error } = await admin.rpc('approve_return_inspection', { p_reservation_id: targetId, p_admin_id: adminId })
   const res = data as { ok?: boolean; completed_ids?: number[] } | null
   if (error || !res?.ok) return { ok: false, error: rpcFailMessage(error, data, '검수 승인에 실패했습니다.') }
-  const ids = Array.isArray(res.completed_ids) && res.completed_ids.length > 0 ? res.completed_ids : [reservationId]
+  const ids = Array.isArray(res.completed_ids) && res.completed_ids.length > 0 ? res.completed_ids : [targetId]
   await finalizeRentalCompletion(admin, ids)
   await awardReturnMissionForApproved(admin, ids) // 반납등록 미션 포인트 — 검수 승인 후 지급(등록한 예약만, 예약당 1회)
-  await sendInspectionNotice(admin, reservationId, 'inspection_pass')
+  await sendInspectionNotice(admin, targetId, 'inspection_pass')
+  // 사진 복사는 오래 걸릴 수 있어 포인트·알림 뒤에 맨 마지막으로 처리한다(제한 시간에 걸려도 고객 안내·적립이 먼저 끝난다, sp3 MINOR-2). 완료 마감된 예약의 반납 등록 사진을 상품 이력에 반영(fail-soft)
+  await recordReturnHistoryForCompleted(admin, ids, adminId)
   return { ok: true }
 }
 
@@ -237,5 +265,6 @@ export async function resolveInspectionIssue(
   // 이슈를 거쳐 마감된 건도 대여완료 포인트는 적립한다(멱등 키로 중복 지급 없음). 고객 알림은 보내지 않는다.
   const ids = Array.isArray(res.completed_ids) && res.completed_ids.length > 0 ? res.completed_ids : [reservationId]
   await finalizeRentalCompletion(admin, ids)
+  await recordReturnHistoryForCompleted(admin, ids, adminId) // 이슈 해소로 완료 마감된 예약도 반납 등록 사진을 상품 이력에 반영(fail-soft)
   return { ok: true }
 }

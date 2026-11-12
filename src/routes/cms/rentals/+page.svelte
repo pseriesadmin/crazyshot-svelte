@@ -111,9 +111,24 @@
     }
   })
 
+  // 사용자가 직접 연 이동(칩·필터·페이지) 진행 여부 — 실시간 새로고침이 이 이동을 취소하지 않도록 새로고침을 미룬다(2026-11-12)
+  let userNavPending = false
+  function userGoto(url: string, opts: Parameters<typeof goto>[1]) {
+    userNavPending = true
+    void goto(url, opts).finally(() => { userNavPending = false })
+  }
+
   // Realtime: rental_reservations 상태 변경 시 목록 자동 갱신
+  // 변경 이벤트가 연달아 와도(대량 갱신·테스트 데이터 등) 600ms 안에 모아 한 번만 새로고침하고, 칩·필터 이동 중에는 이동이 끝난 뒤에 새로고침한다 —
+  // 새로고침이 이동과 겹쳐 이동을 취소해 칩을 눌러도 이동하지 못하던 문제(2026-11-12)
   $effect(() => {
     if (!browser) return
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const runRefresh = () => {
+      refreshTimer = null
+      if (userNavPending) { refreshTimer = setTimeout(runRefresh, 500); return }
+      invalidateAll()
+    }
     const channel = supabase
       .channel('cms-rentals-realtime')
       .on('postgres_changes', {
@@ -121,10 +136,14 @@
         schema: 'public',
         table: 'rental_reservations',
       }, () => {
-        invalidateAll()
+        if (refreshTimer) clearTimeout(refreshTimer)
+        refreshTimer = setTimeout(runRefresh, 600)
       })
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      supabase.removeChannel(channel)
+    }
   })
 
   function applyFilters() {
@@ -143,7 +162,7 @@
     if (dateTo) params.set('date_to', dateTo)
     else params.delete('date_to')
     params.delete('page')
-    goto(`/cms/rentals?${params.toString()}`, { replaceState: true })
+    userGoto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
 
   function setStatus(val: string, contractPending = false) {
@@ -154,13 +173,13 @@
     else                 params.delete('contract_pending')
     params.delete('page')
     params.delete('selected') // 칩 이동 시 열린 패널 선택은 해제 — 취소된 예약 링크의 칩 자동 전환(서버 리다이렉트)과 충돌하지 않게
-    goto(`/cms/rentals?${params.toString()}`, { replaceState: true })
+    userGoto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
 
   function goPage(p: number) {
     const params = new URLSearchParams(window.location.search)
     params.set('page', p.toString())
-    goto(`/cms/rentals?${params.toString()}`, { replaceState: true, noScroll: true })
+    userGoto(`/cms/rentals?${params.toString()}`, { replaceState: true, noScroll: true })
   }
 
   // 패널 선택/해제는 주소의 ?selected= 만 맞추면 되므로 데이터를 다시 불러오지 않는 replaceState를 쓴다.
@@ -487,6 +506,7 @@
             oncancelstate={(pending) => { keepOpenId = pending ? selectedId : null }}
             isRentalView={!['draft', 'hold', 'pending', 'expired'].includes(selectedRow.status) && !(selectedRow.status === 'cancelled' && !selectedRow.payment_confirmed_at)}
             hideChangeCancelButtons={(data.status ?? '') === 'returning' || (data.status ?? '') === 'inspection'}
+            hideInspectionApprove={(data.status ?? '') === 'inspection'}
             stepFilter={['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
             cmsRole={data.cmsRole}
             canChangeOrCancelReservation={data.canChangeOrCancelReservation}
