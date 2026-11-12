@@ -9,6 +9,7 @@ import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { RETURN_EVIDENCE_BUCKET } from '$lib/server/returnSubmission'
 import { RETURN_MEDIA_ITEMS, mediaItemLabel } from '$lib/utils/returnNotice'
 import { loadReturnInspectionItems, loadReturnPhotoItems } from '$lib/server/returnInspectionItems'
+import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
 // 고객 반납 제출 내용 조회(조회 전용) — RentalDetailPanel '검수' 탭이 사용(Migration #722, 2026-10-17).
 // 사진·영상은 비공개 버킷(return-evidence)이라 클릭 시점에 만료가 짧은 서명 URL을 서버가 만들어 내려준다(공개 URL 없음).
@@ -25,6 +26,16 @@ interface IssueRow {
   resolved_at: string | null
   resolution_note: string | null
   assigned_admin: string | null
+}
+
+// 같은 주문(장바구니 1건)에 속한 예약 id 전체(자기 포함) — 주문이 없으면 자기 하나
+async function orderReservationIds(admin: SupabaseClient, reservationId: number): Promise<number[]> {
+  const { data: oiRow } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle()
+  const orderId = (oiRow as { order_id?: number | null } | null)?.order_id
+  if (orderId == null) return [reservationId]
+  const { data: sibs } = await admin.from('order_items').select('reservation_id').eq('order_id', orderId)
+  const mapped = ((sibs ?? []) as { reservation_id: number | null }[]).map((x) => x.reservation_id).filter((v): v is number => v != null)
+  return mapped.length > 0 ? mapped : [reservationId]
 }
 
 async function loadInspection(admin: SupabaseClient, reservationId: number) {
@@ -181,74 +192,112 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // 검수 탭 관리자 직접 등록 칩 — 고객검수 여부와 무관한 활성 항목 전체
   const inspection_items = inspectionActive.map((i) => ({ key: i.key, label: i.label, customerVisible: i.customerVisible }))
 
-  const { data: sub, error: subErr } = await admin
-    .from('reservation_return_submissions')
-    .select('id, method, checklist, locker_number, locker_password, customer_feedback, customer_rating, submitted_at')
-    .eq('reservation_id', reservationId)
-    .maybeSingle()
-  if (subErr) return json({ error: subErr.message }, { status: 500 })
-  if (!sub) return json({ submission: null, groups: [], inspection, admin_entries, inspection_items })
+  // 한 예약의 고객 제출(제출 행 + 사진 묶음) 조회 — 고객 제출은 예약 1건마다 따로 저장된다(같은 주문의 상품이 여러 개면 상품별로 각각 제출).
+  // 목록은 주문 1건 = 1행(대표 예약)이라 대표 예약만 읽으면 다른 상품의 제출이 CMS 에 보이지 않았다(2026-11-11) — 같은 주문의 예약 제출을 함께 내려준다.
+  const canSeeLockerPassword = hasSettingsAccess(cmsRole)
+  async function loadSubmission(rid: number): Promise<{ error: string } | { submission: unknown; groups: unknown[] } | null> {
+    const { data: sub, error: subErr } = await admin
+      .from('reservation_return_submissions')
+      .select('id, method, checklist, locker_number, locker_password, customer_feedback, customer_rating, submitted_at')
+      .eq('reservation_id', rid)
+      .maybeSingle()
+    if (subErr) return { error: subErr.message }
+    if (!sub) return null
 
-  const s = sub as {
-    id: number
-    method: string
-    checklist: string[] | null
-    locker_number: string | null
-    locker_password: string | null
-    customer_feedback: string | null
-    customer_rating: number | null
-    submitted_at: string
-  }
+    const s = sub as {
+      id: number
+      method: string
+      checklist: string[] | null
+      locker_number: string | null
+      locker_password: string | null
+      customer_feedback: string | null
+      customer_rating: number | null
+      submitted_at: string
+    }
 
-  const { data: media, error: mediaErr } = await admin
-    .from('reservation_return_media')
-    .select('id, item_key, storage_path, kind, sort_order')
-    .eq('submission_id', s.id)
-    .order('sort_order', { ascending: true })
-  if (mediaErr) return json({ error: mediaErr.message }, { status: 500 })
+    const { data: media, error: mediaErr } = await admin
+      .from('reservation_return_media')
+      .select('id, item_key, storage_path, kind, sort_order')
+      .eq('submission_id', s.id)
+      .order('sort_order', { ascending: true })
+    if (mediaErr) return { error: mediaErr.message }
 
-  const rows = (media ?? []) as { id: number; item_key: string; storage_path: string; kind: 'photo' | 'video'; sort_order: number }[]
-  const urlByPath = new Map<string, string>()
-  if (rows.length > 0) {
-    const { data: signed } = await admin.storage
-      .from(RETURN_EVIDENCE_BUCKET)
-      .createSignedUrls(rows.map((r) => r.storage_path), SIGNED_URL_TTL_SEC)
-    for (const entry of signed ?? []) {
-      if (entry.path && entry.signedUrl) urlByPath.set(entry.path, entry.signedUrl)
+    const rows = (media ?? []) as { id: number; item_key: string; storage_path: string; kind: 'photo' | 'video'; sort_order: number }[]
+    const urlByPath = new Map<string, string>()
+    if (rows.length > 0) {
+      const { data: signed } = await admin.storage
+        .from(RETURN_EVIDENCE_BUCKET)
+        .createSignedUrls(rows.map((r) => r.storage_path), SIGNED_URL_TTL_SEC)
+      for (const entry of signed ?? []) {
+        if (entry.path && entry.signedUrl) urlByPath.set(entry.path, entry.signedUrl)
+      }
+    }
+
+    // 항목 순서 = 방식별 정의 순서(사진 항목별로 묶어 정렬), 정의에 없는 항목은 뒤에
+    // s.method 는 저장된 제출 방식 값('courier'|'quick'|'locker') — 예약의 return_method(epost 등)를 변환하는 toReturnSubmitMethod 를 쓰면 항상 null 이 돼
+    // 체크리스트가 비고 사진 순서가 정의 순서를 따르지 않는다(2026-10-19 실테스트 발견·수정)
+    const method = s.method === 'courier' || s.method === 'quick' || s.method === 'locker' || s.method === 'visit' ? s.method : null
+    const order = method ? (method === 'courier' ? photoMaster.active : RETURN_MEDIA_ITEMS[method]).map((i) => i.key) : []
+    const keys = [...new Set([...order, ...rows.map((r) => r.item_key)])].filter((k) => rows.some((r) => r.item_key === k))
+    const groups = keys.map((k) => ({
+      item_key: k,
+      label: photoMaster.labelByKey.get(k) ?? mediaItemLabel(k),
+      items: rows
+        .filter((r) => r.item_key === k)
+        .map((r) => ({ id: r.id, kind: r.kind, url: urlByPath.get(r.storage_path) ?? null })),
+    }))
+
+    const checked = new Set(s.checklist ?? [])
+    return {
+      submission: {
+        method: s.method,
+        submitted_at: s.submitted_at,
+        checklist: method === 'courier'
+          ? checklistRows(inspectionActive, checked, labelByKey)
+          : [],
+        locker_number: s.locker_number,
+        // 비밀번호는 기존 CMS 무인함 배정정보와 같이 manager 이상에게만 내려준다(partner는 마스킹 안내)
+        locker_password: canSeeLockerPassword ? s.locker_password : null,
+        locker_password_hidden: !canSeeLockerPassword && !!s.locker_password,
+        // 고객 이용 평가(반납등록 미션 3단계, 100자·선택) — 읽기 전용 표시(Migration #739)
+        customer_feedback: s.customer_feedback,
+        customer_rating: s.customer_rating,
+      },
+      groups,
     }
   }
 
-  // 항목 순서 = 방식별 정의 순서(사진 항목별로 묶어 정렬), 정의에 없는 항목은 뒤에
-  // s.method 는 저장된 제출 방식 값('courier'|'quick'|'locker') — 예약의 return_method(epost 등)를 변환하는 toReturnSubmitMethod 를 쓰면 항상 null 이 돼
-  // 체크리스트가 비고 사진 순서가 정의 순서를 따르지 않는다(2026-10-19 실테스트 발견·수정)
-  const method = s.method === 'courier' || s.method === 'quick' || s.method === 'locker' || s.method === 'visit' ? s.method : null
-  const order = method ? (method === 'courier' ? photoMaster.active : RETURN_MEDIA_ITEMS[method]).map((i) => i.key) : []
-  const keys = [...new Set([...order, ...rows.map((r) => r.item_key)])].filter((k) => rows.some((r) => r.item_key === k))
-  const groups = keys.map((k) => ({
-    item_key: k,
-    label: photoMaster.labelByKey.get(k) ?? mediaItemLabel(k),
-    items: rows
-      .filter((r) => r.item_key === k)
-      .map((r) => ({ id: r.id, kind: r.kind, url: urlByPath.get(r.storage_path) ?? null })),
-  }))
+  const own = await loadSubmission(reservationId)
+  if (own && 'error' in own) return json({ error: own.error }, { status: 500 })
 
-  const checked = new Set(s.checklist ?? [])
+  // 같은 주문의 다른 상품(예약)의 고객 제출 — 상품 이름과 함께(제출한 상품만)
+  const siblingIds = (await orderReservationIds(admin, reservationId)).filter((id) => id !== reservationId)
+  const sibling_submissions: { reservation_id: number; product_name: string | null; submission: unknown; groups: unknown[] }[] = []
+  if (siblingIds.length > 0) {
+    const nameById = new Map<number, string | null>()
+    const { data: nameRows } = await admin
+      .from('rental_reservations')
+      .select('id, product_id, products!rental_reservations_product_id_fkey(name, parent_product_id)')
+      .in('id', siblingIds)
+    const nr = Array.isArray(nameRows) ? nameRows : []
+    await applyParentFieldsToRowProducts(nr, ['name'])
+    for (const r of nr as { id: number; products?: { name?: string | null } | { name?: string | null }[] | null }[]) {
+      const prod = Array.isArray(r.products) ? r.products[0] : r.products
+      nameById.set(r.id, prod?.name ?? null)
+    }
+    for (const sid of siblingIds) {
+      const sib = await loadSubmission(sid)
+      if (!sib) continue
+      // 다른 상품 제출 조회 실패는 건너뛴다(fail-soft) — 대표 예약 제출·검수 정보까지 500 으로 막지 않는다(sp3 MINOR-3)
+      if ('error' in sib) { console.error('[return-evidence] 같은 주문 다른 상품 제출 조회 실패:', sid, sib.error); continue }
+      sibling_submissions.push({ reservation_id: sid, product_name: nameById.get(sid) ?? null, ...sib })
+    }
+  }
+
   return json({
-    submission: {
-      method: s.method,
-      submitted_at: s.submitted_at,
-      checklist: method === 'courier'
-        ? checklistRows(inspectionActive, checked, labelByKey)
-        : [],
-      locker_number: s.locker_number,
-      // 비밀번호는 기존 CMS 무인함 배정정보와 같이 manager 이상에게만 내려준다(partner는 마스킹 안내)
-      locker_password: hasSettingsAccess(cmsRole) ? s.locker_password : null,
-      locker_password_hidden: !hasSettingsAccess(cmsRole) && !!s.locker_password,
-      // 고객 이용 평가(반납등록 미션 3단계, 100자·선택) — 읽기 전용 표시(Migration #739)
-      customer_feedback: s.customer_feedback,
-      customer_rating: s.customer_rating,
-    },
-    groups,
+    submission: own?.submission ?? null,
+    groups: own?.groups ?? [],
+    sibling_submissions,
     inspection,
     admin_entries,
     inspection_items,

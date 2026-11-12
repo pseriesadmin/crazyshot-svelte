@@ -10,6 +10,7 @@ const EVENT_CARD_LABEL: Record<string, string> = {
   contract_signed: '전자계약 서명 완료',
   cancel_request: '예약 취소 요청',
   cancel_inquiry: '예약 취소 문의',
+  return_submitted: '반납 등록 완료',
 }
 
 /**
@@ -94,7 +95,8 @@ export function buildChatInboxItems(
     const cardType = m.action_payload?.type
     if (m.sender_type === 'user') {
       const eventLabel = cardType === 'cancel_request' ? EVENT_CARD_LABEL.cancel_request
-        : cardType === 'cancel_inquiry' ? EVENT_CARD_LABEL.cancel_inquiry : null
+        : cardType === 'cancel_inquiry' ? EVENT_CARD_LABEL.cancel_inquiry
+        : cardType === 'return_submitted' ? EVENT_CARD_LABEL.return_submitted : null
       items.push({
         session_id: sessionId,
         user_id: s.user_id,

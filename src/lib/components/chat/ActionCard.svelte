@@ -145,6 +145,7 @@
       case 'identity_approved':      return { label: '내 정보 확인하기', color: 'green' }
       case 'cancel_request':         return { label: '취소요청 확인', color: 'red' }
       case 'cancel_inquiry':         return { label: '취소문의 확인', color: 'red' }
+      case 'return_submitted':       return { label: '반납등록 확인', color: 'orange' }
       // GSD-17: 제품 링크 카드 (관리자 @ 멘션으로 삽입)
       case 'product_link':           return { label: '상품 상세 보기', color: 'purple' }
       // GSD-20: CTA가 있는 자동응답 카드
@@ -448,7 +449,7 @@
               menuUrl: ctx.menuUrl,
               // 전자계약완료 카드는 "대여정보"가 아니라 "계약서" 탭이 곧바로 보여야
               // "관리자 확인용 전자계약서명 정보 화면"이라는 요구 취지에 맞음
-              initialTab: payload.type === 'contract_signed' ? 'contract' : undefined,
+              initialTab: payload.type === 'contract_signed' ? 'contract' : payload.type === 'return_submitted' ? 'inspection' : undefined,
             })
           } else {
             onctamodal?.({ kind: 'empty', title: ctaLabel })
@@ -634,6 +635,8 @@
             <p class="product-link-badge">예약 취소 요청</p>
           {:else if payload.type === 'cancel_inquiry'}
             <p class="product-link-badge">예약 취소 문의</p>
+          {:else if payload.type === 'return_submitted'}
+            <p class="product-link-badge">반납 등록 완료</p>
           {/if}
           {#if payload.reservation_no}
             <p class="reservation-no">예약번호: {payload.reservation_no}</p>
@@ -678,6 +681,9 @@
         {:else if payload.type === 'cancel_request' && !isAdmin}
           <!-- 고객 화면: 안내 전용(CTA 없음) — 관리자가 채팅 세션에서 확인 후 직접 처리 -->
           <p class="shipment-pending-note">취소 요청이 접수되었습니다. 관리자가 확인 후 이 채팅으로 안내드립니다. (취소 수수료가 적용될 수 있습니다)</p>
+        {:else if payload.type === 'return_submitted' && !isAdmin}
+          <!-- 고객 화면: 안내 전용(CTA 없음) — 관리자가 검수 탭에서 확인한다 -->
+          <p class="shipment-pending-note">반납 정보가 등록되었습니다. 담당자가 확인 후 이 채팅으로 안내드립니다.</p>
         {:else if hideCta}
           <!-- 썸네일만 있는 빠른답변 카드 — 누를 곳이 없으므로 버튼 없음 -->
         {:else}

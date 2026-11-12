@@ -56,6 +56,11 @@ describe('buildChatInboxItems', () => {
     expect(buildChatInboxItems(sessions, m, NOW)[0]).toMatchObject({ kind: 'reply', label: '예약 취소 요청' })
   })
 
+  it('고객 발신 반납 등록 완료 카드에는 라벨이 붙는다(2026-11-12)', () => {
+    const m = [msg({ id: 'r2', session_id: 's3', created_at: iso(1), message_type: 'action_card', content: '', action_payload: { type: 'return_submitted' } })]
+    expect(buildChatInboxItems(sessions, m, NOW)[0]).toMatchObject({ kind: 'reply', label: '반납 등록 완료' })
+  })
+
   it('본문이 없는 고객 첨부는 종류 문구, 목록에 없는 세션 메시지는 무시, 최근 순 정렬', () => {
     const m = [
       msg({ id: 'p1', session_id: 's1', created_at: iso(30), message_type: 'image', content: '' }),

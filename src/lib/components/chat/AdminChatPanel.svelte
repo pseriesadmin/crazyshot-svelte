@@ -310,7 +310,7 @@
   // 'reservation' 전용
   let ctaModalReservationId = $state<number | null>(null)
   let ctaModalRow = $state<CtaModalRentalRow | null>(null)
-  let ctaModalInitialTab = $state<'rental' | 'contract' | undefined>(undefined)
+  let ctaModalInitialTab = $state<'rental' | 'contract' | 'inspection' | undefined>(undefined)
 
   // 'contract-preview' 전용
   let ctaModalContractId = $state<string | null>(null)
