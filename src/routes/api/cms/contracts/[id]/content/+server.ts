@@ -36,7 +36,8 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
     .limit(1)
     .maybeSingle()
 
-  if (!hasSettingsAccess(cmsRole) && !signing) {
+  // 정책 결정 2026-11-11(Stephen): 계약서 탭은 파트너 접근 불가 — 2026-08-20 '서명 완료 계약은 파트너도 열람'을 대체한다(서명 여부와 무관하게 매니저 이상만)
+  if (!hasSettingsAccess(cmsRole)) {
     return json({ error: '권한 없음' }, { status: 403 })
   }
 

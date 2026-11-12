@@ -3,6 +3,7 @@ import { json, error } from '@sveltejs/kit'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { createClient } from '@supabase/supabase-js'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 const BUCKET = 'product-images'
 const PREFIX = 'help/hero-bg'
@@ -54,7 +55,10 @@ export const DELETE: RequestHandler = async ({ request, locals }) => {
     .select('cms_role')
     .eq('id', session.user.id)
     .single()
-  if (!(profile as { cms_role?: string | null } | null)?.cms_role) throw error(403, 'Forbidden')
+  const delRole = (profile as { cms_role?: string | null } | null)?.cms_role
+  if (!delRole) throw error(403, 'Forbidden')
+  // 정책 결정 2026-11-11(Stephen): 배너 이미지 삭제는 매니저 이상만 — 파트너 불가
+  if (!hasSettingsAccess(delRole)) throw error(403, '배너 삭제는 매니저 이상만 할 수 있어요')
 
   const { path } = (await request.json()) as { path?: string }
   if (!path) throw error(400, 'path required')

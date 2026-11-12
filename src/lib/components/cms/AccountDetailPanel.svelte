@@ -5,7 +5,7 @@
   import type { ActionResult } from '@sveltejs/kit'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import { parseUserAgent } from '$lib/utils/parseUserAgent'
-  import { CMS_MENUS, roleAllowsMenuByDefault } from '$lib/constants/cmsMenus'
+  import { CMS_MENUS, isMenuGrantableToRole, roleAllowsMenuByDefault } from '$lib/constants/cmsMenus'
 
   interface LoginLogRow {
     id: string
@@ -729,18 +729,20 @@
                     <div class="menu-group-label">{mainMenu.label}</div>
                     {#each mainMenu.subMenus as sub (sub.menu_key)}
                       {@const isRoleAllowed = roleAllowsMenuByDefault(row.cms_role, sub.menu_key)}
+                      <!-- 임시 권한 제어 오픈 - 2026-11-11: 예약변경 및 취소는 partner 도 계정별 ON/OFF 가능 -->
+                      {@const isGrantable = !isRoleAllowed && isMenuGrantableToRole(row.cms_role, sub.menu_key)}
                       {@const override = permissions.find((p) => p.menu_key === sub.menu_key)}
                       {@const isOverrideBlocked = override?.allowed === false}
-                      {@const effectiveAllowed = isRoleAllowed && !isOverrideBlocked}
+                      {@const effectiveAllowed = isGrantable ? override?.allowed === true : isRoleAllowed && !isOverrideBlocked}
                       {@const isSaving = savingKey === sub.menu_key}
-                      <div class="menu-item" class:menu-item-dimmed={!isRoleAllowed}>
+                      <div class="menu-item" class:menu-item-dimmed={!isRoleAllowed && !isGrantable}>
                         <span class="menu-item-label">{sub.label}</span>
                         <div class="menu-combo">
                           <button
                             type="button"
                             class="combo-btn combo-sm"
                             class:combo-active={effectiveAllowed}
-                            disabled={!isRoleAllowed || isSaving}
+                            disabled={(!isRoleAllowed && !isGrantable) || isSaving}
                             onclick={() => setMenuPermission(sub.menu_key, !effectiveAllowed)}
                             aria-pressed={effectiveAllowed}
                             aria-label="{sub.label} {effectiveAllowed ? '허용됨' : '차단됨'}"

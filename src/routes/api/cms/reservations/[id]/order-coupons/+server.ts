@@ -5,6 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildCouponBreakdown, type OrderCouponInput } from '$lib/utils/orderCouponBreakdown'
 
 // 주문에 적용된 쿠폰 목록 + 쿠폰별 할인 계산 단계 — RentalDetailPanel 결제정보 탭 "할인쿠폰 적용" 아코디언용(2026-10-02).
@@ -18,6 +19,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  // 정책 결정 2026-11-11(Stephen): 결제정보 탭은 파트너 접근 불가 — 이 탭이 호출하는 조회 API도 매니저 이상만
+  if (!hasSettingsAccess(cmsRole)) return json({ error: '결제정보는 매니저 이상만 볼 수 있습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {

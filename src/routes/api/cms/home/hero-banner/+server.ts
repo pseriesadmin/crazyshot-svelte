@@ -78,7 +78,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 }
 
 export const DELETE: RequestHandler = async ({ request, locals }) => {
-  await requireCmsRole(locals)
+  const delRole = await requireCmsRole(locals)
+  // 정책 결정 2026-11-11(Stephen): 배너 이미지 삭제는 매니저 이상만 — 파트너 불가
+  if (!hasSettingsAccess(delRole)) throw error(403, '배너 삭제는 매니저 이상만 할 수 있어요')
 
   const { path } = (await request.json()) as { path?: string }
   if (!path) throw error(400, 'path required')

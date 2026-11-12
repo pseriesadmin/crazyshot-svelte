@@ -15,6 +15,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { findCurrentFinalDocument } from '$lib/server/contractArchive/loadArchivedPdf'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -24,7 +25,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole) return json({ error: '권한 없음' }, { status: 403 })
+  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한 없음' }, { status: 403 })  // 정책 결정 2026-11-11(Stephen): 계약서 탭은 파트너 접근 불가
   if (!UUID_RE.test(params.id)) return json({ error: '유효하지 않은 계약 ID입니다.' }, { status: 400 })
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)

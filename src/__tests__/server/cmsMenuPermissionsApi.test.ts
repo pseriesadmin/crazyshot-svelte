@@ -258,6 +258,19 @@ describe('PUT /api/cms/accounts/[id]/menu-permissions', () => {
     expect(mockRpc).not.toHaveBeenCalledWith('cms_set_menu_permission', expect.anything());
   });
 
+  it('예외(2026-11-11): partner 대상 rental.change_cancel(계정별 허용 항목)에 allowed=true 는 저장된다', async () => {
+    const result = (await PUT(
+      makeEventPUT('manager', 'target-partner-uid', { menu_key: 'rental.change_cancel', allowed: true })
+    )) as unknown as ApiResult;
+    expect(result.status).toBe(200);
+    expect(mockRpc).toHaveBeenCalledWith('cms_set_menu_permission', {
+      p_target_user_id: 'target-partner-uid',
+      p_menu_key: 'rental.change_cancel',
+      p_allowed: true,
+      p_actor_id: ACTOR_ID,
+    });
+  });
+
   it('role 허용범위 내 allowed=true는 정상 저장된다(role 상한선을 넘지 않는 경우)', async () => {
     const result = (await PUT(
       makeEventPUT('manager', 'target-partner-uid', { menu_key: 'products.list', allowed: true })

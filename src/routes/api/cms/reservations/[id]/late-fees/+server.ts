@@ -29,6 +29,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
+  // 정책 결정 2026-11-11(Stephen): 연체료 금액은 파트너 노출 불가 — 조회도 매니저 이상만(연체료 영역은 계약서 탭 안에 있어 파트너 화면에는 원래 없음)
+  if (!hasSettingsAccess(cmsRole)) return json({ error: '연체료는 매니저 이상만 볼 수 있습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) return json({ error: '잘못된 예약 번호입니다.' }, { status: 400 })

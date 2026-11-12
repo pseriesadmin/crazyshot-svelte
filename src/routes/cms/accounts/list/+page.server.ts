@@ -102,6 +102,10 @@ export const actions: Actions = {
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
 
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     const { error } = await admin.rpc('cms_update_admin_name', {
       p_user_id: userId,
       p_full_name: fullName,
@@ -133,6 +137,10 @@ export const actions: Actions = {
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
 
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     const { error } = await admin.rpc('cms_update_admin_phone', {
       p_user_id: userId,
       p_phone: phone,
@@ -155,6 +163,10 @@ export const actions: Actions = {
     // 대상 계정이 superadmin이면 호출자도 실제 superadmin이어야 통과(EC-1)
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
+
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
 
     // 마지막 남은 마스터(superadmin) 강등 차단(Q4 확정, EC-3)
     const lastMasterErr = await requireNotLastSuperadmin(admin, userId)
@@ -191,6 +203,10 @@ export const actions: Actions = {
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
 
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     const { error } = await admin.rpc('cms_toggle_concurrent_login', {
       p_user_id: userId,
       p_current: current,
@@ -223,6 +239,10 @@ export const actions: Actions = {
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
 
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
+
     const { error } = await admin.rpc('cms_toggle_session_limit', {
       p_user_id: userId,
       p_has_limit: hasLimit,
@@ -253,6 +273,10 @@ export const actions: Actions = {
     // 대상 계정이 superadmin이면 호출자도 실제 superadmin이어야 통과(EC-2)
     const accessErr = await requireAccountMutationAccess(locals, admin, userId)
     if (accessErr) return fail(403, { error: accessErr })
+
+    // 관리자(cms_role 보유) 계정만 — 고객 uuid를 직접 보내 고객을 관리자로 만들거나 정보를 바꾸는 것을 막는다(2026-11-11 전수 점검 MAJOR-7, 삭제·복구링크와 같은 검사)
+    const targetErr = await requireAdminTarget(admin, userId)
+    if (targetErr) return fail(400, { error: targetErr })
 
     const { error } = await admin.auth.admin.updateUserById(userId, {
       ban_duration: isSuspended ? 'none' : 'infinite',

@@ -429,6 +429,16 @@ async function updateStatusCore(ctx: StatusCtx, reservationId: number, newStatus
 
     } else {
       // ── partner 경로: 상태 전환만 (환불·계약 취소 없음) ──
+      // 정책 결정 2026-11-11(Stephen): 파트너는 '예약변경 및 취소'가 ON 인 계정만 취소할 수 있고, 취소 대상은 결제 전 신청대기(예약 거부)뿐이다.
+      // (임시 권한 제어 오픈 - 2026-11-11) OFF 이면 신청대기 취소도 불가.
+      const { data: partnerPermRows, error: partnerPermErr } = await admin
+        .from('cms_menu_permissions')
+        .select('menu_key, allowed')
+        .eq('user_id', session.user.id)
+      if (partnerPermErr) return fail(500, { message: '권한을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' })
+      if (!hasMenuAccess(cmsRole, (partnerPermRows ?? []) as CmsMenuPermissionOverride[], 'rental.change_cancel')) {
+        return fail(403, { message: '이 계정은 예약변경·취소 권한이 없습니다.' })
+      }
       // order_items에서 형제 예약 전체를 수집해 각각 update_reservation_status 호출
       let siblingIds: number[] = [reservationId]
       try {
@@ -450,21 +460,21 @@ async function updateStatusCore(ctx: StatusCtx, reservationId: number, newStatus
         }
       } catch { /* fail-soft — 최소한 self는 처리 */ }
 
-      for (const rid of siblingIds) {
-        const { data: statusResult, error: statusError } = await admin.rpc('update_reservation_status', {
-          p_reservation_id: rid,
-          p_new_status:     'cancelled',
-        })
-        if (statusError) {
-          // 요청 예약만 hard fail, 이미 terminal인 형제는 graceful skip
-          if (rid === reservationId) return fail(500, { message: statusError.message })
-          continue
-        }
-        const sr = statusResult as { ok: boolean; error?: string } | null
-        if (!sr?.ok && rid === reservationId) {
-          return fail(400, { message: sr?.error ?? '예약 취소 처리 실패' })
-        }
+      // 시급 수정(2026-11-11 전수 점검 BLOCKER-1) + DB 보강(Migration 810): 파트너 취소는 '결제 전' 신청대기(예약 거부)에만 허용한다.
+      // 이 경로는 환불·계약 취소를 하지 않으므로, 결제가 끝났거나 확정 이후인 예약(같은 주문의 형제 포함)을 상태만 취소하면
+      // '취소됐는데 환불 안 됨' 상태가 된다 — 그런 취소는 환불을 함께 처리하는 매니저 이상 경로로만 한다.
+      // 검사와 취소를 DB 한 함수(행 잠금 후 같은 거래에서 검사·취소)로 묶어, 확인과 취소 사이에 결제가 끼어드는 경합도 막는다.
+      const { data: partnerCancelResult, error: partnerCancelErr } = await admin.rpc('cancel_unpaid_reservations_for_partner', {
+        p_primary_id: reservationId,
+        p_reservation_ids: siblingIds,
+      })
+      if (partnerCancelErr) return fail(500, { message: '예약 취소 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' })
+      const pcr = partnerCancelResult as { ok?: boolean; code?: string; error?: string; cancelled_ids?: number[] } | null
+      if (!pcr?.ok) {
+        const status = pcr?.code === 'NOT_ALLOWED' ? 403 : pcr?.code === 'FAILED' ? 500 : 400
+        return fail(status, { message: pcr?.error ?? '예약 취소 처리 실패' })
       }
+      siblingIds = Array.isArray(pcr.cancelled_ids) && pcr.cancelled_ids.length > 0 ? pcr.cancelled_ids : siblingIds
       cancelledSiblingIds = siblingIds
     }
   } else {

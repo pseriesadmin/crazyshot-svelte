@@ -371,7 +371,8 @@ describe('[P7-4] API — contracts/[id]/content GET/PATCH 403 for partner', () =
     expect(res.status).not.toBe(403);
   });
 
-  it('GREEN: partner라도 서명완료(contract_signings.signed_at 존재)건 GET → 403 아닌 응답 (2026-08-20)', async () => {
+  // 2026-11-11 정책 결정(Stephen): 계약서 탭은 파트너 접근 불가 — 2026-08-20 '서명완료건은 파트너 열람 허용'을 대체한다
+  it('정책 변경: partner는 서명완료(contract_signings.signed_at 존재)건 GET 도 403 (2026-11-11, 2026-08-20 완화 대체)', async () => {
     mockGetCmsRoleForAction.mockResolvedValue('partner');
     nextMaybeSingleResult = { data: { signed_at: '2026-08-20T00:00:00Z' }, error: null };
     const event = {
@@ -381,7 +382,7 @@ describe('[P7-4] API — contracts/[id]/content GET/PATCH 403 for partner', () =
       url: new URL('http://localhost/api/cms/contracts/contract-id-1/content'),
     };
     const res = await (contentGet as (e: unknown) => Promise<unknown>)(event) as { status: number };
-    expect(res.status).not.toBe(403);
+    expect(res.status).toBe(403);
   });
 
   it('RED: partner + 서명 미완료(signed_at 없음)건 GET → 여전히 403 (2026-08-20)', async () => {

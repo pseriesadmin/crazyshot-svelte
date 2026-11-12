@@ -36,7 +36,7 @@ import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { fetchCmsProfileByAuthId } from '$lib/server/cmsProfile'
 import { requireAccountMutationAccess } from '$lib/server/requireTrueSuperadmin'
-import { findCmsMenuByKey, roleAllowsMenuByDefault } from '$lib/constants/cmsMenus'
+import { findCmsMenuByKey, isMenuGrantableToRole, roleAllowsMenuByDefault } from '$lib/constants/cmsMenus'
 import { insertCmsAdminAuditLog } from '$lib/server/cmsAdminAuditLog'
 import type { RequestHandler } from './$types'
 
@@ -149,7 +149,9 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
   // 생략한다.
   if (allowed) {
     const targetProfile = await fetchCmsProfileByAuthId(admin, targetUserId)
-    if (!roleAllowsMenuByDefault(targetProfile?.cms_role ?? '', menuKey)) {
+    const targetRole = targetProfile?.cms_role ?? ''
+    // 임시 권한 제어 오픈 - 2026-11-11: 예약변경 및 취소(grantableToLowerRole)는 partner에게도 계정별로 열어줄 수 있다
+    if (!roleAllowsMenuByDefault(targetRole, menuKey) && !isMenuGrantableToRole(targetRole, menuKey)) {
       return json(
         { error: '이 계정의 등급으로는 접근할 수 없는 메뉴입니다.' },
         { status: 400 }

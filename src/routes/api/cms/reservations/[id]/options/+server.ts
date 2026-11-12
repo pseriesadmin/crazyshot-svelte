@@ -54,7 +54,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     id:           r.id as number,
     option_name:  r.option_name as string,
     qty:          r.qty as number,
-    unit_price:   r.unit_price as number,
+    // 정책 결정 2026-11-11(Stephen): 옵션 단가는 파트너 노출 불가 — 파트너에게는 0 으로 내려준다(화면은 옵션 이름·수량만 표시)
+    unit_price:   hasSettingsAccess(cmsRole) ? (r.unit_price as number) : 0,
     product_code: r.option_product_id ? (codeMap[r.option_product_id as string] ?? null) : null,
   }))
 
