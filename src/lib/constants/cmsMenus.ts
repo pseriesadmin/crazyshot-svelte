@@ -11,7 +11,7 @@
 //
 // .claude/harness/TASK.md "CMS 관리자 계정 목록 → 계정 정보설정 상세패널" Stage 1 (Q1~Q3)
 
-import { hasRouteAccess, hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { getRoleLevel, hasRouteAccess, hasSettingsAccess } from '$lib/utils/cmsPermissions'
 
 export interface CmsSubMenuDef {
   menu_key: string
@@ -20,6 +20,9 @@ export interface CmsSubMenuDef {
    *  href 없는 항목을 건너뛰므로 GNB 메뉴 렌더링·라우트 접근 판정에 영향 없음. */
   href?: string
   requiresSettingsAccess?: boolean
+  /** true 면 역할이 기본으로 막은 계정(partner)에게도 계정별 allowed=true 오버라이드로 '열어줄' 수 있다
+   *  (기본 OFF, 매니저가 계정별로 ON). 비라우트(기능 단위) 항목에만 허용한다 — 라우트 메뉴는 좁히기 전용 유지. */
+  grantableToLowerRole?: boolean
 }
 
 export interface CmsMainMenuDef {
@@ -37,6 +40,7 @@ export interface CmsMenuLookup {
   label: string
   href?: string
   requiresSettingsAccess?: boolean
+  grantableToLowerRole?: boolean
 }
 
 export const CMS_MENUS: CmsMainMenuDef[] = [
@@ -62,7 +66,8 @@ export const CMS_MENUS: CmsMainMenuDef[] = [
       /** 비라우트 기능 권한: 예약변경·예약취소 버튼 접근 제어.
        *  requiresSettingsAccess:true → 기본 허용 대상 = manager 이상.
        *  per-account allowed:false 레코드로 추가 차단 가능(좁히기 전용). */
-      { menu_key: 'rental.change_cancel', label: '예약변경 및 취소', requiresSettingsAccess: true },
+      // 임시 권한 제어 오픈 - 2026-11-11: partner 도 계정별 ON 가능(grantableToLowerRole). 기본은 OFF
+      { menu_key: 'rental.change_cancel', label: '예약변경 및 취소', requiresSettingsAccess: true, grantableToLowerRole: true },
     ],
   },
   {
@@ -230,12 +235,25 @@ export function roleAllowsMenuByDefault(role: string, menuKey: string): boolean 
 }
 
 /**
+ * isMenuGrantableToRole — 역할이 기본으로 막은 메뉴를 계정별 allowed=true 로 열어줄 수 있는지(2026-11-11, Stephen 확정).
+ * 비라우트(href 없음) + grantableToLowerRole 플래그가 켜진 항목이고, 대상이 실제 CMS 역할(partner 이상)일 때만 true.
+ * 예약변경 및 취소(rental.change_cancel) 1건에만 적용한다 — 나머지 메뉴는 '역할이 상한선'(좁히기 전용) 그대로.
+ */
+// 임시 권한 제어 오픈 - 2026-11-11
+export function isMenuGrantableToRole(role: string, menuKey: string): boolean {
+  const menu = findCmsMenuByKey(menuKey)
+  if (!menu || menu.href) return false
+  return menu.grantableToLowerRole === true && getRoleLevel(role) > 0
+}
+
+/**
  * hasMenuAccess — Q3 확정 "블랙리스트 방식" 판정
  *   ① 오버라이드 레코드가 없으면 role 기준 결과(roleAllowsMenuByDefault)를
  *      그대로 따르는 기본 허용
  *   ② 명시적 차단(allowed=false) 레코드가 있을 때만 role과 무관하게 거부
  *   ③ allowed=true 오버라이드는 role이 막은 메뉴를 열어주지 않는다(좁히기 전용, Q6 원칙을
  *      판정 함수 레벨에서도 보장 — Stage 3 서버 불변조건과 동일 방향)
+ *      ※ 예외(2026-11-11): grantableToLowerRole 항목(예약변경 및 취소)만 partner에게 allowed=true 로 열어줄 수 있다
  */
 export function hasMenuAccess(
   role: string,
@@ -250,5 +268,7 @@ export function hasMenuAccess(
   const override = (menuOverrides ?? []).find((o) => o.menu_key === menuKey)
   if (override && override.allowed === false) return false
 
-  return roleAllowsMenuByDefault(role, menuKey)
+  if (roleAllowsMenuByDefault(role, menuKey)) return true
+  // 임시 권한 제어 오픈 - 2026-11-11: 계정별 allowed=true 로 열어준 partner 허용
+  return override?.allowed === true && isMenuGrantableToRole(role, menuKey)
 }
