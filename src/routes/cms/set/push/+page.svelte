@@ -12,6 +12,7 @@
     SMS_BRAND_PREFIX,
     applyNotifyTemplate,
     getNotifySpec,
+    notifyMaxChars,
     validateNotifyMessage,
     type NotifyVarKey,
     type NotifyVars,
@@ -30,7 +31,7 @@
   // 화면 표시 이름 보정 — DB 라벨(#736 '반납 안내(무인함 3시간 전)')은 두 무인함 알림이 헷갈려 화면에서만 구분해 보여 준다(저장·발송 키는 notify_type 그대로)
   // 2026-11-06 교통정리(Stephen 확정): 번호+비밀번호를 보내는 알림(locker_return_guide) = '반납정보 제공안내', 방문·퀵서비스 모든 고객에게 가는 리마인드(return_notice_locker) = '반납 안내'
   const LABEL_OVERRIDE: Record<string, string> = {
-    locker_guide: '무인보관함 수령이용 안내',
+    locker_guide: '무인보관함 수령정보 안내',
     locker_return_guide: '무인보관함 반납정보 제공안내',
     return_notice_locker: '무인보관함 반납 안내',
   }
@@ -173,6 +174,7 @@
     damage_claimed: { cond: '고객 채팅에서 파손 신고가 감지될 때 (자동)', chat: 'card' },
     tracking_notify: { cond: '운송장 번호 등록 시 (수동 입력·두발히어로 접수 직후)', chat: 'card' },
     locker_guide: { cond: '수령 예정 시각 1시간 전 (자동)', chat: 'card' },
+    locker_assign_notice: { cond: '무인함 정보 [배정 확정] 저장 즉시 (예약당 1회 · 등록한 문장이 있을 때)', chat: null },
     locker_return_guide: { cond: '반납 시각 1시간 전, 1회 (무인보관함 반납 예약 · 관리자가 반납용 무인함 번호·비밀번호를 저장한 건)', chat: 'card' },
     return_notice_courier: { cond: '반납일 당일 09:00 (택배)', chat: 'card' },
     return_notice_quick_5h: { cond: '반납 일시 3시간 전 (퀵)', chat: 'card' },
@@ -579,7 +581,7 @@
           <textarea
             class="msg-textarea"
             rows="4"
-            maxlength="1000"
+            maxlength={notifyMaxChars(row.notify_type)}
             bind:this={textareaEl}
             value={draft}
             oninput={(e) => { drafts[row.notify_type] = e.currentTarget.value }}
@@ -587,11 +589,11 @@
             aria-label="{row.label} 안내문장"
           ></textarea>
           <div class="msg-meta">
-            <span>{draft.length}/1000자</span>
+            <span>{draft.length}/{notifyMaxChars(row.notify_type)}자</span>
             {#if spec.sms && draft.trim() !== ''}
               <span class:msg-meta--warn={check.smsKind !== 'SMS'}>문자 최대 {check.smsBytes}바이트 · {check.smsKind === 'SMS' ? '단문(SMS)' : check.smsKind === 'LMS' ? '장문(LMS)' : '2000바이트 초과'}</span>
             {/if}
-            {#if draft.trim() === ''}<span>비워 두면 기본 문구가 발송됩니다.</span>{/if}
+            {#if draft.trim() === ''}<span>{row.notify_type === 'locker_assign_notice' ? '비워 두면 발송하지 않습니다.' : '비워 두면 기본 문구가 발송됩니다.'}</span>{/if}
           </div>
           {#if !check.ok}
             <p class="msg-error" role="alert">{check.error}</p>
@@ -604,8 +606,8 @@
           {/if}
 
           <div class="msg-preview">
-            <span class="msg-field-title">{hasDraft ? '미리보기(예시값)' : '현재 발송 중인 문구(예시값)'}</span>
-            {#if !hasDraft}
+            <span class="msg-field-title">{hasDraft || row.notify_type === 'locker_assign_notice' ? '미리보기(예시값)' : '현재 발송 중인 문구(예시값)'}</span>
+            {#if !hasDraft && row.notify_type !== 'locker_assign_notice'}
               <p class="msg-hint">저장된 문장이 없어 지금 이 문구가 그대로 발송됩니다.</p>
             {/if}
             <div class="msg-preview-box"><span class="msg-preview-tag">푸시</span>{previewBody}</div>

@@ -2317,6 +2317,9 @@
         csToast.error(lockerPwError)
       } else {
         csToast.success('무인보관함 비밀번호가 저장되었습니다.')
+        // 배정 확정과 함께 고객에게 '무인보관함 이용안내' 푸시+문자가 실제로 나간 경우에만 알린다(2026-11-12, Stephen)
+        const saved = await res.json().catch(() => ({})) as { assign_notice?: string | null }
+        if (saved.assign_notice === 'sent') csToast.success("'무인보관함 이용안내' 알림이 발송되었습니다.")
       }
     } catch {
       // 요청이 서버 응답을 받기 전에 끊긴 경우(네트워크 단락) — 서버 오류와 구분해 안내한다(2026-10-23)

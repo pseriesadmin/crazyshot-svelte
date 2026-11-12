@@ -1,19 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { PUSH_KINDS, OTHER_KIND, pushKindOf, mergeTabOrder } from '$lib/utils/pushKinds'
 
-// Stage·Production 의 고객 알림 32종(Migration #181~#788 기준) — 새 유형이 생기면 이 목록과 분류표를 함께 갱신한다
+// Stage·Production 의 고객 알림 33종(Migration #181~#820 기준) — 새 유형이 생기면 이 목록과 분류표를 함께 갱신한다
 const LIFECYCLE_TYPES = [
   'reservation_hold', 'reservation_approval', 'rental_confirm', 'shipment_notify', 'return_registration', 'return_remind',
   'rental_complete', 'admin_chat_reply', 'chat_unanswered', 'contract_sent', 'identity_approved', 'reservation_cancelled',
   'damage_claimed', 'tracking_notify', 'locker_guide', 'dhero_place_guide', 'payment_cancelled_reissue', 'contract_signed_customer',
   'identity_request', 'late_fee_paid', 'ai_auto_reply', 'canned_auto_reply', 'return_notice_courier', 'return_notice_quick_5h',
   'return_notice_quick_2h', 'return_notice_quick_1h', 'return_notice_locker', 'inspection_pass', 'inspection_issue',
-  'issue_report_request', 'locker_return_guide', 'late_fee_request',
+  'issue_report_request', 'locker_return_guide', 'late_fee_request', 'locker_assign_notice',
 ]
 
 describe('푸시알림 종류(서류철) 분류', () => {
-  it('고객 알림 32종이 모두 기타가 아닌 종류에 들어간다', () => {
-    expect(LIFECYCLE_TYPES).toHaveLength(32)
+  it('고객 알림 33종이 모두 기타가 아닌 종류에 들어간다', () => {
+    expect(LIFECYCLE_TYPES).toHaveLength(33)
     for (const t of LIFECYCLE_TYPES) expect(pushKindOf(t)).not.toBe(OTHER_KIND.id)
   })
 
@@ -29,6 +29,7 @@ describe('푸시알림 종류(서류철) 분류', () => {
 
   it('무인보관함 3종: 수령 안내는 수령·배송, 반납 두 가지는 반납', () => {
     expect(pushKindOf('locker_guide')).toBe('pickup')
+    expect(pushKindOf('locker_assign_notice')).toBe('pickup') // 무인보관함 이용안내(#820)
     expect(pushKindOf('locker_return_guide')).toBe('return')
     expect(pushKindOf('return_notice_locker')).toBe('return')
   })
