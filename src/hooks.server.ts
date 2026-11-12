@@ -87,7 +87,10 @@ export const handle: Handle = async ({ event, resolve }) => {
         // JWT 재검증으로 조작된 토큰 차단
         const { data: { user }, error: userError } = await event.locals.supabase.auth.getUser()
         if (userError || !user) return { session: null, user: null }
-        return { session, user }
+        // 돌려주는 session.user 를 getUser() 가 확인한 값으로 교체한다(2026-11-12, Stephen 승인) — getSession() 이 준 session.user 는
+        // 쿠키 유래 값이라 라이브러리가 감시용 포장을 씌워 속성을 읽을 때마다 'could be insecure' 경고를 낸다. 확인된 값으로 바꾸면 경고가 사라지고
+        // session.user.id 를 읽는 서버 코드가 '검증된 값'을 쓰게 된다(인증 서버 호출은 늘지 않는다 — 이미 getUser() 를 호출함).
+        return { session: { ...session, user }, user }
       } catch (sessionErr) {
         // getSession()/getUser()가 {data,error} 형태가 아니라 예외를 던지는 경우
         // (리프레시 토큰 완전 무효화, Auth 서버 네트워크 타임아웃 등) — 예외가 그대로

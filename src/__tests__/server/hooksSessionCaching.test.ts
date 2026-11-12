@@ -220,4 +220,53 @@ describe('hooks.server.ts — safeGetSession() 요청 스코프 캐싱', () => {
 
     expect(response).toBeInstanceOf(Response)
   })
+
+  // 2026-11-12 — 서버 로그의 Supabase 'could be insecure' 경고 해소(Stephen 승인).
+  // 라이브러리는 getSession() 이 준 session.user 를 감시용 포장(Proxy)으로 감싸 속성을 읽는 순간 경고를 낸다.
+  // getUser() 로 확인한 뒤에도 그 포장된 값을 그대로 돌려주면 session.user.id 를 읽는 코드(서버 전역 300여 곳)마다 경고가 찍힌다.
+  // → 돌려주는 session.user 를 getUser() 가 확인해 준 값으로 교체한다(경고 제거 + 코드가 읽는 값이 '검증된 값').
+  it('⑦ 돌려주는 session.user 는 getUser() 로 확인된 값이다(쿠키 유래 감시 포장 객체를 건드리지 않음)', async () => {
+    let touched = 0
+    const unverified = new Proxy({ id: 'forged-user' }, {
+      get: (target, prop) => {
+        touched++
+        return Reflect.get(target, prop)
+      },
+    })
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'tok', user: unverified } }, error: null })
+    getUserMock.mockResolvedValue({ data: { user: USER }, error: null })
+
+    const event = makeEvent()
+    await handleFn({
+      event,
+      resolve: async () => {
+        const r = (await event.locals.safeGetSession!()) as { session: { access_token: string; user: { id: string } } | null; user: { id: string } | null }
+        // 호출한 코드가 session.user.id 를 읽어도 확인된 사용자 값이다
+        expect(r.session?.user.id).toBe('user-1')
+        expect(r.session?.user).toBe(r.user)
+        // 세션의 다른 필드(토큰 등)는 그대로 유지된다
+        expect(r.session?.access_token).toBe('tok')
+        return new Response('ok')
+      },
+    })
+
+    // 쿠키 유래 포장 객체의 속성은 한 번도 읽히지 않았다(경고가 나지 않는다)
+    expect(touched).toBe(0)
+  })
+
+  it('⑧ getUser() 가 다른 사용자를 돌려주면 session.user 도 그 사용자다(쿠키 값이 아니라 확인된 값 기준)', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'tok', user: { id: 'cookie-user' } } }, error: null })
+    getUserMock.mockResolvedValue({ data: { user: { id: 'verified-user' } }, error: null })
+
+    const event = makeEvent()
+    await handleFn({
+      event,
+      resolve: async () => {
+        const r = (await event.locals.safeGetSession!()) as { session: { user: { id: string } }; user: { id: string } }
+        expect(r.session.user.id).toBe('verified-user')
+        expect(r.user.id).toBe('verified-user')
+        return new Response('ok')
+      },
+    })
+  })
 })
