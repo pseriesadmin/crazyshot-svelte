@@ -9,7 +9,7 @@
   import ReturnSubmitModal from '$lib/components/account/ReturnSubmitModal.svelte'
   import { openChatWithContext } from '$lib/stores/chat.svelte'
   import { authState } from '$lib/stores/auth'
-  import { goto, invalidateAll, replaceState } from '$app/navigation'
+  import { afterNavigate, goto, invalidateAll, replaceState } from '$app/navigation'
   import { csToast } from '$lib/utils/toast'
   import type { PageData } from './$types'
   import type { MyRental } from './+page.server'
@@ -37,14 +37,19 @@
   // 진행 중 = 예약신청·계약완료·반출중·대여중·반납중(종료·취소 제외), 취소중 카드는 제외. 마운트 후에 정해서 서버 렌더와 어긋나지 않게 한다.
   const IN_PROGRESS = new Set(['hold', 'confirmed', 'shipped', 'in_use', 'return_requested'])
   let bounceId = $state<string | null>(null)
+  // 예약정보 수정 진입 실패로 돌아온 경우(?editError=) — 안내 토스트 1회 후 주소에서 파라미터 제거.
+  // onMount 에서 replaceState 를 부르면 주소창 입력·새로고침(전체 로드)에서 라우터가 아직 준비되지 않아 오류가 나고 토스트·주소 정리가 멈췄다(Stage 점검 2026-11-12) —
+  // 라우터 준비 뒤 항상 호출되는 afterNavigate 에서 처리한다(첫 진입·앱 안 이동 모두).
+  let editErrorShown = false
+  afterNavigate(() => {
+    if (editErrorShown || !data.editErrorMessage) return
+    editErrorShown = true
+    csToast.warning(data.editErrorMessage)
+    const clean = new URL(window.location.href)
+    clean.searchParams.delete('editError')
+    replaceState(clean, {})
+  })
   onMount(() => {
-    // 예약정보 수정 진입 실패로 돌아온 경우(?editError=) — 안내 토스트 1회 후 주소에서 파라미터 제거
-    if (data.editErrorMessage) {
-      csToast.warning(data.editErrorMessage)
-      const clean = new URL(window.location.href)
-      clean.searchParams.delete('editError')
-      replaceState(clean, {})
-    }
     const focus = new URLSearchParams(window.location.search).get('focus')
     const target = focus ? data.rentals.find(r => String(r.id) === focus || (r.items ?? []).some(i => String(i.id) === focus)) : undefined
     if (target) requestAnimationFrame(() => document.getElementById(`rental-card-${target.id}`)?.scrollIntoView({ block: 'start' }))
@@ -324,7 +329,15 @@
             </div>
 
             <div class="stepper-wrap">
-              <RentalJourneyStepper plain slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} />
+              <RentalJourneyStepper plain slim fluid status={rental.status} returnDay={returnDayState(rental.status, rental.end_date, rental.return_method, rental.return_time)} details={rental.journeyDetails} dheroStage={rental.dheroStage} >
+                {#if rental.lockerInfo}
+                  <div class="locker-info">
+                    <p class="locker-info-lead">무인보관함 정보</p>
+                    <p>무인함 번호: <span class="locker-info-value">{rental.lockerInfo.number}</span></p>
+                    <p>비밀번호: <span class="locker-info-value">{rental.lockerInfo.password}</span></p>
+                  </div>
+                {/if}
+              </RentalJourneyStepper>
             </div>
 
             {#if rental.cancelling}
@@ -744,6 +757,29 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  /* 무인보관함 정보 — 스텝퍼 박스(.stepper-wrap) 안, 단계 말풍선(.step-info, RentalJourneyStepper.svelte)과 같은 스타일을 그대로 차용(2026-11-13 Stephen 지시):
+     흰 면·반경 15px·패딩 12px 14px·13px/1.5·--cs-text-mid·같은 미세 그림자, 꼬리(::before)만 제외. 컴포넌트 스코프 CSS 라 값만 복사 */
+  .locker-info {
+    padding: 12px 14px;
+    border-radius: 15px;
+    background: var(--cs-white);
+    font-family: var(--font-kr);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--cs-text-mid);
+    word-break: keep-all;
+    filter: drop-shadow(0 1px 4px rgba(16, 11, 50, 0.08));
+  }
+  .locker-info p { margin: 0; }
+  .locker-info p + p { margin-top: 2px; }
+  .locker-info-lead { font-weight: 700; color: var(--cs-text); }
+  /* 값 — 운송장 번호(.tracking-copy)와 같은 숫자 폰트·14px·700·퍼플(버튼 아님) */
+  .locker-info-value {
+    font-family: var(--font-en-d-din);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--cs-purple);
   }
   .stepper-wrap + .card-actions { margin-top: 15px; }  /* 스텝퍼(말풍선) ↔ 버튼 간격 12px → 18px → 27px(각 +50%, 2026-10-30 Stephen 지시) */
   .card-actions-btn {

@@ -17,6 +17,7 @@ import { toReturnSubmitMethod } from '$lib/utils/returnNotice'
 import { RETURN_SUBMIT_STATUSES } from '$lib/server/returnSubmission'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { mapEditOrderFailure } from '$lib/server/reservationEditOrder'
+import { resolveLockerInfo, type LockerInfo, type LockerRowInput } from '$lib/utils/lockerInfoVisibility'
 
 export interface MyRental {
   id:                     string
@@ -54,6 +55,8 @@ export interface MyRental {
   returnSubmittable:      boolean
   /** 이미 반납정보를 제출함 */
   returnSubmitted:        boolean
+  /** 무인보관함 정보 — 수령·반납 1시간 전부터 취소·만료 전까지만 서버가 실어 보낸다(노출 전에는 키 자체가 없음) */
+  lockerInfo?:            LockerInfo
 }
 
 // /cart?edit= 진입 실패 시 돌아오는 ?editError=<사유코드> — 허용 목록의 코드만 문구로 바꾼다
@@ -76,7 +79,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const { data, error } = await locals.supabase
     .from('rental_reservations')
-    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_status_code, dhero_meta, dhero_return_book_id, pickup_method, pickup_time, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
+    .select('id, status, reservation_code, start_date, end_date, return_method, return_time, created_at:submitted_at, product_id, tracking_number, courier_code, dhero_status_code, dhero_meta, dhero_return_book_id, pickup_method, pickup_time, locker_number, locker_password, locker_guide_legs, customer_cancelled_at, cancel_confirmed_at, cancel_requested_at, products!rental_reservations_product_id_fkey(name, category, parent_product_id)')
     .eq('user_id', session.user.id)
     // 취소중(고객이 취소했고 관리자 확인 전) 예약도 목록에 남긴다 — 관리자가 취소확인하면 /account/cancel로 이동
     .or('status.in.(hold,confirmed,shipped,in_use,return_requested,returned,completed),and(status.eq.cancelled,customer_cancelled_at.not.is.null,cancel_confirmed_at.is.null)')
@@ -188,13 +191,40 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     ? await loadPaymentReceipts(createClient(getSupabaseUrl(), serviceRoleKey), session.user.id, reservationIds)
     : new Map<string, CardPaymentInfo>()
   const rowById = new Map(rows.map(r => [String(r.id), r]))
+  // 무인보관함 정보 판정용 원본 값(번호·비밀번호는 노출 판정을 통과한 카드에만 응답에 실린다)
+  const lockerRawById = new Map(
+    ((data ?? []) as Array<Record<string, unknown>>).map(r => [String(r.id), {
+      row: {
+        id:                String(r.id),
+        locker_number:     (r.locker_number as string | null) ?? null,
+        locker_password:   (r.locker_password as string | null) ?? null,
+        locker_guide_legs: (r.locker_guide_legs as string | null) ?? null,
+      } satisfies LockerRowInput,
+      pickupTime: (r.pickup_time as string | null) ?? null,
+    }] as const),
+  )
+  const serverNow = new Date()
   const rentals: MyRental[] = grouped.map(g => {
     // 운송장은 같은 주문의 구성원 중 등록된 첫 번째 값을 쓴다(두발히어로 접수는 주문 단위)
     const tracked = g.items.map(i => rowById.get(String(i.id))).find(r => !!r?.tracking_number)
     // dheroStage: g.status(카드 대표 상태)로 재계산 — row-level r.status 사용 금지 (MINOR-3)
     const trackedRaw = tracked ? rawDheroById.get(String(tracked.id)) : undefined
+    const lockerRaws = g.items.map(i => lockerRawById.get(String(i.id))).filter((x): x is NonNullable<typeof x> => !!x)
+    // 수령시각은 무인함 정보를 가져오는 행(번호·비밀번호가 있는 첫 행)의 값 — 크론이 행 단위로 판정하는 것과 같다
+    const lockerSource = lockerRaws.find(x => !!x.row.locker_number?.trim() && !!x.row.locker_password?.trim())
+    const lockerInfo = resolveLockerInfo({
+      rows: lockerRaws.map(x => x.row),
+      status: g.status,
+      cancelling: g.cancelling,
+      startDate: g.start_date,
+      endDate: g.end_date,
+      pickupTime: lockerSource?.pickupTime ?? null,
+      returnTime: g.return_time,
+      now: serverNow,
+    })
     return {
       ...g,
+      ...(lockerInfo ? { lockerInfo } : {}),
       dheroStage: trackedRaw ? dheroStageForReservation({ ...trackedRaw, cardStatus: g.status }) : null,
       payment: pickCardPayment(g.items.map(i => i.id), payments),
       journeyDetails: buildJourneyStepDetails({
