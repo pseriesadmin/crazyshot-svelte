@@ -42,7 +42,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: () => adminClient }))
 
 let allowRate = true
 const rateCalls: unknown[] = []
-vi.mock('$lib/server/guard/rateLimit', () => ({
+vi.mock('$lib/server/editOrderRateLimit', () => ({
   takeRate: vi.fn(async (_admin: unknown, rule: unknown) => {
     rateCalls.push(rule)
     return allowRate

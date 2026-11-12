@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { sendPushToAdmins } from '$lib/server/push'
-import { takeRate } from '$lib/server/guard/rateLimit'
+import { takeRate } from '$lib/server/editOrderRateLimit'
 import { EDIT_ORDER_GENERIC_FAILURE, interpretEditOrderResult, parseEditOrderBody } from '$lib/server/reservationEditOrder'
 import type { RequestHandler } from './$types'
 
