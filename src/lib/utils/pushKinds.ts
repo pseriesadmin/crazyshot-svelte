@@ -36,6 +36,7 @@ const KIND_BY_TYPE: Record<string, string> = {
   tracking_notify: 'pickup',
   dhero_place_guide: 'pickup',
   locker_guide: 'pickup',
+  locker_assign_notice: 'pickup',
   // 반납
   return_registration: 'return',
   return_remind: 'return',

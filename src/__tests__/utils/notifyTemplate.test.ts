@@ -41,8 +41,8 @@ describe('smsByteLength / classifySms', () => {
 })
 
 describe('카탈로그', () => {
-  it('설정 행 33종이 모두 정의돼 있고 기본 문구의 변수는 전부 허용 변수다', () => {
-    expect(NOTIFY_SPECS).toHaveLength(33) // 2026-11-02: late_fee_request(연체료 결제 요청) 추가
+  it('설정 행 34종이 모두 정의돼 있고 기본 문구의 변수는 전부 허용 변수다', () => {
+    expect(NOTIFY_SPECS).toHaveLength(34) // 2026-11-02: late_fee_request(연체료 결제 요청) 추가 · 2026-11-12: locker_assign_notice(무인보관함 이용안내) 추가
     for (const spec of NOTIFY_SPECS) {
       expect(findUnknownVariables(spec.notifyType, spec.defaultMessage)).toEqual([])
     }

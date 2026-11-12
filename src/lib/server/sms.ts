@@ -103,6 +103,9 @@ export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: str
     `[크레이지샷] ${p} 장비가 발송됐어요. crazyshot.kr에서 배송 정보를 확인해 주세요.`,
   tracking_notify: (p) =>
     `[크레이지샷] ${p} 운송장 번호가 등록됐어요. crazyshot.kr에서 배송 추적을 확인해 주세요.`,
+  // 무인보관함 이용안내(#820) — 실제 본문은 CMS 등록 문장(customMessage)이고 이 문구는 쓰이지 않는 예비
+  locker_assign_notice: (p) =>
+    `[크레이지샷] ${p} 무인보관함이 배정됐어요. 이용 방법은 수령 1시간 전에 다시 안내드려요.`,
   dhero_place_guide: (p) =>
     `[크레이지샷] ${p} 두발히어로 배송 안내입니다. crazyshot.kr에서 확인해 주세요.`,
   return_registration: (p) =>

@@ -98,6 +98,11 @@ export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body:
     title: '무인보관함 반납 안내',
     body: (p) => `${p} 반납 안내예요. 무인보관함 정보는 채팅에서 확인하고, 반납 후 반납정보를 등록해 주세요.`,
   },
+  // 2026-11-12 추가(Migration #820): 무인함 [배정 확정] 저장 즉시 나가는 사전 고지. 본문은 CMS에 등록한 안내문장이고(없으면 발송 자체를 하지 않는다 — lockerAssignNotice.ts), 이 고정 문구는 쓰이지 않는 예비다.
+  locker_assign_notice: {
+    title: '무인보관함 이용안내',
+    body: (p) => `${p} 무인보관함이 배정됐어요. 이용 방법은 수령 1시간 전에 다시 안내드려요.`,
+  },
   // 2026-08-25 추가(Migration 347, NOW-FIX-2 §15 동기화): 두발히어로 수령위치 등록 안내.
   // 채팅카드(send_rental_chat_notification 'dhero_place_guide')와 쌍을 이루는 브라우저 푸시.
   // placePageUrl은 외부 URL이라 푸시 알림에서 직접 링크 클릭을 유도할 수 없음 —
@@ -345,6 +350,15 @@ export async function sendSecurityPushToUser(userId: string, notifyType: string,
   } catch {
     // 발신 허브 오류는 호출부로 전파하지 않음
   }
+}
+
+/**
+ * 보안 경보 푸시(여러 명) — sendSecurityPushToUser 와 같은 정책(수신 설정·문구 편집 무시)으로 보내고, 실제 전달된 사용자 id 집합을 돌려준다.
+ * 보안 관제 긴급 경보(guard/instance.ts)가 수신자별 전달 결과를 기록하는 데 쓴다. 실패하면 throw 한다(호출부가 실패로 기록).
+ */
+export async function sendSecurityPushToUsers(userIds: string[], notifyType: string, payload: PushPayload): Promise<Set<string>> {
+  const { sentToUserIds } = await dispatch(userIds, notifyType, payload)
+  return sentToUserIds
 }
 
 /**

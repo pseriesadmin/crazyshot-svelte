@@ -289,6 +289,7 @@ export interface RentalReservation {
   locker_number?: string | null;     // 무인함 번호(Migration 678) — 비밀번호와 함께 저장·안내
   locker_guide_sent_pickup_at: string | null;
   locker_guide_sent_return_at: string | null;
+  locker_assign_notice_sent_at?: string | null; // 무인보관함 이용안내(Migration 820) 발송 시각 — 예약당 1회
   payment_confirmed_at: string | null; // 결제 확인 시각 — confirmed 전환 게이팅(계약서명과 AND)에 사용,
                                         // release_reservation_hold() 30분 만료 크론은 이 값을 확인하지 않음(2026-08-21 발견)
   created_at: string;

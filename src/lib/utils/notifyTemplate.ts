@@ -83,6 +83,9 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   { notifyType: 'locker_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 무인보관함 이용 {{무인함번호}}번함 비밀번호는 '{{무인함비밀번호}}'입니다.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
   // 무인보관함 반납 안내(2026-10-31, Migration #787): 반납 시각 1시간 전 같은 방식으로 나가는 "반납용" 공통 안내문장(푸시·문자·채팅카드). 비우면 아래 기본 문구.
   { notifyType: 'locker_return_guide', vars: [...RESERVATION_VARS, '무인함번호', '무인함비밀번호', '중앙현관비밀번호', '반납기한'], sms: true, defaultMessage: "{{상품명}} 반납 안내예요.\n① {{무인함번호}}번함에 장비를 넣어 주세요. (비밀번호 '{{무인함비밀번호}}')\n② 반납 후 반납정보 등록에서 무인함 번호·비밀번호를 입력해 주세요.\n반납 기한 {{반납기한}}까지 입력이 없으면 지연 연체 요금이 발생할 수 있어요.\n중앙현관 비밀번호: {{중앙현관비밀번호}}" },
+  // 무인보관함 이용안내(2026-11-12, Migration #820, Stephen 확정): 무인함 [배정 확정] 저장 즉시 푸시+문자로 나가는 사전 고지. 등록한 문장(100자 이내)만 보내며 번호·비밀번호는 넣지 않는다(수령 1시간 전 '수령이용 안내'가 따로 보낸다).
+  // defaultMessage 는 화면 입력칸 예시일 뿐 발송에 쓰지 않는다 — 등록한 문장이 없으면 보내지 않는다.
+  { notifyType: 'locker_assign_notice', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 무인보관함이 배정됐어요. 이용 방법은 수령 1시간 전에 다시 안내드려요.' },
   // 반납 방식별 단계 알림(2026-10-17, Migration #722) — 푸시·문자 공통 안내문장(채팅카드는 크론이 같은 기본 문구를 보낸다)
   { notifyType: 'return_notice_courier', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 반납일이에요. 크레이지배송 반납 방법을 확인하고 반납요청을 등록해 주세요.' },
   { notifyType: 'return_notice_quick_5h', vars: RESERVATION_VARS, sms: true, defaultMessage: '{{상품명}} 퀵서비스 반납 안내예요. 대여 종료 시간은 매장 도착 기준이에요.' },
@@ -128,6 +131,12 @@ const VAR_PATTERN = /\{\{\s*([^{}]+?)\s*\}\}/g
 
 export const MAX_NOTIFY_MESSAGE_CHARS = 1000
 const MAX_PUSH_ONLY_CHARS = 500
+
+/** 알림 유형별 글자 수 상한(기본은 MAX_NOTIFY_MESSAGE_CHARS) — 무인보관함 이용안내는 100자(Stephen 2026-11-12) */
+const NOTIFY_TYPE_MAX_CHARS: Record<string, number> = { locker_assign_notice: 100 }
+export function notifyMaxChars(notifyType: string): number {
+  return NOTIFY_TYPE_MAX_CHARS[notifyType] ?? MAX_NOTIFY_MESSAGE_CHARS
+}
 
 /** 본문에 쓰인 변수 이름 목록(중복 제거, 등장 순서) */
 export function extractVariables(template: string): string[] {
@@ -254,6 +263,10 @@ export function validateNotifyMessage(notifyType: string, message: string): Noti
   const text = message.replace(/\r\n/g, '\n')
   if (text.trim() === '') return { ...base, ok: true }
 
+  const typeMax = notifyMaxChars(notifyType)
+  if (text.length > typeMax) {
+    return { ...base, ok: false, error: `문장은 ${typeMax}자 이하로 입력해 주세요.` }
+  }
   if (text.length > MAX_NOTIFY_MESSAGE_CHARS) {
     return { ...base, ok: false, error: `문장은 ${MAX_NOTIFY_MESSAGE_CHARS}자 이하로 입력해 주세요.` }
   }

@@ -44,6 +44,7 @@ export const NOTIFY_TYPE_LABEL: Record<string, string> = {
   reservation_cancelled: '예약 취소 안내',
   locker_guide: '무인보관함 안내',
   locker_return_guide: '무인보관함 반납 안내',
+  locker_assign_notice: '무인보관함 이용안내',
   identity_request: '본인증명 등록요청',
 }
 

@@ -264,6 +264,6 @@ describe('호출부 배선 — 채팅카드 발송 지점마다 허브 호출이
   it('SMS 대상 notify_type 문구 목록이 허브 테스트의 대상(7종+계약 2종)과 일치한다', async () => {
     const { LIFECYCLE_SMS_COPY } = await import('$lib/server/sms')
     // 연체료 2종(2026-11-02)은 허브가 아니라 lateFeeNotify.ts 가 sendCardSms 로 보낸다
-    expect(Object.keys(LIFECYCLE_SMS_COPY).sort()).toEqual([...SMS_TYPES, 'contract_link', 'contract_signed', 'contract_reshare', 'late_fee_request', 'late_fee_paid'].sort())
+    expect(Object.keys(LIFECYCLE_SMS_COPY).sort()).toEqual([...SMS_TYPES, 'contract_link', 'contract_signed', 'contract_reshare', 'late_fee_request', 'late_fee_paid', 'locker_assign_notice'].sort()) // locker_assign_notice(#820)는 무인함 배정 저장 API가 lockerAssignNotice.ts 로 보낸다
   })
 })

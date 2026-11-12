@@ -18,6 +18,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { isValidLockerNumber, isValidLockerPassword, isValidLockerGuideLegs, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR, LOCKER_GUIDE_LEGS_ERROR } from '$lib/utils/lockerFields'
+import { sendLockerAssignNotice } from '$lib/server/lockerAssignNotice'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -105,5 +106,12 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
     throw error(500, '비밀번호 저장 중 오류가 발생했습니다.')
   }
 
-  return json({ success: true, locker_password: lockerPassword, locker_number: lockerNumber, locker_guide_legs: legs })
+  // 배정 확정 즉시 이용안내(푸시+문자) 사전 고지 — 번호·비밀번호를 저장할 때만, 예약당 1회, 등록 문장이 있을 때만(fail-soft: 배정 저장은 이미 끝났다)
+  // 응답의 assign_notice: 'sent'면 실제 발송됨(화면이 '발송되었습니다' 토스트를 띄운다), 그 외 값은 보내지 않은 사유
+  let assignNotice: string | null = null
+  if (lockerPassword !== null) {
+    assignNotice = (await sendLockerAssignNotice(createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), reservationId)).reason
+  }
+
+  return json({ success: true, locker_password: lockerPassword, locker_number: lockerNumber, locker_guide_legs: legs, assign_notice: assignNotice })
 }
