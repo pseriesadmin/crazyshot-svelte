@@ -11,6 +11,7 @@ import type { Database, NotificationToken, PushNotificationConfig } from '$lib/t
 import { callTypedRpc } from '$lib/utils/rpc'
 import { sendLifecycleSms } from './sms'
 import { liveTracking, trackingNoticeText } from '$lib/utils/trackingNotice'
+import { RETURN_SUBMIT_LINK_TYPES, returnSubmitPath } from '$lib/utils/returnNotice'
 
 /** 푸시·문자 본문에 택배사·운송장 번호 줄을 붙이는 알림 타입(채팅카드는 DB 함수가 payload 로 싣는다) */
 const TRACKING_NOTIFY_TYPES = ['shipment_notify', 'tracking_notify']
@@ -441,7 +442,7 @@ export async function sendReservationLifecyclePush(
     await sendPushToUser(
       row.user_id,
       notifyType,
-      { title: copy.title, body: lockerBody ?? (TRACKING_NOTIFY_TYPES.includes(notifyType) ? applyNotifyTemplate(copy.body(productName), vars) : copy.body(productName)), link: '/account/rental' },
+      { title: copy.title, body: lockerBody ?? (TRACKING_NOTIFY_TYPES.includes(notifyType) ? applyNotifyTemplate(copy.body(productName), vars) : copy.body(productName)), link: RETURN_SUBMIT_LINK_TYPES.has(notifyType) ? returnSubmitPath(reservationId) : '/account/rental' }, // 반납 등록요청·방식별 반납 안내는 등록 화면으로 바로(2026-11-13)
       // 무인보관함은 조립 실패(lockerBody 없음) 때도 편집 문장을 적용하지 않는다 — 함번호·비밀번호 변수 없이 치환되면 깨진 문장이 나가기 때문
       { vars, noOverride: isLockerType || lockerBody !== undefined },
     )

@@ -16,6 +16,7 @@ import { CONSULT_HOURS_KEY, getConsultHours } from '$lib/server/consultHours'
 import { validateConsultHours } from '$lib/utils/consultHours'
 import { getLockerGuideTimer } from '$lib/server/lockerGuideTimer'
 import { getReturnRegisterTimer } from '$lib/server/returnRegisterTimer'
+import { RETURN_SUBMIT_LINK_TYPES, returnSubmitPath } from '$lib/utils/returnNotice'
 import { RETURN_REGISTER_TIMER_KEY, isReturnRegisterLeg, parseReturnRegisterHours, type ReturnRegisterTimer } from '$lib/utils/returnRegisterTimer'
 import { LOCKER_TIMER_KEY, parseTimerHourValue, type LockerGuideTimer, type LockerTimerLeg } from '$lib/utils/lockerGuideTimer'
 
@@ -84,13 +85,15 @@ function configTypeToSmsType(configType: string): string | undefined {
  */
 function buildSmsDefaultSamples(): Record<string, string> {
   const product = NOTIFY_VARIABLES['상품명'].sample
-  const link = 'https://crazyshot.kr/account/rental'
+  const defaultLink = 'https://crazyshot.kr/account/rental'
   const out: Record<string, string> = {}
   for (const spec of NOTIFY_SPECS) {
     if (!spec.sms) continue
     const smsType = configTypeToSmsType(spec.notifyType)
     const fn = smsType ? LIFECYCLE_SMS_COPY[smsType] : undefined
     if (!fn) continue
+    // 반납 등록요청·방식별 반납 안내는 실제로 반납 등록 화면 풀링크가 붙는다(예시 예약번호 1234)
+    const link = smsType && RETURN_SUBMIT_LINK_TYPES.has(smsType) ? `https://crazyshot.kr${returnSubmitPath(1234)}` : defaultLink
     let msg = fn(product, link)
     if (!msg.includes('http')) msg = `${msg}\n${link}`
     out[spec.notifyType] = msg

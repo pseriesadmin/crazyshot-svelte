@@ -16,7 +16,8 @@ import { nextLabel, nextStatus } from '$lib/utils/rentalTransition'
 describe('반납 방식별 단계 알림 정의 (Migration #722)', () => {
   it('모든 단계가 알림 유형·버튼 라벨을 가진다', () => {
     for (const s of RETURN_NOTICE_STAGES) {
-      expect(RETURN_NOTICE_NOTIFY_TYPE[s]).toMatch(/^return_notice_/)
+      // reg_* 단계(반납정보 등록요청 타이머, Migration #822)는 return_registration 유형을 쓴다
+      expect(RETURN_NOTICE_NOTIFY_TYPE[s]).toMatch(s.startsWith('reg_') ? /^return_registration$/ : /^return_notice_/)
       expect(RETURN_NOTICE_BUTTON_LABEL[s]).toBeTruthy()
     }
   })

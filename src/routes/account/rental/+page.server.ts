@@ -13,7 +13,7 @@ import type { CancelKind } from '$lib/utils/canCancelReservation'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
-import { toReturnSubmitMethod } from '$lib/utils/returnNotice'
+import { resolveReturnSubmitMethod } from '$lib/utils/returnNotice'
 import { RETURN_SUBMIT_STATUSES } from '$lib/server/returnSubmission'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { mapEditOrderFailure } from '$lib/server/reservationEditOrder'
@@ -141,7 +141,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   // 반납정보 등록 대상 예약의 제출 여부 — 제출 테이블은 RLS 정책이 없어 서버(서비스 롤)로만 읽는다
   const submittableIds = ((data ?? []) as Array<Record<string, unknown>>)
-    .filter(r => RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null)
+    .filter(r => RETURN_SUBMIT_STATUSES.has(r.status as string) && resolveReturnSubmitMethod(r.return_method as string | null) !== null)
     .map(r => r.id as number)
   const submittedIds = new Set<string>()
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
@@ -174,7 +174,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       tracking_number:        isLive ? (r.tracking_number as string | null) : null,
       courier_code:           isLive ? ((r.courier_code as string | null) ?? null) : null,
       dheroStage:             null, // 그룹 레벨에서 cardStatus(g.status) 기준으로 재계산 (MINOR-3)
-      returnSubmittable:      RETURN_SUBMIT_STATUSES.has(r.status as string) && toReturnSubmitMethod(r.return_method as string | null) !== null,
+      returnSubmittable:      RETURN_SUBMIT_STATUSES.has(r.status as string) && resolveReturnSubmitMethod(r.return_method as string | null) !== null, // 방문 반납 포함(2026-11-13, Stephen 지시)
       returnSubmitted:        submittedIds.has(String(r.id)),
       cancelKind: cancelKinds.get(String(r.id)) ?? 'unavailable',
       cancelRequested: cancelRequestedIds.has(String(r.id)),

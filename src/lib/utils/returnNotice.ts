@@ -3,9 +3,10 @@
 // 단계 산출(시각·방식)은 DB 함수 claim_return_notice_targets 가 하고, 여기서는 단계 → 알림 유형·카드 버튼·이동 주소만 정한다.
 // 푸시·문자 문구는 push.ts CUSTOMER_LIFECYCLE_PUSH_COPY / sms.ts LIFECYCLE_SMS_COPY 가 정본이다(같은 유형 키).
 
-export type ReturnNoticeStage = 'courier' | 'quick_5h' | 'quick_2h' | 'quick_1h' | 'locker_2h'
+// reg_* = 반납정보 등록요청 타이머(Migration #822, 2026-11-13) — 방문·퀵·무인함 고객에게 반납 시각 N시간 전(푸시알림 설정 '반납 접수 요청' 행에서 지정). 알림 유형은 return_registration 하나를 쓴다.
+export type ReturnNoticeStage = 'courier' | 'quick_5h' | 'quick_2h' | 'quick_1h' | 'locker_2h' | 'reg_visit' | 'reg_quick' | 'reg_locker'
 
-export const RETURN_NOTICE_STAGES: ReturnNoticeStage[] = ['courier', 'quick_5h', 'quick_2h', 'quick_1h', 'locker_2h']
+export const RETURN_NOTICE_STAGES: ReturnNoticeStage[] = ['courier', 'quick_5h', 'quick_2h', 'quick_1h', 'locker_2h', 'reg_visit', 'reg_quick', 'reg_locker']
 
 /** 단계 → 푸시·문자·설정(push_notification_config) 공통 알림 유형 */
 export const RETURN_NOTICE_NOTIFY_TYPE: Record<ReturnNoticeStage, string> = {
@@ -14,6 +15,9 @@ export const RETURN_NOTICE_NOTIFY_TYPE: Record<ReturnNoticeStage, string> = {
   quick_2h: 'return_notice_quick_2h',
   quick_1h: 'return_notice_quick_1h',
   locker_2h: 'return_notice_locker',
+  reg_visit: 'return_registration',
+  reg_quick: 'return_registration',
+  reg_locker: 'return_registration',
 }
 
 /** 채팅카드 버튼 라벨(요구서 CTA 이름) */
@@ -23,7 +27,20 @@ export const RETURN_NOTICE_BUTTON_LABEL: Record<ReturnNoticeStage, string> = {
   quick_2h: '반납 준비 확인',
   quick_1h: '반납 준비 확인',
   locker_2h: '무인함 정보 등록',
+  reg_visit: '반납정보 등록',
+  reg_quick: '반납정보 등록',
+  reg_locker: '반납정보 등록',
 }
+
+/** 푸시·문자 링크를 반납 제출 화면(풀링크)으로 보내는 알림 유형 — 반납정보 등록요청과 방식별 단계 안내(2026-11-13). 반납 예정(return_remind)은 상품 이력 화면이라 제외. */
+export const RETURN_SUBMIT_LINK_TYPES: ReadonlySet<string> = new Set([
+  'return_registration',
+  'return_notice_courier',
+  'return_notice_quick_5h',
+  'return_notice_quick_2h',
+  'return_notice_quick_1h',
+  'return_notice_locker',
+])
 
 /** 고객 반납 제출 화면 경로 */
 export function returnSubmitPath(reservationId: number): string {
@@ -57,13 +74,13 @@ export const RETURN_SUBMIT_RULES: Record<ReturnSubmitMethod, { photosRequired: b
   // 퀵: 무인함을 쓴 경우에만 번호·비밀번호를 입력한다(선택 — 입력하면 둘 다 필수). 쓰지 않았다면 비워 두고 제출한다.
   quick: { photosRequired: false, checklist: false, lockerInfo: false, lockerInfoOptional: true },
   locker: { photosRequired: true, checklist: false, lockerInfo: true },
-  // 방문: 무인함 반납과 같은 요건 — 사진(무인함·장비 각 1장) + 무인함 번호·비밀번호 필수(2026-11-06 Stephen 확정). 알림 CTA 로만 들어오며 마이페이지 목록 버튼은 없다.
+  // 방문: 무인함 반납과 같은 요건 — 사진(무인함·장비 각 1장) + 무인함 번호·비밀번호 필수(2026-11-06 Stephen 확정). 알림 CTA 와 마이페이지 대여카드 버튼(2026-11-13 추가)으로 들어온다.
   visit: { photosRequired: true, checklist: false, lockerInfo: true },
 }
 
 /**
  * 제출 화면·API 가 쓰는 방식 판정 — toReturnSubmitMethod 에 "방문 반납(무인함 정보만)"을 더한다.
- * 방문은 마이페이지 반납정보 등록 버튼 대상이 아니라서(toReturnSubmitMethod 는 방문을 null 로 유지) 이 함수는 알림 CTA 로 열린 화면과 제출 API 에서만 쓴다(2026-11-06).
+ * toReturnSubmitMethod 는 방문을 null 로 유지하고, 이 함수는 알림 CTA·마이페이지 대여카드 버튼(2026-11-13)·제출 화면·제출 API 가 쓴다.
  */
 export function resolveReturnSubmitMethod(returnMethod: string | null | undefined): ReturnSubmitMethod | null {
   const base = toReturnSubmitMethod(returnMethod)
