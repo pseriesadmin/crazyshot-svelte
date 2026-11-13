@@ -27,6 +27,10 @@ interface IssueRow {
   resolved_at: string | null
   resolution_note: string | null
   assigned_admin: string | null
+  claim_kinds: string[] | null
+  claim_amount: number | null
+  claim_status: string | null
+  claim_items: { kind: string; amount: number }[] | null
 }
 
 // 같은 주문(장바구니 1건)에 속한 예약 id 전체(자기 포함) — 주문이 없으면 자기 하나
@@ -60,7 +64,7 @@ async function loadInspection(admin: SupabaseClient, reservationId: number) {
 
   const { data: issueRows } = await admin
     .from('reservation_inspection_issues')
-    .select('id, reservation_id, issue_types, detail, media, created_at, resolved_at, resolution_note, assigned_admin')
+    .select('id, reservation_id, issue_types, detail, media, created_at, resolved_at, resolution_note, assigned_admin, claim_kinds, claim_amount, claim_status, claim_items')
     .in('reservation_id', ids)
     .order('created_at', { ascending: false })
   const issues = (issueRows ?? []) as IssueRow[]
@@ -120,6 +124,10 @@ async function loadInspection(admin: SupabaseClient, reservationId: number) {
       created_at: i.created_at,
       resolved_at: i.resolved_at,
       resolution_note: i.resolution_note,
+      claim_kinds: i.claim_kinds ?? null,
+      claim_amount: i.claim_amount ?? null,
+      claim_status: i.claim_status ?? null,
+      claim_items: i.claim_items ?? null,
       media: (i.media ?? []).map((m) => ({ kind: m.kind, url: urlByPath.get(m.path) ?? null })),
     })),
   }

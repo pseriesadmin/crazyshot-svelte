@@ -22,8 +22,23 @@ export const INSPECTION_ISSUE_TYPES: { key: string; label: string }[] = [
   { key: 'exterior_damage', label: '외관 파손' },
   { key: 'malfunction', label: '작동 이상' },
   { key: 'consumable_lost', label: '소모품 분실' },
+  { key: 'billing', label: '청구' },
   { key: 'etc', label: '기타' },
 ]
+
+/** '청구' 항목(2026-11-14, Stephen 확정) — 청구 사유(복수)와 금액(원)을 함께 기록한다. 지금은 기록만 하고, 나중에 PG 결제 요청에 그대로 쓴다. key 는 저장값이라 바꾸지 않는다. */
+export const BILLING_ISSUE_KEY = 'billing'
+export const CLAIM_KINDS: { key: string; label: string }[] = [
+  { key: 'damage', label: '파손' },
+  { key: 'lost', label: '분실' },
+  { key: 'overdue', label: '연체' },
+  { key: 'return_shipping', label: '반품배송요금' },
+]
+export const CLAIM_AMOUNT_MAX = 100_000_000
+const CLAIM_LABEL = new Map(CLAIM_KINDS.map((k) => [k.key, k.label] as const))
+export function claimKindLabel(key: string): string {
+  return CLAIM_LABEL.get(key) ?? key
+}
 
 export const INSPECTION_DETAIL_MAX = 1000
 /** 관리자 CS 이슈 등록의 내용(목록 카드 제목을 겸함) 글자 수 상한 — 고객 증빙 폼의 INSPECTION_DETAIL_MAX 와 별개 */
@@ -45,6 +60,8 @@ export interface InspectionIssueInput {
   types: string[]
   detail: string
   media: InspectionIssueMediaInput[]
+  /** 항목 '청구'를 골랐을 때만 — 청구 사유·금액(원). 그 밖에는 null */
+  claim?: { items: { kind: string; amount: number }[]; total: number } | null
 }
 
 /** 증빙 경로 확인은 호출부가 주입한다(서버 전용 returnSubmission.isOwnedEvidencePath) — 이 파일은 브라우저에서도 import 가능하게 순수 유지 */
@@ -60,6 +77,26 @@ export function validateIssueInput(
   const detail = typeof b.detail === 'string' ? b.detail.trim() : ''
   if (detail.length > INSPECTION_ISSUE_TITLE_MAX) return { ok: false, error: `내용은 ${INSPECTION_ISSUE_TITLE_MAX}자 이하로 입력해 주세요.` }
 
+  // 청구 — 항목 '청구'를 고르면 사유(1개 이상)와 금액(1원~1억 원)이 필수, 고르지 않으면 청구 값은 무시한다
+  // (2026-11-14 Stephen 지시) 사유마다 금액을 따로 받는다 — claim_items: [{ kind, amount }], 합계는 서버가 계산해 저장
+  let claim: { items: { kind: string; amount: number }[]; total: number } | null = null
+  if (types.includes(BILLING_ISSUE_KEY)) {
+    const raw = Array.isArray(b.claim_items) ? b.claim_items : []
+    const items: { kind: string; amount: number }[] = []
+    for (const r of raw) {
+      const o = (r ?? {}) as Record<string, unknown>
+      const kind = typeof o.kind === 'string' ? o.kind : ''
+      if (!CLAIM_LABEL.has(kind) || items.some((it) => it.kind === kind)) return { ok: false, error: '청구 사유를 1개 이상 선택해 주세요.' }
+      const amount = typeof o.amount === 'number' ? o.amount : Number.NaN
+      if (!Number.isInteger(amount) || amount < 1 || amount > CLAIM_AMOUNT_MAX) return { ok: false, error: '청구 금액을 1원 이상 1억 원 이하로 입력해 주세요.' }
+      items.push({ kind, amount })
+    }
+    if (items.length === 0) return { ok: false, error: '청구 사유를 1개 이상 선택해 주세요.' }
+    const total = items.reduce((sum, it) => sum + it.amount, 0)
+    if (total > CLAIM_AMOUNT_MAX) return { ok: false, error: '청구 금액 합계는 1억 원 이하로 입력해 주세요.' }
+    claim = { items, total }
+  }
+
   const rawMedia = Array.isArray(b.media) ? b.media : []
   if (rawMedia.length > INSPECTION_MEDIA_MAX) return { ok: false, error: `증빙은 최대 ${INSPECTION_MEDIA_MAX}개까지 첨부할 수 있어요.` }
   const media: InspectionIssueMediaInput[] = []
@@ -69,7 +106,7 @@ export function validateIssueInput(
     if (!isOwnedPath(path)) return { ok: false, error: '첨부 파일 정보가 올바르지 않아요. 다시 올려 주세요.' }
     media.push({ path, kind: o.kind === 'video' ? 'video' : 'photo' })
   }
-  return { ok: true, value: { types, detail, media } }
+  return { ok: true, value: { types, detail, media, claim } }
 }
 
 // ── CS 사전 이슈 접수(3단계, Migration #728) ─────────────────────────────────────────

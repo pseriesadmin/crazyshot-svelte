@@ -6,12 +6,12 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
-import { approveInspection, registerInspectionIssue, resolveInspectionIssue } from '$lib/server/inspection'
+import { approveInspection, confirmReturnUnit, registerInspectionIssue, resolveInspectionIssue } from '$lib/server/inspection'
 import { isOwnedEvidencePath } from '$lib/server/returnSubmission'
 import { INSPECTION_NOTE_MAX, validateIssueInput } from '$lib/utils/inspection'
 
 // 반납 검수 승인·이슈 등록·이슈 해소 (2단계, Migration #724). manager 이상 + 메뉴 rental.reservation.
-//  action: 'approve' | 'issue' | 'resolve'
+//  action: 'approve' | 'issue' | 'resolve' | 'confirm_unit'(상품별 검수확인 — 이 예약 1건만 반납완료로, 2026-11-13)
 // 검수 없이 returned→completed 로 가는 다른 경로(updateStatus·QR)는 막혀 있고 DB 트리거도 같은 규칙을 집행한다.
 export const POST: RequestHandler = async ({ params, request, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
@@ -41,6 +41,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   let result: { ok: boolean; error?: string }
   if (action === 'approve') {
     result = await approveInspection(admin, reservationId, adminId)
+  } else if (action === 'confirm_unit') {
+    result = await confirmReturnUnit(admin, reservationId)
   } else if (action === 'issue') {
     const parsed = validateIssueInput(
       body,

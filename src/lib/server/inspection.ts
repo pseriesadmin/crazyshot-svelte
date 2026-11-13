@@ -106,16 +106,70 @@ export async function ensureReturnedForInspection(admin: AnyClient, reservationI
     }
   }
   for (const id of ids) {
-    const { data, error } = await admin.rpc('update_reservation_status', { p_reservation_id: id, p_new_status: 'returned' })
-    const res = data as { ok?: boolean; error?: string } | null
-    if (error || !res?.ok) return { ok: false, error: res?.error ?? error?.message ?? '회수 확인 처리에 실패했습니다.' }
-    try {
-      await awardOnTimeReturnPoints(admin, id)
-    } catch {
-      /* 정시반납 적립 실패는 검수 흐름에 영향 없음 */
-    }
+    const moved = await markReservationReturned(admin, id)
+    if (!moved.ok) return moved
   }
   return { ok: true }
+}
+
+/** 예약 1건을 반납완료(returned)로 전환하고 정시반납 적립을 처리한다(적립 실패는 fail-soft). 반납완료가 되면 그 재고는 다시 예약 가능하다(가용성 계산은 returned 를 점유로 보지 않는다). */
+async function markReservationReturned(admin: AnyClient, id: number): Promise<InspectionResult> {
+  const { data, error } = await admin.rpc('update_reservation_status', { p_reservation_id: id, p_new_status: 'returned' })
+  const res = data as { ok?: boolean; error?: string } | null
+  if (error || !res?.ok) return { ok: false, error: res?.error ?? error?.message ?? '회수 확인 처리에 실패했습니다.' }
+  try {
+    await awardOnTimeReturnPoints(admin, id)
+  } catch {
+    /* 정시반납 적립 실패는 검수 흐름에 영향 없음 */
+  }
+  return { ok: true }
+}
+
+export const CONFIRM_UNIT_STATUS_ERROR = '반납요청 단계의 상품만 검수확인할 수 있어요.'
+export const CONFIRM_UNIT_RECORD_ERROR = '반납 정보가 등록된 상품만 검수확인할 수 있어요.'
+export const UNCONFIRMED_CARD_ERROR = '검수확인이 안 된 상품이 있어요. 각 상품 카드에서 [검수확인]을 누른 뒤 승인해 주세요.'
+
+/**
+ * 상품별 [검수확인] (2026-11-13, Stephen 확정) — 반납정보가 등록된 상품(예약 1건)의 검수를 확인하면 그 상품만 반납완료로 전환해
+ * 그 재고 코드품번을 가용재고로 되돌린다. 같은 주문의 다른 상품·주문 전체 상태는 건드리지 않는다.
+ * 이미 반납완료 이상이면 아무것도 하지 않는다(멱등). 반납 기록이 없거나 확인하지 못하면 막는다(fail-closed).
+ */
+export async function confirmReturnUnit(admin: AnyClient, reservationId: number): Promise<InspectionResult> {
+  const { data: self } = await admin.from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+  const status = (self as { status?: string } | null)?.status
+  if (!status) return { ok: false, error: '예약을 찾을 수 없습니다.' }
+  if (status === 'returned' || status === 'completed') return { ok: true }
+  if (status !== 'return_requested') return { ok: false, error: CONFIRM_UNIT_STATUS_ERROR }
+
+  const missing = await listMissingReturnRecords(admin, reservationId)
+  if (missing === null) return { ok: false, error: RETURN_RECORD_CHECK_FAILED_ERROR }
+  if (missing.includes(reservationId)) return { ok: false, error: CONFIRM_UNIT_RECORD_ERROR }
+  return markReservationReturned(admin, reservationId)
+}
+
+/**
+ * 검수확인이 안 된 상품 — 같은 주문에서 아직 반납요청이고 고객 제출 카드가 있는 상품 id. 조회에 실패하면 null(승인을 진행하지 않는다).
+ * 관리자 대리 등록만 있는 상품은 카드(검수확인 버튼)가 없어 여기에 넣지 않는다 — 기존처럼 승인할 때 반납완료로 함께 전환된다.
+ */
+export async function listUnconfirmedCardUnits(admin: AnyClient, reservationId: number): Promise<number[] | null> {
+  try {
+    const ids: number[] = [reservationId]
+    const { data: oi } = await admin.from('order_items').select('order_id').eq('reservation_id', reservationId).maybeSingle()
+    const orderId = (oi as { order_id?: number | null } | null)?.order_id
+    if (orderId != null) {
+      const { data: sibs } = await admin.from('order_items').select('reservation_id').eq('order_id', orderId)
+      for (const r of (sibs ?? []) as { reservation_id: number | null }[]) if (r.reservation_id != null && r.reservation_id !== reservationId) ids.push(r.reservation_id)
+    }
+    const { data: pending, error: pErr } = await admin.from('rental_reservations').select('id').in('id', ids).eq('status', 'return_requested')
+    if (pErr) return null
+    const pendingIds = ((pending ?? []) as { id: number }[]).map((r) => r.id)
+    if (pendingIds.length === 0) return []
+    const { data: subs, error: sErr } = await admin.from('reservation_return_submissions').select('reservation_id').in('reservation_id', pendingIds)
+    if (sErr) return null
+    return ((subs ?? []) as { reservation_id: number }[]).map((r) => r.reservation_id)
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -168,6 +222,10 @@ export async function approveInspection(admin: AnyClient, reservationId: number,
   const missing = await listMissingReturnRecords(admin, reservationId)
   if (missing === null) return { ok: false, error: RETURN_RECORD_CHECK_FAILED_ERROR }
   if (missing.length > 0) return { ok: false, error: RETURN_RECORD_MISSING_ERROR }
+  // 상품별 [검수확인](2026-11-13, Stephen 확정) — 고객 제출 카드가 있는 모든 상품을 확인해야 승인한다(화면의 [반납 검수 승인] 활성 조건과 같은 규칙)
+  const unconfirmed = await listUnconfirmedCardUnits(admin, reservationId)
+  if (unconfirmed === null) return { ok: false, error: RETURN_RECORD_CHECK_FAILED_ERROR }
+  if (unconfirmed.length > 0) return { ok: false, error: UNCONFIRMED_CARD_ERROR }
   const targetId = await resolveApprovalTargetId(admin, reservationId)
   const ready = await ensureReturnedForInspection(admin, targetId)
   if (!ready.ok) return ready
@@ -209,6 +267,10 @@ export async function registerInspectionIssue(
       media: input.media,
       assigned_admin: adminId,
       created_by: adminId,
+      // 청구 항목(2026-11-14) — 반납 전·종료 건의 기록에도 사유별 금액을 함께 남긴다(RPC 경로와 같은 값: 사유 목록·합계·항목별 금액·청구 전 상태)
+      ...(input.claim
+        ? { claim_kinds: input.claim.items.map((it) => it.kind), claim_amount: input.claim.total, claim_status: 'pending', claim_items: input.claim.items }
+        : {}),
     })
     if (insErr) return { ok: false, error: '이슈 기록에 실패했습니다.' }
     try {
@@ -230,6 +292,7 @@ export async function registerInspectionIssue(
     p_types: input.types,
     p_detail: input.detail || null,
     p_media: input.media,
+    p_claim_items: input.claim?.items ?? null,
   })
   const res = data as { ok?: boolean; first?: boolean } | null
   if (error || !res?.ok) return { ok: false, error: rpcFailMessage(error, data, '이슈 등록에 실패했습니다.') }
