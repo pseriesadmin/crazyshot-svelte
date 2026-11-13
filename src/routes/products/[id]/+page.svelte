@@ -1634,7 +1634,8 @@
   .price-unit { display: flex; align-items: baseline; gap: 4px; }
   .price-period-label { font: var(--text-m-script-14); }
   @media (min-width: 641px) {
-    .price-period-label { font: var(--text-pc-ad-kr-22); }
+    /* 2026-11-13(Stephen 지시): PC 'Day'·'12H' 라벨도 '원'과 같이 기본 폰트(--font-kr) — 크기(22px)·굵기(500) 기존 유지 */
+    .price-period-label { font: var(--text-pc-ad-kr-22); font-family: var(--font-kr); }
   }
   .price-amount {
     font: var(--text-m-ad-kr-24);
@@ -1645,10 +1646,12 @@
     line-height: 1;
   }
   @media (min-width: 641px) {
-    .price-amount { font: var(--text-pc-ad-kr-35); -webkit-text-stroke: 0; line-height: 1; }
+    /* 2026-11-13(Stephen 지시): PC 도 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900(0.5px 외곽선) — 크기(35px)·색 기존 유지 */
+    .price-amount { font: var(--text-pc-ad-kr-35); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; -webkit-text-stroke: 0.5px currentColor; line-height: 1; }
   }
   .price-currency { font: var(--text-m-script-14); }
-  @media (min-width: 641px) { .price-currency { font: var(--text-pc-ad-kr-22); } }
+  /* 2026-11-13(Stephen 지시): PC '원'을 기본 폰트(--font-kr)로 — 광고용 헤딩 폰트 토큰(--text-pc-ad-kr-22)의 글꼴만 걷어내고 크기(22px)·굵기(500)는 기존 유지 */
+  @media (min-width: 641px) { .price-currency { font: var(--text-pc-ad-kr-22); font-family: var(--font-kr); } }
   .price-sep { font: var(--text-m-script-14); color: var(--cs-red-badge); }
 
   /* Delivery */
@@ -1880,6 +1883,13 @@
     font-family: var(--font-kr-heading);
     font-weight: 700;
     font-size: 14px;
+  }
+  /* 2026-11-13(Stephen 지시): 옵션 금액 숫자도 본상품 금액과 같이 숫자 전용 폰트(D-DIN, 한글 '무료제공' 대체 폰트 포함)·900 — 크기(모바일 14px·PC 13px)·색 기존 유지.
+     D-DIN 최대 웨이트가 700 이라 같은 색 0.5px 외곽선으로 900 만큼 굵게(.price-amount 와 동일 방식). PC·모바일 공통 */
+  .option-price-num {
+    font-family: 'D-DIN Exp', var(--font-kr-heading);
+    font-weight: 900;
+    -webkit-text-stroke: 0.5px currentColor;
   }
   @media (min-width: 641px) {
     .option-price-num { font-size: 13px; }

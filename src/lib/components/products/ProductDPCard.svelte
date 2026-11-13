@@ -342,7 +342,8 @@
     .pc-price-group{ gap: 5px; }
     .pc-price-row   { flex-wrap: nowrap; gap: 5px; letter-spacing: -0.5px; }
     .pc-price-label { font: var(--text-pc-body-14); font-weight: 700; line-height: 1; }     /* 14px Bold */
-    .pc-price-num   { font: var(--text-pc-title-18); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; -webkit-text-stroke: 0; } /* 18px Bold — 모바일 전용 외곽선 해제 */
+    /* 18px · 2026-11-13(Stephen 지시): PC 도 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900(0.5px 외곽선) — 크기·색 기존 유지 */
+    .pc-price-num   { font: var(--text-pc-title-18); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; -webkit-text-stroke: 0.5px currentColor; }
     .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; color: inherit; }     /* 14px Bold */
     /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
     .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }

@@ -1882,7 +1882,7 @@
     color: #ff3535; letter-spacing: -0.5px;
   }
   .prod-card-price .price-label { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
-  .prod-card-price .price-num   { font-family: var(--font-kr); font-size: 25px; font-weight: 900; }
+  .prod-card-price .price-num   { font-family: 'D-DIN Exp', var(--font-kr); font-size: 25px; font-weight: 900; -webkit-text-stroke: 0.5px currentColor; /* 2026-11-13(Stephen 지시): PC 금액 숫자도 D-DIN 900 — 크기·색 기존 유지 */ }
   .prod-card-price .price-sep   { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
   .prod-card-desc { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
 

@@ -6,6 +6,8 @@ import { sendSms, buildLockerGuideSms, buildLockerReturnGuideSms } from '$lib/se
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
+import { getLockerGuideTimer } from '$lib/server/lockerGuideTimer'
+import { timerHourToMinutes } from '$lib/utils/lockerGuideTimer'
 import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
 import { checkUndeliveredSms, type SmsAlertResult } from '$lib/server/smsDeliveryAlert'
 import type { RequestHandler } from './$types'
@@ -52,6 +54,49 @@ export const GET: RequestHandler = async ({ request }) => {
   // 루프 도중에 되돌리면 같은 실행의 다음 배치가 곧바로 다시 선정해 즉시 반복 시도되므로 끝에서 한 번에 처리한다.
   const toRelease: { reservationId: number; leg: string }[] = []
 
+  // 한 건 발송(문자 → 채팅카드 → 푸시) — 기본 '1시간 전' 안내와 추가 타이머 안내가 같은 흐름을 쓴다.
+  // 문자 실패, 또는 문자 불가(번호 없음)인데 채팅 실패인 경우 release() 로 "발송됨" 표시를 되돌려 재시도 대상으로 남긴다.
+  async function deliverOne(row: ClaimedLockerGuide, release: () => void): Promise<void> {
+    // 푸시알림 설정의 공통 안내문장이 푸시·문자·채팅카드의 정본(2026-10-11) — 조립 실패 시에만 기존 고정 문구로 되돌린다.
+    // 모든 발송 대상은 이 예약의 소유 고객 한 명이다(전화번호·푸시·채팅 모두 reservation.user_id 기준).
+    // 수령 건은 locker_guide, 반납 건은 locker_return_guide 문장·푸시 유형을 쓴다(2026-10-31, Migration #787).
+    const isReturn = row.leg === 'return'
+    const pushType = isReturn ? 'locker_return_guide' : 'locker_guide'
+    const composed = await composeLockerGuideMessage(admin, row.reservation_id, { leg: row.leg })
+    const fallbackSms = isReturn
+      ? buildLockerReturnGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
+      : buildLockerGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
+    const smsText = composed ? `${SMS_BRAND_PREFIX}${composed}` : fallbackSms
+
+    // 비밀번호가 담긴 문자를 가장 먼저 보낸다 — 실패하면 채팅·푸시를 보내지 않고(중복 방지) 이 건을 재시도 대상으로 되돌린다.
+    const canSms = !!(row.phone && row.password)
+    if (canSms) {
+      try {
+        await sendSms(row.phone as string, smsText)
+      } catch (smsErr) {
+        release()
+        throw smsErr
+      }
+    }
+
+    // 조립 실패 시: 수령은 기존 고정 카드(알림 RPC), 반납은 수령 문구로 나가지 않도록 반납용 예비 문장을 카드 본문으로 보낸다.
+    const cardText = composed ?? (isReturn ? fallbackSms.replace(/^\[크레이지샷\]\s*/, '') : null)
+    const { error: notifyError } = cardText
+      ? await admin.rpc('send_locker_guide_card', { p_reservation_id: row.reservation_id, p_content: cardText })
+      : await admin.rpc('send_rental_chat_notification', {
+          p_reservation_id: row.reservation_id,
+          p_notify_type:    'locker_guide',
+        })
+    if (notifyError) {
+      // 문자가 이미 나갔으면 안내는 전달된 것 — 다시 보내 문자가 중복되지 않게 되돌리지 않는다. 문자 불가(번호 없음) 건만 재시도.
+      if (!canSms) release()
+      throw new Error(notifyError.message)
+    }
+
+    await sendReservationLifecyclePush(admin, row.reservation_id, pushType, { skipSms: true, ...(composed ? { bodyOverride: composed } : {}) }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
+
+  }
+
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
     const { data: claimed, error: claimError } = await admin.rpc('claim_reservations_due_for_locker_guide', {
       p_limit: BATCH_SIZE,
@@ -69,44 +114,7 @@ export const GET: RequestHandler = async ({ request }) => {
       processed++
       // 한 건의 실패(채팅 RPC 오류·SMS 네트워크 예외)가 나머지 배치 처리를 막지 않도록 개별 격리
       try {
-        // 푸시알림 설정의 공통 안내문장이 푸시·문자·채팅카드의 정본(2026-10-11) — 조립 실패 시에만 기존 고정 문구로 되돌린다.
-        // 모든 발송 대상은 이 예약의 소유 고객 한 명이다(전화번호·푸시·채팅 모두 reservation.user_id 기준).
-        // 수령 건은 locker_guide, 반납 건은 locker_return_guide 문장·푸시 유형을 쓴다(2026-10-31, Migration #787).
-        const isReturn = row.leg === 'return'
-        const pushType = isReturn ? 'locker_return_guide' : 'locker_guide'
-        const composed = await composeLockerGuideMessage(admin, row.reservation_id, { leg: row.leg })
-        const fallbackSms = isReturn
-          ? buildLockerReturnGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
-          : buildLockerGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
-        const smsText = composed ? `${SMS_BRAND_PREFIX}${composed}` : fallbackSms
-
-        // 비밀번호가 담긴 문자를 가장 먼저 보낸다 — 실패하면 채팅·푸시를 보내지 않고(중복 방지) 이 건을 재시도 대상으로 되돌린다.
-        const canSms = !!(row.phone && row.password)
-        if (canSms) {
-          try {
-            await sendSms(row.phone as string, smsText)
-          } catch (smsErr) {
-            toRelease.push({ reservationId: row.reservation_id, leg: row.leg })
-            throw smsErr
-          }
-        }
-
-        // 조립 실패 시: 수령은 기존 고정 카드(알림 RPC), 반납은 수령 문구로 나가지 않도록 반납용 예비 문장을 카드 본문으로 보낸다.
-        const cardText = composed ?? (isReturn ? fallbackSms.replace(/^\[크레이지샷\]\s*/, '') : null)
-        const { error: notifyError } = cardText
-          ? await admin.rpc('send_locker_guide_card', { p_reservation_id: row.reservation_id, p_content: cardText })
-          : await admin.rpc('send_rental_chat_notification', {
-              p_reservation_id: row.reservation_id,
-              p_notify_type:    'locker_guide',
-            })
-        if (notifyError) {
-          // 문자가 이미 나갔으면 안내는 전달된 것 — 다시 보내 문자가 중복되지 않게 되돌리지 않는다. 문자 불가(번호 없음) 건만 재시도.
-          if (!canSms) toRelease.push({ reservationId: row.reservation_id, leg: row.leg })
-          throw new Error(notifyError.message)
-        }
-
-        await sendReservationLifecyclePush(admin, row.reservation_id, pushType, { skipSms: true, ...(composed ? { bodyOverride: composed } : {}) }) // 비밀번호 포함 자체 SMS가 있어 허브 SMS 제외
-
+        await deliverOne(row, () => toRelease.push({ reservationId: row.reservation_id, leg: row.leg }))
         succeeded++
       } catch (err) {
         failed++
@@ -121,9 +129,49 @@ export const GET: RequestHandler = async ({ request }) => {
     if (claimedRows.length < BATCH_SIZE) break // 마지막 배치(더 이상 대상 없음)
   }
 
+  // 추가 자동 발송(2026-11-13, Stephen 지시) — 푸시알림 설정에서 지정한 시각(수령·반납 예정일 당일, KST)이 지난 건을 한 번 더 발송한다.
+  // 기본 '1시간 전' 안내를 이미 보낸 건·수령(반납) 시각이 지난 건은 DB 함수가 제외한다. 설정이 없으면(두 칸 모두 비어 있음) 아무 것도 하지 않는다.
+  const timerCfg = await getLockerGuideTimer(admin)
+  const pickupMinutes = timerCfg.pickup !== null ? timerHourToMinutes(timerCfg.pickup) : null
+  const returnMinutes = timerCfg.return !== null ? timerHourToMinutes(timerCfg.return) : null
+  const toReleaseTimer: { reservationId: number; leg: string }[] = []
+  let timerProcessed = 0
+  if (pickupMinutes !== null || returnMinutes !== null) {
+    for (let batch = 0; batch < MAX_BATCHES; batch++) {
+      const { data: claimed, error: claimError } = await admin.rpc('claim_locker_guide_timer', {
+        p_pickup_minutes: pickupMinutes,
+        p_return_minutes: returnMinutes,
+        p_limit: BATCH_SIZE,
+      })
+      if (claimError) {
+        errors.push({ reservationId: -1, leg: 'timer', error: claimError.message })
+        break
+      }
+      const claimedRows = (claimed ?? []) as ClaimedLockerGuide[]
+      if (claimedRows.length === 0) break
+      for (const row of claimedRows) {
+        processed++ // 기본 안내와 추가 타이머 건을 합산(succeeded + failed = processed)
+        timerProcessed++ // 그중 추가 타이머 건 수
+        try {
+          await deliverOne(row, () => toReleaseTimer.push({ reservationId: row.reservation_id, leg: row.leg }))
+          succeeded++
+        } catch (err) {
+          failed++
+          errors.push({ reservationId: row.reservation_id, leg: `timer-${row.leg}`, error: err instanceof Error ? err.message : '알 수 없는 예외' })
+        }
+      }
+      if (claimedRows.length < BATCH_SIZE) break
+    }
+  }
+
   for (const r of toRelease) {
     const { error: relErr } = await admin.rpc('release_locker_guide_claim', { p_reservation_id: r.reservationId, p_leg: r.leg })
     if (relErr) errors.push({ reservationId: r.reservationId, leg: r.leg, error: `재시도 표시 복구 실패: ${relErr.message}` })
+  }
+
+  for (const r of toReleaseTimer) {
+    const { error: relErr } = await admin.rpc('release_locker_guide_timer_claim', { p_reservation_id: r.reservationId, p_leg: r.leg })
+    if (relErr) errors.push({ reservationId: r.reservationId, leg: `timer-${r.leg}`, error: `재시도 표시 복구 실패: ${relErr.message}` })
   }
 
   // 문자 미도착 점검(2026-10-14) — 별도 크론을 늘리지 않고 이 10분 크론 끝에 얹는다. 최근 3시간 안의 미확인 발송이 없으면 DB 조회 한 번으로 끝나며,
@@ -135,5 +183,5 @@ export const GET: RequestHandler = async ({ request }) => {
     smsAlert = { error: e instanceof Error ? e.message : '문자 미도착 점검 실패' }
   }
 
-  return json({ processed, succeeded, failed, retryScheduled: toRelease.length, errors, smsAlert })
+  return json({ processed, timerProcessed, succeeded, failed, retryScheduled: toRelease.length + toReleaseTimer.length, errors, smsAlert })
 }

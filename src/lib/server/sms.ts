@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SolapiMessageService } from 'solapi'
 import { SMS_BRAND_PREFIX, classifySms, smsByteLength } from '$lib/utils/notifyTemplate'
+import { returnSubmitPath } from '$lib/utils/returnNotice'
 
 // SMS 발송: Solapi SDK (HMAC 서명 인증 — IP 등록 불필요, Vercel 서버리스에 최적)
 // env 미설정 시 SMS 미전송 (graceful skip) — api/profile/send-otp에서 이동(2026-08-20,
@@ -108,8 +109,9 @@ export const LIFECYCLE_SMS_COPY: Record<string, (productName: string, link?: str
     `[크레이지샷] ${p} 무인보관함이 배정됐어요. 이용 방법은 수령 1시간 전에 다시 안내드려요.`,
   dhero_place_guide: (p) =>
     `[크레이지샷] ${p} 두발히어로 배송 안내입니다. crazyshot.kr에서 확인해 주세요.`,
+  // 반납정보 등록요청(2026-11-13) — 링크는 반납 등록 화면 풀링크(defaultLinkPath). 문구에 링크를 넣지 않으면 아래 발송부가 본문 끝에 붙인다.
   return_registration: (p) =>
-    `[크레이지샷] ${p} 반납 정보를 등록해 주세요. crazyshot.kr에서 확인해 주세요.`,
+    `[크레이지샷] ${p} 반납 정보를 등록해 주세요. 아래 링크에서 바로 등록할 수 있어요.`,
   return_remind: (p) =>
     `[크레이지샷] ${p} 반납예정일이 다가와요. crazyshot.kr에서 반납 방법을 확인해 주세요.`,
   reservation_cancelled: (p) =>
@@ -157,14 +159,15 @@ export interface SendLifecycleSmsParams {
 
 const SITE_URL = 'https://crazyshot.kr'
 
-function defaultLinkPath(notifyType: string, reservationId: number): string {
+export function defaultLinkPath(notifyType: string, reservationId: number): string {
   switch (notifyType) {
     case 'return_remind':    return `/account/rental/${reservationId}/history`
+    case 'return_registration':
     case 'return_notice_courier':
     case 'return_notice_quick_5h':
     case 'return_notice_quick_2h':
     case 'return_notice_quick_1h':
-    case 'return_notice_locker': return `/account/rental/${reservationId}/return-submit`
+    case 'return_notice_locker': return returnSubmitPath(reservationId)
     case 'contract_signed':  return `/account/rental/${reservationId}/contract`
     case 'contract_reshare': return `/account/rental/${reservationId}/contract`
     default:                 return '/account/rental'

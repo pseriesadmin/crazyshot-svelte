@@ -5,6 +5,8 @@
  * 단계 산출·중복 선점은 DB 함수 claim_return_notice_targets(Migration #722)가 원자적으로 한다 —
  * (예약, 단계)당 1회만 반환되므로 크론이 겹쳐 돌아도 같은 안내가 두 번 나가지 않는다.
  * 방문 반납은 기존 매일 09시 return-remind 크론이 그대로 맡는다.
+ * 추가(Migration #822, 2026-11-13): 푸시알림 설정 '반납 접수 요청' 행의 방문·퀵·무인함 '반납 시각 N시간 전'을 지정하면
+ * claim_return_register_targets 가 대상을 선점해 같은 발송 흐름(채팅카드 → 푸시+문자, 반납등록 화면 링크)으로 '반납정보 등록요청'을 보낸다.
  *
  * 발송 순서: ① 채팅카드(send_return_notice_card) ② 푸시+문자(sendReservationLifecyclePush — 허브가 같은 날 중복·로그 처리)
  *           ③ 퀵 3시간 전 안내(quick_5h 단계)만 운영자 푸시.
@@ -23,6 +25,7 @@ import {
   isReturnNoticeStage,
   returnSubmitPath,
 } from '$lib/utils/returnNotice'
+import { getReturnRegisterTimer } from '$lib/server/returnRegisterTimer'
 import type { RequestHandler } from './$types'
 
 const BATCH_SIZE = 50
@@ -55,8 +58,23 @@ export const GET: RequestHandler = async ({ request }) => {
   // 아무것도 전달하지 못한 건 — 루프가 끝난 뒤 선점을 되돌려 다음 크론에서 재시도(루프 도중에 되돌리면 같은 실행의 다음 배치가 즉시 다시 선점한다)
   const toRelease: { reservationId: number; stage: string }[] = []
 
+  // 대상 선점 원천 2개 — ① 방식별 단계 안내(기존) ② 반납정보 등록요청 타이머(Migration #822, 방문·퀵·무인함 '반납 시각 N시간 전').
+  // ②는 푸시알림 설정에 시간이 하나도 없으면 호출하지 않는다. 조회 실패 시 ①만 돌아간다.
+  const registerTimer = await getReturnRegisterTimer(admin)
+  const hasRegisterTimer = registerTimer.visit !== null || registerTimer.quick !== null || registerTimer.locker !== null
+  const sources: { rpc: string; args: Record<string, number | null> }[] = [
+    { rpc: 'claim_return_notice_targets', args: { p_limit: BATCH_SIZE } },
+    ...(hasRegisterTimer
+      ? [{
+          rpc: 'claim_return_register_targets',
+          args: { p_visit_hours: registerTimer.visit, p_quick_hours: registerTimer.quick, p_locker_hours: registerTimer.locker, p_limit: BATCH_SIZE },
+        }]
+      : []),
+  ]
+
+  for (const source of sources) {
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
-    const { data: claimed, error: claimError } = await admin.rpc('claim_return_notice_targets', { p_limit: BATCH_SIZE })
+    const { data: claimed, error: claimError } = await admin.rpc(source.rpc, source.args)
     if (claimError) {
       errors.push({ reservationId: -1, stage: '-', error: claimError.message })
       break
@@ -117,6 +135,7 @@ export const GET: RequestHandler = async ({ request }) => {
     }
 
     if (rows.length < BATCH_SIZE) break
+  }
   }
 
   for (const r of toRelease) {
