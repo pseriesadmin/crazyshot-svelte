@@ -25,6 +25,8 @@
   import { validateUploadFile, validateUploadFileSize } from '$lib/utils/fileValidation'
   import { csToast } from '$lib/utils/toast'
   import { normalizeChatContext } from '$lib/utils/chatContext'
+  import { onMount } from 'svelte'
+  import Arrow02Icon from '$lib/components/common/Arrow02Icon.svelte'
 
   interface Props {
     /** 로그인 사용자 정보 (비로그인 시 'test-user') */
@@ -63,6 +65,24 @@
 
   // 게스트 헤더 모드: 입력 시작 또는 '비회원' 선택 시 'info'로 전환
   let guestMode = $state<'prompt' | 'info'>('prompt')
+
+  // '반납정보 등록하기' 안내바(2026-11-13, Stephen 지시) — 반납 예정 고객에게 채팅을 열 때마다 헤더 아래에 위에서 아래로 내려오며 노출하고, 반납등록 화면으로 연결한다.
+  // 대상 판정은 서버(/api/chat/return-register-bar, 기존 CMS 반납 정책)가 하고, 등록을 마치면 대상에서 빠져 더 이상 뜨지 않는다. 조회 실패는 조용히 무시(채팅 사용 방해 금지).
+  let returnBarHref = $state<string | null>(null)
+  onMount(() => {
+    if (!userId || userId === 'test-user') return
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const res = await fetch('/api/chat/return-register-bar', { signal: controller.signal })
+        if (!res.ok) return
+        const body = await res.json() as { items?: Array<{ href?: string }> }
+        const href = body.items?.[0]?.href
+        if (typeof href === 'string' && /^\/account\/rental\/\d+\/return-submit$/.test(href)) returnBarHref = href   // 서버가 만드는 반납등록 화면 주소 형식만 허용(sp5 SEC-003)
+      } catch { /* 안내바만 못 띄움 */ }
+    })()
+    return () => controller.abort()
+  })
   function setGuestInfo() { guestMode = 'info' }
 
   // 세션 ID 앞 8자를 핸들로 표시 (비로그인 식별용)
@@ -381,6 +401,12 @@
   <!-- 헤더 (모바일: 대화 목록 위에 겹치는 반투명 영역 / PC: display: contents로 기존 배치 그대로) -->
   <div class="overlay-top" bind:clientHeight={overlayTopH}>
     <ChatHeader {userId} {userName} userHandle={displayHandle} {guestMode} onGuestInfo={setGuestInfo} {onclose} onclear={handleClearHistory} />
+    {#if returnBarHref}
+      <a class="return-bar" href={returnBarHref}>
+        <span class="return-bar-label">반납정보 등록하기</span>
+        <Arrow02Icon size={18} />
+      </a>
+    {/if}
   </div>
 
   <!-- 메시지 목록 -->
@@ -466,6 +492,36 @@
   .overlay-bottom {
     bottom: 0;
     background: linear-gradient(to top, var(--chat-bg) 0%, var(--chat-bg) 55%, transparent 100%);
+  }
+
+  /* 반납정보 등록하기 안내바 — 헤더 아래 알림바 레이어. 채팅 플로팅 바(FloatingBar)의 스프링 모션을 응용해 위에서 아래로 튕기듯 내려온다(채팅을 열 때마다).
+     버튼 표준(front-uiux §5 보조 버튼): 보라 면·흰 글자·30px 반경, 아웃라인·그림자 없음, 호버는 배경색만 변경. 높이는 모바일 44px. */
+  .return-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    height: 44px;
+    margin-top: 10px;
+    padding: 0 20px;
+    box-sizing: border-box;
+    background: var(--cs-purple);
+    color: var(--cs-white);
+    border-radius: var(--radius-xl);
+    font: var(--text-m-body-16B);
+    text-decoration: none;
+    transition: background 0.15s;
+    animation: return-bar-drop 0.48s cubic-bezier(0.34, 1.28, 0.64, 1) both;
+  }
+  .return-bar:hover,
+  .return-bar:active { background: var(--cs-purple-hover); }
+  @keyframes return-bar-drop {
+    0%   { transform: translateY(-140%); opacity: 0; }
+    55%  { opacity: 1; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .return-bar { animation: none; }
   }
 
   /* 상담 응대시간 안내 — 면(fill)만 사용, 보더·그림자 없음 */

@@ -11,6 +11,7 @@
   import LegacyMemberVerifyModal from '$lib/components/auth/LegacyMemberVerifyModal.svelte'
   import { browser } from '$app/environment'
   import { csToast } from '$lib/utils/toast'
+  import CheckIcon from '$lib/components/common/CheckIcon.svelte'
   import type { PageData } from './$types'
 
   // ── 서버 데이터 (CMS → 프로모션 → 광고 배너) ──
@@ -266,7 +267,7 @@
 
           <!-- Remember me + Forgot -->
           <div class="d-meta-row">
-            <!-- front-uiux §17 체크 확인 버튼 표준(인라인 SVG + .checkbox-btn) — <input type="checkbox"> 금지.
+            <!-- front-uiux §17 체크 확인 버튼 표준(CheckIcon 컴포넌트 + .checkbox-btn) — <input type="checkbox"> 금지.
                  라벨 안에 버튼을 두어 "Remember me" 글자를 눌러도 같은 버튼 클릭으로 토글된다 -->
             <label class="d-remember">
               <button
@@ -277,9 +278,7 @@
                 aria-label="로그인 상태 유지"
                 aria-pressed={rememberMe}
               >
-                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
-                </svg>
+                <CheckIcon checked={rememberMe} />
               </button>
               <span class="d-remember-label">Remember me</span>
             </label>
@@ -575,9 +574,7 @@
             aria-label="로그인 상태 유지"
             aria-pressed={rememberMe}
           >
-            <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
-            </svg>
+            <CheckIcon checked={rememberMe} />
           </button>
           <span class="m-remember-label">Remember me</span>
         </label>
@@ -967,8 +964,6 @@
     cursor: pointer;
     user-select: none;
   }
-  /* §17 수직정렬 광학보정 — 텍스트 옆 단독 배치라 이 화면 라벨 범위로만 스코프(전역 .checkbox-btn-terms 불변) */
-  .d-remember .checkbox-btn-terms { transform: translateY(2px); }
   .d-remember-label {
     font-family: var(--font-kr);
     font-size: 12px;
@@ -1154,6 +1149,29 @@
     cursor: pointer;
     padding: 0;
   }
+  /* 메뉴(☰) 아이콘 호버·터치(눌림) 모션(2026-11-13, Stephen 지시) — 30% 확대로 빠르지만 부드럽게 튕기며(바운싱) 자리 잡고, 놓으면 부드럽게 원래 크기로.
+     호버 중 최종 크기(scale 1.3)는 base 값으로 유지하고 keyframes 는 그 앞의 튕김만 맡는다(끝 값이 같아 끊김이 없다). */
+  .m-topbar-menu svg {
+    transform-origin: 50% 50%;
+    transition: transform 0.22s cubic-bezier(0.22, 0.8, 0.36, 1);
+  }
+  .m-topbar-menu:hover svg,
+  .m-topbar-menu:active svg {
+    transform: scale(1.3);
+    animation: m-menu-bounce 0.5s cubic-bezier(0.25, 0.8, 0.4, 1);
+  }
+  @keyframes m-menu-bounce {
+    0%   { transform: scale(1); }
+    38%  { transform: scale(1.5); }    /* 빠르게 크게 부풀었다가 */
+    62%  { transform: scale(1.2); }    /* 살짝 줄고 */
+    82%  { transform: scale(1.35); }   /* 다시 조금 튀고 */
+    100% { transform: scale(1.3); }    /* 30% 확대로 안착 */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .m-topbar-menu svg { transition: none; }
+    .m-topbar-menu:hover svg,
+    .m-topbar-menu:active svg { animation: none; }
+  }
 
   /* 본문 — 탑바(16+55+8=79px) 아래 시작, 여유 6px */
   .m-body {
@@ -1325,13 +1343,7 @@
     user-select: none;
   }
   .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
-  .checkbox-btn-terms { color: var(--cs-purple-op10); }
-  .checkbox-btn-terms.checked { color: var(--cs-purple); }
-  /* front-uiux §17 반응형 크기 — Mobile 22×15 기본, PC(≥768px) 18×12 (비율 3:2 유지) */
-  .checkbox-btn-terms svg { width: 22px; height: 15px; }
-  @media (min-width: 768px) {
-    .checkbox-btn-terms svg { width: 18px; height: 12px; }
-  }
+  /* 체크 아이콘의 색·크기(모바일 22px / PC 18px)·광학 보정은 CheckIcon 컴포넌트가 정한다(front-uiux §17) */
   .m-remember-label {
     font: var(--text-m-script-14B);
     color: var(--cs-text-light);
@@ -1455,6 +1467,25 @@
   }
   .d-signup-submit:hover { opacity: 0.9; transform: translateY(-1px); }
   .d-signup-submit:active { transform: translateY(0); opacity: 1; }
+  /* Sign Up '+' 아이콘 — 호버·터치(눌림) 시 부드럽고 빠르게 3바퀴 회전(2026-11-13, Stephen 지시). 1080deg = 3바퀴라 끝나면 원래 모양으로 돌아온다 */
+  .d-signup-submit svg,
+  .m-signup-submit svg { transform-origin: 50% 50%; }
+  .d-signup-submit:hover svg,
+  .d-signup-submit:active svg,
+  .m-signup-submit:hover:not(:disabled) svg,
+  .m-signup-submit:active:not(:disabled) svg {
+    animation: signup-plus-spin 0.9s cubic-bezier(0.45, 0, 0.2, 1) both;
+  }
+  @keyframes signup-plus-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(1080deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .d-signup-submit:hover svg,
+    .d-signup-submit:active svg,
+    .m-signup-submit:hover:not(:disabled) svg,
+    .m-signup-submit:active:not(:disabled) svg { animation: none; }
+  }
 
   /* 모바일 로그인 버튼 */
   .m-signin-submit {
