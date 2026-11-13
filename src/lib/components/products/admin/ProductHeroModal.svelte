@@ -6,6 +6,7 @@
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
+  import type { ProductListMode } from '$lib/utils/productListOrder'
 
   interface ProductItem {
     id: string
@@ -16,7 +17,7 @@
 
   interface HeroSettings {
     products: { id: string; order: number }[]
-    mode: 'random' | 'fixed'
+    mode: ProductListMode
   }
 
   // 카테고리 선택 시 헤더 슬라이드 대신 노출되는 배너(가로 100% × 세로 150px) — 카테고리별 1개
@@ -173,7 +174,7 @@
     return supabase.storage.from('cms-assets').getPublicUrl(path).data.publicUrl
   }
 
-  let mode = $state<'random' | 'fixed'>(initialSettings.mode)
+  let mode = $state<ProductListMode>(initialSettings.mode)
   let selected = $state<ProductItem[]>([])
   let searchResults = $state<ProductItem[]>([])
   let isSearching = $state(false)
@@ -386,6 +387,9 @@
         </button>
         <button type="button" class="combo-btn" class:combo-btn-active={mode === 'random'} aria-pressed={mode === 'random'} onclick={() => (mode = 'random')}>
           <span class="combo-label">랜덤 노출</span>
+        </button>
+        <button type="button" class="combo-btn" class:combo-btn-active={mode === 'random_once'} aria-pressed={mode === 'random_once'} onclick={() => (mode = 'random_once')}>
+          <span class="combo-label">1회 랜덤노출</span>
         </button>
       </div>
     </div>
@@ -678,8 +682,9 @@
   /* 콤보 버튼 선택 그룹 — front-uiux.md §16 표준(PC 기본 + 모바일 오버라이드) */
   /* 상품 그리드 설정 모달의 노출 순서 콤보와 같은 규격: 버튼 폭 동일(가장 긴 버튼 기준) · 행/열 간격 12px/6px · 라벨 --text-pc-script-12 */
   .combo-wrap {
-    display: inline-grid;
-    grid-template-columns: repeat(2, 1fr);
+    /* 옵션이 3개(고정 순서·랜덤 노출·1회 랜덤노출)가 되어 좁은 폭에서는 줄바꿈 — 2026-11-13 */
+    display: inline-flex;
+    flex-wrap: wrap;
     gap: 12px 6px;
     align-self: flex-start;
   }

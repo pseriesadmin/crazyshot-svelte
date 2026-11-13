@@ -1,9 +1,11 @@
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
+import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
+import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
 import type { PageServerLoad } from './$types'
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, cookies }) => {
   const { session } = await locals.safeGetSession()
   const urlCategory = url.searchParams.get('category') ?? 'all'
   // 목록 무한스크롤 — 처음 INFINITE_INITIAL개만 서버에서 내려주고, 이후 10개씩은 클라이언트가
@@ -35,9 +37,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
   const settings = ((settingsRaw as unknown) as Record<string, unknown>) ?? {}
 
-  type HeroSettings     = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
+  type HeroSettings     = { products: { id: string; order: number }[]; mode: ProductListMode }
   type GridSettings     = { category: string; count: number; sort: string; fixedProducts?: { id: string; order: number }[]; fixedByCategory?: Record<string, { id: string; order: number }[]> }
-  type MdSettings       = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
+  type MdSettings       = { products: { id: string; order: number }[]; mode: ProductListMode }
   type CatSettings      = { items: { code_id: string; icon_key: string; sort_order: number }[] }
   type KeywordsSettings = { items: string[] }
   type CategoryBannerSettings = {
@@ -67,10 +69,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // get_products_by_ids(WHERE id = ANY(...))는 입력 배열 순서를 보장하지 않으므로,
   // 관리자가 드래그로 지정한 고정 순서(order)를 여기서 직접 재정렬한다.
   // mode='random'이면 매 요청마다 셔플 — 이전에는 이 값이 어디서도 읽히지 않아 무효였음.
+  // mode='random_once'(1회 랜덤노출, 2026-11-13)면 브라우저 세션당 처음 한 번만 섞고 이후 방문에서는 같은 순서를 유지한다(세션 쿠키 시드).
   function applyProductOrder(
     cards: ProductCard[],
-    setting: { products: { id: string; order: number }[]; mode: 'random' | 'fixed' },
+    setting: { products: { id: string; order: number }[]; mode: ProductListMode },
+    salt: string,
   ): ProductCard[] {
+    if (setting.mode === 'random_once') {
+      return orderByOnceSeed(cards, resolveOnceSeed(cookies, url.protocol === 'https:'), salt)
+    }
     if (setting.mode === 'random') {
       const shuffled = [...cards]
       for (let i = shuffled.length - 1; i > 0; i--) {
@@ -126,9 +133,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
       : Promise.resolve({ data: [] as unknown[], error: null }),
   ])
 
-  const heroProducts: ProductCard[] = applyProductOrder((heroRes.data ?? []) as ProductCard[], heroSettings)
+  const heroProducts: ProductCard[] = applyProductOrder((heroRes.data ?? []) as ProductCard[], heroSettings, 'hero')
   const gridProducts: ProductCard[] = mapGridRows((gridRes.data ?? []) as Record<string, unknown>[])
-  const mdProducts: ProductCard[] = applyProductOrder((mdRes.data ?? []) as ProductCard[], mdSettings)
+  const mdProducts: ProductCard[] = applyProductOrder((mdRes.data ?? []) as ProductCard[], mdSettings, 'md')
 
   // 12H·24H 실가격·판매전용 정보 합성 — 공용 모듈(추가 조회 엔드포인트와 동일 로직)
   const allIds = [

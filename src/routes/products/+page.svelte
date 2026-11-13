@@ -248,7 +248,18 @@
   let endDock = $state(false)
   // 무한스크롤 진행 중(hasMore)엔 목록 끝에 닿을 수 없으므로 PC·모바일 공통으로 항상 도크
   let dockAuto = $derived(hasMore)
-  let dockOn = $derived(dockAuto || endDock)
+  // '1회 랜덤노출'(MD 추천 설정 노출 방식, 2026-11-13 Stephen 지시) — MD 추천 도크 팝업을 브라우저 세션당 처음 한 번만 띄운다.
+  // 한 번 떴다가 스크롤을 다시 시작하면 '사용 끝' 상태로 기록(sessionStorage)하고, 그 뒤로는 스크롤 때마다 다시 뜨지 않고 목록 맨 아래 일반 배치로만 둔다.
+  // 브라우저를 닫았다 다시 열면 기록이 사라져 다시 한 번 뜬다. 고정 순서·랜덤 노출 설정은 종전 동작 그대로.
+  const MD_DOCK_ONCE_KEY = 'cs_md_dock_once'
+  let mdDockOnce = $derived(data.settings.mdPicks?.mode === 'random_once')
+  let mdDockUsed = $state(false)
+  let mdDockSettled = $derived(mdDockOnce && mdDockUsed)
+  $effect(() => {
+    if (!mdDockOnce) { mdDockUsed = false; return }
+    try { if (sessionStorage.getItem(MD_DOCK_ONCE_KEY) === '1') mdDockUsed = true } catch { /* 저장소 사용 불가 시 이 화면 방문 동안만 유지 */ }
+  })
+  let dockOn = $derived(!mdDockSettled && (dockAuto || endDock))
   // 일반 배치 상태의 실제 높이 — 도크(fixed)로 전환돼도 이 높이만큼 자리를 남겨 페이지가 튀지 않게 함
   let flowH = $state(0)
   // 일반 배치 자리의 기준점(0높이) — 도크 전환 여부와 무관하게 항상 같은 문서 위치에 존재
@@ -272,13 +283,19 @@
     const onScroll = () => {
       const y = window.scrollY
       const goingUp = y < lastY
-      if (!dockAuto && slotEl) {
+      if (!dockAuto && slotEl && !mdDockSettled) {
         // 일반 배치 자리(slotEl)의 화면상 위치로 판정 — 스크롤 관성·바운스에 영향받지 않음
         const slotTop = slotEl.getBoundingClientRect().top
         if (goingUp && slotTop > window.innerHeight) endDock = true       // 자리가 화면 아래로 완전히 벗어난 뒤에만 도크 전환
         else if (!goingUp && slotTop <= window.innerHeight) endDock = false // 자리가 화면에 다시 들어오면 일반 배치 복귀
       }
       lastY = y
+      // 1회 랜덤노출: 도크가 한 번 떠 있다가 스크롤이 다시 시작되면 사용 끝으로 기록 — 이후 다시 뜨지 않는다
+      if (mdDockOnce && dockVisible && !mdDockUsed) {
+        mdDockUsed = true
+        endDock = false   // 도크(fixed)에서 일반 배치로 돌아가므로 자리 표시용 빈 칸(아래 {#if endDock …})이 남지 않게 함
+        try { sessionStorage.setItem(MD_DOCK_ONCE_KEY, '1') } catch { /* 저장소 사용 불가 시 이 화면 방문 동안만 유지 */ }
+      }
       dockVisible = false
       dockExpanded = false
       if (dockTimer) clearTimeout(dockTimer)
@@ -833,7 +850,7 @@
        살짝 슬라이드업(팝업)되는 도크로 노출 — 스크롤 재개 시 다시 내려감. 목록이 끝나면 일반 흐름 배치 -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div bind:this={slotEl} style="height:0" aria-hidden="true"></div>
-  {#if endDock && !dockAuto}
+  {#if endDock && !dockAuto && !mdDockSettled}
     <div style="height:{flowH}px" aria-hidden="true"></div>
   {/if}
   <div
@@ -1476,6 +1493,9 @@
   .d-feat-plabel { font: var(--text-pc-title-16); }
   .d-feat-pnum {
     font: var(--text-pc-htitle-25);
+    /* 2026-11-13(Stephen 지시): PC 금액 숫자도 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900 — 크기·색 기존 유지, D-DIN 최대 700 은 0.5px 외곽선으로 보정 */
+    font-family: 'D-DIN Exp', var(--font-kr);
+    -webkit-text-stroke: 0.5px currentColor;
     font-weight: 900;
     line-height: 1;
     font-variant-numeric: tabular-nums;

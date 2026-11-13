@@ -4,8 +4,10 @@
   import { slide, fly } from 'svelte/transition';
   import type { PageData } from './$types';
   import SubGnb from '$lib/components/common/SubGnb.svelte';
+  import CheckIcon from '$lib/components/common/CheckIcon.svelte';
+  import { cartDraftKey, isDraftEmpty, parseDraft, serializeDraft, type CartRentalDraftInput } from '$lib/utils/cartRentalDraft';
   import CalendarGrid from '$lib/components/common/CalendarGrid.svelte';
-  import { firstCartSubmitBlocker } from '$lib/utils/cartSubmitBlocker';
+  import { firstCartSubmitBlocker, firstCartSubmitBlockerTarget, type CartBlockerTarget, type CartSubmitBlockerInput } from '$lib/utils/cartSubmitBlocker';
   import TimePickerGrid from '$lib/components/common/TimePickerGrid.svelte';
   import { resolveLeadRule, isPickupDateBlocked, minPickupDate, maxReturnDate as calcMaxReturnDate, leadTimeMessage, stripServerGuardPrefix } from '$lib/utils/pickupLeadTime';
   import { pickupTimeLimits, returnTimeLimits, isTimeWithinLimits } from '$lib/utils/pickupTimeRules';
@@ -578,6 +580,131 @@
     // 사용자가 실제로 패널을 조작할 때만—를 통해서만 일어난다).
   })
 
+  // ── 대여예약옵션 임시 보관·복원(2026-11-13, Stephen 지시) — 장바구니를 나갔다 다시 들어와도 수령·반납 방법·일시·방문지점·'회원정보 반영' 체크가 남도록 한다.
+  // 개인 정보(이름·주소 등)는 저장하지 않고 '회원정보 반영' 체크만 기억해 회원 정보로 다시 채운다. 규칙·안전 원칙은 $lib/utils/cartRentalDraft 머리 주석 참고.
+  // 복원은 사용자가 패널을 직접 조작하는 것과 같은 핸들러(bulkHandle*)를 같은 순서로 다시 호출해 모든 검증을 그대로 거친다.
+  let draftRestoreDone = false
+  // 복원한 날짜가 있고 사용자가 아직 날짜를 직접 바꾸지 않은 동안 true — 재고 불가 날짜 목록(비동기 조회)이 도착하면 한 번 더 걸러낸다
+  let draftDatesRestored = false
+  let draftSaveReady = $state(false)
+  function draftUserId(): string | null {
+    const id = (data as { userId?: string | null }).userId
+    return typeof id === 'string' && id ? id : null
+  }
+  function clearRentalDraft(): void {
+    const uid = draftUserId()
+    if (!uid) return
+    try { localStorage.removeItem(cartDraftKey(uid)) } catch { /* 저장소 사용 불가 시 무시 */ }
+  }
+  function restoreRentalDraft(): void {
+    const uid = draftUserId()
+    if (!uid) return
+    let raw: string | null
+    try { raw = localStorage.getItem(cartDraftKey(uid)) } catch { return }
+    const d = parseDraft(raw, Date.now())
+    if (!d) { if (raw) clearRentalDraft(); return }
+    // 서버나 화면에 이미 값이 있으면(저장된 예약을 다시 연 경우 등) 덮어쓰지 않는다
+    const hasOwn = !!(bulkOpts.rentalMethod || bulkOpts.returnMethod || bulkDate || bulkTime || bulkReturnDate || bulkReturnTime ||
+      itemsState.some(it => !it.deleted && (it.rentalDate || it.rentalTime || it.returnDate || it.returnTime || it.opts.rentalMethod || it.opts.returnMethod)))
+    if (hasOwn) return
+    const purchaseOnly = readIsPurchaseOnly()
+    // ① 수령 방법 → ② 반납 방법 (지금 화면에서 고를 수 있는 방식일 때만)
+    const rentalKey = d.rentalMethod && pickupVisibleTabs.some(t => t.v === d.rentalMethod) ? (d.rentalMethod as DeliveryMethod) : null
+    if (rentalKey) bulkHandleMethod(rentalKey)
+    if (!purchaseOnly && rentalKey && d.returnMethod && d.returnMethod !== bulkOpts.returnMethod && !isDeliveryLocked(rentalKey) &&
+        returnVisibleTabsFor(rentalKey).some(t => t.v === d.returnMethod)) {
+      bulkHandleReturnMethod(d.returnMethod as DeliveryMethod)
+    }
+    // ③ 수령일·반납일 — 지금 기준 마감·최대 대여기간을 만족할 때만(핸들러가 경고를 띄우지 않도록 먼저 확인)
+    if (!purchaseOnly && rentalKey && d.rentalDate && !isDeliveryLeadtimeInvalid(d.rentalDate)) {
+      bulkHandleDate(d.rentalDate)
+      if (d.returnDate && d.returnDate >= d.rentalDate && !(maxReturnDate && d.returnDate > maxReturnDate)) bulkHandleDate(d.returnDate)
+      // ④ 시간 — 배송형은 방식 선택이 정한 00:00/24:00 을 그대로 둔다
+      // 시간 선택 목록과 같은 규칙(당일 여유시간·방식별 영업 시간대·반납이 수령보다 이르지 않을 것)으로 한 번 더 확인하고, 어긋나면 시간만 비운다
+      if (bulkDate && d.rentalTime && !isDeliveryTypeMethod(bulkOpts.rentalMethod) && !isCourierDependent(bulkOpts.rentalMethod) &&
+          isTimeWithinLimits(timeLimitsFor({ type: 'rental', method: bulkOpts.rentalMethod, selectedDate: bulkDate }), d.rentalTime)) bulkHandleTime(d.rentalTime)
+      if (bulkReturnDate && d.returnTime && !isDeliveryTypeMethod(bulkOpts.rentalMethod) && !isDeliveryLocked(bulkOpts.returnMethod) && !isCourierDependent(bulkOpts.returnMethod) &&
+          isTimeWithinLimits(timeLimitsFor({ type: 'return', method: bulkOpts.returnMethod, selectedDate: bulkReturnDate, pickupDate: bulkDate, pickupTime: bulkTime }), d.returnTime)) bulkHandleReturnTime(d.returnTime)
+      draftDatesRestored = !!bulkDate
+      filterRestoredDatesByStock()   // 불가 날짜 목록이 이미 도착해 있는 경우도 한 번 걸러낸다
+    }
+    // ⑤ 방문지점·'회원정보 반영' 체크(개인 정보는 회원 정보에서 다시 채운다)
+    const pointOk = (id: string) => !!id && visitPickupPoints.some(pt => pt.id === id)
+    if (rentalKey && pointOk(d.rentalPointId) && (rentalKey === 'visit' || rentalKey === 'locker')) bulkHandleRentalForm({ ...bulkRentalForm, pickupPointId: d.rentalPointId })
+    if (!bulkOpts.copyToReturn && !purchaseOnly && pointOk(d.returnPointId) && (bulkOpts.returnMethod === 'visit' || bulkOpts.returnMethod === 'locker')) bulkHandleReturnForm({ ...bulkReturnForm, pickupPointId: d.returnPointId })
+    const profile = sdUserProfileInfo
+    const addr = sdUserAddressInfo
+    const fillProfile = (f: FormState): FormState => ({ ...f, memberCheck: true, name: profile?.name ?? f.name, email: profile?.email ?? f.email, phone: profile?.phone ?? f.phone })
+    const fillAddress = (f: FormState, method: DeliveryMethod | null): FormState =>
+      isOutOfDeliveryArea(method, addr?.road_address ?? '', addr?.postal_code ?? null)
+        ? f
+        : { ...f, memberCheck2: true, addr: addr?.road_address ?? f.addr, addrDetail: addr?.detail_address ?? f.addrDetail, postalCode: addr?.postal_code ?? f.postalCode }
+    if (rentalKey && d.rentalMemberCheck && sdHasUserProfileInfo && profile) bulkHandleRentalForm(fillProfile(bulkRentalForm))
+    if (rentalKey && d.rentalMemberCheck2 && sdHasUserAddress && addr) bulkHandleRentalForm(fillAddress(bulkRentalForm, bulkOpts.rentalMethod))
+    if (!bulkOpts.copyToReturn && !purchaseOnly && d.returnMemberCheck && sdHasUserProfileInfo && profile) bulkHandleReturnForm(fillProfile(bulkReturnForm))
+    if (!bulkOpts.copyToReturn && !purchaseOnly && d.returnMemberCheck2 && sdHasUserAddress && addr) bulkHandleReturnForm(fillAddress(bulkReturnForm, bulkOpts.returnMethod))
+  }
+  // 최초 시딩(위 hasSeededBulk) 직후 한 번만 복원 — 수정 모드(/cart?edit=)는 서버 값으로 채우므로 복원·저장 모두 하지 않는다
+  $effect(() => {
+    if (draftRestoreDone || typeof window === 'undefined') return
+    if (data.isEditMode) { draftRestoreDone = true; return }
+    if (!itemsState.some(it => !it.deleted) || !hasSeededBulk) return
+    draftRestoreDone = true
+    untrack(() => restoreRentalDraft())
+    draftSaveReady = true
+  })
+  // 복원한 날짜가 그 사이 다른 예약으로 재고가 모두 찬 날이면(달력에서는 선택이 막히는 날) 비운다 — 목록은 복원 뒤 비동기로 도착하므로 도착할 때마다 확인하고, 복원 직후 이미 도착해 있어도 한 번 확인한다.
+  // 최종 방어는 서버(제출 시 promote_draft_reservation 의 재고 확인, '해당 기간에 예약 가능한 재고가 없습니다.')이고, 이 확인은 고객이 막힌 날짜를 안고 제출 직전까지 가지 않게 하는 보조다.
+  // 비울 때는 화면 패널(bulk*)뿐 아니라 각 상품 카드가 가진 같은 값(itemsState)도 함께 비운다 — applyBulkToItems 는 bulk 값이 비면 카드의 옛 값을 그대로 두기 때문.
+  // (복원은 카드에 자기 값이 없을 때만 실행되므로, 카드 값은 복원으로 채워진 것과 같다.)
+  function filterRestoredDatesByStock(): void {
+    if (!draftDatesRestored) return
+    const delivery = isDeliveryTypeMethod(bulkOpts.rentalMethod)   // 배송형은 방식이 정한 시간(00:00/24:00)을 유지
+    const clearCards = (both: boolean): void => {
+      itemsState = itemsState.map(it => {
+        if (it.deleted || !isRentalLine(groupsById.get(it.id)?.durationType ?? null)) return it
+        return both
+          ? { ...it, rentalDate: '', returnDate: '', rentalTime: delivery ? it.rentalTime : '', returnTime: delivery ? it.returnTime : '' }
+          : { ...it, returnDate: '', returnTime: delivery ? it.returnTime : '' }
+      })
+    }
+    if (bulkDate && unavailablePickupDates.has(bulkDate)) {
+      bulkDate = ''; bulkReturnDate = ''
+      if (!delivery) { bulkTime = ''; bulkReturnTime = '' }
+      clearCards(true)
+      draftDatesRestored = false
+    } else if (bulkReturnDate && unavailableReturnDates.has(bulkReturnDate)) {
+      bulkReturnDate = ''
+      if (!delivery) bulkReturnTime = ''
+      clearCards(false)
+      draftDatesRestored = false
+    }
+  }
+  $effect(() => {
+    // 두 집합이 새로 도착·갱신될 때 다시 돌도록 읽어 둔다
+    void unavailablePickupDates
+    void unavailableReturnDates
+    untrack(() => filterRestoredDatesByStock())
+  })
+  // 값이 바뀔 때마다 보관(모두 비면 삭제, 담긴 상품이 없어도 삭제)
+  $effect(() => {
+    if (!draftSaveReady || data.isEditMode) return
+    const input: CartRentalDraftInput = {
+      rentalMethod: bulkOpts.rentalMethod, returnMethod: bulkOpts.returnMethod,
+      rentalDate: bulkDate, rentalTime: bulkTime, returnDate: bulkReturnDate, returnTime: bulkReturnTime,
+      rentalPointId: bulkRentalForm.pickupPointId, returnPointId: bulkReturnForm.pickupPointId,
+      rentalMemberCheck: bulkRentalForm.memberCheck, rentalMemberCheck2: bulkRentalForm.memberCheck2,
+      returnMemberCheck: bulkReturnForm.memberCheck, returnMemberCheck2: bulkReturnForm.memberCheck2,
+    }
+    const hasItems = itemsState.some(it => !it.deleted)
+    const uid = draftUserId()
+    if (!uid) return
+    try {
+      if (!hasItems || isDraftEmpty(input)) localStorage.removeItem(cartDraftKey(uid))
+      else localStorage.setItem(cartDraftKey(uid), serializeDraft(input, Date.now()))
+    } catch { /* 저장소 사용 불가 시 무시 */ }
+  })
+
   // ── Order Total
   let otSelectedCouponIds = $state(new Set<string>())
   let otPointsUsed = $state(0)
@@ -867,6 +994,7 @@
   }
 
   function bulkHandleDate(d: string) {
+    draftDatesRestored = false   // 사용자가 직접 날짜를 고르기 시작하면 복원값 자동 걸러내기를 끝낸다
     if (bulkDate && !bulkReturnDate) {
       if (d >= bulkDate) {
         // 최대 대여일 초과 반납일은 확정하지 않는다(범위선택 경로에는 달력 상한이 없어 검증 필요)
@@ -909,6 +1037,7 @@
     applyBulkToItems()
   }
   function bulkHandleReturnDate(d: string) {
+    draftDatesRestored = false
     // [13] 반납일이 수령일보다 앞서면 차단 (수령일이 아직 미설정이면 통과)
     if (bulkDate && d < bulkDate) {
       csToast.warning('반납일은 수령일 이후로 설정해주세요')
@@ -1280,6 +1409,17 @@
       : consentItems.every((c) => consentChecked[c.id] === true)
   )
   let showGuideModal = $state(false);
+  // 이용안내 모달 본문 하단 페이드(2026-11-13, Stephen 지시) — 아래로 더 스크롤할 내용이 남아 있을 때만 하단을 흐리게(mask-image), 끝까지 내리면 해제해 마지막 줄이 흐려지지 않게 한다.
+  let guideBodyEl = $state<HTMLElement | null>(null);
+  let guideFadeBottom = $state(false);
+  function updateGuideFade(): void {
+    const el = guideBodyEl
+    if (!el) return
+    guideFadeBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 4
+  }
+  $effect(() => {
+    if (showGuideModal && guideBodyEl) void tick().then(updateGuideFade)
+  })
   let isConfirming = $state(false);
   // 2026-09-07(Stephen 요청) — 이용안내 모달의 필수 동의 항목을 전부 체크하면 모달을
   // 자동으로 닫는다. 토글 직후 값으로 판정해야 하므로(consentChecked는 $state라 이 함수
@@ -1289,6 +1429,14 @@
     if (consentItems.length > 0 && consentItems.every((c) => consentChecked[c.id] === true)) {
       showGuideModal = false
     }
+  }
+
+  // 필수 동의 사항 전체 선택(2026-11-13, Stephen 지시) — 하나라도 비어 있으면 전부 체크, 전부 체크된 상태면 전부 해제. 전부 체크되면 개별 체크와 같이 모달을 닫는다.
+  const allConsentChecked = $derived(consentItems.length > 0 && consentItems.every((c) => consentChecked[c.id] === true))
+  function toggleAllConsentItems(): void {
+    const next = !allConsentChecked
+    for (const c of consentItems) consentChecked[c.id] = next
+    if (next) showGuideModal = false
   }
 
   // hold 재발행 확인 — 확정사양(AdminChatPanel.svelte .confirm-toast 패턴 재사용, 네이티브
@@ -1455,12 +1603,32 @@
         // readyToSubmit(canProceed && methodSelectionValid)에는 이미 포함돼 있으므로
         // 여기도 동일하게 추가 — 제출 게이팅과 경고 토스트 판정 기준을 일치시킴.
         if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
-          csToast.warning(describeSubmitBlocker(), { id: 'cart-submit-blocker' })
+          showSubmitBlockerWarning()
         }
       },
       { threshold: 0, rootMargin: '150px 0px 150px 0px' }
     )
     observer.observe(sentinel)
+    return () => observer.disconnect()
+  })
+
+  // 2026-11-13(Stephen 지적) — 위 관찰자는 쿠폰·포인트 목록 맨 아래 센티널이라, 필수 입력을 비운 채 옵션 영역을 지나 아래로 스크롤해도
+  // 한참 내려가기 전에는 경고·이동이 일어나지 않았다. 옵션 영역(Order items) 바로 다음인 'Order Total' 섹션 상단에 닿는 순간에도 같은 경고와 이동을 건다.
+  // 첫 관찰(페이지 진입 시 이미 보이는 경우)은 건너뛰어 열자마자 화면이 튀지 않게 한다.
+  $effect(() => {
+    const el = orderTotalSectionEl
+    if (!el) return
+    let first = true
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (first) { first = false; return }
+        if (entry.isIntersecting && hasItems && (!datesSet || !pickupPointsSet || !formsComplete || !methodSelectionValid)) {
+          showSubmitBlockerWarning()
+        }
+      },
+      { threshold: 0, rootMargin: '0px 0px -40% 0px' }
+    )
+    observer.observe(el)
     return () => observer.disconnect()
   })
 
@@ -2164,7 +2332,7 @@
 
   // 제출이 막힌 이유를 구체적으로 안내(2026-10-05) — "미입력 항목을 확인하세요" 한 문구 대신 화면 위→아래 순서로 첫 번째 빠진 항목을 알린다.
   // 판정은 readyToSubmit 구성요소(datesSet·pickupPointsSet·formsComplete·methodSelectionValid·deadlineOk·priceUnsetBlocked·agreed)와 같은 기준.
-  function describeSubmitBlocker(): string {
+  function buildSubmitBlockerInput(): CartSubmitBlockerInput {
     const active = itemsState.filter(it => !it.deleted && it.checked)
     let rentalDateMissing = false, rentalTimeMissing = false, returnDateMissing = false, returnTimeMissing = false
     let rentalPointMissing = false, returnPointMissing = false
@@ -2189,13 +2357,104 @@
         if (returnFormMissing.length === 0) returnFormMissing = missingCartFormFields(ef.ret)
       }
     }
-    return firstCartSubmitBlocker({
+    return {
       hasItems, methodInvalid: !methodSelectionValid,
       rentalDateMissing, rentalTimeMissing, returnDateMissing, returnTimeMissing,
       rentalPointMissing, returnPointMissing, rentalFormMissing, returnFormMissing,
       deadlineOk, priceUnset: priceUnsetBlocked, agreed,
-    }) ?? (deliveryAreaBlocked ? DELIVERY_AREA_MESSAGE : '미입력 항목을 확인하세요')
+      methodLeg: bulkOpts.rentalMethod ? 'return_' : 'rental',
+    }
   }
+  function describeSubmitBlocker(): string {
+    return firstCartSubmitBlocker(buildSubmitBlockerInput()) ?? (deliveryAreaBlocked ? DELIVERY_AREA_MESSAGE : '미입력 항목을 확인하세요')
+  }
+
+  // 제출 막힘 경고 — 모바일(≤640px)은 토스트 직후 누락 항목으로 바로 이동하고, PC(≥641px)는 상품이 여러 개일 때 강제 이동이 불편해(Stephen 지적, 2026-11-13)
+  // 토스트를 눌렀을 때만 이동한다(아래 $effect). 토스트에 별도 버튼은 두지 않는다.
+  let pcBlockerMessage = ''
+  function showSubmitBlockerWarning(): void {
+    const message = describeSubmitBlocker()
+    csToast.warning(message, { id: 'cart-submit-blocker' })
+    const isPc = typeof window !== 'undefined' && window.matchMedia('(min-width: 641px)').matches
+    if (isPc) pcBlockerMessage = message
+    else void guideToSubmitBlocker()
+  }
+  $effect(() => {
+    if (typeof window === 'undefined') return
+    const onClick = (e: MouseEvent) => {
+      if (!pcBlockerMessage) return
+      const el = e.target instanceof Element ? e.target : null
+      const toastEl = el?.closest('[data-sonner-toast]')
+      if (!toastEl || el?.closest('button')) return
+      if (!(toastEl.textContent ?? '').includes(pcBlockerMessage)) return
+      void guideToSubmitBlocker()
+    }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  })
+
+  // 경고 토스트 직후 누락 항목 위치로 이동(2026-11-13, Stephen 지시) — 접힌 대여예약옵션(모바일)·해당 아코디언을 먼저 펼친 뒤 스크롤한다.
+  // 예약신청 버튼 경고와 스크롤 중 자동 경고(가격 영역 진입) 양쪽에서 호출한다.
+  async function guideToSubmitBlocker(): Promise<void> {
+    const target: CartBlockerTarget | null = firstCartSubmitBlockerTarget(buildSubmitBlockerInput())
+    if (!target || typeof window === 'undefined') return
+    const isMobile = window.matchMedia('(max-width: 640px)').matches
+    if (isMobile) bulkOpen = true
+    bulkOpenAcc = target.leg
+    await tick()
+    // 아코디언 펼침 애니메이션(300ms)이 끝난 뒤 위치를 잡는다
+    await new Promise<void>((resolve) => setTimeout(resolve, 330))
+    locateBlockerElement(target)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+  // 누락 항목의 화면 요소 — 화면에 보이는(PC/모바일 중 렌더된) 아코디언 안에서 찾고, 항목 요소가 없으면(접힘) 아코디언 자체를 돌려준다.
+  function locateBlockerElement(target: CartBlockerTarget): HTMLElement | null {
+    if (typeof document === 'undefined') return null
+    const acc = Array.from(document.querySelectorAll<HTMLElement>(`[data-guide-acc="${target.leg}"]`)).find((el) => el.offsetParent !== null)
+    if (!acc) return null
+    const pick = (sel: string): HTMLElement | null => acc.querySelector<HTMLElement>(sel)
+    const inputs = Array.from(acc.querySelectorAll<HTMLInputElement>('input.f-input:not([disabled])'))
+    let el: HTMLElement | null = null
+    switch (target.part) {
+      case 'method': el = pick('.delivery-combo'); break
+      case 'date': el = pick('.datetime-wrap'); break
+      case 'time': el = pick('.datetime-btn-mid') ?? pick('.datetime-wrap'); break
+      case 'point': el = pick('.pickup-point-list'); break
+      case 'name': el = inputs[0] ?? null; break
+      case 'email': el = inputs[1] ?? null; break
+      case 'phone': el = inputs[2] ?? null; break
+      case 'addr': el = pick('.postcode-btn'); break
+      case 'addrDetail': el = inputs[3] ?? null; break
+    }
+    return el ?? acc
+  }
+
+  // 누락 항목을 지나쳐 아래로 스크롤하면(2026-11-13, Stephen 지적) — 해당 항목이 화면 위로 벗어나는 순간 경고하고 그 항목으로 되돌린다.
+  // 'Order Total' 이 같은 화면에 함께 보이는 PC 레이아웃처럼 섹션 진입 기준 관찰자가 발동하지 않는 경우를 포함한다.
+  // 항목이 다시 화면에 보이면 재무장하므로 같은 지나침마다 한 번만 동작한다.
+  $effect(() => {
+    if (typeof window === 'undefined' || !hasItems) return
+    let armed = true
+    let lastY = window.scrollY
+    let raf = 0
+    const check = () => {
+      raf = 0
+      const y = window.scrollY
+      const down = y > lastY
+      lastY = y
+      const target = firstCartSubmitBlockerTarget(buildSubmitBlockerInput())
+      const el = target ? locateBlockerElement(target) : null
+      if (!el) { armed = true; return }
+      const bottom = el.getBoundingClientRect().bottom
+      if (bottom >= 0) { armed = true; return }
+      if (armed && down) {
+        armed = false
+        showSubmitBlockerWarning()
+      }
+    }
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(check) }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => { window.removeEventListener('scroll', onScroll); if (raf) cancelAnimationFrame(raf) }
+  })
   // 2026-08-30: rental_method_options.fee_amount(방식별 기본배송비) 경로는 CMS에 입력 UI
   // 자체가 없어 항상 0으로 방치돼 있던 죽은 코드였음(감사 RSC-C3) — 배송비는 전부
   // rental_shipping_settings(왕복/배송/반납요금) + 배송료 우대설정으로만 계산하도록 정리.
@@ -3064,27 +3323,35 @@
           <div class="points-select-section">
             <span class="section-sub-label">포인트 사용 (보유 <span class="points-balance-num">{fmtKrw(sdUserPoints)}</span>p)</span>
             <div class="points-input-row">
+              <!-- 2026-11-13(Stephen 지시 '1000 단위'): 천단위 콤마 실시간 표시(금액 입력폼 표준) — type=number 는 콤마를 못 보여 줘 text+numeric 키패드로 바꾸고, 값은 숫자만 추출해 적용한다 -->
               <input
-                type="number"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
                 class="f-input points-input"
-                min="0"
-                max={otMaxPoints}
-                step={sdPointUseRules.useUnit}
-                value={otPointsUsed}
+                value={otPointsUsed.toLocaleString('ko-KR')}
                 disabled={!pricingReady || !otSelectedCouponsAllowPoints || !sdPointUseRules.useEnabled}
                 oninput={(e) => {
-                  const el = e.target as HTMLInputElement
-                  const v = Math.min(otMaxPoints, Math.max(0, parseInt(el.value) || 0))
+                  // 한글 등 IME 조합 중에는 보류(조합이 끝나는 oncompositionend 에서 처리)
+                  if ('isComposing' in e && (e as { isComposing?: boolean }).isComposing) return
+                  const el = e.currentTarget as HTMLInputElement
+                  const v = Math.min(otMaxPoints, Math.max(0, parseInt(el.value.replace(/[^0-9]/g, ''), 10) || 0))
                   otPointsUsed = v
-                  // 값이 같아 상태가 안 바뀌어도 입력칸에 보이는 숫자는 항상 실제 적용값과 일치시킨다
-                  el.value = String(v)
+                  // 값이 같아 상태가 안 바뀌어도 입력칸에 보이는 숫자는 항상 실제 적용값(천단위 콤마)과 일치시킨다
+                  el.value = v.toLocaleString('ko-KR')
+                }}
+                oncompositionend={(e) => {
+                  const el = e.currentTarget as HTMLInputElement
+                  const v = Math.min(otMaxPoints, Math.max(0, parseInt(el.value.replace(/[^0-9]/g, ''), 10) || 0))
+                  otPointsUsed = v
+                  el.value = v.toLocaleString('ko-KR')
                 }}
                 onchange={(e) => {
                   // 입력을 마치면 최소 사용 포인트·사용 단위 규칙까지 적용(타이핑 중에는 최대값만 제한)
-                  const el = e.target as HTMLInputElement
+                  const el = e.currentTarget as HTMLInputElement
                   const v = normalizePointUse(sdPointUseRules, { requested: otPointsUsed, balance: sdUserPoints, payable: otPointPayable })
                   otPointsUsed = v
-                  el.value = String(v)
+                  el.value = v.toLocaleString('ko-KR')
                 }}
               />
               <button
@@ -3236,11 +3503,9 @@
           onclick={() => { if (consentItems.length > 0) { showGuideModal = true } else { manualAgreed = !manualAgreed } }}
           aria-label="동의"
         >
-          <svg width="22" height="15" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-          </svg>
+          <CheckIcon checked={agreed} />
         </button>
-        <span class="footer-terms-text" style:color={agreed ? 'var(--cs-purple)' : 'var(--cs-purple-op10)'}>등록한 대여조건 및 <button type="button" class="terms-guide-link" onclick={() => (showGuideModal = true)}>이용안내</button>에 모두 동의합니다.</span>
+        <span class="footer-terms-text" style:color="var(--cs-purple)">등록한 대여조건 및 <button type="button" class="terms-guide-link" onclick={() => (showGuideModal = true)}>이용안내</button>에 모두 동의합니다.</span>
       </label>
       {#if canProceed && formsComplete && !methodSelectionValid}
         <p class="footer-method-warning">수령·반납 방식을 다시 선택해주세요.</p>
@@ -3258,7 +3523,7 @@
           // 비활성(조건 미충족) 상태에서 눌러도 이유를 알린다(2026-10-02, Stephen 지시) — disabled 속성은 클릭 이벤트 자체를
           // 막아 안내가 불가능하므로 aria-disabled로 접근성 상태만 유지하고 여기서 차단한다.
           if (!readyToSubmit) {
-            csToast.warning(describeSubmitBlocker(), { id: 'cart-submit-blocker' })
+            showSubmitBlockerWarning()
             return
           }
           // 본인증명 등록요청 카드는 이 화면에서 보내지 않는다(2026-10-26, Stephen 확정) — 관리자가 '예약승인'을 실행할 때만 발송된다.
@@ -3562,6 +3827,8 @@
                 return
               }
             }
+            // 주문(예약신청)이 접수됐으므로 임시 보관한 대여예약옵션은 지운다
+            if (createOrderRes.ok) clearRentalDraft()
             // 판매전용 단독 → 곧바로 PG 결제(주문 생성이 실패했으면 진행하지 않고 안내)
             if (directPay) {
               const created = createOrderRes.ok
@@ -3699,7 +3966,7 @@
           <span class="guide-modal-title">대여·예약 이용안내</span>
           <button type="button" class="guide-modal-close" onclick={() => (showGuideModal = false)} aria-label="닫기">✕</button>
         </div>
-        <div class="guide-modal-body">
+        <div class="guide-modal-body" class:fade-bottom={guideFadeBottom} bind:this={guideBodyEl} onscroll={updateGuideFade}>
           {#if sd.rentalGuideText}
             <p class="guide-modal-text">{sd.rentalGuideText}</p>
           {:else}
@@ -3708,7 +3975,18 @@
 
           {#if consentItems.length > 0}
             <div class="consent-list">
-              <p class="consent-list-title">필수 동의 사항 — 전부 체크해야 예약신청이 가능합니다.</p>
+              <label class="consent-item-row consent-all-row">
+                <button
+                  type="button"
+                  class="checkbox-btn checkbox-btn-terms consent-item-checkbox"
+                  class:checked={allConsentChecked}
+                  onclick={toggleAllConsentItems}
+                  aria-label="필수 동의 사항 전체 선택"
+                >
+                  <CheckIcon checked={allConsentChecked} />
+                </button>
+                <span class="consent-list-title">필수 동의 사항 — 전부 체크해야 예약신청이 가능합니다.</span>
+              </label>
               {#each consentItems as item (item.id)}
                 <label class="consent-item-row">
                   <button
@@ -3718,9 +3996,7 @@
                     onclick={() => toggleConsentItem(item.id)}
                     aria-label={item.content}
                   >
-                    <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                      <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-                    </svg>
+                    <CheckIcon checked={consentChecked[item.id]} />
                   </button>
                   <span class="consent-item-text" class:consent-item-text--checked={consentChecked[item.id]}>{item.content}</span>
                 </label>
@@ -3783,9 +4059,7 @@
                (18×12px)의 110%(19.8×13.2px)로 아래 .card-top-row .checkbox-btn-terms svg에서
                지정 — 모바일 전용 카드(OrderCard, PC에는 노출 안 됨)라 별도 미디어쿼리 불필요. -->
           <button class="checkbox-btn checkbox-btn-terms" class:checked={item.checked} onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
-            <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-            </svg>
+            <CheckIcon checked={item.checked} />
           </button>
           <button class="delete-btn" onclick={() => removeItem(item)} aria-label="삭제">
             <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
@@ -3931,9 +4205,7 @@
   <div class="item-card" class:selected={item.checked} role="listitem">
     <div class="item-card-topbar">
       <button class="item-card-check checkbox-btn-terms" class:checked={item.checked} onclick={() => updateItem(item.id, { checked: !item.checked })} aria-label="선택">
-        <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-          <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-        </svg>
+        <CheckIcon checked={item.checked} />
       </button>
       <button class="delete-btn item-card-delete" onclick={() => removeItem(item)} aria-label="삭제">
         <svg width="14" height="14" viewBox="0 0 17 17" fill="none">
@@ -4066,7 +4338,7 @@
        수령 방법(+방문지점/배송지)·고객정보·요청사항은 그대로, 구매는 반납이 없어 반납 방법은 숨긴다.
        선택한 수령 방법은 배송비 판정과 예약 저장에 그대로 반영된다. -->
   <div class="accordions">
-    <div class="acc-item">
+    <div class="acc-item" data-guide-acc="rental">
       <div class="acc-head acc-head-static">
         <span class="acc-label">수령 방법</span>
         <div class="acc-head-right">
@@ -4084,7 +4356,7 @@
   <!-- 통합 단일 대여예약옵션 편집기 — bulkOpts/bulkDate/bulkTime/bulkRentalForm/bulkReturnForm 클로저 참조 -->
   <div class="accordions">
     <!-- 대여 방법 -->
-    <div class="acc-item">
+    <div class="acc-item" data-guide-acc="rental">
       <button class="acc-head" onclick={() => bulkOpenAcc = 'rental'}>
         <span class="acc-label">대여 방법</span>
         <div class="acc-head-right">
@@ -4133,7 +4405,7 @@
       {/if}
     </div>
     <!-- 반납 방법 -->
-    <div class="acc-item">
+    <div class="acc-item" data-guide-acc="return_">
       <button class="acc-head" onclick={() => bulkOpenAcc = 'return_'}>
         <span class="acc-label">반납 방법</span>
         <div class="acc-head-right">
@@ -4208,9 +4480,7 @@
           }}
           aria-label="회원정보 반영"
         >
-          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-          </svg>
+          <CheckIcon checked={p.form.memberCheck} />
         </button>
         <span>회원정보 반영</span>
       </label>
@@ -4281,9 +4551,7 @@
           }}
           aria-label="회원정보 반영"
         >
-          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-              <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-            </svg>
+          <CheckIcon checked={p.form.memberCheck2} />
         </button>
         <span>회원정보 반영</span>
       </label>
@@ -4659,9 +4927,7 @@
           onclick={() => props.onCopyChange?.(!props.copyToReturn)}
           aria-label="반납에 동일 적용"
         >
-          <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-            <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-          </svg>
+          <CheckIcon checked={props.copyToReturn || locked} />
         </button>
         <span>{locked ? '배송 선택 시 반납방식이 자동으로 동일하게 고정됩니다.' : '설정옵션을 반납방법에 적용합니다.'}</span>
       </label>
@@ -4673,9 +4939,7 @@
   <div class="coupon-row" class:coupon-row-disabled={props.disabled}>
     <label class="coupon-row-left">
       <button class="checkbox-btn checkbox-btn-terms" class:checked={props.checked} onclick={props.onToggle} disabled={props.disabled} aria-label={props.label}>
-        <svg viewBox="0 0 18 12" fill="none" aria-hidden="true">
-          <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-        </svg>
+        <CheckIcon checked={props.checked} />
       </button>
       <span class="coupon-label">{props.label}</span>
       {#if props.note}
@@ -5053,9 +5317,16 @@
   /* 2026-08-18: 옵션카드(.dual-price-row--opt)와 동일 수준으로 본상품 dual-price-row도
      한 단계 더 축소 — 위 font: 토큰(라벨/통화) 위에 font-size만 덮어써서 폭 좁힘.
      PC(≥641px)만 이 축소값 유지 */
-  @media (min-width: 641px) { .price-unit-label { font-size: 11px; } }
+  /* 2026-11-13(Stephen 지시): PC 'Day'·'12H' 라벨을 기본 폰트(--font-kr)로 — 광고용 헤딩 폰트 토큰(--text-pc-ad-kr-22)의 글꼴만 걷어내고 크기(11px)·굵기(500)는 기존 유지 */
+  @media (min-width: 641px) { .price-unit-label { font-family: var(--font-kr); font-size: 11px; } }
   @media (min-width: 641px) { .price-amount { font-size: 13px; } }
-  @media (min-width: 641px) { .price-currency { font-size: 11px; } }
+  /* 2026-11-13(Stephen 지시): PC 본상품 금액 숫자도 모바일과 같은 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900(0.5px 외곽선) — 크기(13px)·색 기존 유지. 옵션 카드(--opt)는 모바일과 같이 제외 */
+  @media (min-width: 641px) {
+    /* 2026-11-13(Stephen 지시): 한 사이즈 크게 두 번 — 13px → 14px → 16px(PC 토큰 사다리 12→14→16) */
+    .dual-price-row:not(.dual-price-row--opt) .price-amount { font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; font-size: 16px; -webkit-text-stroke: 0.5px currentColor; }
+  }
+  /* 2026-11-13(Stephen 지시): PC '원'도 'Day'·'12H' 라벨과 같이 기본 폰트(--font-kr) — 크기(11px)·굵기(500) 기존 유지 */
+  @media (min-width: 641px) { .price-currency { font-family: var(--font-kr); font-size: 11px; } }
   /* 2026-08-18: 모바일 반응형만 한 단계 큰 폰트 토큰값으로 재확대 — price-unit-label/
      price-currency는 위 10px 오버라이드를 제거해 원래 선언된 토큰(--text-m-script-12,
      12px)으로 복귀(폰트 타입은 그대로 유지, 크기만 한 단계 큰 기존 토큰값 적용).
@@ -5132,14 +5403,13 @@
   }
   .checkbox-btn-terms { color: var(--cs-purple-op10); display: flex; align-items: center; justify-content: center; }
   .checkbox-btn-terms.checked { color: var(--cs-purple); }
-  .checkbox-btn-terms svg { width: 22px; height: 15px; }
-  @media (min-width: 768px) { .checkbox-btn-terms svg { width: 18px; height: 12px; } }
+  /* 크기는 CheckIcon 기본값(모바일 22×15 / PC 18×12) — 화면별로 다르면 아래처럼 --check-w/--check-h 로 지정 */
   /* 2026-09-16(Stephen 지시) — 모바일 상품카드(OrderCard, card-top-row)의 체크박스를
      PC .item-card-check와 동일한 곡선 아이콘으로 통일하면서, 크기는 PC 값(18×12px)의
      110%(19.8×13.2px)로 지정 — 위 22×15px(다른 checkbox-btn-terms 사용처의 모바일 기본값)
      보다 이 컨텍스트 전용값이 더 구체적인 선택자라 우선 적용됨. 이 카드는 모바일에서만
      렌더링되므로(PC는 .item-card가 대신 노출) 별도 미디어쿼리 불필요. */
-  .card-top-row .checkbox-btn-terms svg { width: 19.8px; height: 13.2px; }
+  .card-top-row .checkbox-btn-terms { --check-w: 19.8px; --check-h: 13.2px; }
   .delete-btn {
     background: none;
     border: none;
@@ -6540,7 +6810,9 @@
   }
   .guide-modal {
     background: var(--cs-white);
-    border-radius: var(--radius-2xl);
+    /* 2026-11-13(Stephen 지시): 이 모달은 최상위 컨테이너가 아니라 장바구니 안에 종속된 중간 레벨 팝업(아래 모바일 규칙 주석과 동일 판단)이라
+       front-uiux.md §4 'card 중 PC' 30px(--radius-xl)을 네 모서리에 적용 — 기존 대(50px)에서 ×0.60 */
+    border-radius: var(--radius-xl);
     width: 100%;
     max-width: 560px;
     max-height: 80vh;
@@ -6556,7 +6828,9 @@
     border-bottom: 1px solid var(--cs-lilac);
     flex-shrink: 0;
   }
-  .guide-modal-title { font-size: 18px; font-weight: 700; color: var(--cs-text); }
+  /* 2026-11-13(Stephen 지시): 한 사이즈 작게 — 18px → 16px 토큰(모바일 --text-m-body-16B / PC --text-pc-title-16). 헤더 높이가 변하지 않도록 행간은 기존(160%) 유지 */
+  .guide-modal-title { font: var(--text-m-body-16B); line-height: 1.6; color: var(--cs-text); }
+  @media (min-width: 641px) { .guide-modal-title { font: var(--text-pc-title-16); line-height: 1.6; } }
   .guide-modal-close {
     background: none;
     border: none;
@@ -6569,6 +6843,11 @@
   .guide-modal-body {
     padding: 24px 30px 30px;
     overflow-y: auto;
+  }
+  /* 하단 페이드 아웃 — 프로젝트의 기존 스크롤 페이드(CalendarGrid·RentalJourneyStepper)와 같은 mask-image 방식 */
+  .guide-modal-body.fade-bottom {
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 56px), transparent);
+    mask-image: linear-gradient(to bottom, black calc(100% - 56px), transparent);
   }
   .guide-modal-text {
     font-size: 14px;
@@ -6599,6 +6878,10 @@
     color: var(--cs-text-dark);
     margin: 0;
   }
+  /* 2026-11-13(Stephen 지시): PC 한 사이즈 크게 — 13px → 14px(--text-pc-body-14, Bold). 모바일은 기존 13px 유지 */
+  @media (min-width: 641px) {
+    .consent-list-title { font: var(--text-pc-body-14); }
+  }
   .consent-item-row {
     display: flex;
     align-items: flex-start;
@@ -6608,6 +6891,12 @@
   .consent-item-checkbox {
     margin-top: 2px;
   }
+  /* 2026-11-13(Stephen 지시): 전체 선택 줄은 한 줄 문구이므로 아이콘과 문구를 수직 중앙 정렬(개별 항목은 여러 줄일 수 있어 기존 위 정렬 유지) */
+  .consent-all-row { align-items: center; }
+  .consent-all-row .consent-item-checkbox { margin-top: 0; }
+  /* 2026-11-13(Stephen 지시): 개별 동의 항목 들여쓰기 — 전체 선택 줄의 문구 시작 위치(아이콘 폭 + 간격 10px)에 개별 아이콘을 맞춘다. 아이콘 폭은 CheckIcon 기본값(모바일 22px / 768px 이상 18px)을 따른다 */
+  .consent-item-row:not(.consent-all-row) { padding-left: 32px; }
+  @media (min-width: 768px) { .consent-item-row:not(.consent-all-row) { padding-left: 28px; } }
   .consent-item-text {
     font-size: 14px;
     line-height: 1.6;
@@ -6817,7 +7106,7 @@
        (22×15px → 19.8×13.5px). .checkbox-btn-terms svg는 아이템 카드 선택·동의항목
        체크박스 등 이 페이지 곳곳에서 공유되므로, 전역 규칙을 바꾸지 않고 footer 영역
        (.footer-terms)에만 한정된 선택자로 별도 적용 — 다른 체크박스 크기는 영향 없음. */
-    .footer-terms .checkbox-btn-terms svg { width: 19.8px; height: 13.5px; }
+    .footer-terms .checkbox-btn-terms { --check-w: 19.8px; --check-h: 13.5px; }
     /* 2026-08-18: 기존 15px 하드코딩값을 한 단계 큰 토큰(--text-m-title-18B, 18px Bold)으로 교체 */
     .footer-cta { flex: none; width: 100%; height: 56px; font: var(--text-m-title-18B); }
     .price-detail-list { padding: 0 10px; }

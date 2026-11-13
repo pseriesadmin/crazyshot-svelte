@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
-
   interface Props {
     keywords?: string[]
     onkeywordclick?: (kw: string) => void
@@ -26,7 +24,7 @@
           title={kw}
           aria-label={kw}
           onclick={() => onkeywordclick?.(kw)}
-        >{truncateKeywordLabel(kw)}</button>
+        >{kw}</button>
       {/each}
     </div>
   </div>
@@ -90,7 +88,11 @@
     transition: background 0.15s;
     min-height: 44px;
   }
-  .chip:hover {
+  /* 2026-11-13(Stephen 지시): 호버·터치(:active) 시 글자를 흰색 Bold 로 — 배경 변경(기존)은 유지 */
+  .chip:hover,
+  .chip:active {
     background: #c1bbec;
+    color: var(--cs-white);
+    font-weight: 700;
   }
 </style>

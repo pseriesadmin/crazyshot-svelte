@@ -5,6 +5,8 @@ import type { PageServerLoad } from './$types'
 import { loadBannerSlots } from '$lib/server/crazylogBannerSlots'
 import { plainTextPreview } from '$lib/utils/crazylogText'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
+import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
+import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
 
 export type BannerSlot = {
   id: string
@@ -20,7 +22,7 @@ export type BannerSlot = {
   valid_until: string | null
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, cookies, url }) => {
   const now = new Date().toISOString()
 
   const { session } = await locals.safeGetSession()
@@ -310,7 +312,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     ((kwPageSettingRes.data as { value: unknown } | null)?.value as { items: string[] } | null) ??
     { items: [] }
 
-  type MdPicksRaw = { products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
+  type MdPicksRaw = { products: { id: string; order: number }[]; mode: ProductListMode }
   const mdPicksRaw: MdPicksRaw =
     ((mdPicksSettingRes.data as { value: unknown } | null)?.value as MdPicksRaw | null) ??
     { products: [], mode: 'fixed' }
@@ -364,7 +366,10 @@ export const load: PageServerLoad = async ({ locals }) => {
     .sort((a, b) => a.order - b.order)
     .map((p) => homeProductById.get(p.id))
     .filter((p): p is HomeProductRow => !!p)
-  if (mdPicksRaw.mode === 'random') {
+  if (mdPicksRaw.mode === 'random_once') {
+    // 1회 랜덤노출(2026-11-13) — 브라우저 세션당 처음 한 번만 섞고 이후 방문은 같은 순서(/products 의 MD 추천과 같은 'md' 기준)
+    mdProducts = orderByOnceSeed(mdProducts, resolveOnceSeed(cookies, url.protocol === 'https:'), 'md')
+  } else if (mdPicksRaw.mode === 'random') {
     for (let i = mdProducts.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       ;[mdProducts[i], mdProducts[j]] = [mdProducts[j], mdProducts[i]]
