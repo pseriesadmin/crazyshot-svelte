@@ -8,13 +8,15 @@
     title?: string
     disabled?: boolean
     ariaLabel?: string
+    /** 1시간 단위 선택(01:00~24:00 + 맨 위 '없음') — 분 휠 없이 'HH:00' 을 돌려주고, '없음'은 ''을 돌려준다. 기본(false)은 기존 시·분 선택. */
+    hourOnly?: boolean
     onchange?: (hhmm: string) => void
   }
 
-  let { value = '', placeholder = '시각 선택', title = '시간 설정', disabled = false, ariaLabel = '시각 선택', onchange }: Props = $props()
+  let { value = '', placeholder = '시각 선택', title = '시간 설정', disabled = false, ariaLabel = '시각 선택', hourOnly = false, onchange }: Props = $props()
 
   const ROW = 26 // 휠 한 줄 높이(px) — 아래 CSS --tp-row 와 같다
-  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
+  const HOURS = $derived(hourOnly ? ['없음', ...Array.from({ length: 24 }, (_, i) => String(i + 1).padStart(2, '0'))] : Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')))
   const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
 
   let open = $state(false)
@@ -24,9 +26,15 @@
 
   function openPopup(): void {
     if (disabled) return
-    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
-    hour = m ? Number(m[1]) : 9
-    minute = m ? Number(m[2]) : 0
+    if (hourOnly) {
+      const h = /^(0[1-9]|1\d|2[0-4]):00$/.exec(value)
+      hour = h ? Number(h[1]) : 9 // 목록 0번이 '없음'이라 시(1~24)가 곧 위치
+      minute = 0
+    } else {
+      const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
+      hour = m ? Number(m[1]) : 9
+      minute = m ? Number(m[2]) : 0
+    }
     open = true
   }
   function close(): void {
@@ -34,7 +42,7 @@
     triggerEl?.focus()
   }
   function commit(): void {
-    const next = `${HOURS[hour]}:${MINUTES[minute]}`
+    const next = hourOnly ? (hour === 0 ? '' : `${HOURS[hour]}:00`) : `${HOURS[hour]}:${MINUTES[minute]}`
     open = false
     triggerEl?.focus()
     onchange?.(next)
@@ -147,14 +155,15 @@
           tabindex="0"
           aria-label="시"
           bind:this={hourEl}
-          use:wheel={{ count: 24, get: () => hour, set: (i) => (hour = i) }}
-          onkeydown={(e) => onWheelKey(e, hour, 24, (i) => (hour = i))}
+          use:wheel={{ count: HOURS.length, get: () => hour, set: (i) => (hour = i) }}
+          onkeydown={(e) => onWheelKey(e, hour, HOURS.length, (i) => (hour = i))}
         >
           {#each HOURS as h, i (h)}
             <button type="button" class="tp-item" class:tp-item-sel={i === hour} role="option" aria-selected={i === hour} tabindex="-1" onclick={() => { hour = i; pick(hourEl, i) }}>{h}</button>
           {/each}
         </div>
 
+        {#if !hourOnly}
         <span class="tp-colon" aria-hidden="true">:</span>
 
         <div
@@ -170,6 +179,7 @@
             <button type="button" class="tp-item" class:tp-item-sel={i === minute} role="option" aria-selected={i === minute} tabindex="-1" onclick={() => { minute = i; pick(minuteEl, i) }}>{m}</button>
           {/each}
         </div>
+        {/if}
       </div>
 
       <div class="tp-actions">

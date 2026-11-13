@@ -14,6 +14,10 @@ import { getLockerEntrancePassword, LOCKER_ENTRANCE_KEY } from '$lib/server/lock
 import { isValidLockerPassword } from '$lib/utils/lockerFields'
 import { CONSULT_HOURS_KEY, getConsultHours } from '$lib/server/consultHours'
 import { validateConsultHours } from '$lib/utils/consultHours'
+import { getLockerGuideTimer } from '$lib/server/lockerGuideTimer'
+import { getReturnRegisterTimer } from '$lib/server/returnRegisterTimer'
+import { RETURN_REGISTER_TIMER_KEY, isReturnRegisterLeg, parseReturnRegisterHours, type ReturnRegisterTimer } from '$lib/utils/returnRegisterTimer'
+import { LOCKER_TIMER_KEY, parseTimerHourValue, type LockerGuideTimer, type LockerTimerLeg } from '$lib/utils/lockerGuideTimer'
 
 // 상담 응대시간 행이 알림 목록 안에서 놓이는 자리(2026-11-10) — 어느 알림 바로 아래인지(notify_type), ''는 맨 위. 설정이 없으면 목록 맨 아래.
 const CONSULT_ROW_AFTER_KEY = 'push_consult_row_after'
@@ -124,6 +128,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 
   const lockerEntrancePassword = await getLockerEntrancePassword(sb)
   const consultHours = await getConsultHours(sb)
+  const lockerTimer = await getLockerGuideTimer(sb)
+  const returnRegisterTimer = await getReturnRegisterTimer(sb)
   const consultRowAfter = await getConsultRowAfter(sb)
 
   // 표시 순서(Migration #797 sort_order, 관리자가 드래그로 변경) — 비어 있는 신규 유형은 맨 아래(id 순).
@@ -176,6 +182,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     adminList: (adminRes.data ?? []) as AdminNotifyRow[],
     lockerEntrancePassword,
     consultHours,
+    lockerTimer,
+    returnRegisterTimer,
     consultRowAfter,
     logs,
     smsDefaults: buildSmsDefaultSamples(),
@@ -364,6 +372,74 @@ export const actions: Actions = {
       afterValue: { setting: CONSULT_HOURS_KEY, value: v.value },
     })
     return { ok: true, action: 'updateConsultHours' as const, cleared: false }
+  },
+
+  // 무인보관함 안내 추가 자동 발송 시간 저장(2026-11-13) — 수령(pickup)/반납(return) 구간별 1~24시(KST). 시각을 비워 저장하면 그 구간의 추가 발송을 끈다.
+  updateLockerTimer: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const leg = data.get('leg')
+    if (leg !== 'pickup' && leg !== 'return') return fail(400, { message: 'invalid request' })
+    const hour = parseTimerHourValue(data.get('time'))
+    if (hour === undefined) return fail(400, { message: '시각을 01:00 ~ 24:00 사이에서 선택해 주세요.' })
+
+    const sb = admin()
+    const before = await getLockerGuideTimer(sb)
+    const after: LockerGuideTimer = { ...before, [leg as LockerTimerLeg]: hour }
+
+    if (after.pickup === null && after.return === null) {
+      const { error } = await sb.from('cms_settings').delete().eq('key', LOCKER_TIMER_KEY)
+      if (error) return fail(500, { message: error.message })
+    } else {
+      const { error } = await sb.from('cms_settings').upsert({ key: LOCKER_TIMER_KEY, value: after, updated_at: new Date().toISOString() })
+      if (error) return fail(500, { message: error.message })
+    }
+    await insertCmsAdminAuditLog(sb, {
+      actorId: session.user.id,
+      actionType: 'push_message_change',
+      targetUserId: null,
+      beforeValue: { setting: LOCKER_TIMER_KEY, value: before },
+      afterValue: { setting: LOCKER_TIMER_KEY, value: after },
+    })
+    return { ok: true, action: 'updateLockerTimer' as const, cleared: hour === null }
+  },
+
+  // 반납정보 등록요청 발송 시간 저장(2026-11-13, Migration #822) — 방문(visit)·퀵(quick)·무인함(locker) 구간별 '반납 시각 N시간 전'(1~24). 비워 저장하면 그 구간은 보내지 않는다.
+  updateReturnRegisterTimer: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const data = await request.formData()
+    const leg = data.get('leg')
+    if (!isReturnRegisterLeg(leg)) return fail(400, { message: 'invalid request' })
+    const hours = parseReturnRegisterHours(data.get('hours'))
+    if (hours === undefined) return fail(400, { message: '1시간 전 ~ 24시간 전 사이에서 선택해 주세요.' })
+
+    const sb = admin()
+    const before = await getReturnRegisterTimer(sb)
+    const after: ReturnRegisterTimer = { ...before, [leg]: hours }
+
+    if (after.visit === null && after.quick === null && after.locker === null) {
+      const { error } = await sb.from('cms_settings').delete().eq('key', RETURN_REGISTER_TIMER_KEY)
+      if (error) return fail(500, { message: error.message })
+    } else {
+      const { error } = await sb.from('cms_settings').upsert({ key: RETURN_REGISTER_TIMER_KEY, value: after, updated_at: new Date().toISOString() })
+      if (error) return fail(500, { message: error.message })
+    }
+    await insertCmsAdminAuditLog(sb, {
+      actorId: session.user.id,
+      actionType: 'push_message_change',
+      targetUserId: null,
+      beforeValue: { setting: RETURN_REGISTER_TIMER_KEY, value: before },
+      afterValue: { setting: RETURN_REGISTER_TIMER_KEY, value: after },
+    })
+    return { ok: true, action: 'updateReturnRegisterTimer' as const, cleared: hours === null }
   },
 
   // 상담 응대시간 행의 목록 내 위치 저장(드래그 결과) — 표시 위치만 바꾼다
