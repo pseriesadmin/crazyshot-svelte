@@ -1,38 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import {
-  EMPTY_RETURN_REGISTER_TIMER,
-  isValidReturnRegisterHours,
-  parseReturnRegisterHours,
-  parseReturnRegisterTimer,
-  returnRegisterLabel,
-} from '$lib/utils/returnRegisterTimer'
+import { EMPTY_RETURN_REGISTER_TIMER, parseReturnRegisterTime, parseReturnRegisterTimer } from '$lib/utils/returnRegisterTimer'
 import { RETURN_NOTICE_BUTTON_LABEL, RETURN_NOTICE_NOTIFY_TYPE, RETURN_NOTICE_STAGES, RETURN_SUBMIT_LINK_TYPES, isReturnNoticeStage, returnSubmitPath } from '$lib/utils/returnNotice'
 
-describe('반납정보 등록요청 타이머 값 해석', () => {
-  it('화면 선택값: 빈 값은 해제(null), 1~24 정수만 허용, 그 밖은 undefined', () => {
-    expect(parseReturnRegisterHours('')).toBeNull()
-    expect(parseReturnRegisterHours(null)).toBeNull()
-    expect(parseReturnRegisterHours('1')).toBe(1)
-    expect(parseReturnRegisterHours('24')).toBe(24)
-    expect(parseReturnRegisterHours('0')).toBeUndefined()
-    expect(parseReturnRegisterHours('25')).toBeUndefined()
-    expect(parseReturnRegisterHours('1.5')).toBeUndefined()
-    expect(parseReturnRegisterHours('abc')).toBeUndefined()
-    expect(parseReturnRegisterHours(3)).toBeUndefined()
+describe('반납정보 등록요청 타이머 값 해석(반납일 당일 HH:MM)', () => {
+  it('화면 선택값: 빈 값은 해제(null), 01:00~23:50 10분 단위와 24:00 만 허용, 그 밖은 undefined', () => {
+    expect(parseReturnRegisterTime('')).toBeNull()
+    expect(parseReturnRegisterTime(null)).toBeNull()
+    expect(parseReturnRegisterTime('01:00')).toBe('01:00')
+    expect(parseReturnRegisterTime('09:30')).toBe('09:30')
+    expect(parseReturnRegisterTime('24:00')).toBe('24:00')
+    for (const bad of ['00:00', '09:15', '24:10', '25:00', '5', 3, undefined]) expect(parseReturnRegisterTime(bad)).toBeUndefined()
   })
 
-  it('저장값 해석: 어긋난 칸은 null, 없는 값은 모두 null', () => {
+  it('저장값 해석: 어긋난 칸·옛 숫자(N시간 전) 값은 null, 없는 값은 모두 null', () => {
     expect(parseReturnRegisterTimer(null)).toEqual(EMPTY_RETURN_REGISTER_TIMER)
-    expect(parseReturnRegisterTimer({ visit: 3, quick: 99, locker: 'x' })).toEqual({ visit: 3, quick: null, locker: null })
-    expect(parseReturnRegisterTimer({ visit: 1, quick: 24, locker: 12 })).toEqual({ visit: 1, quick: 24, locker: 12 })
-  })
-
-  it('표기와 범위 검사', () => {
-    expect(returnRegisterLabel(null)).toBe('설정 안 함')
-    expect(returnRegisterLabel(5)).toBe('5시간 전')
-    expect(isValidReturnRegisterHours(24)).toBe(true)
-    expect(isValidReturnRegisterHours(0)).toBe(false)
+    expect(parseReturnRegisterTimer({ visit: '09:10', quick: '99:00', locker: 'x' })).toEqual({ visit: '09:10', quick: null, locker: null })
+    expect(parseReturnRegisterTimer({ visit: '01:00', quick: '24:00', locker: '12:30' })).toEqual({ visit: '01:00', quick: '24:00', locker: '12:30' })
+    expect(parseReturnRegisterTimer({ visit: 3, quick: 24, locker: 12 })).toEqual(EMPTY_RETURN_REGISTER_TIMER)
   })
 })
 
@@ -73,11 +58,21 @@ describe('발송 코드 연결(소스 점검)', () => {
     expect(mig).toContain('0c547f2b9811dc6ca121cc187be3c7a0')
   })
 
-  it('크론: 시간이 하나라도 설정되면 claim_return_register_targets 를 두 번째 원천으로 호출', () => {
+  it('크론: 시간이 하나라도 설정되면 claim_return_register_clock_targets 를 두 번째 원천으로 호출(분 단위 값)', () => {
     const cron = read('src/routes/api/cron/return-notice/+server.ts')
-    expect(cron).toContain("rpc: 'claim_return_register_targets'")
+    expect(cron).toContain("rpc: 'claim_return_register_clock_targets'")
+    expect(cron).toContain('timerTimeToMinutes')
     expect(cron).toContain('getReturnRegisterTimer')
     expect(cron).toContain('hasRegisterTimer')
+  })
+
+  it('Migration #825: 반납일 당일 시각(분) 선점 함수는 서버 전용이고 지정 시각 이후 1시간·반납 1시간 뒤까지만 대상이다', () => {
+    const mig = read('supabase/migrations/20261113140000_825_return_register_clock_time.sql')
+    expect(mig).toContain('REVOKE ALL ON FUNCTION public.claim_return_register_clock_targets(integer, integer, integer, integer) FROM PUBLIC, anon, authenticated;')
+    expect(mig).toContain('GRANT EXECUTE ON FUNCTION public.claim_return_register_clock_targets(integer, integer, integer, integer) TO service_role;')
+    expect(mig).toContain('now() >= d.due_at')
+    expect(mig).toContain("now() <  d.due_at + interval '1 hour'")
+    expect(mig).toContain("now() <  d.ret_at + interval '1 hour'")
   })
 
   it('설정 저장 액션: manager 이상 게이트 + 감사 로그', () => {

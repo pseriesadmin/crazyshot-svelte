@@ -19,8 +19,8 @@
   } from '$lib/utils/notifyTemplate'
   import { isValidLockerPassword, sanitizeLockerInput } from '$lib/utils/lockerFields'
   import { CONSULT_NOTICE_MAX, sanitizeConsultNotice, validateConsultHours } from '$lib/utils/consultHours'
-  import { parseTimerHourValue, timerHourLabel, type LockerTimerLeg } from '$lib/utils/lockerGuideTimer'
-  import { RETURN_REGISTER_LEGS, RETURN_REGISTER_LEG_LABEL, RETURN_REGISTER_MAX_HOURS, RETURN_REGISTER_MIN_HOURS, parseReturnRegisterHours, returnRegisterLabel, type ReturnRegisterLeg } from '$lib/utils/returnRegisterTimer'
+  import { parseTimerValue, type LockerTimerLeg } from '$lib/utils/lockerGuideTimer'
+  import { RETURN_REGISTER_LEGS, RETURN_REGISTER_LEG_LABEL, parseReturnRegisterTime, type ReturnRegisterLeg } from '$lib/utils/returnRegisterTimer'
   import type { PageData } from './$types'
   import type { PushConfigRow, AdminNotifyRow, PushLogRow } from './+page.server'
 
@@ -34,6 +34,7 @@
   // 2026-11-06 교통정리(Stephen 확정): 번호+비밀번호를 보내는 알림(locker_return_guide) = '반납정보 제공안내', 방문·퀵서비스 모든 고객에게 가는 리마인드(return_notice_locker) = '반납 안내'
   const LABEL_OVERRIDE: Record<string, string> = {
     locker_guide: '무인보관함 수령정보 안내',
+    return_registration: '반납정보 등록요청',
     locker_return_guide: '무인보관함 반납정보 제공안내',
     return_notice_locker: '무인보관함 반납 안내',
   }
@@ -169,7 +170,7 @@
     reservation_approval: { cond: '고객 서명·결제 완료 감지 시 (자동)', chat: 'card' },
     shipment_notify: { cond: '[택배 출고 처리]로 배송중 전환 시', chat: 'card', manual: '[반출 알림 발송] · 계약완료 단계' },
     rental_confirm: { cond: '[방문 출고 처리]·[수령 확인]으로 대여중 전환 시', chat: 'card' },
-    return_registration: { cond: '[반납 접수]로 반납접수 전환 시 (고객 직접 제출은 제외) · 방문·퀵·무인보관함 반납은 아래에서 지정한 반납 시각 N시간 전 (반납정보 미등록 건)', chat: 'card', manual: '[반납 정보 요청] · 반납접수 단계' },
+    return_registration: { cond: '[반납 접수]로 반납접수 전환 시 (고객 직접 제출은 제외) · 방문·퀵·무인보관함 반납은 아래에서 지정한 반납일 당일 시각 (반납정보 미등록 건)', chat: 'card', manual: '[반납 정보 요청] · 반납접수 단계' },
     return_remind: { cond: '반납예정일 당일 09:00 (방문·미지정)', chat: 'card', manual: '[반납 요청] · 대여중·반납접수 단계' },
     rental_complete: { cond: '현재 발송 안 함 (검수 통과 알림으로 대체)', chat: 'card' },
     reservation_cancelled: { cond: '예약 취소 실행 시', chat: 'card' },
@@ -367,34 +368,38 @@
   }
 
   // ─── 무인보관함 안내 추가 자동 발송 시간(2026-11-13) — 수령일/반납일 당일 지정 시각(KST 01:00~24:00)에 같은 안내문장을 한 번 더 발송 ───
-  let timerDraft = $state<Record<LockerTimerLeg, string | null>>({ pickup: null, return: null })
+  let timerDraft = $state<Record<LockerTimerLeg, string | null>>({ pickupPrev: null, pickup: null, return: null })
   let savingTimerLeg = $state<LockerTimerLeg | null>(null)
   const timerSaved = $derived(data.lockerTimer)
   function timerSavedValue(leg: LockerTimerLeg): string {
-    const h = timerSaved?.[leg] ?? null
-    return h === null ? '' : timerHourLabel(h)
+    return timerSaved?.[leg] ?? ''
   }
   function timerValue(leg: LockerTimerLeg): string {
     return timerDraft[leg] ?? timerSavedValue(leg)
   }
-  function timerDirty(leg: LockerTimerLeg): boolean {
-    return timerValue(leg) !== timerSavedValue(leg)
-  }
   function timerLegOf(notifyType: string): LockerTimerLeg | null {
     return notifyType === 'locker_guide' ? 'pickup' : notifyType === 'locker_return_guide' ? 'return' : null
+  }
+  /** 행에 표시할 추가 발송 시각 칸 — 수령정보 안내 행은 '수령 전날'과 '수령일 당일', 반납 행은 '반납일 당일' */
+  function timerLegsOf(leg: LockerTimerLeg): LockerTimerLeg[] {
+    return leg === 'pickup' ? ['pickupPrev', 'pickup'] : [leg]
   }
   /** 행의 '실행 조건' 문구 — 추가 발송 시간이 저장돼 있으면 덧붙인다 */
   function condText(row: PushConfigRow, cond: string): string {
     const leg = timerLegOf(row.notify_type)
-    const saved = leg ? timerSavedValue(leg) : ''
-    if (!leg || !saved) return cond
-    return `${cond} · ${leg === 'pickup' ? '수령일' : '반납일'} 당일 ${saved} (추가)`
+    if (!leg) return cond
+    const parts: string[] = []
+    if (leg === 'pickup' && timerSavedValue('pickupPrev')) parts.push(`수령 전날 ${timerSavedValue('pickupPrev')}`)
+    if (timerSavedValue(leg)) parts.push(`${leg === 'pickup' ? '수령일' : '반납일'} 당일 ${timerSavedValue(leg)}`)
+    return parts.length === 0 ? cond : `${cond} · ${parts.join(' · ')} (추가)`
   }
 
   async function saveTimer(leg: LockerTimerLeg): Promise<void> {
     const value = timerValue(leg)
-    if (parseTimerHourValue(value) === undefined) {
-      csToast.error('시각을 01:00 ~ 24:00 사이에서 선택해 주세요.')
+    if (value === timerSavedValue(leg)) { timerDraft[leg] = null; return }
+    if (parseTimerValue(value) === undefined) {
+      timerDraft[leg] = null
+      csToast.error('시각을 01:00 ~ 24:00 사이(10분 단위)에서 선택해 주세요.')
       return
     }
     savingTimerLeg = leg
@@ -404,54 +409,55 @@
     try {
       const err = await postAction('?/updateLockerTimer', fd)
       if (err) {
+        timerDraft[leg] = null // 저장 실패 — 선택값을 되돌려 저장된 값을 다시 보여준다
         csToast.error(err)
         return
       }
-      timerDraft[leg] = null
       csToast.success(value === '' ? '추가 자동 발송을 해제했습니다.' : '추가 자동 발송 시간을 저장했습니다.')
       await invalidateAll()
+      timerDraft[leg] = null
     } catch {
+      timerDraft[leg] = null
       csToast.error('저장에 실패했습니다.')
     } finally {
       savingTimerLeg = null
     }
   }
 
-  // ─── 반납정보 등록요청 발송 시간(2026-11-13) — 방문·퀵·무인보관함 반납 고객에게 반납 시각 N시간 전(1~24) 등록요청 발송. 비우면 그 방식은 발송 안 함 ───
+  // ─── 반납정보 등록요청 발송 시간(2026-11-13) — 방문·퀵·무인보관함 반납 고객에게 반납일 당일 지정 시각(KST 01:00~24:00, 10분 단위) 등록요청 발송. 없음이면 그 방식은 발송 안 함 ───
   let regDraft = $state<Record<ReturnRegisterLeg, string | null>>({ visit: null, quick: null, locker: null })
   let savingRegLeg = $state<ReturnRegisterLeg | null>(null)
   const regSaved = $derived(data.returnRegisterTimer)
-  const REG_HOUR_OPTIONS: number[] = Array.from({ length: RETURN_REGISTER_MAX_HOURS - RETURN_REGISTER_MIN_HOURS + 1 }, (_, i) => RETURN_REGISTER_MIN_HOURS + i)
   function regSavedValue(leg: ReturnRegisterLeg): string {
-    const h = regSaved?.[leg] ?? null
-    return h === null ? '' : String(h)
+    return regSaved?.[leg] ?? ''
   }
   function regValue(leg: ReturnRegisterLeg): string {
     return regDraft[leg] ?? regSavedValue(leg)
   }
-  function regDirty(leg: ReturnRegisterLeg): boolean {
-    return regValue(leg) !== regSavedValue(leg)
-  }
   async function saveRegTimer(leg: ReturnRegisterLeg): Promise<void> {
     const value = regValue(leg)
-    if (parseReturnRegisterHours(value) === undefined) {
-      csToast.error('1시간 전 ~ 24시간 전 사이에서 선택해 주세요.')
+    if (value === regSavedValue(leg)) { regDraft[leg] = null; return }
+    if (parseReturnRegisterTime(value) === undefined) {
+      regDraft[leg] = null
+      csToast.error('시각을 01:00 ~ 24:00 사이(10분 단위)에서 선택해 주세요.')
       return
     }
     savingRegLeg = leg
     const fd = new FormData()
     fd.set('leg', leg)
-    fd.set('hours', value)
+    fd.set('time', value)
     try {
       const err = await postAction('?/updateReturnRegisterTimer', fd)
       if (err) {
+        regDraft[leg] = null // 저장 실패 — 선택값을 되돌려 저장된 값을 다시 보여준다
         csToast.error(err)
         return
       }
-      regDraft[leg] = null
       csToast.success(value === '' ? '등록요청 발송을 해제했습니다.' : '등록요청 발송 시간을 저장했습니다.')
       await invalidateAll()
+      regDraft[leg] = null
     } catch {
+      regDraft[leg] = null
       csToast.error('저장에 실패했습니다.')
     } finally {
       savingRegLeg = null
@@ -739,61 +745,48 @@
             {@const tleg = timerLegOf(row.notify_type) as LockerTimerLeg}
             <div class="entrance-box">
               <span class="msg-field-title">추가 자동 발송 시간 (한국 시간)</span>
-              <div class="entrance-row">
-                <label class="consult-time">
-                  <span class="consult-time-label">{tleg === 'pickup' ? '수령일 당일' : '반납일 당일'}</span>
+              <div class="entrance-row entrance-row--timer">
+              {#each timerLegsOf(tleg) as leg (leg)}
+                <label class="consult-time consult-time--timer">
+                  <span class="consult-time-label">{leg === 'pickupPrev' ? '수령 전날' : leg === 'pickup' ? '수령일 당일' : '반납일 당일'}</span>
                   <span class="consult-time-input">
                     <CmsTimePicker
-                      hourOnly
-                      value={timerValue(tleg)}
+                      instant
+                      value={timerValue(leg)}
                       placeholder="없음"
                       title="추가 자동 발송 시간 설정"
-                      ariaLabel="추가 자동 발송 시간"
-                      disabled={savingTimerLeg === tleg}
-                      onchange={(v) => { timerDraft[tleg] = v }}
+                      ariaLabel={leg === 'pickupPrev' ? '수령 전날 추가 자동 발송 시간' : '추가 자동 발송 시간'}
+                      disabled={savingTimerLeg === leg}
+                      onchange={(v) => { timerDraft[leg] = v; void saveTimer(leg) }}
                     />
                   </span>
                 </label>
-                <button
-                  type="button"
-                  class="btn-save-inline"
-                  class:dirty={timerDirty(tleg)}
-                  disabled={savingTimerLeg === tleg || !timerDirty(tleg)}
-                  onclick={() => saveTimer(tleg)}
-                >저장</button>
+              {/each}
               </div>
             </div>
           {/if}
 
           {#if row.notify_type === 'return_registration'}
             <div class="entrance-box">
-              <span class="msg-field-title">반납정보 등록요청 발송 시간 (반납 시각 기준)</span>
+              <span class="msg-field-title">반납정보 등록요청 발송 시간 (반납일 당일 · 한국 시간)</span>
+              <div class="entrance-row entrance-row--timer">
               {#each RETURN_REGISTER_LEGS as rleg (rleg)}
-                <div class="entrance-row">
-                  <label class="consult-time">
-                    <span class="consult-time-label reg-leg-label">{RETURN_REGISTER_LEG_LABEL[rleg]}</span>
-                    <select
-                      class="reg-select"
+                <label class="consult-time">
+                  <span class="consult-time-label">{RETURN_REGISTER_LEG_LABEL[rleg]}</span>
+                  <span class="consult-time-input">
+                    <CmsTimePicker
+                      instant
                       value={regValue(rleg)}
+                      placeholder="없음"
+                      title="반납정보 등록요청 발송 시간 설정"
+                      ariaLabel="{RETURN_REGISTER_LEG_LABEL[rleg]} 등록요청 발송 시간"
                       disabled={savingRegLeg === rleg}
-                      aria-label="{RETURN_REGISTER_LEG_LABEL[rleg]} 등록요청 발송 시간"
-                      onchange={(e) => { regDraft[rleg] = e.currentTarget.value }}
-                    >
-                      <option value="">{returnRegisterLabel(null)}</option>
-                      {#each REG_HOUR_OPTIONS as h (h)}
-                        <option value={String(h)}>{returnRegisterLabel(h)}</option>
-                      {/each}
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    class="btn-save-inline"
-                    class:dirty={regDirty(rleg)}
-                    disabled={savingRegLeg === rleg || !regDirty(rleg)}
-                    onclick={() => saveRegTimer(rleg)}
-                  >저장</button>
-                </div>
+                      onchange={(v) => { regDraft[rleg] = v; void saveRegTimer(rleg) }}
+                    />
+                  </span>
+                </label>
               {/each}
+              </div>
             </div>
           {/if}
 
@@ -1296,29 +1289,6 @@
     align-items: center;
   }
 
-  .reg-leg-label {
-    min-width: 120px;
-  }
-  .reg-select {
-    flex: none;
-    width: 140px;
-    min-height: 40px;
-    padding: 8px 14px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--cs-white);
-    color: var(--cs-text);
-    font: var(--text-pc-body-14);
-    cursor: pointer;
-  }
-  .reg-select:focus-visible {
-    outline: 2px solid var(--cs-focus-ring);
-    outline-offset: -2px;
-  }
-  .reg-select:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   .consult-gap {
     margin-top: 10px;
   }
@@ -1331,6 +1301,11 @@
     font: var(--text-pc-body-14);
     font-weight: 700;
     color: var(--cs-text-mid);
+  }
+  /* 추가 자동 발송 시간 — 수령 전날·수령일 당일 칸을 한 행에 나란히(좁으면 줄바꿈) */
+  .entrance-row--timer {
+    flex-wrap: wrap;
+    gap: 8px 28px;
   }
   .consult-time-input {
     display: block;
