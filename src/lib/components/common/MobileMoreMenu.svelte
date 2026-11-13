@@ -155,6 +155,20 @@
   }
   .mm-icon-btn:hover  { opacity: 0.75; }
   .mm-icon-btn:active { opacity: 0.5; }
+  /* 닫기(✕) 호버·터치(눌림) 모션(2026-11-13, Stephen 지시) — 3바퀴를 부드럽고 빠르게 가속하며 돌다가 끝에서 천천히 줄이며 멈춘다(느리게 시작 → 중간 최고 속도 → 긴 감속). 1080deg = 3바퀴라 끝나면 원래 모양 */
+  .mm-icon-btn svg { transform-origin: 50% 50%; }
+  .mm-icon-btn:hover svg,
+  .mm-icon-btn:active svg {
+    animation: mm-close-spin 1.3s cubic-bezier(0.6, 0, 0.15, 1) both;
+  }
+  @keyframes mm-close-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(1080deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mm-icon-btn:hover svg,
+    .mm-icon-btn:active svg { animation: none; }
+  }
 
   /* ── 메뉴 목록 ──────────────────────────────────── */
   .mm-nav {
@@ -212,6 +226,30 @@
   }
   .mm-action-btn:hover  { opacity: 0.9; transform: translateY(-1px); }
   .mm-action-btn:active { opacity: 1; transform: translateY(0); }
+  /* 화살표 호버·터치(눌림) 모션(2026-11-13, Stephen 지시) — ①살짝 왼쪽으로 빠르게 튕기기 3번 → ②오른쪽으로 아주 빠르게 지나 버튼 배경 밖으로 이탈
+     → ③글자(Sign in) 오른쪽 쪽에서 다시 나타나 제자리. 배경 밖으로 나간 화살표가 보이지 않도록 버튼 영역을 잘라낸다(overflow: hidden). 로그인·로그아웃 버튼 공통. */
+  .mm-action-btn { overflow: hidden; }
+  .mm-action-btn:hover .mm-action-arrow,
+  .mm-action-btn:active .mm-action-arrow {
+    animation: mm-arrow-bounce-out-in 1.3s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  }
+  @keyframes mm-arrow-bounce-out-in {
+    0%    { transform: translateX(0);     opacity: 1; }
+    7%    { transform: translateX(-6px); }
+    14%   { transform: translateX(0); }
+    21%   { transform: translateX(-6px); }
+    28%   { transform: translateX(0); }
+    35%   { transform: translateX(-6px); }
+    42%   { transform: translateX(0);     opacity: 1; }
+    50%   { transform: translateX(110px); opacity: 1; }   /* 아주 빠르게 오른쪽으로 배경 밖 이탈 */
+    50.1% { transform: translateX(-64px); opacity: 0; }   /* 보이지 않는 상태로 글자 오른쪽 쪽으로 이동 */
+    58%   { transform: translateX(-52px); opacity: 1; }   /* 글자 오른쪽에서 나타남 */
+    100%  { transform: translateX(0);     opacity: 1; }   /* 제자리 */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mm-action-btn:hover .mm-action-arrow,
+    .mm-action-btn:active .mm-action-arrow { animation: none; }
+  }
 
   .mm-action-text {
     flex: 1;
