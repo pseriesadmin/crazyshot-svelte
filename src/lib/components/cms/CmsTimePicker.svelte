@@ -8,15 +8,20 @@
     title?: string
     disabled?: boolean
     ariaLabel?: string
-    /** 1시간 단위 선택(01:00~24:00 + 맨 위 '없음') — 분 휠 없이 'HH:00' 을 돌려주고, '없음'은 ''을 돌려준다. 기본(false)은 기존 시·분 선택. */
-    hourOnly?: boolean
+    /** 즉시 반영 선택 — 시(없음·01~24)와 분(10분 단위) 목록을 나란히 두고, 고르는 즉시 'HH:MM'(없음은 '')을 돌려준다. 저장 버튼 없음. 기본(false)은 기존 시·분 휠 선택. */
+    instant?: boolean
     onchange?: (hhmm: string) => void
   }
 
-  let { value = '', placeholder = '시각 선택', title = '시간 설정', disabled = false, ariaLabel = '시각 선택', hourOnly = false, onchange }: Props = $props()
+  let { value = '', placeholder = '시각 선택', title = '시간 설정', disabled = false, ariaLabel = '시각 선택', instant = false, onchange }: Props = $props()
 
   const ROW = 26 // 휠 한 줄 높이(px) — 아래 CSS --tp-row 와 같다
-  const HOURS = $derived(hourOnly ? ['없음', ...Array.from({ length: 24 }, (_, i) => String(i + 1).padStart(2, '0'))] : Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')))
+  const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
+  // instant 목록: '없음'(빈 값)은 시·분 목록 위 가로 바, 시 = 01 ~ 24, 분 = 10분 단위 — 고르는 즉시 반영(24시는 00분만)
+  const INSTANT_HOURS = Array.from({ length: 24 }, (_, i) => String(i + 1).padStart(2, '0'))
+  const INSTANT_MINUTES = ['00', '10', '20', '30', '40', '50']
+  const curHour = $derived(value ? value.slice(0, 2) : '')
+  const curMinute = $derived(value ? value.slice(3, 5) : '')
   const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
 
   let open = $state(false)
@@ -26,15 +31,9 @@
 
   function openPopup(): void {
     if (disabled) return
-    if (hourOnly) {
-      const h = /^(0[1-9]|1\d|2[0-4]):00$/.exec(value)
-      hour = h ? Number(h[1]) : 9 // 목록 0번이 '없음'이라 시(1~24)가 곧 위치
-      minute = 0
-    } else {
-      const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
-      hour = m ? Number(m[1]) : 9
-      minute = m ? Number(m[2]) : 0
-    }
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
+    hour = m ? Number(m[1]) : 9
+    minute = m ? Number(m[2]) : 0
     open = true
   }
   function close(): void {
@@ -42,10 +41,23 @@
     triggerEl?.focus()
   }
   function commit(): void {
-    const next = hourOnly ? (hour === 0 ? '' : `${HOURS[hour]}:00`) : `${HOURS[hour]}:${MINUTES[minute]}`
+    const next = `${HOURS[hour]}:${MINUTES[minute]}`
     open = false
     triggerEl?.focus()
     onchange?.(next)
+  }
+  // 시·분 목록은 고르는 즉시 값을 돌려주고 팝업은 열어 둔다(시와 분을 이어서 고를 수 있게) — 닫기는 ✕·바깥 클릭
+  function chooseHour(h: string): void {
+    if (h === '') onchange?.('')
+    else onchange?.(`${h}:${h === '24' ? '00' : curMinute || '00'}`)
+  }
+  function chooseMinute(m: string): void {
+    if (!curHour || curHour === '24') return
+    onchange?.(`${curHour}:${m}`)
+  }
+  // 목록이 열리면 선택된 값이 보이도록 스크롤
+  function scrollToSelected(node: HTMLDivElement) {
+    node.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'center' })
   }
 
   // 휠: 열릴 때 선택값이 가운데 줄에 오도록 스크롤하고, 스크롤이 멈추는 위치를 선택값으로 읽는다.
@@ -71,7 +83,8 @@
   function onKeydown(e: KeyboardEvent): void {
     if (!open) return
     if (e.key === 'Escape') close()
-    else if (e.key === 'Enter') {
+    else if (e.key === 'Enter' && !instant) {
+      // 휠 모드 전용 — instant 는 고르는 즉시 반영되므로 Enter 로 낡은 휠 값을 저장하지 않는다(포커스된 목록 버튼은 기본 동작으로 선택된다)
       e.preventDefault()
       commit()
     }
@@ -124,7 +137,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="tp-wrap" class:tp-open={open}>
+<div class="tp-wrap" class:tp-open={open} class:tp-instant={instant}>
   <button
     type="button"
     class="tp-trigger"
@@ -144,8 +157,26 @@
 
   {#if open}
     <div class="tp-popup" role="dialog" aria-label={title} use:positionPopup>
-      <button type="button" class="tp-close" aria-label="패널 닫기" onclick={close}>✕</button>
+      {#if !instant}
+        <button type="button" class="tp-close" aria-label="패널 닫기" onclick={close}>✕</button>
+      {/if}
 
+      {#if instant}
+      <button type="button" class="tp-opt tp-none" class:tp-opt-sel={value === ''} aria-pressed={value === ''} {disabled} onclick={() => chooseHour('')}>없음</button>
+      <div class="tp-lists">
+        <div class="tp-list" role="listbox" aria-label="시" use:scrollToSelected>
+          {#each INSTANT_HOURS as h (h)}
+            <button type="button" class="tp-opt" class:tp-opt-sel={h === curHour} role="option" aria-selected={h === curHour} {disabled} onclick={() => chooseHour(h)}>{h}</button>
+          {/each}
+        </div>
+        <span class="tp-colon" aria-hidden="true">:</span>
+        <div class="tp-list" role="listbox" aria-label="분" use:scrollToSelected>
+          {#each INSTANT_MINUTES as m (m)}
+            <button type="button" class="tp-opt" class:tp-opt-sel={!!curHour && m === curMinute} role="option" aria-selected={!!curHour && m === curMinute} disabled={disabled || !curHour || curHour === '24'} onclick={() => chooseMinute(m)}>{m}</button>
+          {/each}
+        </div>
+      </div>
+      {:else}
       <div class="tp-wheels">
         <div class="tp-band" aria-hidden="true"></div>
 
@@ -155,15 +186,14 @@
           tabindex="0"
           aria-label="시"
           bind:this={hourEl}
-          use:wheel={{ count: HOURS.length, get: () => hour, set: (i) => (hour = i) }}
-          onkeydown={(e) => onWheelKey(e, hour, HOURS.length, (i) => (hour = i))}
+          use:wheel={{ count: 24, get: () => hour, set: (i) => (hour = i) }}
+          onkeydown={(e) => onWheelKey(e, hour, 24, (i) => (hour = i))}
         >
           {#each HOURS as h, i (h)}
             <button type="button" class="tp-item" class:tp-item-sel={i === hour} role="option" aria-selected={i === hour} tabindex="-1" onclick={() => { hour = i; pick(hourEl, i) }}>{h}</button>
           {/each}
         </div>
 
-        {#if !hourOnly}
         <span class="tp-colon" aria-hidden="true">:</span>
 
         <div
@@ -179,12 +209,12 @@
             <button type="button" class="tp-item" class:tp-item-sel={i === minute} role="option" aria-selected={i === minute} tabindex="-1" onclick={() => { minute = i; pick(minuteEl, i) }}>{m}</button>
           {/each}
         </div>
-        {/if}
       </div>
 
       <div class="tp-actions">
         <button type="button" class="tp-btn" onclick={commit}>저장</button>
       </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -335,6 +365,74 @@
     z-index: 1;
     font: var(--text-pc-body-14);
     color: var(--cs-text);
+  }
+
+  /* instant 선택기의 숫자 — 숫자 전용 폰트(D-DIN Exp, app.css --font-en-d-din 과 같은 폰트). 크기·굵기는 기존 토큰 그대로, 한글('없음')은 한글 폰트로 대체 */
+  /* instant 선택기 레이어 가로폭 축소(176px → 124px): 시·분 두 목록만 담으므로 목록 폭 44px */
+  .tp-instant .tp-popup {
+    width: 124px;
+    padding: 10px; /* 닫기 ✕ 없음 — 바깥 클릭·Esc 로 닫는다 */
+  }
+  .tp-instant .tp-list {
+    width: 44px;
+  }
+  /* '없음' — 시·분 목록 위 전체 가로폭 바 */
+  .tp-none {
+    margin-bottom: 4px;
+  }
+  .tp-instant .tp-value {
+    letter-spacing: 0.12em; /* '시 : 분' 자간 확대 — 22:10 이 붙어 보이지 않게 */
+  }
+  .tp-instant .tp-value,
+  .tp-instant .tp-opt,
+  .tp-instant .tp-colon {
+    font-family: 'D-DIN Exp', var(--font-kr);
+  }
+
+  /* instant 목록 — 시·분을 나란히 두고 고르는 즉시 반영. 선택값은 면(fill) 표시, 호버는 배경색만 변경 */
+  .tp-lists {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .tp-list {
+    width: 56px;
+    max-height: calc(var(--tp-row) * 3.4); /* 세로폭 30% 축소(레이어 228px → 약 160px) — 3줄 + 다음 줄 일부가 보여 스크롤 가능함을 알려준다 */
+    overflow-y: auto;
+    scroll-snap-type: y mandatory; /* 자석 모션 — 스크롤하면 한 줄 단위로 딱 달라붙는다 */
+    overscroll-behavior: contain; /* 목록 끝에서 페이지가 같이 스크롤되지 않게 */
+    scrollbar-width: none;
+  }
+  .tp-list::-webkit-scrollbar {
+    display: none;
+  }
+  .tp-opt {
+    display: block;
+    width: 100%;
+    scroll-snap-align: start;
+    height: var(--tp-row);
+    padding: 0;
+    border: none;
+    border-radius: var(--cms-radius-sm);
+    background: transparent;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid);
+    text-align: center;
+    cursor: pointer;
+  }
+  .tp-opt-sel {
+    background: var(--cs-lilac);
+    color: var(--cs-text);
+  }
+  .tp-opt:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  @media (hover: hover) {
+    .tp-opt:hover:not(.tp-opt-sel) {
+      background: var(--cs-surface-gray);
+    }
   }
 
   /* 저장 — 소형 실행 버튼 크기·반경(cms-uiux §0-10-F)에 버튼 아웃라인 회피 원칙(§0-10 공통)을 적용: 아웃라인 없이 면 색만 쓰고, 호버·터치는 배경 토큰 변경으로 표현 (팝업 안에서는 가운데 정렬 — Stephen 지시) */

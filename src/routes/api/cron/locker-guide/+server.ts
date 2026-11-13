@@ -7,7 +7,7 @@ import { sendReservationLifecyclePush } from '$lib/server/push'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
 import { getLockerGuideTimer } from '$lib/server/lockerGuideTimer'
-import { timerHourToMinutes } from '$lib/utils/lockerGuideTimer'
+import { timerTimeToMinutes } from '$lib/utils/lockerGuideTimer'
 import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
 import { checkUndeliveredSms, type SmsAlertResult } from '$lib/server/smsDeliveryAlert'
 import type { RequestHandler } from './$types'
@@ -132,9 +132,10 @@ export const GET: RequestHandler = async ({ request }) => {
   // 추가 자동 발송(2026-11-13, Stephen 지시) — 푸시알림 설정에서 지정한 시각(수령·반납 예정일 당일, KST)이 지난 건을 한 번 더 발송한다.
   // 기본 '1시간 전' 안내를 이미 보낸 건·수령(반납) 시각이 지난 건은 DB 함수가 제외한다. 설정이 없으면(두 칸 모두 비어 있음) 아무 것도 하지 않는다.
   const timerCfg = await getLockerGuideTimer(admin)
-  const pickupMinutes = timerCfg.pickup !== null ? timerHourToMinutes(timerCfg.pickup) : null
-  const returnMinutes = timerCfg.return !== null ? timerHourToMinutes(timerCfg.return) : null
+  const pickupMinutes = timerCfg.pickup !== null ? timerTimeToMinutes(timerCfg.pickup) : null
+  const returnMinutes = timerCfg.return !== null ? timerTimeToMinutes(timerCfg.return) : null
   const toReleaseTimer: { reservationId: number; leg: string }[] = []
+  const toReleasePrev: number[] = []
   let timerProcessed = 0
   if (pickupMinutes !== null || returnMinutes !== null) {
     for (let batch = 0; batch < MAX_BATCHES; batch++) {
@@ -164,6 +165,32 @@ export const GET: RequestHandler = async ({ request }) => {
     }
   }
 
+  // 수령 전날 사전 발송(2026-11-13, Stephen 지시) — 수령일이 '내일'인 건에 전날 지정 시각(KST)이 지나면 같은 안내를 미리 한 번 보낸다(수령 구간만).
+  const prevMinutes = timerCfg.pickupPrev !== null ? timerTimeToMinutes(timerCfg.pickupPrev) : null
+  if (prevMinutes !== null) {
+    for (let batch = 0; batch < MAX_BATCHES; batch++) {
+      const { data: claimed, error: claimError } = await admin.rpc('claim_locker_guide_prev_day', { p_pickup_minutes: prevMinutes, p_limit: BATCH_SIZE })
+      if (claimError) {
+        errors.push({ reservationId: -1, leg: 'prev-day', error: claimError.message })
+        break
+      }
+      const claimedRows = (claimed ?? []) as ClaimedLockerGuide[]
+      if (claimedRows.length === 0) break
+      for (const row of claimedRows) {
+        processed++
+        timerProcessed++
+        try {
+          await deliverOne(row, () => toReleasePrev.push(row.reservation_id))
+          succeeded++
+        } catch (err) {
+          failed++
+          errors.push({ reservationId: row.reservation_id, leg: 'prev-day', error: err instanceof Error ? err.message : '알 수 없는 예외' })
+        }
+      }
+      if (claimedRows.length < BATCH_SIZE) break
+    }
+  }
+
   for (const r of toRelease) {
     const { error: relErr } = await admin.rpc('release_locker_guide_claim', { p_reservation_id: r.reservationId, p_leg: r.leg })
     if (relErr) errors.push({ reservationId: r.reservationId, leg: r.leg, error: `재시도 표시 복구 실패: ${relErr.message}` })
@@ -172,6 +199,11 @@ export const GET: RequestHandler = async ({ request }) => {
   for (const r of toReleaseTimer) {
     const { error: relErr } = await admin.rpc('release_locker_guide_timer_claim', { p_reservation_id: r.reservationId, p_leg: r.leg })
     if (relErr) errors.push({ reservationId: r.reservationId, leg: `timer-${r.leg}`, error: `재시도 표시 복구 실패: ${relErr.message}` })
+  }
+
+  for (const id of toReleasePrev) {
+    const { error: relErr } = await admin.rpc('release_locker_guide_prev_claim', { p_reservation_id: id })
+    if (relErr) errors.push({ reservationId: id, leg: 'prev-day', error: `재시도 표시 복구 실패: ${relErr.message}` })
   }
 
   // 문자 미도착 점검(2026-10-14) — 별도 크론을 늘리지 않고 이 10분 크론 끝에 얹는다. 최근 3시간 안의 미확인 발송이 없으면 DB 조회 한 번으로 끝나며,
@@ -183,5 +215,5 @@ export const GET: RequestHandler = async ({ request }) => {
     smsAlert = { error: e instanceof Error ? e.message : '문자 미도착 점검 실패' }
   }
 
-  return json({ processed, timerProcessed, succeeded, failed, retryScheduled: toRelease.length + toReleaseTimer.length, errors, smsAlert })
+  return json({ processed, timerProcessed, succeeded, failed, retryScheduled: toRelease.length + toReleaseTimer.length + toReleasePrev.length, errors, smsAlert })
 }
