@@ -18,6 +18,10 @@
   import { supabase } from '$lib/services/supabase'
   import {
     INSPECTION_ISSUE_TYPES,
+    BILLING_ISSUE_KEY,
+    CLAIM_KINDS,
+    CLAIM_AMOUNT_MAX,
+    claimKindLabel,
     INSPECTION_STATUS_LABEL,
     INSPECTION_ISSUE_TITLE_MAX,
     INSPECTION_NOTE_MAX,
@@ -517,7 +521,7 @@
     inspected_at: string | null
     has_prior_issue: boolean
     prior_reports?: { id: number; status: string; types: string[]; detail: string | null; submitted_at: string | null; expires_at: string; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
-    issues: { id: number; assignee_name?: string | null; types: string[]; detail: string | null; created_at: string; resolved_at: string | null; resolution_note: string | null; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
+    issues: { id: number; assignee_name?: string | null; types: string[]; detail: string | null; created_at: string; resolved_at: string | null; resolution_note: string | null; claim_kinds?: string[] | null; claim_amount?: number | null; claim_items?: { kind: string; amount: number }[] | null; media: { kind: 'photo' | 'video'; url: string | null }[] }[]
   }
   let evInspection = $state<EvidenceInspection | null>(null)
 
@@ -631,7 +635,34 @@
     if (evFetchedFor !== row.reservation_id) return 0
     return (evSubmission !== null ? 1 : 0) + evSiblingSubs.length + evAdminEntries.length + csItems.filter((c) => !c.done && !c.pending).length
   })
-  const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue')
+  // 상품별 [검수확인](2026-11-13, Stephen 확정) — 고객 제출 카드가 있는 상품이 아직 반납요청이면 검수확인 전. 모두 확인돼야 [반납 검수 승인] 활성(서버 approveInspection 도 같은 규칙으로 막는다).
+  // 관리자 대리 등록만 있는 상품은 카드·버튼이 없어 대기 대상에서 뺀다(기존처럼 승인할 때 함께 반납완료로 전환). CS 접수 미처리(이슈 검수중)면 모두 확인돼도 승인 비활성 — 기존 유지.
+  function evUnitStatus(rid: number): string {
+    return evOrderUnits.find((u) => u.reservation_id === rid)?.status ?? (rid === row.reservation_id ? row.status : '')
+  }
+  const unconfirmedCards = $derived(evSubItems.filter((it) => evUnitStatus(it.rid) === 'return_requested'))
+  const approveHeaderReady = $derived(canInspect && canApproveStage && hasInspectionInfo && inspStatus !== 'issue' && unconfirmedCards.length === 0)
+  let confirmingUnit = $state<number | null>(null)
+  async function confirmUnit(rid: number): Promise<void> {
+    if (confirmingUnit !== null || inspBusy) return
+    confirmingUnit = rid
+    try {
+      const res = await fetch(`/api/cms/reservations/${rid}/inspection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm_unit' }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) { csToast.error(body.error ?? '검수확인에 실패했습니다.'); return }
+      csToast.success('검수확인했습니다. 이 상품은 다시 예약할 수 있어요.')
+      evFetchedFor = null // 탭 effect 가 새 상태(상품별 반납완료)를 다시 조회한다
+      onrefresh?.()
+    } catch {
+      csToast.error('검수확인 중 오류가 발생했습니다.')
+    } finally {
+      confirmingUnit = null
+    }
+  }
   // 대여중·반납중·검수 단계(대여중·반납요청·반납완료·이슈 검수중)에서는 예약변경·예약취소 버튼을 노출하지 않는다
   // 헤더 여정 현재 단계(2026-10-22, Stephen 확정 A안): 반납 일시가 지났거나 반납 안내가 발송된 대여중은 목록 '반납중' 칩과 맞춰 '반납중' 단계로 강조한다(표시용 — 실제 상태는 대여중 그대로)
   // 계약발송 단계(2026-10-22, Stephen 지시): 예약현황 패널(stepFilter 에 hold 포함)은 예약신청과 계약완료 사이에 '계약발송' 단계를 항상 둔다(발송된 건은 현재/지난 단계, 발송 전은 미도달 단계)
@@ -655,6 +686,7 @@
   interface CsItem {
     key: string; who: 'customer' | 'admin'; title: string; at: string | null; detail: string | null
     pending: boolean; done: boolean; assignee: string | null; resolvedAt: string | null; note: string | null
+    claim: string | null // 청구 사유·금액 요약(항목 '청구'일 때)
     media: { kind: 'photo' | 'video'; url: string | null }[]
   }
   const csItems = $derived.by((): CsItem[] => {
@@ -667,7 +699,7 @@
         key: `p${pr.id}`, who: 'customer',
         title: pr.status === 'submitted' ? (detail ? `${types} — ${detail}` : types) : '고객 입력 대기',
         at: pr.submitted_at, detail: detail || null, pending: pr.status !== 'submitted', done: false,
-        assignee: null, resolvedAt: null, note: null, media: pr.media,
+        assignee: null, resolvedAt: null, note: null, claim: null, media: pr.media,
       })
     }
     for (const is of evInspection.issues) {
@@ -676,7 +708,9 @@
       list.push({
         key: `i${is.id}`, who: 'admin', title: detail ? `${types} — ${detail}` : types,
         at: is.created_at, detail: detail || null, pending: false, done: !!is.resolved_at,
-        assignee: is.assignee_name ?? null, resolvedAt: is.resolved_at, note: is.resolution_note, media: is.media,
+        assignee: is.assignee_name ?? null, resolvedAt: is.resolved_at, note: is.resolution_note,
+        claim: claimSummary(is.claim_items, is.claim_kinds, is.claim_amount),
+        media: is.media,
       })
     }
     // 입력 대기(날짜 없음)가 맨 위, 이후 최신순
@@ -685,6 +719,9 @@
   let inspBusy       = $state(false)
   let issueTypesSel  = $state<string[]>([])
   let issueDetail    = $state('')
+  // '청구' 항목(2026-11-14, Stephen 확정) — 청구 사유(복수)·금액(원, 천단위 콤마 표시). 지금은 기록만, PG 결제 연동은 이후
+  let issueClaimKinds = $state<string[]>([])
+  let issueClaimAmounts = $state<Record<string, string>>({}) // 사유별 청구 금액(천단위 콤마 표시 문자열)
   let issueMedia     = $state<{ path: string; kind: 'photo' | 'video'; previewUrl: string; name: string }[]>([])
   let issueUploading = $state(0)
   let resolveNote    = $state('')
@@ -751,6 +788,38 @@
 
   function toggleIssueType(key: string): void {
     issueTypesSel = issueTypesSel.includes(key) ? issueTypesSel.filter((k) => k !== key) : [...issueTypesSel, key]
+    if (key === BILLING_ISSUE_KEY && !issueTypesSel.includes(BILLING_ISSUE_KEY)) { issueClaimKinds = []; issueClaimAmounts = {} }
+  }
+  function toggleClaimKind(key: string): void {
+    if (issueClaimKinds.includes(key)) {
+      issueClaimKinds = issueClaimKinds.filter((k) => k !== key)
+      const { [key]: _removed, ...rest } = issueClaimAmounts
+      issueClaimAmounts = rest
+    } else {
+      // 화면에는 항상 사유 정의 순서(파손·분실·연체·반품배송요금)로 보인다
+      issueClaimKinds = CLAIM_KINDS.map((k) => k.key).filter((k) => k === key || issueClaimKinds.includes(k))
+    }
+  }
+  // 금액 입력 표준(uiux-index '금액 입력폼 표준'): 숫자만 받아 천단위 콤마로 표시, 서버에는 숫자만 보낸다. 한글 조합 중에는 값을 바꾸지 않는다
+  function handleClaimAmountInput(kind: string, raw: string, isComposing = false): void {
+    if (isComposing) return
+    const digits = raw.replace(/[^0-9]/g, '')
+    issueClaimAmounts = { ...issueClaimAmounts, [kind]: digits ? parseInt(digits, 10).toLocaleString('ko-KR') : '' }
+  }
+  const claimAmountOf = (kind: string): number => Number((issueClaimAmounts[kind] ?? '').replace(/[^0-9]/g, ''))
+  const claimItemsPayload = $derived(issueClaimKinds.map((k) => ({ kind: k, amount: claimAmountOf(k) })))
+  const claimTotal = $derived(claimItemsPayload.reduce((sum, it) => sum + it.amount, 0))
+  const issueBillingReady = $derived(
+    !issueTypesSel.includes(BILLING_ISSUE_KEY) ||
+      (claimItemsPayload.length > 0 && claimItemsPayload.every((it) => it.amount >= 1 && it.amount <= CLAIM_AMOUNT_MAX) && claimTotal <= CLAIM_AMOUNT_MAX),
+  )
+  /** CS 카드의 청구 요약 — '파손 150,000원 · 연체 30,000원 (합계 180,000원)'. 옛 형식(사유 목록 + 합계 금액만 있는 기록)도 보여 준다 */
+  function claimSummary(items: { kind: string; amount: number }[] | null | undefined, kinds: string[] | null | undefined, total: number | null | undefined): string | null {
+    if (items && items.length > 0) {
+      const line = items.map((it) => `${claimKindLabel(it.kind)} ${it.amount.toLocaleString('ko-KR')}원`).join(' · ')
+      return items.length > 1 ? `${line} (합계 ${items.reduce((s, it) => s + it.amount, 0).toLocaleString('ko-KR')}원)` : line
+    }
+    return kinds && kinds.length > 0 && total ? `${kinds.map(claimKindLabel).join(' · ')} — ${total.toLocaleString('ko-KR')}원` : null
   }
 
   async function pickIssueFiles(event: Event): Promise<void> {
@@ -857,6 +926,7 @@
       if (action === 'issue') {
         payload.types = issueTypesSel
         payload.detail = issueDetail
+        if (issueTypesSel.includes(BILLING_ISSUE_KEY)) payload.claim_items = claimItemsPayload
         payload.media = issueMedia.map((m) => ({ path: m.path, kind: m.kind }))
       }
       if (action === 'resolve') payload.note = resolveNote
@@ -868,7 +938,7 @@
       const body = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) { csToast.error(body.error ?? '처리에 실패했습니다.'); return }
       csToast.success(action === 'approve' ? '반납 검수를 승인했습니다. 고객에게 대여 완료가 안내됩니다.' : action === 'issue' ? (canApproveStage ? '검수 이슈를 등록했습니다. 고객에게 안내됩니다.' : '검수 이슈를 등록했습니다.') : '이슈를 처리 완료했습니다.')
-      issueTypesSel = []; issueDetail = ''; resolveNote = ''
+      issueTypesSel = []; issueDetail = ''; resolveNote = ''; issueClaimKinds = []; issueClaimAmounts = {}
       for (const m of issueMedia) URL.revokeObjectURL(m.previewUrl)
       issueMedia = []
       evFetchedFor = null // 탭 effect 가 새 상태를 다시 조회한다
@@ -2593,7 +2663,7 @@
           type="button"
           class="btn-header-action"
           disabled={inspBusy || !approveHeaderReady}
-          title={approveHeaderReady ? undefined : !canApproveStage ? '반납요청·반납완료 단계에서 승인할 수 있어요' : inspStatus === 'issue' ? 'CS 접수 건은 검수 탭에서 CS 처리 완료 후 마감할 수 있어요' : '고객 반납 제출 정보 또는 CS 접수 정보가 등록되면 승인할 수 있어요'}
+          title={approveHeaderReady ? undefined : !canApproveStage ? '반납요청·반납완료 단계에서 승인할 수 있어요' : inspStatus === 'issue' ? 'CS 접수 건은 검수 탭에서 CS 처리 완료 후 마감할 수 있어요' : unconfirmedCards.length > 0 ? '검수 탭의 모든 상품 카드에서 검수확인을 누르면 승인할 수 있어요' : '고객 반납 제출 정보 또는 CS 접수 정보가 등록되면 승인할 수 있어요'}
           onclick={() => runInspection('approve')}
         >반납 검수 승인</button>
       {/if}
@@ -4050,6 +4120,11 @@
                 {#if it.groups.length === 0}
                   <div class="ev-check ev-check-off">첨부된 사진이 없습니다.</div>
                 {/if}
+                {#if canInspect && ['return_requested', 'returned'].includes(evUnitStatus(it.rid))}
+                  <div class="action-section action-section-end">
+                    <button type="button" class="btn-ev-confirm" disabled={evUnitStatus(it.rid) !== 'return_requested' || confirmingUnit !== null || inspBusy} onclick={() => confirmUnit(it.rid)}>{evUnitStatus(it.rid) === 'return_requested' ? '검수확인' : '검수확인 완료'}</button>
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>
@@ -4104,6 +4179,31 @@
                   <button type="button" class="ev-chip" class:ev-chip-on={issueTypesSel.includes(t.key)} aria-pressed={issueTypesSel.includes(t.key)} onclick={() => toggleIssueType(t.key)}>{t.label}</button>
                 {/each}
               </div>
+              {#if issueTypesSel.includes(BILLING_ISSUE_KEY)}
+                <!-- '청구' 하위 옵션 — 들여쓰고 면(lilac)으로 묶어 청구 항목에 딸린 선택임을 보여 준다 -->
+                <div class="claim-sub">
+                <div class="ev-chips">
+                  {#each CLAIM_KINDS as k (k.key)}
+                    <button type="button" class="ev-chip" class:ev-chip-on={issueClaimKinds.includes(k.key)} aria-pressed={issueClaimKinds.includes(k.key)} onclick={() => toggleClaimKind(k.key)}>{k.label}</button>
+                  {/each}
+                </div>
+                <!-- 선택한 사유마다 금액 입력칸이 하나씩 생긴다(사유별 청구 금액) -->
+                {#each issueClaimKinds as kind (kind)}
+                  <div class="cs-input-row">
+                    <input
+                      type="text"
+                      inputmode="numeric"
+                      class="cancel-reason-input"
+                      placeholder="{claimKindLabel(kind)} 청구 금액(원)"
+                      aria-label="{claimKindLabel(kind)} 청구 금액(원)"
+                      value={issueClaimAmounts[kind] ?? ''}
+                      oninput={(e) => handleClaimAmountInput(kind, e.currentTarget.value, e instanceof InputEvent && e.isComposing)}
+                      oncompositionend={(e) => handleClaimAmountInput(kind, e.currentTarget.value)}
+                    />
+                  </div>
+                {/each}
+                </div>
+              {/if}
               <div class="cs-input-row">
                 <input type="text" class="cancel-reason-input" maxlength={INSPECTION_ISSUE_TITLE_MAX} placeholder="내용을 입력하세요 (목록 카드 제목으로 표시돼요)" bind:value={issueDetail} />
                 <span class="cs-count">{issueDetail.length}/{INSPECTION_ISSUE_TITLE_MAX}</span>
@@ -4127,7 +4227,7 @@
                 </div>
               {/if}
               <div class="action-section action-section-end">
-                <button type="button" class="btn-danger-sm" disabled={inspBusy || issueUploading > 0 || issueTypesSel.length === 0} onclick={() => runInspection('issue')}>CS 접수 등록</button>
+                <button type="button" class="btn-danger-sm" disabled={inspBusy || issueUploading > 0 || issueTypesSel.length === 0 || !issueBillingReady} onclick={() => runInspection('issue')}>CS 접수 등록</button>
               </div>
             </div>
           {:else}
@@ -4158,6 +4258,7 @@
             {#if csOpen[c.key]}
               <div class="cs-card-body">
                 {#if c.detail}<div class="ev-check">{c.detail}</div>{/if}
+                {#if c.claim}<div class="ev-check">청구 {c.claim}</div>{/if}
                 {#if c.pending}<div class="ev-meta">고객이 아직 증빙을 등록하지 않았어요.</div>{/if}
                 {#if c.assignee}<div class="ev-meta">담당 {c.assignee}</div>{/if}
                 {#if c.resolvedAt}<div class="ev-meta">처리 완료 {smsDateLabel(c.resolvedAt)}</div>{/if}
@@ -5313,6 +5414,19 @@
      기존 퍼플 컬러 토큰·padding 20px을 유지하도록 컨텍스트 셀렉터로 명시도를 올림(!important 미사용) */
   /* 예약 단계(승인하기/거부) 버튼 그룹만 우측 끝 정렬 — 다른 상태의 액션행은 기존 좌측 정렬 유지 */
   .action-section.action-section-end { justify-content: flex-end; }
+  /* 상품 카드 [검수확인] — DetailPanel 소형 실행 버튼(§0-10-F) 아웃라인 없는 변형: 면 색만, 호버·터치는 배경 토큰 변경 */
+  /* '청구' 하위 옵션 묶음 — 들여쓰기 + lilac 면으로 항목 칩과 구분 */
+  .claim-sub { display: flex; flex-direction: column; gap: 10px; margin-left: 24px; padding: 12px; border-radius: var(--cms-radius-sm); background: var(--cs-lilac); }
+  .btn-ev-confirm {
+    min-width: 78px; text-align: center; flex-shrink: 0;
+    font-size: 12px; font-weight: 700; line-height: 1.4; padding: 8px 14px;
+    border: none; border-radius: var(--cms-radius-sm);
+    background: var(--cs-lilac); color: var(--cs-text-mid);
+    cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
+  }
+  @media (hover: hover) { .btn-ev-confirm:hover:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); } }
+  .btn-ev-confirm:active:not(:disabled) { background: var(--cs-text-mid); color: var(--cs-white); }
+  .btn-ev-confirm:disabled { opacity: 0.5; cursor: default; }
   .action-section .btn-primary { background: var(--cs-purple); padding: 0 20px; }
   .action-section .btn-primary:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .btn-primary:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }

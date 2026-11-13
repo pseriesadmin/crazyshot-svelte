@@ -37,8 +37,9 @@ function makeAdmin(rpcImpl: (fn: string) => unknown) {
     return rpcImpl(fn)
   }
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq']) chain[m] = () => chain
+  for (const m of ['select', 'eq', 'in']) chain[m] = () => chain
   chain.maybeSingle = async () => ({ data: { status: 'returned', products: { name: 'SONY FX3' } } })
+  chain.then = (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null }) // 상품별 검수확인 대기 조회(listUnconfirmedCardUnits) — 대기 상품 없음
   return { rpc, from: () => chain }
 }
 
