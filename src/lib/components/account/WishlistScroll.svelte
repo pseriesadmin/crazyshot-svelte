@@ -1,6 +1,7 @@
 <script lang="ts">
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
+  import type { CustomerBadge } from '$lib/types/badge'
 
   interface WishItem {
     wishlist_id: string
@@ -18,9 +19,11 @@
     items?: WishItem[]
     totalCount?: number
     hideTitle?: boolean
+    /** 상품별 배지(상품 id → 배지 목록) */
+    badgeMap?: Record<string, CustomerBadge[]>
   }
 
-  let { items = [], totalCount = 0, hideTitle = false }: Props = $props()
+  let { items = [], totalCount = 0, hideTitle = false, badgeMap = {} }: Props = $props()
 
   let localItems = $state([...items])
   let localCount = $state(totalCount)
@@ -85,6 +88,7 @@
               href={`/products/${item.slug}`}
               wished
               onWishToggle={handleWishToggle}
+              badges={badgeMap[item.product_id] ?? []}
             />
           {/each}
         </div>

@@ -148,7 +148,7 @@
         </div>
 
         <!-- 관심가져봄 -->
-        <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} />
+        <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} badgeMap={data.productBadges} />
 
         <!-- 대여 정보 + 내정보 메뉴 -->
         <div class="flex flex-col items-start pt-[50px] relative shrink-0 w-full">
@@ -292,7 +292,7 @@
                 </div>
               </div>
               <div class="overflow-x-auto">
-                <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} hideTitle />
+                <WishlistScroll items={data.wishlists} totalCount={data.wishlists.length} hideTitle badgeMap={data.productBadges} />
               </div>
             </div>
           </div>

@@ -1062,6 +1062,7 @@
             href={'/products/' + (prod.slug || prod.id)}
             wished={wishedSet.has(prod.id)}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+            badges={data.productBadges?.[prod.id] ?? []}
           />
         {/each}
       </div>

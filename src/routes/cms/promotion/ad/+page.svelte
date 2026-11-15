@@ -8,6 +8,7 @@
   import CmsKpiGrid from '$lib/components/cms/CmsKpiGrid.svelte'
   import CmsStatRing from '$lib/components/cms/CmsStatRing.svelte'
   import CmsStatBars from '$lib/components/cms/CmsStatBars.svelte'
+  import BadgeTab from '$lib/components/cms/badge/BadgeTab.svelte'
 
   // mid_banner_pc/mid_banner_mobile 제거(2026-09-01, CMS 전역 정밀 검증 v5) — front가 hero_pc/
   // hero_mobile 슬롯만 조회·렌더링해 두 슬롯을 등록해도 고객에게 절대 노출되지 않는 죽은 옵션이었음
@@ -21,7 +22,7 @@
   interface Props { data: PageData; form: ActionData }
   let { data, form }: Props = $props()
 
-  type Tab = 'dashboard' | 'slots' | 'list' | 'create'
+  type Tab = 'dashboard' | 'slots' | 'list' | 'create' | 'badge' | 'badge-settings'
   let activeTab = $state<Tab>((data.tab as Tab) ?? 'dashboard')
 
   // 대시보드 KPI — 기존 로드된 banners 배열에서 클라이언트 집계 (신규 쿼리 없음)
@@ -82,6 +83,8 @@
   }
 
   $effect(() => {
+    // 배지 탭은 각 패널이 결과 토스트를 직접 띄운다(중복 토스트 방지)
+    if (activeTab === 'badge' || activeTab === 'badge-settings') return
     if (form?.ok === true) {
       csToast.success('처리되었습니다.')
       creating = false
@@ -94,8 +97,8 @@
 <div class="page-wrap">
 
   <div class="page-header">
-    <h1 class="page-title">홍보 배너 관리</h1>
-    <p class="page-sub">홈페이지 슬롯별 배너 이미지와 링크를 관리합니다.</p>
+    <h1 class="page-title">배너 및 배지 관리</h1>
+    <p class="page-sub">배너 슬롯 이미지 설정관리와 배지 목록 설정 관리</p>
   </div>
 
   <!-- 탭 네비게이션 -->
@@ -105,6 +108,8 @@
       { id: 'slots',  label: '슬롯 현황' },
       { id: 'list',   label: '전체 목록' },
       { id: 'create', label: '배너 등록' },
+      { id: 'badge',  label: '배지 목록' },
+      { id: 'badge-settings', label: '배지타입 목록' },
     ] as t (t.id)}
       <button
         role="tab"
@@ -328,6 +333,16 @@
         </div>
       </form>
     </div>
+
+  <!-- ─── 배지 ─── -->
+  {:else if activeTab === 'badge' || activeTab === 'badge-settings'}
+    <BadgeTab
+      mode={activeTab === 'badge' ? 'list' : 'settings'}
+      rules={data.badge.rules}
+      templates={data.badge.templates}
+      coupons={data.badge.coupons}
+      productNames={data.badge.productNames}
+    />
   {/if}
 
 </div>

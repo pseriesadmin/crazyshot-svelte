@@ -1141,7 +1141,7 @@
   // ── 서버 데이터 추출 (PageData는 +page.ts 기준이므로 server 필드는 캐스트 필요)
   // datesSet 등 canProceed 조건이 라인아이템 목록을 참조하므로 Footer 섹션보다 앞에 선언
   type ProductRow = { id: string; name: string; category: string; brand: string | null; slug: string; image_urls: string[]; is_active: boolean; shipping_round_trip?: boolean | null; shipping_delivery?: boolean | null; shipping_return?: boolean | null; sale_only?: boolean | null; sale_price?: number | null }
-  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; discount_scope?: string; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
+  type UserCouponExt = { id: string; coupon_id: string; first_viewed_at: string | null; badgeLinked?: boolean; coupons: { id: string; code: string; type: string; discount_type: string; discount_value: number; display_name: string | null; allow_stacking: boolean; allow_coupon_stacking: boolean; discount_scope?: string; valid_until: string | null; validity_type: string; valid_days: number | null; max_discount_amount: number | null; allow_with_points: boolean; min_purchase_amount: number; min_rental_amount: number; min_rental_days: number; is_walk_in_only: boolean; applies_to_rental?: boolean; applies_to_sale?: boolean } | null }
   type PriceRuleExt = { price12h: number | null; price24h: number | null; deposit: number | null }
   type CartLineItemOption = { optionProductId: string | null; name: string; qty: number; unitPrice: number; unitPrice12h: number | null; imageUrl: string | null; deliveryRentalDisabled: boolean; isRequired: boolean; minSelectRequired: boolean; qtyFollowsMain: boolean; isFree?: boolean }
   type CartLineItem = { reservationId: string; productId: string | null; product: ProductRow | null; price12h: number | null; price24h: number | null; deposit: number | null; startDate: string; endDate: string; pickupMethod: string | null; returnMethod: string | null; pickupTime: string | null; returnTime: string | null; durationType: string | null; options: CartLineItemOption[]; status: string }
@@ -3276,6 +3276,7 @@
                 {@const condFail = cond && !cond.ok ? cond.reason : null}
                 {@render CouponRow({
                   label: couponLabel,
+                  badgeLinked: uc.badgeLinked === true,
                   days: daysUntilExpiry(c.valid_until, c.validity_type, uc.first_viewed_at, c.valid_days),
                   note: isNoDelivery
                     ? '크레이지배송(택배) 선택 시 사용 가능'
@@ -4935,13 +4936,16 @@
   </div>
 {/snippet}
 
-{#snippet CouponRow(props: { label: string; days: number | null; checked: boolean; onToggle: () => void; disabled?: boolean; note?: string })}
+{#snippet CouponRow(props: { label: string; days: number | null; checked: boolean; onToggle: () => void; disabled?: boolean; note?: string; badgeLinked?: boolean })}
   <div class="coupon-row" class:coupon-row-disabled={props.disabled}>
     <label class="coupon-row-left">
       <button class="checkbox-btn checkbox-btn-terms" class:checked={props.checked} onclick={props.onToggle} disabled={props.disabled} aria-label={props.label}>
         <CheckIcon checked={props.checked} />
       </button>
       <span class="coupon-label">{props.label}</span>
+      {#if props.badgeLinked}
+        <span class="coupon-linked">배지</span>
+      {/if}
       {#if props.note}
         <span class="coupon-note">{props.note}</span>
       {/if}
@@ -6414,6 +6418,7 @@
   .coupon-expiry { font-size: 14px; font-weight: 700; color: #444; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .coupon-days { color: var(--cs-red-badge); }
   /* free_delivery 쿠폰 상호배타 안내(2026-09-01) — 배송 우대설정과 중복 적용 불가 사유 표시 */
+  .coupon-linked { flex-shrink: 0; padding: 3px 8px; border-radius: var(--radius-full); background: var(--cs-lilac); color: var(--cs-purple); font-size: 11px; font-weight: 700; }
   .coupon-note { font-size: 12px; font-weight: 500; color: var(--cs-red-badge); flex-shrink: 0; }
   .coupon-section { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
   .coupon-section .section-sub-label { padding: 0 0 5px; }

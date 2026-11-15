@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
+  import type { CustomerBadge } from '$lib/types/badge'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import SearchKeywordBar from '$lib/components/products/SearchKeywordBar.svelte'
@@ -55,6 +56,7 @@
     slug?: string
     href?: string
     wished?: boolean
+    badges?: CustomerBadge[]
   }
   /** 서버에서 받아둔 검색 결과(한 번에 SEARCH_FETCH_LIMIT개) — 화면에는 visibleCount개만 보여주고 더보기로 늘린다 */
   let searchResults      = $state<SearchProduct[]>([])
@@ -97,6 +99,7 @@
         ?? (r['image_url'] ? String(r['image_url']) : '/images/products/grid-flat.png'),
       href:     slug ? `/products/${slug}` : undefined,
       wished:   Boolean(r['wished']),
+      badges:   Array.isArray(r['badges']) ? (r['badges'] as CustomerBadge[]) : [],
     }
   }
 
@@ -195,6 +198,7 @@
   /** 검색된 상품(id 목록)에 연결된 상품설명서 조회 — 실패해도 상품 결과에는 영향 없음 */
   async function fetchManualResults(products: SearchProduct[]): Promise<SearchManual[]> {
     const imgById = new Map(products.map((p) => [p.id, p.img]))
+    const badgesById = new Map(products.map((p) => [p.id, p.badges ?? []]))
     const ids = products.map((p) => p.id).filter(Boolean).slice(0, 50)
     if (ids.length === 0) return []
     const resp = await fetch(`/api/search/manuals?ids=${ids.map(encodeURIComponent).join(',')}`)
@@ -207,6 +211,7 @@
       slug:        r['slug'] ? String(r['slug']) : null,
       path:        String(r['path'] ?? ''),
       name:        String(r['name'] ?? ''),
+      badges:      badgesById.get(String(r['product_id'] ?? '')) ?? [],
     }))
   }
 

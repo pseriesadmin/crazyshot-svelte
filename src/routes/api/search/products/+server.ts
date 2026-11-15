@@ -21,6 +21,7 @@
 //   수정: service_role로 방금 생성된 로그를 후속 조회해 searchLogId를 채운다.
 
 import { json, error as httpError } from '@sveltejs/kit'
+import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { createClient } from '@supabase/supabase-js'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -138,10 +139,12 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       locals.supabase,
       rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
     )
+    const badgeMap = await loadProductBadgeMap(locals.supabase, rpcResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')))
     const results = rpcResults.map((r) => {
       const id = String(r['product_id'] ?? r['id'] ?? '')
       return {
         ...r,
+        badges: badgeMap[id] ?? [],
         price_12h: price12hMap[id] ?? null,
         sale_only: saleMap[id]?.sale_only ?? false,
         sale_price: saleMap[id]?.sale_price ?? null,
@@ -233,10 +236,12 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     locals.supabase,
     finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')),
   )
+  const badgeMap = await loadProductBadgeMap(locals.supabase, finalResults.map((r) => String(r['product_id'] ?? r['id'] ?? '')))
   const results = finalResults.map((r) => {
     const id = String(r['product_id'] ?? r['id'] ?? '')
     return {
       ...r,
+      badges: badgeMap[id] ?? [],
       price_min: r['price_min'] ?? priceMinMap[id] ?? null,
       ...(hasImage(r) || !imageMap[id] ? {} : { image_urls: imageMap[id] }),
       price_12h: price12hMap[id] ?? null,

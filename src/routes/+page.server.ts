@@ -1,4 +1,5 @@
 import { env } from '$env/dynamic/private'
+import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
@@ -437,11 +438,14 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
   // MD 추천 카드의 찜 버튼용 — 로그인 사용자가 이미 찜한 MD 추천 상품 id (비로그인이면 빈 배열, /products 와 같은 헬퍼)
   const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, mdProducts.map((p) => p.id))
 
+  // MD 추천 카드 썸네일 배지(CMS 프로모션 '배지') — 화면의 상품 id 묶음으로 1회 조회
+  const productBadges = await loadProductBadgeMap(locals.supabase, mdProducts.map((p) => p.id))
+
   return {
     bannerMap, isCms, categories, crazylogPosts, bannerSlots, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts,
-    isLoggedIn: !!session?.user.id, wishedIds,
+    isLoggedIn: !!session?.user.id, wishedIds, productBadges,
   }
 }

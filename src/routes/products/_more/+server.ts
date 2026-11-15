@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort } from '$lib/server/products/productGrid'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
+import { loadProductBadgeMap } from '$lib/server/productBadges'
 import type { RequestHandler } from './$types'
 
 // /products "전체" 목록 무한스크롤 추가 조회 — 목록(그리드)만 가져온다(hero·MD추천·키워드 등 페이지 전체 load 재실행 없음).
@@ -13,7 +14,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const limit = Math.min(30, Math.max(1, Math.floor(Number(url.searchParams.get('limit')) || 10)))
   const seed = (url.searchParams.get('seed') ?? '').slice(0, 32)
   const total = Math.min(MAX_TOTAL, offset + limit)
-  if (offset >= MAX_TOTAL) return json({ products: [], wishedIds: [], hasMore: false })
+  if (offset >= MAX_TOTAL) return json({ products: [], wishedIds: [], productBadges: {}, hasMore: false })
 
   const { session } = await locals.safeGetSession()
 
@@ -53,5 +54,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const products = await attachCardPrices(locals.supabase, page)
   const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, products.map((p) => p.id))
 
-  return json({ products, wishedIds, hasMore: rows.length >= total && total < MAX_TOTAL })
+  const productBadges = await loadProductBadgeMap(locals.supabase, products.map((p) => p.id))
+
+  return json({ products, wishedIds, productBadges, hasMore: rows.length >= total && total < MAX_TOTAL })
 }
