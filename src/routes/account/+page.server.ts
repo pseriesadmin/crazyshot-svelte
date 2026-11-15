@@ -1,4 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit'
+import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { isRealMemberSession } from '$lib/utils/authGuard'
 import type { PageServerLoad, Actions } from './$types'
 import { callTypedRpc } from '$lib/utils/rpc'
@@ -301,6 +302,8 @@ export const load: PageServerLoad = async ({ locals, depends, url }) => {
       wishlist_id: string; product_id: string; product_name: string; category: string
       image_url: string; slug: string; price24h: number | null; price12h: number | null; wished_at: string
     }>,
+    // 찜 카드 썸네일 배지(CMS 프로모션 '배지') — 찜 목록 상품 id 묶음으로 1회 조회
+    productBadges: await loadProductBadgeMap(locals.supabase, ((wishlistRes.data ?? []) as Array<{ product_id: string }>).map((w) => w.product_id)),
     // TODO(DB): notifications 테이블 미열람 건수 또는 events 집계로 교체
     benefitCount: 3,
     coupons,

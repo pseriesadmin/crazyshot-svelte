@@ -7,6 +7,7 @@
   import { fly, fade } from 'svelte/transition'
   import type { PageData } from './$types'
   import type { ProductCard } from './+page.server'
+  import type { CustomerBadge } from '$lib/types/badge'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import { tabBarState } from '$lib/stores/tabBar.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
@@ -20,6 +21,9 @@
   let { data }: { data: PageData } = $props()
 
   let wishedSet = $state(new Set(data.wishedIds))
+  // 상품 배지 — 서버 load 분 + 무한스크롤(/products/_more) 추가 분을 합쳐 쓴다
+  let extraBadges = $state<Record<string, CustomerBadge[]>>({})
+  const badgeMap = $derived<Record<string, CustomerBadge[]>>({ ...(data.productBadges ?? {}), ...extraBadges })
   $effect(() => { wishedSet = new Set(data.wishedIds) })
 
   async function handleWishToggle(id: string | undefined) {
@@ -316,11 +320,12 @@
         `/products/_more?offset=${gridAll.length}&limit=${INFINITE_STEP}&seed=${encodeURIComponent(listSeed)}${data.urlCategory && data.urlCategory !== 'all' ? `&category=${encodeURIComponent(data.urlCategory)}` : ''}`,
       )
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as { products: ProductCard[]; wishedIds: string[]; hasMore: boolean }
+      const json = (await res.json()) as { products: ProductCard[]; wishedIds: string[]; productBadges?: Record<string, CustomerBadge[]>; hasMore: boolean }
       const known = new Set(gridAll.map((p) => p.id))
       const fresh = json.products.filter((p) => !known.has(p.id))   // 조회수순 등은 사이에 순서가 바뀔 수 있어 중복 제거
       extraProducts = [...extraProducts, ...fresh]
       if (json.wishedIds.length > 0) wishedSet = new Set([...wishedSet, ...json.wishedIds])
+      if (json.productBadges) extraBadges = { ...extraBadges, ...json.productBadges }
       if (!json.hasMore || fresh.length === 0) exhausted = true
     } catch {
       exhausted = true   // 실패 시 무한 재시도 방지 — 새로고침 전까지 추가 조회 중단
@@ -702,6 +707,7 @@
               href={productLink(prod)}
               category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
               wished={wishedSet.has(prod.id)}
+              badges={badgeMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             />
           </div>
@@ -764,6 +770,7 @@
               href={productLink(prod)}
               category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
               wished={wishedSet.has(prod.id)}
+              badges={badgeMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             />
           </div>
@@ -819,6 +826,7 @@
               href={productLink(prod)}
               category={prod.category}
               wished={wishedSet.has(prod.id)}
+              badges={badgeMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             />
             </div>
@@ -891,6 +899,7 @@
             href={productLink(prod)}
             category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
             wished={wishedSet.has(prod.id)}
+            badges={badgeMap[prod.id] ?? []}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
           />
         {/each}

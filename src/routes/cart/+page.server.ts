@@ -1,4 +1,5 @@
 import { redirect } from '@sveltejs/kit'
+import { loadBadgeCouponIds, markBadgeLinkedCoupons } from '$lib/server/productBadges'
 import { isFirstRentalUser } from '$lib/server/coupons/firstRental'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
@@ -744,7 +745,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     pointUseRules:   await loadPointUseRules(supabase),
     docGate:        getDocGateStatus(profileResult.data as ProfileRow | null),
     docLanding:     docLandingKind(profileResult.data as ProfileRow | null),
-    userCoupons:     filteredCoupons as UserCouponRow[],
+    // 배지 연동 쿠폰: 카트 상품에 붙은 배지의 연결 쿠폰을 앞으로 + badgeLinked 표식(가격·할인 계산 무관)
+    userCoupons:     markBadgeLinkedCoupons(filteredCoupons, await loadBadgeCouponIds(supabase, serverProducts.map((p) => p.id))) as UserCouponRow[],
     isServerLoaded:  rawReservations.length > 0,
     // 예약정보 수정 모드 — edit 파라미터가 없으면 전부 기본값(isEditMode=false)
     isEditMode:             editContext !== null,

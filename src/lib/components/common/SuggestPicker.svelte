@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte'
+  import { tick, type Snippet } from 'svelte'
   import type { SuggestPickerOption, SuggestPickerVariant } from '$lib/types/suggest-picker'
 
   export type { SuggestPickerFieldControl }
@@ -41,6 +41,9 @@
      *  반복하는 UX 전용. 기본값 false(기존 동작 유지) — 선택한 라벨을 입력창에 남겨두는
      *  단일값 선택기(카테고리/등급 등 <select> 대체용)에는 절대 true로 바꾸지 말 것. */
     clearOnSelect?: boolean
+    /** 0(기본)=목록 전체를 한 번에 그림(기존 동작). 1 이상이면 그 개수만큼만 먼저 그리고,
+     *  목록을 아래로 스크롤해 끝에 가까워지면 같은 개수씩 추가로 그린다(긴 목록의 화면 부하 완화) */
+    pageSize?: number
     oninput?: (value: string) => void
     onselect?: (option: SuggestPickerOption, previousId: string | null) => void
     field: Snippet<[SuggestPickerFieldControl]>
@@ -62,6 +65,7 @@
     variant = 'generic',
     noFilter = false,
     clearOnSelect = false,
+    pageSize = 0,
     oninput,
     onselect,
     field,
@@ -84,6 +88,24 @@
   let hasUserTyped = $state(false)
 
   const listboxId = $derived(`${id}-suggest-list`)
+
+  // 점진 노출 — 지금까지 그린 개수(pageSize 0 이면 전체). 목록이 새로 계산될 때마다 첫 페이지로 되돌린다
+  let shown = $state(0)
+  const visible = $derived(pageSize > 0 ? suggestions.slice(0, shown || pageSize) : suggestions)
+
+  function showMore(): void {
+    if (pageSize > 0 && visible.length < suggestions.length) shown = visible.length + pageSize
+  }
+
+  // 아래로 스크롤하는 경우에만 더 그린다 — 검색어를 바꿔 목록이 줄어들며 스크롤 위치가 보정될 때(위로 이동)는 무시
+  let layerEl = $state<HTMLElement | null>(null)
+  let lastScrollTop = 0
+  function handleLayerScroll(e: Event): void {
+    const el = e.currentTarget as HTMLElement
+    const down = el.scrollTop > lastScrollTop
+    lastScrollTop = el.scrollTop
+    if (down && el.scrollTop + el.clientHeight >= el.scrollHeight - 24) showMore()
+  }
 
   function filterOptions(kw: string): SuggestPickerOption[] {
     if (noFilter) return options
@@ -110,7 +132,9 @@
       suggestOpen = next.length > 0
     }
     suggestions = next
+    shown = pageSize
     suggestIdx = -1
+    if (pageSize > 0) void tick().then(() => { if (layerEl) layerEl.scrollTop = 0 })   // 새 목록은 맨 위부터
   }
 
   function closeSuggest(): void {
@@ -182,16 +206,21 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (!suggestOpen || suggestions.length === 0) return
+    if (!suggestOpen || visible.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      suggestIdx = (suggestIdx + 1) % suggestions.length
+      if (suggestIdx + 1 >= visible.length && visible.length < suggestions.length) {
+        showMore()                      // 아직 안 그린 항목이 있으면 더 그리고 다음 칸으로(처음으로 돌아가지 않음)
+        suggestIdx += 1
+      } else {
+        suggestIdx = (suggestIdx + 1) % visible.length
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      suggestIdx = suggestIdx <= 0 ? suggestions.length - 1 : suggestIdx - 1
+      suggestIdx = suggestIdx <= 0 ? visible.length - 1 : suggestIdx - 1
     } else if (e.key === 'Enter' && suggestIdx >= 0) {
       e.preventDefault()
-      const item = suggestions[suggestIdx]
+      const item = visible[suggestIdx]
       if (item) selectOption(item)
     } else if (e.key === 'Escape') {
       closeSuggest()
@@ -222,8 +251,8 @@
 <div class="suggest-picker">
   {@render field(fieldControl)}
   {#if suggestOpen}
-    <div class="suggest-picker-layer" id={listboxId} role="listbox" aria-label={resolvedListLabel}>
-      {#each suggestions as item, i (item.id)}
+    <div class="suggest-picker-layer" id={listboxId} role="listbox" aria-label={resolvedListLabel} onscroll={handleLayerScroll} bind:this={layerEl}>
+      {#each visible as item, i (item.id)}
         {@const isSelected = suggestIdx === i || selectedId === item.id}
         <button
           type="button"

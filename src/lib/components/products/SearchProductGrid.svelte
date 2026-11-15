@@ -1,5 +1,6 @@
 <script lang="ts">
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
+  import type { CustomerBadge } from '$lib/types/badge'
 
   interface Product {
     id: string | number
@@ -12,6 +13,7 @@
     img: string
     href?: string
     wished?: boolean
+    badges?: CustomerBadge[]
   }
 
   interface Props {
@@ -72,6 +74,7 @@
               salePrice={p.salePrice ?? null}
               href={p.href ?? `/products/${p.id}`}
               wished={p.wished ?? false}
+              badges={p.badges ?? []}
               onWishToggle={onWishToggle ? () => onWishToggle(String(p.id)) : undefined}
             />
           </div>

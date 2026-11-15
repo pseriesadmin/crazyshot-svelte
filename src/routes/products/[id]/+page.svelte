@@ -9,6 +9,8 @@
   import ProductHero from '$lib/components/products/ProductHero.svelte';
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte';
+  import BadgeChip from '$lib/components/cms/badge/BadgeChip.svelte';
+  import { MAX_VISIBLE_BADGES } from '$lib/utils/resolveBadges';
   import type { Tables, ProductOptionLinkRow, ProductBundleLinkRow } from '$lib/types/database';
   import type { ContentBlock } from '$lib/types/content-editor';
   import { imageBlockBoxStyle } from '$lib/types/content-editor';
@@ -101,6 +103,8 @@
       isLoggedIn: boolean;
       categoryLabel: string | null;
       categories: DisplayCategory[];
+      /** 상품 배지(CMS 프로모션 '배지') — 상품 id → 배지 목록 */
+      productBadges?: Record<string, import('$lib/types/badge').CustomerBadge[]>;
     };
   }
   let { data }: Props = $props();
@@ -807,6 +811,8 @@
     manualViewerOpen = true;
   }
 
+  // 제목 카드에도 대표 이미지와 같은 배지를 같은 순서·개수로 노출한다(CMS 프로모션 '배지')
+  const titleBadges = $derived((data.productBadges?.[data.productId] ?? []).slice(0, MAX_VISIBLE_BADGES));
   const pageTitle = $derived(product?.name ? `${product.name} — CRAZYSHOT` : '상품상세 — CRAZYSHOT');
   /** 검색·AI용 설명 — 상품마다 이름·분류·캡션·요금으로 만든다(2026-10-27) */
   const pageDescription = $derived(
@@ -992,6 +998,13 @@
       <!-- TitleInfo card -->
       <div class="title-card">
         <div class="title-block">
+          {#if titleBadges.length > 0}
+            <div class="title-badges">
+              {#each titleBadges as b (b.badge_id)}
+                <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={26} />
+              {/each}
+            </div>
+          {/if}
           {#if product.brand}
             <p class="product-brand">{product.brand}</p>
           {/if}
@@ -1435,6 +1448,7 @@
             href="/products/{item.slug ?? item.id}"
             wished={wishedSet.has(item.id)}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
+            badges={data.productBadges?.[item.id] ?? []}
           />
         {/each}
       {/if}
@@ -1605,6 +1619,7 @@
   }
 
   .title-block { display: flex; flex-direction: column; gap: 10px; }
+  .title-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .product-name {
     font: var(--text-m-htitle-24B);
     color: var(--cs-text);

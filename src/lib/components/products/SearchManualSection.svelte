@@ -7,10 +7,13 @@
     slug: string | null
     path: string
     name: string
+    /** 상품 배지(CMS 프로모션 '배지') — 썸네일 좌상단 */
+    badges?: CustomerBadge[]
   }
 </script>
 
 <script lang="ts">
+  import type { CustomerBadge } from '$lib/types/badge'
   import PdfModal from '$lib/components/common/PdfModal.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
@@ -43,7 +46,7 @@
         <li>
           <button type="button" class="manual-item" onclick={() => (openIndex = i)} aria-label={`${m.productName} ${m.name} 상품설명서 보기`}>
             <!-- 표준 상품 썸네일(ProductDPCard thumb 변형) — 크기만 이 영역 특성에 맞춰 지정 -->
-            <span class="manual-thumb"><ProductDPCard variant="thumb" name={m.productName} imageUrl={m.imageUrl} /></span>
+            <span class="manual-thumb"><ProductDPCard variant="thumb" name={m.productName} imageUrl={m.imageUrl} badges={m.badges ?? []} /></span>
             <span class="manual-text">
               <span class="manual-product">{m.productName}</span>
               <span class="manual-name">{m.name}</span>

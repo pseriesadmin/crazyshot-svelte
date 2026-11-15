@@ -1,6 +1,9 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import type { ProductCategoryEnum } from '$lib/types/database'
+  import type { CustomerBadge } from '$lib/types/badge'
+  import { MAX_VISIBLE_BADGES } from '$lib/utils/resolveBadges'
+  import BadgeChip from '$lib/components/cms/badge/BadgeChip.svelte'
 
   interface Props {
     id?: string
@@ -30,6 +33,8 @@
     subCopy?: string | null
     /** 카테고리 줄 노출 — 표준은 숨김(기본 false, 2026-11-05 Stephen 지시). 필요한 영역만 true 로 켠다 */
     showCategory?: boolean
+    /** 썸네일 좌상단에 겹쳐 보일 상품 배지(우선순위 순, 최대 3개까지만 표시) — CMS 프로모션 '배지' 설정 */
+    badges?: CustomerBadge[]
   }
 
   let {
@@ -47,7 +52,13 @@
     variant = 'standard',
     showCategory = false,
     subCopy = null,
+    badges = [],
   }: Props = $props()
+
+  const shownBadges = $derived(badges.slice(0, MAX_VISIBLE_BADGES))
+  // 이미지형은 좌상단, 바(텍스트)형은 하단 중앙 — 표시 개수 상한(3)은 둘을 합쳐서 적용
+  const iconBadges = $derived(shownBadges.filter((b) => b.kind !== 'textbar'))
+  const barBadges = $derived(shownBadges.filter((b) => b.kind === 'textbar'))
 
   /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조 — 2026-11-05 Stephen 지시로 list 도 동일) */
   const nameFirst = $derived(variant === 'pick-home' || variant === 'list' || variant === 'pick')
@@ -75,6 +86,21 @@
   <!-- 이미지 영역 290×290 -->
   <div class="pc-img-wrap">
     <img src={imageUrl} alt={name} loading="lazy" class="pc-img" />
+
+    {#if iconBadges.length > 0}
+      <span class="pc-badges">
+        {#each iconBadges as b (b.badge_id)}
+          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={22} />
+        {/each}
+      </span>
+    {/if}
+    {#if barBadges.length > 0}
+      <span class="pc-badges-bar">
+        {#each barBadges as b (b.badge_id)}
+          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={22} />
+        {/each}
+      </span>
+    {/if}
 
     <!-- 찜 버튼: 로그인 상태(onWishToggle 전달)면 찜 여부와 무관하게 항상 표시.
          비찜=기본(흰 아이콘), 찜=.active(빨강). 2026-08-27 커밋 21a5479에서 "찜된 상품만 표시"로
@@ -147,6 +173,20 @@
   <span class="pc-card pc-card--thumb">
     <span class="pc-img-wrap">
       <img src={imageUrl} alt="" loading="lazy" class="pc-img" />
+      {#if iconBadges.length > 0}
+        <span class="pc-badges">
+          {#each iconBadges as b (b.badge_id)}
+            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={16} />
+          {/each}
+        </span>
+      {/if}
+      {#if barBadges.length > 0}
+        <span class="pc-badges-bar">
+          {#each barBadges as b (b.badge_id)}
+            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={16} />
+          {/each}
+        </span>
+      {/if}
     </span>
   </span>
 {:else if (variant === 'list' || variant === 'pick' || variant === 'pick-home') && href}
@@ -202,6 +242,33 @@
   }
   .pc-card:hover .pc-img {
     transform: scale(1.04);
+  }
+  .pc-badges {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    max-width: calc(100% - 16px);
+    pointer-events: none;
+  }
+  /* 바(텍스트)형 배지 — 썸네일 하단 중앙, 가장자리 여백 10px */
+  .pc-badges-bar {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    max-width: calc(100% - 20px);
+    pointer-events: none;
   }
 
   .pc-clip {

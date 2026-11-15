@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit'
+import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import type { PageServerLoad } from './$types'
 
@@ -60,6 +61,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
   }))
 
   const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, productIds)
+  const productBadges = await loadProductBadgeMap(locals.supabase, productIds)
 
   return {
     group: {
@@ -70,6 +72,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
       sort_order: group.sort_order,
     },
     products,
+    productBadges,
     wishedIds,
     isLoggedIn: !!session?.user.id,
   }
