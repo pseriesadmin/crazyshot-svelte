@@ -18,7 +18,7 @@ vi.mock('$lib/server/getCmsRoleForAction', () => ({ getCmsRoleForAction: async (
 vi.mock('$lib/server/products/searchByProductCode', () => ({ findParentIdsByProductCode: async () => [] }))
 vi.mock('$lib/server/products/searchByKeyword', () => ({ findParentIdsByKeyword: async () => [] }))
 vi.mock('$lib/server/products/searchByCompactText', () => ({ findParentIdsByCompactText: async () => [] }))
-vi.mock('$lib/server/searchEngine/adapters/productSearchIndex', () => ({ getProductSearchIndex: async () => ({ search: () => [] }) }))
+vi.mock('$lib/server/searchEngine/adapters/productSearchIndex', () => ({ getProductSearchIndex: async () => ({ search: () => [] }), getProductSearchIndexForCms: async () => ({ search: () => [] }) }))
 vi.mock('$lib/server/synonymLearning', () => ({ loadSynonymGroups: async () => [] }))
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({

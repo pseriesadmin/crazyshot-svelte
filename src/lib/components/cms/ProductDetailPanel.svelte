@@ -9,6 +9,7 @@
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
   import { supabase } from '$lib/services/supabase'
   import { parseCardKeywords } from '$lib/utils/cardKeywords'
+  import { resolveInitialTab } from '$lib/utils/productPanelTab'
   import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
@@ -67,6 +68,7 @@
     sale_price: number | null
     sale_only: boolean
     option_only: boolean
+    option_only_unlinked?: boolean
     // 2026-09-29 정책: "결합상품" 분류는 등록 시점에만 결정·영구 고정 — '결합상품' 탭은
     // 이 값이 true인 상품에만 노출된다(TABS derived 참고). 기존 단일상품에 결합상품을
     // 추가해 사후 전환하는 것은 금지.
@@ -185,17 +187,25 @@
   const validTabs: TabKey[] = ['basic', 'options', 'bundles', 'pricing', 'rental', 'content', 'components', 'images', 'specs', 'history']
   // 자식(재고) 상품은 나머지 8개 탭이 부모와 동일한 내용을 읽기전용으로 중복 노출할 뿐이라
   // 실질 정보가 없음 — history 탭으로 고정 진입
-  const parsedInitialTab: TabKey = product.parent_product_id
-    ? 'history'
-    : ((validTabs.includes(initialTab as TabKey) && (!tabsFilter || tabsFilter.includes(initialTab as TabKey))
-        // 2026-09-29 정책: ?tab=bundles로 직접 진입해도 결합상품 미분류 상품에는 그 탭
-        // 내용이 열리지 않게 함(TABS derived의 탭바 숨김과 동일 기준 — URL 우회 방지)
-        && (initialTab !== 'bundles' || !!product.is_bundle_product)
-        ? initialTab
-        : (tabsFilter?.[0] ?? 'basic')) as TabKey)
+  // 2026-09-29 정책: ?tab=bundles로 직접 진입해도 결합상품 미분류 상품에는 그 탭 내용이 열리지 않게 함(TABS derived의 탭바 숨김과 동일 기준 — URL 우회 방지)
+  // 판정은 productPanelTab.ts(시험 있음)
+  const parsedInitialTab = resolveInitialTab<TabKey>({
+    parentProductId: product.parent_product_id,
+    initialTab,
+    tabsFilter,
+    isBundleProduct: product.is_bundle_product,
+    validTabs,
+  }) as TabKey
   let activeTab = $state<TabKey>(parsedInitialTab)
   // 자식 상품(빠른재고등록 생성) 여부 — history 탭만 수정 허용, 나머지 읽기 전용
   const isChildProduct = $derived(!!product.parent_product_id)
+  // 방어: 이전 상품 데이터로 마운트된 뒤 product 가 자식으로 바뀌어도 자식은 이력 탭으로 고정(탭 상태는 마운트 시 1회만 정해지므로)
+  $effect(() => {
+    if (isChildProduct && activeTab !== 'history') {
+      activeTab = 'history'
+      untrack(() => { if (!historyLoaded) loadHistory() })
+    }
+  })
   // 부모 상품이면서 자식(인벤토리)이 1개 이상인 경우 — 이력 탭을 집계 모드로 표시
   const isAggregatedMode = $derived(!isChildProduct && inventoryList.length > 0)
 
@@ -2081,6 +2091,9 @@
                 <span class="toggle-thumb"></span>
               </button>
               <span class="toggle-state-label">{localBasic.option_only ? '옵션 전용(썸네일 미노출)' : '일반(정상 노출)'}</span>
+              {#if localBasic.option_only && product.option_only && product.option_only_unlinked}
+                <span class="toggle-state-label toggle-state-warn">옵션으로 연결된 상품이 없어 고객에게 노출되지 않습니다.</span>
+              {/if}
             </div>
           </div>
         </form>
@@ -3923,6 +3936,7 @@
   }
   .toggle-btn.on .toggle-thumb { transform: translateX(16px); }
   .toggle-state-label { font: var(--text-pc-body-14); color: var(--cs-text); }
+  .toggle-state-warn { color: var(--cs-error); }
   .price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .form-footer { display: flex; justify-content: flex-end; padding-top: 4px; }
   .btn-save {

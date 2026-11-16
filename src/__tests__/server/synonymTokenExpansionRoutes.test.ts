@@ -77,6 +77,13 @@ vi.mock('$lib/server/searchEngine/adapters/productSearchIndex', () => ({
       return (miniByQuery[q] ?? []).map((doc) => ({ document: doc, score: 1, terms: [], queryTerms: [] }))
     },
   }),
+  // CMS 검색 라우트가 쓰는 CMS 전용 색인(옵션 전용 상품 포함) — 같은 가짜 검색기를 쓴다
+  getProductSearchIndexForCms: async () => ({
+    search: (q: string) => {
+      miniSearchCalls.push(q)
+      return (miniByQuery[q] ?? []).map((doc) => ({ document: doc, score: 1, terms: [], queryTerms: [] }))
+    },
+  }),
 }))
 
 

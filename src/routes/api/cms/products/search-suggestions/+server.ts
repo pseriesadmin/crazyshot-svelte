@@ -38,7 +38,7 @@ import { findParentIdsByProductCode } from '$lib/server/products/searchByProduct
 import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
 import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
 import { findParentIdsByDetailText } from '$lib/server/products/searchByDetailText'
-import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { getProductSearchIndexForCms } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
@@ -383,10 +383,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       }
 
       // ── 3차: MiniSearch 자연어 폴백 (여전히 부족하면) ─────────────────────
-      // (getProductSearchIndex는 is_active=true·deleted_at IS NULL·parent_product_id IS NULL 필터 내장)
+      // (getProductSearchIndexForCms는 is_active=true·deleted_at IS NULL·parent_product_id IS NULL 필터 내장, 옵션 전용 상품은 포함)
       if (finalItems.length < limit) {
         try {
-          const index = await getProductSearchIndex()
+          const index = await getProductSearchIndexForCms()
 
           // 단어 치환 변형을 원문보다 먼저 검색(원문이 limit을 먼저 채워 밀려나는 것 방지). 변형이 없으면 기존 순서 [q, ...확장어]
           for (const qItem of [...tokenVariantTerms, q, ...expandedTerms]) {
