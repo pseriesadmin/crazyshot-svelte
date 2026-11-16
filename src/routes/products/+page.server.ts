@@ -1,6 +1,7 @@
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
+import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
 import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
 import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
@@ -148,6 +149,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
   const wishedIds = await getWishedProductIds(locals.supabase, session?.user.id, allIds)
 
   const productBadges = await loadProductBadgeMap(locals.supabase, allIds)
+  const productCardKeywords = await loadCardKeywordMap(locals.supabase, allIds)
 
   const pricedAll = await attachCardPrices(locals.supabase, [...heroProducts, ...gridProducts, ...mdProducts])
   const pricedHero = pricedAll.slice(0, heroProducts.length)
@@ -159,6 +161,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
     isLoggedIn: !!session?.user.id,
     wishedIds,
     productBadges,
+    productCardKeywords,
     urlCategory,
     infiniteMode,
     infiniteLimit,

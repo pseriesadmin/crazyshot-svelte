@@ -3,14 +3,20 @@
    * KeywordTagInput — 키워드 태그 입력(최대 10개). IME-SAFE-INPUT 패턴(core-rules.md):
    * ① Enter는 e.isComposing 체크 ② add()가 빈값·중복·최대치를 내부에서 방어.
    */
+  import { toggleCardKeyword } from '$lib/utils/cardKeywords'
+  import { csToast } from '$lib/utils/toast'
+
   interface Props {
     keywords: string[]
+    /** 고객 상품 카드에 노출할 키워드(keywords 의 부분집합). undefined 면 선택 기능 꺼짐(상품 상세 패널만 전달) */
+    cardKeywords?: string[]
     max?: number
     /** 읽기 전용 — 입력·삭제 불가, 태그만 보여준다 */
     readonly?: boolean
   }
 
-  let { keywords = $bindable([]), max = 10, readonly = false }: Props = $props()
+  let { keywords = $bindable([]), cardKeywords = $bindable(), max = 10, readonly = false }: Props = $props()
+  const selectable = $derived(cardKeywords !== undefined)
   let kwInput = $state('')
 
   function add() {
@@ -22,6 +28,14 @@
 
   function remove(kw: string) {
     keywords = keywords.filter((k) => k !== kw)
+    if (cardKeywords !== undefined) cardKeywords = cardKeywords.filter((k) => k !== kw)
+  }
+
+  function toggleCard(kw: string) {
+    if (cardKeywords === undefined || readonly) return
+    const { next, limited } = toggleCardKeyword(cardKeywords, kw)
+    if (limited) { csToast.warning('카드 노출 키워드는 최대 3개까지 선택할 수 있어요.'); return }
+    cardKeywords = next
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -30,7 +44,7 @@
       e.preventDefault()
       add()
     } else if (e.key === 'Backspace' && kwInput === '' && keywords.length > 0) {
-      keywords = keywords.slice(0, -1)
+      remove(keywords[keywords.length - 1])
     }
   }
 </script>
@@ -38,8 +52,14 @@
 <div class="kw-area" role="group" aria-label={`키워드 태그 (최대 ${max}개)`}>
   <div class="kw-list">
     {#each keywords as kw (kw)}
-      <span class="kw-tag">
-        <span class="kw-hash">#</span>{kw}
+      <span class="kw-tag" class:card-on={selectable && cardKeywords?.includes(kw)}>
+        {#if selectable && !readonly}
+          <button type="button" class="kw-pick" onclick={() => toggleCard(kw)} aria-pressed={cardKeywords?.includes(kw) ?? false} title="상품 카드에 노출">
+            <span class="kw-hash">#</span>{kw}
+          </button>
+        {:else}
+          <span class="kw-hash">#</span>{kw}
+        {/if}
         {#if !readonly}<button type="button" class="kw-del" onclick={() => remove(kw)} aria-label={`${kw} 태그 삭제`}>×</button>{/if}
       </span>
     {/each}
@@ -86,6 +106,18 @@
     color: var(--cs-purple);
     font: var(--text-pc-script-12);
     font-weight: 700;
+  }
+  .kw-tag.card-on { background: var(--cs-purple); color: var(--cs-white, #fff); }
+  .kw-tag.card-on .kw-del { color: var(--cs-white, #fff); }
+  .kw-pick {
+    display: inline-flex;
+    align-items: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
   }
   .kw-hash { opacity: 0.6; }
   .kw-del {

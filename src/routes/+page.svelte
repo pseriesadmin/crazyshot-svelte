@@ -1063,6 +1063,7 @@
             wished={wishedSet.has(prod.id)}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             badges={data.productBadges?.[prod.id] ?? []}
+            cardKeywords={data.productCardKeywords?.[prod.id] ?? []}
           />
         {/each}
       </div>

@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation'
   import type { ProductCategoryEnum } from '$lib/types/database'
   import type { CustomerBadge } from '$lib/types/badge'
+  import CardKeywordChips from '$lib/components/products/CardKeywordChips.svelte'
   import BadgeChip from '$lib/components/cms/badge/BadgeChip.svelte'
 
   interface Props {
@@ -36,6 +37,8 @@
     badges?: CustomerBadge[]
     /** 배지 기준 크기(px) — 미지정이면 표준 22(썸네일 변형은 16). CMS 배지 미리보기처럼 썸네일을 크게 보여 줄 때만 지정 */
     badgeSize?: number
+    /** 썸네일과 상품명 사이에 라운드 바로 보일 키워드(CMS 상품설명 키워드 중 카드 노출로 선택한 것, products.card_keywords) — 없으면 줄 자체를 그리지 않는다 */
+    cardKeywords?: string[]
   }
 
   let {
@@ -55,6 +58,7 @@
     subCopy = null,
     badges = [],
     badgeSize,
+    cardKeywords = [],
   }: Props = $props()
 
   // 이미지형은 좌상단, 바(텍스트)형은 하단 중앙 — 표시 개수 상한은 두지 않는다(2026-11-16, Stephen 확정)
@@ -123,6 +127,9 @@
 
   <!-- 텍스트 영역 -->
   <div class="pc-info">
+    {#if cardKeywords.length > 0}
+      <CardKeywordChips keywords={cardKeywords} />
+    {/if}
     {#if category && showCategory}
       <p class="pc-category">{category}</p>
     {/if}

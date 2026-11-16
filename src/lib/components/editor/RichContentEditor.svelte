@@ -27,6 +27,8 @@
   interface Props {
     blocks: ContentBlock[]
     keywords: string[]
+    /** 고객 상품 카드에 노출할 키워드 선택(keywords 의 부분집합) — 전달할 때만 키워드 칩 클릭으로 선택 가능 */
+    cardKeywords?: string[]
     /** 이미지 업로드 prefix(/api/cms/upload의 product_id). 크레이지로그는 'log/<uuid>' */
     uploadPrefix?: string
     /** 'user' = 사용자 화면(front 토큰), 'cms' = 관리자 화면(4단계에서 사용) */
@@ -43,6 +45,7 @@
   let {
     blocks = $bindable([]),
     keywords = $bindable([]),
+    cardKeywords = $bindable(),
     uploadPrefix = 'content/' + (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : 'tmp'),
     variant = 'user',
     placeholder = '내용을 입력하세요',
@@ -1512,7 +1515,7 @@
   {/if}
 
   {#if showKeywords}
-    <KeywordTagInput bind:keywords {readonly} />
+    <KeywordTagInput bind:keywords bind:cardKeywords {readonly} />
   {/if}
 
   <!-- ═════════ 선택 시트(PC: 툴바 아래 팝오버 / 모바일: 하단 시트) ═════════ -->

@@ -21,9 +21,11 @@
     hideTitle?: boolean
     /** 상품별 배지(상품 id → 배지 목록) */
     badgeMap?: Record<string, CustomerBadge[]>
+    /** 상품별 카드 노출 키워드(상품 id → 키워드 목록) */
+    keywordMap?: Record<string, string[]>
   }
 
-  let { items = [], totalCount = 0, hideTitle = false, badgeMap = {} }: Props = $props()
+  let { items = [], totalCount = 0, hideTitle = false, badgeMap = {}, keywordMap = {} }: Props = $props()
 
   let localItems = $state([...items])
   let localCount = $state(totalCount)
@@ -89,6 +91,7 @@
               wished
               onWishToggle={handleWishToggle}
               badges={badgeMap[item.product_id] ?? []}
+              cardKeywords={keywordMap[item.product_id] ?? []}
             />
           {/each}
         </div>

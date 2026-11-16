@@ -735,60 +735,11 @@ describe('cloneProduct (add_inventory) — 부모 값 복사 중단(Phase 5)', (
     expect(String(row.qr_payload)).toContain('/qr/product/')
   })
 
-  it('P5-2 원본이 자식 재고여도 이름·분류·슬러그 기준은 부모 값(자식의 옛 복사값이 아님)이고 복사 칼럼은 없다', async () => {
-    const childSource = {
-      ...SOURCE_PRODUCT, id: 'child-1', name: '옛 자식 이름', category: 'old-cat', slug: 'old-child-slug',
-      parent_product_id: 'parent-product-id', code_series: null, product_code: 'CS0001',
-    }
-    const parentRow = { id: 'parent-product-id', name: '부모 이름', category: 'parent-cat', slug: 'parent-slug', brand: null, image_urls: [], product_caption: null }
-    const products: unknown[] = [
-      { data: childSource, error: null },                                  // 1. 원본 조회
-      { data: [parentRow], error: null },                                  // 2. 부모 값 해석(헬퍼 .in())
-      { data: { code_series: { category_code: 'X', year_month: 'all', max_sequence: null } }, error: null }, // 3. 루트 code_series
-      { data: null, error: null },                                         // 4. slug 중복 확인
-    ]
-    const inserts: Record<string, unknown>[] = []
-    const mk = (result: unknown) => {
-      const c: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'is', 'in', 'order', 'limit', 'not']) c[m] = () => c
-      c.single = () => Promise.resolve(result)
-      c.maybeSingle = () => Promise.resolve(result)
-      c.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(result).then(res, rej)
-      return c
-    }
-    const admin = {
-      from: (table: string) => {
-        if (table === 'price_rules') return mk({ data: [], error: null })
-        const c = mk(products.shift() ?? { data: null, error: null }) as Record<string, unknown>
-        c.insert = (row: Record<string, unknown>) => { inserts.push(row); return mk({ data: { id: 'new-child-id' }, error: null }) }
-        return c
-      },
-      rpc: (name: string) => Promise.resolve(name.startsWith('get_product') ? { data: [], error: null } : { data: null, error: null }),
-    }
-    await runAddInventory(admin, 'child-1')
-    const row = inserts[0]
-    expect(row).toBeDefined()
-    expect(row).toMatchObject({ name: '부모 이름', category: 'parent-cat', parent_product_id: 'parent-product-id' })
-    expect(String(row.slug)).toContain('parent-slug-inv')
-    for (const c of COPIED_COLUMNS) expect(row, `${c}는 복사하지 않는다`).not.toHaveProperty(c)
-  })
+  // P5-2(원본이 자식 재고여도 부모 값 기준으로 재고 추가)는 2026-11-16 정책 변경으로 폐기 — 자식은 복제 원본이 될 수 없다(cloneProductChildBlocked.test.ts)
 })
 
 describe('cloneProduct (new_product) — 원본이 자식 재고일 때 링크도 부모 기준(m-1)', () => {
-  it('P5-3 옵션상품·결합상품 링크를 자식이 아닌 부모 id로 조회해 복제한다', async () => {
-    const admin = makeNewProductAdmin({ sourceParentId: 'real-parent-id' });
-    createClientMock.mockReturnValue(admin);
-    await actions.cloneProduct({
-      request: makeFormRequest({
-        source_product_id: 'child-source-id', count: '1', mode: 'new_product', auto_code: 'true',
-        partner_code: 'false', partner_combo_row_id: COMBO_ROW_ID,
-      }),
-      locals: makeLocals(),
-    } as Parameters<typeof actions.cloneProduct>[0]);
-    expect(admin.rpc).toHaveBeenCalledWith('get_product_option_links', { p_product_id: 'real-parent-id' });
-    expect(admin.rpc).toHaveBeenCalledWith('get_product_bundle_links', { p_product_id: 'real-parent-id' });
-    expect(admin.rpc).not.toHaveBeenCalledWith('get_product_option_links', { p_product_id: 'child-source-id' });
-  });
+  // P5-3(원본이 자식 재고일 때 부모 id 로 링크 조회)은 2026-11-16 정책 변경으로 폐기 — cloneProductChildBlocked.test.ts 가 400 거절을 고정한다
 
   it('P5-4 [회귀] 원본이 부모면 기존처럼 원본 id로 링크를 조회한다', async () => {
     const admin = makeNewProductAdmin();

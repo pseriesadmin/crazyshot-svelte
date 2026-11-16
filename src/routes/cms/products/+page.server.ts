@@ -1,5 +1,6 @@
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { redirect, fail } from '@sveltejs/kit'
+import { sanitizeCardKeywords } from '$lib/utils/cardKeywords'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
@@ -26,7 +27,6 @@ import { findParentIdsByProductCode } from '$lib/server/products/searchByProduct
 import { findParentIdsByKeyword } from '$lib/server/products/searchByKeyword'
 import { findParentIdsByCompactText } from '$lib/server/products/searchByCompactText'
 import { findParentIdsByDetailText } from '$lib/server/products/searchByDetailText'
-import { resolveParentProductFields, PARENT_DISPLAY_FIELDS, PARENT_CONTENT_FIELDS, PARENT_POLICY_FIELDS } from '$lib/server/products/resolveParentProductFields'
 
 // rental_period_options / rental_method_options 는 database.ts 미등록 — 우회 헬퍼
 function untypedFrom(sb: SupabaseClient, table: string) {
@@ -1253,10 +1253,15 @@ export const actions: Actions = {
       if (keywordsStr) { try { keywords = JSON.parse(keywordsStr) } catch { /* ignore */ } }
       // RTN-LOW-1(3): 등록과 동일하게 최대 10개 cap
       keywords = (Array.isArray(keywords) ? keywords : []).filter(Boolean).slice(0, 10)
+      // 카드 노출 키워드 — 등록된 키워드 안의 값만, 최대 MAX_CARD_KEYWORDS 개
+      let cardRaw: unknown = []
+      const cardStr = form.get('card_keywords') as string | null
+      if (cardStr) { try { cardRaw = JSON.parse(cardStr) } catch { /* ignore */ } }
+      const card_keywords = sanitizeCardKeywords(cardRaw, keywords)
 
       const { error: updateError } = await admin
         .from('products')
-        .update({ content_blocks, keywords })
+        .update({ content_blocks, keywords, card_keywords })
         .eq('id', productId)
 
       if (updateError) return fail(500, { error: '상품설명 수정에 실패했습니다.' })
@@ -1537,18 +1542,21 @@ export const actions: Actions = {
 
     const { data: sourceRow, error: sourceError } = await admin
       .from('products')
-      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, is_bundle_product, product_code, code_series, parent_product_id, content_blocks, keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
+      .select('id, category, name, slug, brand, description, product_caption, image_urls, specifications, sale_price, sale_only, option_only, is_bundle_product, product_code, code_series, parent_product_id, content_blocks, keywords, card_keywords, components, allowed_period_ids, allowed_method_ids, allowed_pickup_ids, shipping_round_trip, shipping_delivery, shipping_return')
       .eq('id', sourceProductId)
       .is('deleted_at', null)
       .single()
 
     if (sourceError || !sourceRow) return fail(404, { error: '원본 상품을 찾을 수 없습니다.' })
 
-    // 원본이 자식 재고면 표시·콘텐츠·정책 값은 부모 기준으로 해석한다(자식 재고 부모 참조 전환 Phase 5 — 자식에는 복사 값이 없거나
-    // 옛 값일 수 있다). 품번(product_code)·code_series·parent_product_id 같은 자식 고유값은 덮어쓰지 않는다.
-    const [source] = await resolveParentProductFields(admin, [sourceRow], [
-      ...PARENT_DISPLAY_FIELDS, ...PARENT_CONTENT_FIELDS, ...PARENT_POLICY_FIELDS, 'option_only', 'is_bundle_product',
-    ])
+    // 자식 재고는 복제 원본이 될 수 없다(2026-11-16, Stephen 정책): 자식의 정보는 전부 부모에 귀속되고 자식 고유 정보는 상품이력뿐이다.
+    // 화면은 자식 선택 시 복제 버튼을 숨기지만 직접 요청·오래된 화면으로 들어오는 경로도 서버에서 막는다.
+    if ((sourceRow as { parent_product_id?: string | null }).parent_product_id) {
+      return fail(400, { error: '재고(자식) 상품은 복제할 수 없어요. 대표 상품에서 복제해 주세요.' })
+    }
+
+    // 위 가드로 원본은 항상 부모 상품이다(자식 원본의 부모 값 해석 분기는 2026-11-16 제거).
+    const source = sourceRow
 
     // ── add_inventory 모드: 동일 상품 재고 추가 ──────────────────
     if (mode === 'add_inventory') {
@@ -1562,15 +1570,12 @@ export const actions: Actions = {
         return fail(400, { error: '부모 상품의 품번 체계가 설정되지 않았습니다. 먼저 상품을 다시 등록하거나 관리자에게 문의하세요.' })
       }
 
-      // source가 이미 재고 자식 상품인 경우 루트 ID 사용 (2단계 이상 중첩 방지)
-      const srcParentId = (source as Record<string, unknown>).parent_product_id as string | null
-      const rootProductId = srcParentId ?? sourceProductId
+      // 원본은 항상 부모 상품이므로 루트 ID 는 원본 ID
+      const rootProductId = sourceProductId
 
       // 재고 순번 상한 사전 차단: 남은 순번보다 많이 등록하려 하면 하나도 만들지 않고 막는다
       // (만든 뒤 상한에 걸리면 품번 없는 재고가 남는 결함 방지 + 번호 소모 방지)
-      const rootSeries = (srcParentId
-        ? (await admin.from('products').select('code_series').eq('id', rootProductId).maybeSingle()).data?.code_series
-        : codeSeries) as Record<string, unknown> | null | undefined
+      const rootSeries = codeSeries as Record<string, unknown> | null | undefined
       const maxSeq = rootSeries && rootSeries.max_sequence != null ? Number(rootSeries.max_sequence) : null
       if (rootSeries && maxSeq !== null) {
         const { data: seqRow } = rootSeries.parent_seq_digits
@@ -1800,7 +1805,7 @@ export const actions: Actions = {
 
     // 옵션상품 연결(옵션상품 탭)도 그대로 복제 — get 결과 행(option_product_id 등)을 upsert 입력으로 그대로 사용
     // 옵션·결합상품 링크는 부모에만 있다 — 원본이 자식 재고면 그 부모의 링크를 복제한다(is_bundle_product를 부모 값으로 복제하는 것과 일치)
-    const sourceLinkOwnerId = ((source as Record<string, unknown>).parent_product_id as string | null) ?? sourceProductId
+    const sourceLinkOwnerId = sourceProductId
     const { data: sourceOptionLinks } = await admin.rpc('get_product_option_links', { p_product_id: sourceLinkOwnerId })
     const createdIds: string[] = []
     const cloneWarnings: string[] = []
@@ -1838,6 +1843,7 @@ export const actions: Actions = {
           specifications: source.specifications,
           content_blocks: (source as Record<string, unknown>).content_blocks ?? [],
           keywords: (source as Record<string, unknown>).keywords ?? [],
+          card_keywords: (source as Record<string, unknown>).card_keywords ?? [],
           components: (source as Record<string, unknown>).components ?? null,
           allowed_period_ids: (source as Record<string, unknown>).allowed_period_ids ?? [],
           allowed_method_ids: (source as Record<string, unknown>).allowed_method_ids ?? null,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CardKeywordChips from '$lib/components/products/CardKeywordChips.svelte'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { goto } from '$app/navigation';
@@ -104,6 +105,7 @@
       categories: DisplayCategory[];
       /** 상품 배지(CMS 프로모션 '배지') — 상품 id → 배지 목록 */
       productBadges?: Record<string, import('$lib/types/badge').CustomerBadge[]>;
+      productCardKeywords?: Record<string, string[]>;
     };
   }
   let { data }: Props = $props();
@@ -997,6 +999,7 @@
       <!-- TitleInfo card -->
       <div class="title-card">
         <div class="title-block">
+          <CardKeywordChips keywords={data.productCardKeywords?.[data.productId] ?? []} />
           {#if titleBadges.length > 0}
             <div class="title-badges">
               {#each titleBadges as b (`${b.badge_id}:${b.template_id}`)}
@@ -1448,6 +1451,7 @@
             wished={wishedSet.has(item.id)}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             badges={data.productBadges?.[item.id] ?? []}
+            cardKeywords={data.productCardKeywords?.[item.id] ?? []}
           />
         {/each}
       {/if}
@@ -1617,24 +1621,28 @@
     }
   }
 
-  .title-block { display: flex; flex-direction: column; gap: 10px; }
+  .title-block { display: flex; flex-direction: column; gap: 7px; }   /* 10→7px(−30%, 모바일·PC 공통) */
+  .title-block :global(.pc-kw-row) { margin-bottom: 10.5px; }   /* 키워드 바↔브랜드 간격 7→17.5px(×2.5, 모바일·PC 공통) */
   .title-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .product-name {
     font: var(--text-m-htitle-24B);
+    line-height: 112%;   /* 행 높이 −30%(160→112%) */
     color: var(--cs-text);
     margin: 0;
   }
   @media (min-width: 641px) {
-    .product-name { font: var(--text-pc-ad-kr-35); }
+    .product-name { font: var(--text-pc-ad-kr-35); line-height: 112%; }   /* 행 높이 56→39.2px(−30%) */
+    .title-block { gap: 7px; }                                            /* 10→7px(−30%) */
+    .title-block :global(.pc-kw-row) { margin-bottom: 10.5px; }            /* 키워드 바↔브랜드 간격 7→17.5px(+150%) */
   }
 
   .product-sub {
-    font: var(--text-m-title-18L);
+    font: var(--text-m-body-16L);   /* 서브카피 한 단계 낮춤(2026-11-16): 모바일 18→16px */
     color: var(--cs-text-mid);
     margin: 0;
   }
   @media (min-width: 641px) {
-    .product-sub { font: var(--text-pc-hsub-22); }
+    .product-sub { font: var(--text-pc-title-18); }   /* PC 22→18px 한 단계 낮춤 */
   }
 
   /* Price */
@@ -1896,7 +1904,7 @@
   .option-price-num {
     font-family: var(--font-kr-heading);
     font-weight: 700;
-    font-size: 14px;
+    font-size: 16px;   /* 모바일 14→16px 한 단계 크게(--text-m-body-16B 크기) */
   }
   /* 2026-11-13(Stephen 지시): 옵션 금액 숫자도 본상품 금액과 같이 숫자 전용 폰트(D-DIN, 한글 '무료제공' 대체 폰트 포함)·900 — 크기(모바일 14px·PC 13px)·색 기존 유지.
      D-DIN 최대 웨이트가 700 이라 같은 색 0.5px 외곽선으로 900 만큼 굵게(.price-amount 와 동일 방식). PC·모바일 공통 */
@@ -1906,7 +1914,7 @@
     -webkit-text-stroke: 0.5px currentColor;
   }
   @media (min-width: 641px) {
-    .option-price-num { font-size: 13px; }
+    .option-price-num { font-size: 18px; }   /* PC 13→14→16→18px 세 단계 크게(--text-pc-title-18 크기, D-DIN·900 유지) */
   }
   .option-price-unit {
     font: var(--text-m-script-12);
@@ -1970,7 +1978,8 @@
     color: var(--cs-text-light);
     letter-spacing: 0.5px;
     text-transform: uppercase;
-    margin: 0 0 4px;
+    line-height: 112%;   /* 행 높이 −30%(160→112%) */
+    margin: 0 0 2.8px;
   }
 
   /* ── Deposit + Policy */
@@ -2047,7 +2056,7 @@
     .spec-row { grid-template-columns: 160px 1fr; padding: 14px 0; }
     .spec-key  { font: var(--text-pc-body-14); color: var(--cs-text-dark); }
     .spec-val  { font: var(--text-pc-body-14); color: var(--cs-text); font-weight: 400; }
-    .product-brand { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); }
+    .product-brand { font: var(--text-pc-script-12); font-weight: 700; color: var(--cs-text-light); line-height: 140%; margin-bottom: 7.7px; }   /* 행 높이 24→16.8px(−30%) · 브랜드↔상품명 간격 9.8→14.7px(+50%) */
   }
 
   /* ── 구성품 섹션 (정보 탭 최상단) */

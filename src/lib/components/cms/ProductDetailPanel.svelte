@@ -8,6 +8,7 @@
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import { baseCodeDisplay } from '$lib/utils/baseCodeDisplay'
   import { supabase } from '$lib/services/supabase'
+  import { parseCardKeywords } from '$lib/utils/cardKeywords'
   import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
   import type { ContentBlock } from '$lib/types/content-editor'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
@@ -76,6 +77,7 @@
     assets?: AssetDetail[]
     content_blocks?: unknown
     keywords?: unknown
+    card_keywords?: unknown
     manual_files?: unknown
     option_links?: unknown
     bundle_links?: unknown
@@ -437,6 +439,7 @@
     // 못해 콘텐츠 탭의 미저장 로컬 편집이 조용히 남아있던 버그(products.md §4-2 위반).
     localContentBlocks = parseContentBlocks(product)
     localKeywords = parseKeywords(product)
+    localCardKeywords = parseCardKeywords(product.card_keywords)
     // 새 에디터는 마운트 이후 prop 변경을 따라가지 않으므로 서버값 재동기화는 {#key}로 재마운트한다
     // (+= 는 읽기+쓰기라 untrack 없이는 이 $effect가 자기 자신을 다시 실행해 무한 루프가 된다)
     // 첫 실행은 초기값과 같으므로 재마운트하지 않는다(편집기가 마운트 직후 한 번 더 만들어지는 낭비 방지)
@@ -1184,13 +1187,15 @@
   }
   let localContentBlocks = $state<ContentBlock[]>(parseContentBlocks(product))
   let localKeywords = $state<string[]>(parseKeywords(product))
+  let localCardKeywords = $state<string[]>(parseCardKeywords(product.card_keywords))
   let isSavingContent = $state(false)
   let contentEditorKey = $state(0)
   let contentEditorSynced = false // 비반응형 — 재동기화 $effect의 첫 실행 구분용
   let contentEditorRef = $state<RichContentEditor | undefined>()
   const isDirtyContent = $derived(
     JSON.stringify(localContentBlocks) !== JSON.stringify(parseContentBlocks(product)) ||
-    JSON.stringify(localKeywords) !== JSON.stringify(parseKeywords(product))
+    JSON.stringify(localKeywords) !== JSON.stringify(parseKeywords(product)) ||
+    JSON.stringify(localCardKeywords) !== JSON.stringify(parseCardKeywords(product.card_keywords))
   )
 
   // QR-RETRY-1: 과거 등록 당시 품번 채번이 실패해 영구히 '미발행'으로 남은 자식 상품 자가복구
@@ -1260,6 +1265,7 @@
       fd.append('section_type', 'content')
       fd.append('content_blocks', JSON.stringify(blocksToSave))
       fd.append('keywords', JSON.stringify(localKeywords))
+      fd.append('card_keywords', JSON.stringify(localCardKeywords))
       const res = await fetch('?/updateSection', { method: 'POST', body: fd })
       // OPT-SAVE-ERR-1과 동일 수정: res.ok가 아니라 deserialize로 판정해야 실제 실패
       // 사유(세션 만료 등, CMS 중앙 게이트 차단 포함)가 화면에 정확히 표시된다.
@@ -2709,6 +2715,7 @@
               bind:this={contentEditorRef}
               bind:blocks={localContentBlocks}
               bind:keywords={localKeywords}
+              bind:cardKeywords={localCardKeywords}
               variant="cms"
               readonly={isChildProduct}
               placeholder="상품설명을 입력하세요"
