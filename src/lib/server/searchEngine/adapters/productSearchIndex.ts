@@ -67,6 +67,9 @@ const CACHE_TTL_MS = 60_000
 
 let cachedIndex: ProductSearchProvider | null = null
 let cachedAt = 0
+// CMS 전용 색인(옵션 전용 상품 포함) — 고객 검색 색인과 캐시를 분리한다(고객 검색 결과는 불변)
+let cachedCmsIndex: ProductSearchProvider | null = null
+let cachedCmsAt = 0
 
 function isCacheValid(): boolean {
   return cachedIndex !== null && Date.now() - cachedAt < CACHE_TTL_MS
@@ -212,20 +215,35 @@ export function getLastIndexBuildStats(): IndexBuildStats | null {
  */
 export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
   if (isCacheValid()) return cachedIndex!
+  return buildProductSearchIndex(false)
+}
 
+/**
+ * CMS 검색 전용 색인 — 고객 색인과 같은 구성이되 '옵션 전용(option_only=true)' 상품도 포함한다.
+ * 옵션 전용 상품은 고객 검색·진열에서는 제외하지만(products.md §2-12), 관리자는 찾아서 관리·옵션 연결을 해야 한다.
+ * 고객 검색(/api/search/products 등)에는 사용하지 말 것.
+ */
+export async function getProductSearchIndexForCms(): Promise<ProductSearchProvider> {
+  if (cachedCmsIndex !== null && Date.now() - cachedCmsAt < CACHE_TTL_MS) return cachedCmsIndex
+  return buildProductSearchIndex(true)
+}
+
+async function buildProductSearchIndex(includeOptionOnly: boolean): Promise<ProductSearchProvider> {
   const buildStartedAt = Date.now()
+
+  let productQuery = supabase
+    .from('products')
+    .select(
+      'id, name, brand, category, slug, product_caption, keywords, content_blocks, components, specifications',
+    )
+    .is('parent_product_id', null)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+  if (!includeOptionOnly) productQuery = productQuery.eq('option_only', false)
 
   // J-2 + I-4 + L-1 + L-2: 상품 조회 · 관리자 확인 신호 · 공개 후기 · 분류 이름을 병렬 실행
   const [productResult, adminConfirmedTerms, reviewTexts, categoryLabels, nlParams] = await Promise.all([
-    supabase
-      .from('products')
-      .select(
-        'id, name, brand, category, slug, product_caption, keywords, content_blocks, components, specifications',
-      )
-      .is('parent_product_id', null)
-      .eq('is_active', true)
-      .eq('option_only', false)
-      .is('deleted_at', null),
+    productQuery,
     loadAdminConfirmedSearchTerms(),   // I-4: 관리자 확인 신호 (fail-safe: 실패 시 빈 맵)
     loadReviewSearchTerms(),           // L-1: 공개 후기 텍스트 (fail-safe: 실패 시 빈 맵)
     loadCategoryLabels(),              // L-2: 한글 분류 이름 (fail-safe: 실패 시 빈 맵)
@@ -238,6 +256,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
   if (error || !data) {
     // 조회 실패 시 빈 인덱스 반환 (검색 없이 RPC 결과만 사용하는 폴백)
     console.error('[productSearchIndex] 상품 조회 실패:', error?.message)
+    if (includeOptionOnly) return withCategoryIntent(createIndex<ProductDoc>(indexConfig, []), new Map(), [])
     lastBuildStats = {
       indexedProducts: 0, reviewedProducts: 0, reviewRows: 0, weakProducts: 0,
       buildMs: Date.now() - buildStartedAt, status: 'error', builtAt: Date.now(),
@@ -256,7 +275,14 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
     categoryLabels,
   })
 
-  cachedIndex = withCategoryIntent(createIndex<ProductDoc>(indexConfig, docs), categoryLabels, docs)
+  const built = withCategoryIntent(createIndex<ProductDoc>(indexConfig, docs), categoryLabels, docs)
+  if (includeOptionOnly) {
+    // CMS 색인은 별도 캐시에만 두고, 고객 색인 캐시·점검 통계는 건드리지 않는다
+    cachedCmsIndex = built
+    cachedCmsAt = Date.now()
+    return built
+  }
+  cachedIndex = built
   cachedAt = Date.now()
 
   // L-1: 정기 점검용 빌드 통계 (숫자만)
@@ -275,7 +301,7 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
     indexedProducts: docs.length, reviewedProducts, reviewRows, weakProducts,
     buildMs: Date.now() - buildStartedAt, status: 'ok', builtAt: Date.now(),
   }
-  return cachedIndex
+  return built
 }
 
 /**
@@ -284,4 +310,6 @@ export async function getProductSearchIndex(): Promise<ProductSearchProvider> {
 export function invalidateProductSearchCache(): void {
   cachedIndex = null
   cachedAt = 0
+  cachedCmsIndex = null
+  cachedCmsAt = 0
 }

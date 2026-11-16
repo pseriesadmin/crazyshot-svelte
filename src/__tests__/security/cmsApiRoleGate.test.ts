@@ -27,6 +27,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 vi.mock('$lib/server/searchEngine/adapters/productSearchIndex', () => ({
   getProductSearchIndex: async () => ({ search: () => [] }),
+  getProductSearchIndexForCms: async () => ({ search: () => [] }),
 }))
 
 const profileRef: { cms_role: string | null } = { cms_role: null }

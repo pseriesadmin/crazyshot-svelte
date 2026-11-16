@@ -9,7 +9,7 @@ import { productSearchOrFilterForTerms } from '$lib/utils/similarNameSuggest'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
 import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
 import { rankProductsByRelevance, parsePinId } from '$lib/utils/productSearchRanking'
-import { invalidateProductSearchCache, getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
+import { invalidateProductSearchCache, getProductSearchIndexForCms } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
 
 // 하이브리드 검색: ilike 결과 "약한 매칭" 기준 — 이 건수 이하면 NLSearch 자연어 폴백 실행
@@ -460,7 +460,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     let naturalIds: string[] = []
     if ((ilikeCount ?? 0) <= WEAK_MATCH_THRESHOLD) {
       try {
-        const index = await getProductSearchIndex()
+        const index = await getProductSearchIndexForCms()
         const naturalResults = index.search(q, {
           fuzzy: 0.2,
           prefix: true,

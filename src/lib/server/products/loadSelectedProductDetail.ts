@@ -57,6 +57,8 @@ export type SelectedProduct = {
   sale_price: number | null
   sale_only: boolean
   option_only: boolean
+  /** 옵션 전용인데 어느 부모 상품의 옵션으로도 연결되지 않아 고객에게 어디서도 노출되지 않는 상태(2026-11-16) */
+  option_only_unlinked?: boolean
   // 2026-09-29 정책: "결합상품" 분류는 등록 시점에만 결정·영구 고정(products.is_bundle_product
   // 컬럼). ProductDetailPanel의 '결합상품' 탭은 이 값이 true인 상품에만 노출된다 — 기존
   // 단일상품에 결합상품을 추가해 사후에 결합상품으로 전환하는 것은 금지 정책이라, 탭 노출
@@ -211,6 +213,20 @@ export async function loadSelectedProductDetail(
       hasOlderDuplicateCode: false,
       categoryComboItems:    [],
     } as SelectedProduct
+
+    // 옵션 전용 상품이 어느 부모 상품의 옵션으로도 연결되지 않았는지 — 실패해도 상세 로드는 계속(경고만 생략)
+    if (selectedProduct.option_only) {
+      try {
+        const { count: linkedCount, error: linkedErr } = await admin
+          .from('product_option_links')
+          .select('id', { count: 'exact', head: true })
+          .eq('option_product_id', policySourceId)
+          .is('deleted_at', null)
+        if (!linkedErr) selectedProduct.option_only_unlinked = (linkedCount ?? 0) === 0
+      } catch (e) {
+        console.error('[loadSelectedProductDetail] 옵션 연결 조회 오류:', e)
+      }
+    }
 
     selectedPriceRules = priceRules ?? []
 
