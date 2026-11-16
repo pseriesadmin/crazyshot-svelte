@@ -129,7 +129,7 @@
               <button type="button" class="cat-pill" class:active={kind === 'image'} onclick={() => (kind = 'image')}>원형 이미지 타입</button>
               <button type="button" class="cat-pill" class:active={kind === 'textbar'} onclick={() => (kind = 'textbar')}>텍스트바 타입</button>
             </div>
-            <p class="type-guide">원형이미지 타입으로 등록 가능한 이미지 파일 포맷은 PNG, SVG 이며, SVG를 추천합니다. 텍스트바 타입은 최대 10자 이내 입력 가능하며 6자 내외 입력을 추천합니다.</p>
+            <p class="type-guide">원형이미지 타입으로 정사각형(좌우 대칭) 비율의 PNG, SVG 포맷이 등록 가능하며, SVG를 추천합니다.<br />텍스트바 타입은 최대 10자 이내 입력 가능하며 6자 내외 입력을 추천합니다.</p>
           </div>
         </div>
 

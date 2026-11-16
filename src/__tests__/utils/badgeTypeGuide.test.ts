@@ -22,7 +22,7 @@ function png(width: number, height: number): Uint8Array {
 
 describe('배지타입 패널 — 가이드 문장', () => {
   it('형태 버튼 바로 아래(같은 값 칸 안)에 지정 문장을 그대로 보여 준다', () => {
-    const guide = '원형이미지 타입으로 등록 가능한 이미지 파일 포맷은 PNG, SVG 이며, SVG를 추천합니다. 텍스트바 타입은 최대 10자 이내 입력 가능하며 6자 내외 입력을 추천합니다.'
+    const guide = '원형이미지 타입으로 정사각형(좌우 대칭) 비율의 PNG, SVG 포맷이 등록 가능하며, SVG를 추천합니다.<br />텍스트바 타입은 최대 10자 이내 입력 가능하며 6자 내외 입력을 추천합니다.'
     expect(panel).toContain(`<p class="type-guide">${guide}</p>`)
     expect(panel.indexOf('class="pill-row"')).toBeLessThan(panel.indexOf('class="type-guide"'))
     expect(panel).toMatch(/\.type-guide \{ margin: 6px 0 0;/)
