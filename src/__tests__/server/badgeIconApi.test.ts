@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
- * /api/cms/badges/icon — 배지 SVG 업로드·삭제 API
+ * /api/cms/badges/icon — 배지 이미지(SVG·PNG) 업로드·삭제 API
  *  - 세션 없음 401 / CMS 역할 없음 403 / partner 403(매니저 이상만) / manager 통과
  *  - 업로드는 정화된 SVG 만 저장(스크립트·이벤트·외부 이미지 제거), 부적격 SVG 는 저장하지 않고 400
- *  - 삭제는 우리 업로드 경로 형식만 허용
+ *  - 삭제는 우리 업로드 경로 형식(.svg·.png)만 허용
+ *  - PNG 는 파일 머리(시그니처)로 판별해 시그니처·IHDR·크기 확인 후 원본 저장 — 확장자·MIME 은 믿지 않고, 판별에 실패한 파일은 SVG 정화 경로로만 간다(우회 없음)
  */
 vi.mock('$env/dynamic/private', () => ({ env: { SUPABASE_SERVICE_ROLE_KEY: 'k' } }))
 vi.mock('$lib/env/supabasePublic', () => ({ getSupabaseUrl: () => 'https://test.supabase.co' }))
@@ -114,5 +115,90 @@ describe('배지 SVG 업로드 API — 저장 내용', () => {
       expect(await statusOf(() => m.DELETE({ request: del(bad), locals: L } as never) as Promise<Response>), String(bad)).toBe(400)
     }
     expect(remove).not.toHaveBeenCalled()
+  })
+})
+
+/** 최소 PNG 머리(시그니처 + IHDR) — 서버 검증용 */
+function pngBytes(width: number, height: number, over?: { ihdr?: string; pad?: number }): Uint8Array {
+  const b = new Uint8Array(33 + (over?.pad ?? 0))
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  b.set([0, 0, 0, 13], 8)
+  b.set(new TextEncoder().encode(over?.ihdr ?? 'IHDR'), 12)
+  const v = new DataView(b.buffer)
+  v.setUint32(16, width)
+  v.setUint32(20, height)
+  return b
+}
+function fileForm(bytes: Uint8Array, name: string, type: string): Request {
+  const fd = new FormData()
+  fd.append('file', new File([bytes as BlobPart], name, { type }))
+  return new Request('https://x/api/cms/badges/icon', { method: 'POST', body: fd })
+}
+
+describe('배지 PNG 업로드 API', () => {
+  it('정상 PNG 는 원본 그대로 .png 로 저장하고 Content-Type 은 서버가 image/png 로 고정한다', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    const bytes = pngBytes(64, 64)
+    const res = (await m.POST({ request: fileForm(bytes, 'a.png', 'image/png'), locals: locals(true, 'manager') } as never)) as Response
+    expect(res.status).toBe(200)
+    const [path, blob, opts] = upload.mock.calls[0] as [string, Blob, { contentType: string; upsert: boolean }]
+    expect(path).toMatch(/^badges\/[0-9a-f-]{36}\.png$/)
+    expect(opts.contentType).toBe('image/png')
+    expect(opts.upsert).toBe(false)
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes)
+    expect(((await res.json()) as { url: string }).url).toMatch(/\/badge-icons\/badges\/[0-9a-f-]{36}\.png$/)
+  })
+
+  it('종류는 파일 머리로 판별한다 — .svg 이름·svg MIME 이어도 PNG 바이트면 .png 로 저장', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    const res = (await m.POST({ request: fileForm(pngBytes(32, 32), 'sneaky.svg', 'image/svg+xml'), locals: locals(true, 'manager') } as never)) as Response
+    expect(res.status).toBe(200)
+    expect((upload.mock.calls[0] as [string])[0]).toMatch(/\.png$/)
+  })
+
+  it('반대로 .png 이름·png MIME 이어도 SVG 텍스트면 정화 경로로 가서 .svg 정화본만 저장', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    const res = (await m.POST({ request: fileForm(new TextEncoder().encode(EVIL), 'a.png', 'image/png'), locals: locals(true, 'manager') } as never)) as Response
+    expect(res.status).toBe(200)
+    const [path, blob] = upload.mock.calls[0] as [string, Blob]
+    expect(path).toMatch(/\.svg$/)
+    expect((await blob.text()).toLowerCase()).not.toMatch(/script|onload|onclick|evil\.example|<image/)
+  })
+
+  it('PNG 시그니처인데 IHDR 이 깨졌으면 400 — SVG 정화 경로로 새지 않고 저장하지 않는다', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    expect(await statusOf(() => m.POST({ request: fileForm(pngBytes(16, 16, { ihdr: 'XXXX' }), 'a.png', 'image/png'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(400)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('가로·세로 0 또는 1024px 초과 PNG 는 400', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    const L = locals(true, 'manager')
+    expect(await statusOf(() => m.POST({ request: fileForm(pngBytes(0, 10), 'a.png', 'image/png'), locals: L } as never) as Promise<Response>)).toBe(400)
+    expect(await statusOf(() => m.POST({ request: fileForm(pngBytes(1025, 10), 'a.png', 'image/png'), locals: L } as never) as Promise<Response>)).toBe(400)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('200KB 를 넘는 PNG 는 저장하지 않고 400', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    expect(await statusOf(() => m.POST({ request: fileForm(pngBytes(64, 64, { pad: 201 * 1024 }), 'a.png', 'image/png'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(400)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('시그니처 없는 임의 바이너리는 SVG 정화에서 거절되어 400', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    const junk = Uint8Array.from({ length: 200 }, (_, i) => (i * 37) % 256)
+    expect(await statusOf(() => m.POST({ request: fileForm(junk, 'a.png', 'image/png'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(400)
+    expect(await statusOf(() => m.POST({ request: fileForm(new TextEncoder().encode('GIF89a'), 'a.png', 'image/png'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(400)
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('PNG 업로드도 매니저 이상만(partner 403) · 삭제는 .png 경로를 허용한다', async () => {
+    const m = await import('../../routes/api/cms/badges/icon/+server')
+    expect(await statusOf(() => m.POST({ request: fileForm(pngBytes(64, 64), 'a.png', 'image/png'), locals: locals(true, 'partner') } as never) as Promise<Response>)).toBe(403)
+    expect(upload).not.toHaveBeenCalled()
+    expect(await statusOf(() => m.DELETE({ request: del('badges/123e4567-e89b-12d3-a456-426614174000.png'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(200)
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(await statusOf(() => m.DELETE({ request: del('badges/123e4567-e89b-12d3-a456-426614174000.gif'), locals: locals(true, 'manager') } as never) as Promise<Response>)).toBe(400)
   })
 })

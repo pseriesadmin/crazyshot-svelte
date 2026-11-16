@@ -4,15 +4,17 @@ import { isBadgeSvgUrl } from '$lib/utils/badgeSvgUrl'
 const OK = 'https://ezyvffjvuwmtuhpxdjrw.supabase.co/storage/v1/object/public/badge-icons/badges/123e4567-e89b-12d3-a456-426614174000.svg'
 
 describe('isBadgeSvgUrl — 배지 SVG 주소는 배지 버킷 주소만 허용', () => {
-  it('배지 버킷의 업로드 파일 주소는 통과한다', () => {
+  it('배지 버킷의 업로드 파일 주소(.svg·.png)는 통과한다', () => {
     expect(isBadgeSvgUrl(OK)).toBe(true)
+    expect(isBadgeSvgUrl(OK.replace('.svg', '.png'))).toBe(true)
   })
 
   it('외부 주소·다른 버킷·다른 경로·다른 확장자는 거절한다', () => {
     expect(isBadgeSvgUrl('https://evil.example/x.svg')).toBe(false)
     expect(isBadgeSvgUrl(OK.replace('badge-icons', 'product-images'))).toBe(false)
     expect(isBadgeSvgUrl(OK.replace('/badges/', '/other/'))).toBe(false)
-    expect(isBadgeSvgUrl(OK.replace('.svg', '.png'))).toBe(false)
+    expect(isBadgeSvgUrl(OK.replace('.svg', '.gif'))).toBe(false)
+    expect(isBadgeSvgUrl(OK.replace('.svg', '.png.svg.exe'))).toBe(false)
     expect(isBadgeSvgUrl(OK.replace('https://', 'http://'))).toBe(false)
     expect(isBadgeSvgUrl('javascript:alert(1)')).toBe(false)
     expect(isBadgeSvgUrl('')).toBe(false)

@@ -342,6 +342,7 @@
       templates={data.badge.templates}
       coupons={data.badge.coupons}
       productNames={data.badge.productNames}
+      sampleImages={data.badge.sampleImages}
     />
   {/if}
 

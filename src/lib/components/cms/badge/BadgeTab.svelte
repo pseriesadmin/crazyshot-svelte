@@ -11,6 +11,7 @@
   import BadgeTemplatePanel from './BadgeTemplatePanel.svelte'
   import { postBadgeAction } from './badgeApi'
   import { isoToKstDate } from '$lib/utils/badgeColor'
+  import { formatBadgeNo } from '$lib/utils/badgeNo'
   import type { BadgeCouponOption, BadgeProductName, BadgeRule, BadgeTemplate } from '$lib/types/badge'
 
   interface Props {
@@ -19,9 +20,11 @@
     templates: BadgeTemplate[]
     coupons: BadgeCouponOption[]
     productNames: BadgeProductName[]
+    /** 패널 썸네일 미리보기에 쓸 실제 상품 이미지 후보 */
+    sampleImages?: string[]
   }
 
-  let { mode, rules, templates, coupons, productNames }: Props = $props()
+  let { mode, rules, templates, coupons, productNames, sampleImages = [] }: Props = $props()
 
   let ordered = $state<BadgeRule[]>([])
   $effect(() => {
@@ -122,6 +125,7 @@
                   </div>
                   <div class="card-info">
                     <div class="card-info-top">
+                      {#if r.badge_no !== undefined}<span class="card-no" aria-label="배지 목록 품번 {formatBadgeNo(r.badge_no)}">{formatBadgeNo(r.badge_no)}</span>{/if}
                       <span class="cat-badge">{periodLabel(r)}</span>
                       {#if r.coupon_id}<span class="stock-badge">{couponLabel(r.coupon_id)}</span>{/if}
                     </div>
@@ -172,7 +176,7 @@
       <div class="detail-pane" transition:fly={{ x: 24, duration: 200 }}>
         {#key `${mode}:${selectedId}:${panelVersion}`}
           {#if mode === 'list'}
-            <BadgeRulePanel rule={selectedRule} {templates} {coupons} {productNames} onclose={closePanel} onsaved={afterSaved} />
+            <BadgeRulePanel rule={selectedRule} {templates} {coupons} {productNames} {sampleImages} onclose={closePanel} onsaved={afterSaved} />
           {:else}
             <BadgeTemplatePanel template={selectedTemplate} onclose={closePanel} onsaved={afterSaved} />
           {/if}
@@ -221,6 +225,11 @@
   }
   .card-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
   .card-info-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  /* 배지 목록 품번 — 만들 때 한 번 부여되는 고유번호(순서·삭제와 무관하게 고정) */
+  .card-no {
+    flex-shrink: 0; min-width: 22px; height: 22px; padding: 0 6px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-sm); background: var(--cs-purple); color: var(--cs-white); font: var(--text-pc-descript-10); font-weight: 700;
+  }
   .cat-badge {
     display: inline-block; padding: 5px 10px; background: var(--cs-lilac); color: var(--cs-purple-dark);
     border-radius: var(--radius-sm); font: var(--text-pc-descript-10); white-space: nowrap;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 배지 템플릿 등록·수정 패널 — 이미지형(SVG 가져오기) / 텍스트바형(문구 + 바 색상). 부모에서 {#key} 로 재마운트한다.
+  // 배지 템플릿 등록·수정 패널 — 원형 이미지 타입(SVG·PNG 가져오기) / 텍스트바 타입(문구 + 바 색상). 부모에서 {#key} 로 재마운트한다.
   import { csToast } from '$lib/utils/toast'
   import CmsColorPicker from '$lib/components/cms/CmsColorPicker.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
@@ -53,14 +53,14 @@
       const res = await fetch('/api/cms/badges/icon', { method: 'POST', body: fd })
       const body = (await res.json().catch(() => null)) as { url?: string; path?: string; message?: string } | null
       if (!res.ok || !body?.url) {
-        csToast.error(body?.message ?? 'SVG 를 가져오지 못했어요')
+        csToast.error(body?.message ?? '이미지를 가져오지 못했어요')
         return
       }
       if (pendingPath) await removeUploaded(pendingPath)
       pendingPath = body.path ?? null
       svgUrl = body.url
     } catch {
-      csToast.error('SVG 를 가져오지 못했어요')
+      csToast.error('이미지를 가져오지 못했어요')
     } finally {
       uploading = false
     }
@@ -81,7 +81,7 @@
   async function save() {
     if (!isDirty || saving) return
     if (name.trim() === '') return csToast.error('이름을 입력해 주세요')
-    if (kind === 'image' && !svgUrl) return csToast.error('SVG 이미지를 가져와 주세요')
+    if (kind === 'image' && !svgUrl) return csToast.error('이미지를 가져와 주세요')
     if (kind === 'textbar') {
       if (text.trim() === '') return csToast.error('문구를 입력해 주세요')
       if (!isHexColor(bgColor)) return csToast.error('바 색상은 #RRGGBB 형식이어야 해요')
@@ -116,17 +116,20 @@
       <div class="section-header">
         <span class="section-title">{template ? template.name : '새 배지'}</span>
         <div class="head-actions">
-          <button type="button" class="btn-save-inline" class:dirty={isDirty} disabled={!isDirty || saving} onclick={save}>{saving ? '저장 중...' : '저장'}</button>
+          <button type="button" class="btn-save-inline" class:dirty={isDirty} disabled={!isDirty || saving} onclick={save}>{template ? (saving ? '수정 중...' : '수정') : (saving ? '저장 중...' : '저장')}</button>
           <button type="button" class="close-btn" aria-label="패널 닫기" onclick={close}>✕</button>
         </div>
       </div>
 
       <div class="inline-form">
-        <div class="inline-row">
+        <div class="inline-row inline-row-top">
           <span class="vr-label">형태</span>
-          <div class="pill-row">
-            <button type="button" class="cat-pill" class:active={kind === 'image'} onclick={() => (kind = 'image')}>이미지형</button>
-            <button type="button" class="cat-pill" class:active={kind === 'textbar'} onclick={() => (kind = 'textbar')}>텍스트바형</button>
+          <div class="row-value">
+            <div class="pill-row">
+              <button type="button" class="cat-pill" class:active={kind === 'image'} onclick={() => (kind = 'image')}>원형 이미지 타입</button>
+              <button type="button" class="cat-pill" class:active={kind === 'textbar'} onclick={() => (kind = 'textbar')}>텍스트바 타입</button>
+            </div>
+            <p class="type-guide">원형이미지 타입으로 등록 가능한 이미지 파일 포맷은 PNG, SVG 이며, SVG를 추천합니다. 텍스트바 타입은 최대 10자 이내 입력 가능하며 6자 내외 입력을 추천합니다.</p>
           </div>
         </div>
 
@@ -137,16 +140,16 @@
 
         {#if kind === 'image'}
           <div class="inline-row">
-            <span class="vr-label">SVG 이미지</span>
+            <span class="vr-label">이미지</span>
             <label class="btn-file">
-              {uploading ? '가져오는 중…' : 'SVG 가져오기'}
-              <input type="file" accept="image/svg+xml,.svg" onchange={onFile} disabled={uploading} hidden />
+              {uploading ? '가져오는 중…' : '이미지 가져오기'}
+              <input type="file" accept="image/svg+xml,.svg,image/png,.png" onchange={onFile} disabled={uploading} hidden />
             </label>
           </div>
         {:else}
           <div class="inline-row">
             <label class="vr-label" for="bt-text">문구</label>
-            <input id="bt-text" class="il-input" maxlength="8" bind:value={text} autocomplete="off" />
+            <input id="bt-text" class="il-input" maxlength="10" bind:value={text} autocomplete="off" />
           </div>
           <div class="inline-row inline-row-top">
             <span class="vr-label">바 배경색</span>
@@ -186,7 +189,8 @@
   .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* 상세 패널 본문(ProductDetailPanel .detail-panel / .tab-content / .section 과 동일) */
-  .detail-panel { display: flex; flex-direction: column; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
+  /* flex-shrink: 0 — 바깥 .detail-pane(max-height + overflow-y: auto)이 스크롤하도록, 내용이 길어도 패널이 줄어들어 잘리지 않게 한다 */
+  .detail-panel { display: flex; flex-direction: column; flex-shrink: 0; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
   .tab-content { padding: 26px 26px 65px; }
   .section { display: flex; flex-direction: column; gap: 16px; }
   .section-header { display: flex; align-items: center; justify-content: space-between; }
@@ -220,6 +224,8 @@
 
   /* 콤보버튼 UI — 상세패널형 (cms-uiux.md §7-12-A) */
   .pill-row { display: flex; gap: 6px; }
+  /* 형태 버튼 아래 안내 문장 — 버튼과 적정 간격(8px 행 간격 + 6px) */
+  .type-guide { margin: 6px 0 0; font: var(--text-pc-script-12); color: var(--cs-text-light); line-height: 1.5; }
   .cat-pill {
     height: 34px; padding: 0 18px; border-radius: var(--radius-xl, 30px); border: none;
     background: var(--cs-lilac); font: 700 13px/1 'Noto Sans KR', sans-serif; color: var(--cs-text);

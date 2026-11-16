@@ -1,14 +1,16 @@
 <script lang="ts">
-  // 배지 노출 등록·수정 패널 — 템플릿 + 쿠폰 + 대상(상품/카테고리) + 노출기간. 부모에서 {#key} 로 재마운트한다.
+  // 배지 노출 등록·수정 패널 — 템플릿(여러 개 선택) + 쿠폰 + 대상(상품/카테고리) + 노출기간. 부모에서 {#key} 로 재마운트한다.
   import { csToast } from '$lib/utils/toast'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import BadgeChip from './BadgeChip.svelte'
+  import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import CouponPicker from './CouponPicker.svelte'
   import { postBadgeAction } from './badgeApi'
   import { isoToKstDate, kstDateToIso } from '$lib/utils/badgeColor'
-  import type { BadgeCouponOption, BadgeProductName, BadgeRule, BadgeTemplate } from '$lib/types/badge'
+  import { formatBadgeNo } from '$lib/utils/badgeNo'
+  import type { BadgeCouponOption, BadgeProductName, BadgeRule, BadgeTemplate, CustomerBadge } from '$lib/types/badge'
 
   interface Props {
     rule: BadgeRule | null
@@ -16,16 +18,19 @@
     coupons: BadgeCouponOption[]
     /** 기존 대상 상품의 표시 이름 */
     productNames: BadgeProductName[]
+    /** 미리보기 썸네일에 무작위로 깔 실제 상품 이미지 후보 */
+    sampleImages?: string[]
     onclose: () => void
     /** 저장 성공 시 저장된 항목 id 와 함께 호출(패널은 열어 둔다) — id 없이 호출하면 삭제 등으로 패널을 닫는 경우 */
     onsaved: (savedId?: string) => void
   }
 
-  let { rule, templates, coupons, productNames, onclose, onsaved }: Props = $props()
+  let { rule, templates, coupons, productNames, sampleImages = [], onclose, onsaved }: Props = $props()
 
   // 마운트 시 1회 초기화 — 부모 {#key} 로 항목이 바뀌면 재마운트(core-rules: $state(prop) 금지 패턴 1)
   let name = $state(rule?.name ?? '')
-  let templateId = $state(rule?.template_id ?? '')
+  // 선택한 배지타입(순서 = 고객 화면 표시 순서, 개수 제한 없음). 옛 데이터는 첫 배지타입 한 개로 시작한다.
+  let templateIds = $state<string[]>([...(rule?.template_ids?.length ? rule.template_ids : rule?.template_id ? [rule.template_id] : [])])
   let couponId = $state<string | null>(rule?.coupon_id ?? null)
   let validFrom = $state(isoToKstDate(rule?.valid_from ?? null))
   let validUntil = $state(isoToKstDate(rule?.valid_until ?? null))
@@ -37,11 +42,11 @@
 
   const isNew = rule === null
   const signature = $derived(
-    JSON.stringify([name.trim(), templateId, couponId, validFrom, validUntil, products.map((p) => p.id).sort(), [...categories].sort()])
+    JSON.stringify([name.trim(), templateIds, couponId, validFrom, validUntil, products.map((p) => p.id).sort(), [...categories].sort()])
   )
   const initialSignature = JSON.stringify([
     (rule?.name ?? '').trim(),
-    rule?.template_id ?? '',
+    rule?.template_ids?.length ? rule.template_ids : rule?.template_id ? [rule.template_id] : [],
     rule?.coupon_id ?? null,
     isoToKstDate(rule?.valid_from ?? null),
     isoToKstDate(rule?.valid_until ?? null),
@@ -49,7 +54,26 @@
     [...(rule?.categories ?? [])].sort(),
   ])
   const isDirty = $derived(
-    isNew ? name.trim() !== '' && templateId !== '' && (products.length > 0 || categories.length > 0) : signature !== initialSignature
+    isNew ? name.trim() !== '' && templateIds.length > 0 && (products.length > 0 || categories.length > 0) : signature !== initialSignature
+  )
+
+  function toggleTemplate(id: string) {
+    templateIds = templateIds.includes(id) ? templateIds.filter((x) => x !== id) : [...templateIds, id]
+  }
+
+  // 고객 상품 썸네일에 적용된 모습 미리보기 — 선택한 배지를 고객 화면과 같은 규칙(이미지형 좌상단·바형 하단 중앙)으로 그린다
+  // 패널을 열 때마다 실제 상품 이미지 중 하나를 무작위로 깐다(마운트 시 1회 — 선택을 바꿔도 사진은 그대로). 후보가 없으면 빈 이미지(회색 배경).
+  const PREVIEW_IMG =
+    (sampleImages.length > 0 ? sampleImages[Math.floor(Math.random() * sampleImages.length)] : null) ??
+    'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='
+  const previewBadges = $derived(
+    templateIds
+      .map((id) => templates.find((t) => t.id === id))
+      .filter((t): t is BadgeTemplate => t !== undefined && t.is_active)
+      .map((t): CustomerBadge => ({
+        product_id: 'preview', badge_id: 'preview', template_id: t.id, priority: 0,
+        kind: t.kind, svg_url: t.svg_url, text: t.text, bg_color: t.bg_color, text_color: t.text_color,
+      }))
   )
 
   // ── 상품 검색(브라우저 RPC 직접 호출 금지 → 서버 API)
@@ -113,7 +137,7 @@
   async function save() {
     if (!isDirty || saving) return
     if (name.trim() === '') return csToast.error('명칭을 입력해 주세요')
-    if (!templateId) return csToast.error('배지 템플릿을 선택해 주세요')
+    if (templateIds.length === 0) return csToast.error('배지를 1개 이상 선택해 주세요')
     if (products.length + categories.length === 0) return csToast.error('상품 또는 카테고리를 1개 이상 선택해 주세요')
     const from = kstDateToIso(validFrom, 'start')
     const until = kstDateToIso(validUntil, 'end')
@@ -122,7 +146,7 @@
     const r = await postBadgeAction('saveProductBadge', {
       id: rule?.id ?? '',
       name: name.trim(),
-      template_id: templateId,
+      template_ids: templateIds,
       coupon_id: couponId ?? '',
       valid_from: from ?? '',
       valid_until: until ?? '',
@@ -141,7 +165,10 @@
   <div class="tab-content">
     <div class="section">
       <div class="section-header">
-        <span class="section-title">{rule ? '배지목록 등록정보' : '새 배지 노출'}</span>
+        <div class="title-group">
+          <span class="section-title">{rule ? '배지목록 등록정보' : '새 배지 노출'}</span>
+          {#if rule?.badge_no !== undefined}<span class="panel-no" aria-label="배지 목록 품번 {formatBadgeNo(rule.badge_no)}">{formatBadgeNo(rule.badge_no)}</span>{/if}
+        </div>
         <div class="head-actions">
           <button type="button" class="btn-save-inline" class:dirty={isDirty} disabled={!isDirty || saving} onclick={save}>{saving ? '저장 중...' : '저장'}</button>
           <button type="button" class="close-btn" aria-label="패널 닫기" onclick={onclose}>✕</button>
@@ -156,13 +183,16 @@
 
         <div class="inline-row inline-row-top">
           <span class="vr-label">배지</span>
-          <div class="row-value">
+          <div class="row-value badge-row">
             <div class="tpl-grid">
               {#each templates.filter((t) => t.is_active) as t (t.id)}
-                <button type="button" class="tpl" class:active={templateId === t.id} onclick={() => (templateId = t.id)}>
+                <button type="button" class="tpl" class:active={templateIds.includes(t.id)} aria-pressed={templateIds.includes(t.id)} onclick={() => toggleTemplate(t.id)}>
                   <BadgeChip kind={t.kind} svg_url={t.svg_url} text={t.text} bg_color={t.bg_color} text_color={t.text_color} size={26} />
                 </button>
               {/each}
+            </div>
+            <div class="badge-preview" aria-label="고객 상품 썸네일 적용 미리보기">
+              <ProductDPCard variant="thumb" name="" imageUrl={PREVIEW_IMG} badges={previewBadges} badgeSize={22} />
             </div>
           </div>
         </div>
@@ -262,6 +292,9 @@
 
 <style>
   .head-actions { display: flex; align-items: center; gap: 8px; }
+  /* 배정된 품번 — 제목 오른쪽에 여백을 두고 단순 텍스트로 표시 */
+  .title-group { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .panel-no { flex-shrink: 0; font: var(--text-pc-script-12); color: var(--cs-text-mid); }
   /* 패널 닫기 close-red (cms-uiux.md §0-10-A-1) */
   .close-btn {
     flex-shrink: 0; width: 28px; height: 28px; min-height: 28px; display: flex; align-items: center; justify-content: center;
@@ -271,7 +304,8 @@
   .close-btn:hover { background: rgba(255,53,53,0.08); color: var(--cs-red-badge); }
 
   /* 상세 패널 본문(ProductDetailPanel .detail-panel / .tab-content / .section 과 동일) */
-  .detail-panel { display: flex; flex-direction: column; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
+  /* flex-shrink: 0 — 바깥 .detail-pane(max-height + overflow-y: auto)이 스크롤하도록, 내용이 길어도 패널이 줄어들어 잘리지 않게 한다 */
+  .detail-panel { display: flex; flex-direction: column; flex-shrink: 0; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
   .tab-content { padding: 26px 26px 65px; }
   .section { display: flex; flex-direction: column; gap: 16px; }
   .section-header { display: flex; align-items: center; justify-content: space-between; }
@@ -303,13 +337,20 @@
   .il-input:focus { background: var(--cs-surface-gray); outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
   .panel-actions { display: flex; justify-content: flex-end; padding-top: 16px; }
 
-  .tpl-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* 배지 행 — 왼쪽 선택 목록 + 오른쪽 고객 썸네일 적용 미리보기 */
+  .badge-row { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 16px; --pc-thumb-size: 174px; }
+  /* 배지가 많아지면 오른쪽 미리보기 높이를 넘지 않고 이 영역 안에서 세로 스크롤 */
+  .tpl-grid { flex: 1 1 240px; min-width: 0; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: var(--pc-thumb-size); overflow-y: auto; }
+  /* 미선택은 배경 없음, 선택(여러 개 가능)만 퍼플 면, 호버는 배경색 변경만(cms-uiux.md §0-10 상태 표현 원칙) */
   .tpl {
     display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 14px;
-    border: none; border-radius: var(--cms-radius-sm); background: var(--cs-lilac); cursor: pointer; transition: background 0.15s;
+    border: none; border-radius: var(--cms-radius-sm); background: transparent; cursor: pointer; transition: background 0.15s;
   }
   .tpl:hover:not(.active) { background: var(--cs-surface-gray); }
   .tpl.active { background: var(--cs-purple); }
+  .badge-preview { flex: 0 0 auto; }
+  /* 흰·연보라 배지도 보이도록 사진 자리를 중간 톤 배경으로 둔다 */
+  .badge-preview :global(.pc-img-wrap) { background: var(--cs-text-light); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip {
     display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px 4px 4px 12px;
