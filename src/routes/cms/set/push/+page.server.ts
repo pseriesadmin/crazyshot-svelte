@@ -11,6 +11,7 @@ import { clearNotifyMessageCache, readMessageFromExtraConfig } from '$lib/server
 import { validateNotifyMessage, NOTIFY_SPECS, NOTIFY_VARIABLES } from '$lib/utils/notifyTemplate'
 import { LIFECYCLE_SMS_COPY } from '$lib/server/sms'
 import { getLockerEntrancePassword, LOCKER_ENTRANCE_KEY } from '$lib/server/lockerEntrance'
+import { sendTestNotice, TEST_SEND_TYPES, type TestSendOutcome } from '$lib/server/notifyTestSend'
 import { isValidLockerPassword } from '$lib/utils/lockerFields'
 import { CONSULT_HOURS_KEY, getConsultHours } from '$lib/server/consultHours'
 import { validateConsultHours } from '$lib/utils/consultHours'
@@ -199,6 +200,33 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 }
 
 export const actions: Actions = {
+  // 테스트 발송(2026-11-16, Stephen 지시) — 알림별 실제 발송 경로(푸시·문자·채팅카드)로 CMS 직원 계정 1개에 보낸다. 일반 고객에게는 보낼 수 없다.
+  sendTestNotice: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { message: '인증 필요' })
+    const cmsRole = await getCmsRoleForAction(locals)
+    if (!cmsRole || !hasSettingsAccess(cmsRole)) return fail(403, { message: '권한 없음' })
+
+    const form = await request.formData()
+    const targetId = form.get('target_user_id')
+    const rawType = form.get('notify_type')
+    if (typeof targetId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(targetId)) {
+      return fail(400, { message: '대상 계정이 올바르지 않습니다.' })
+    }
+    const types = rawType === 'all' ? TEST_SEND_TYPES : typeof rawType === 'string' && TEST_SEND_TYPES.includes(rawType) ? [rawType] : null
+    if (!types) return fail(400, { message: '알 수 없는 알림입니다.' })
+
+    const sb = admin()
+    const { data: target } = await sb.from('user_profiles').select('id, cms_role, withdrawal_status').eq('id', targetId).maybeSingle()
+    const t = target as { id?: string; cms_role?: string | null; withdrawal_status?: string | null } | null
+    if (!t?.id || !t.cms_role) return fail(400, { message: 'CMS 직원 계정에만 테스트 발송할 수 있습니다.' })
+    if (t.withdrawal_status && t.withdrawal_status !== 'none') return fail(400, { message: '탈퇴 처리된 계정입니다.' })
+
+    const results: TestSendOutcome[] = []
+    for (const type of types) results.push(await sendTestNotice(sb, t.id, type))
+    return { ok: true, action: 'sendTestNotice' as const, results }
+  },
+
   updatePushConfig: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { message: '인증 필요' })

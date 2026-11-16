@@ -4,6 +4,7 @@
 //
 // 흐름: 관리자 인증 → 세션 user_id 확인 → distribute_coupon(locals.supabase) →
 //       COUPON_GIFT_CARD 메시지 INSERT(service_role)
+import { resolveCardContent, loadCustomerNameVars } from '$lib/server/cardMessage'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -124,7 +125,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .insert({
       session_id:     sessionId,
       sender_type:    'admin',
-      content:        `쿠폰을 보내드렸어요! (${discountLabel})`,
+      content:        await resolveCardContent(admin, 'event_coupon_issued', { ...(await loadCustomerNameVars(admin, userId)), 할인내용: discountLabel }, `쿠폰을 보내드렸어요! (${discountLabel})`),
       message_type:   'action_card',
       action_payload: actionPayload,
       is_read:        false,

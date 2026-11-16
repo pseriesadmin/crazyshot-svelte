@@ -10,6 +10,7 @@ import { awardOnTimeReturnPoints } from '$lib/server/awardOnTimeReturnPoints'
 import { recordReturnHistoryForCompleted } from '$lib/server/recordReturnHistory'
 import { registerPriorIssue } from '$lib/server/priorIssue'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import { CUSTOMER_LIFECYCLE_PUSH_COPY, sendPushToAdmins, sendReservationLifecyclePush } from '$lib/server/push'
 import type { InspectionIssueInput } from '$lib/utils/inspection'
 import { issueTypeLabel } from '$lib/utils/inspection'
@@ -71,7 +72,8 @@ export async function sendInspectionNotice(admin: AnyClient, reservationId: numb
       await admin.rpc('send_return_notice_card', {
         p_reservation_id: reservationId,
         p_notify_type: type,
-        p_content: copy.body(name),
+        // 푸시알림 설정에 등록한 안내문장이 있으면 카드도 그 문장으로(2026-11-16)
+        p_content: await resolveCardContent(admin, type, await loadReservationCardVars(admin, reservationId, name), copy.body(name)),
         p_button_label: INSPECTION_NOTICE_BUTTON_LABEL,
         p_action_url: INSPECTION_NOTICE_URL,
       })

@@ -9,6 +9,7 @@
 // 이 row는 CMS 패널의 <form action="?/updateCustomerInfo">(본인증명·외국인증명 행을
 // 감싸는 폼) 내부에 있어 중첩 <form>을 쓸 수 없다 — 기존 "재등록" 버튼(/api/cms/upload-doc)과
 // 동일하게 SvelteKit form action이 아니라 REST 엔드포인트 + 클라이언트 fetch()로 구현.
+import { resolveCardContent, loadCustomerNameVars } from '$lib/server/cardMessage'
 import type { RequestHandler } from './$types'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -78,7 +79,7 @@ export const POST: RequestHandler = async ({ request, locals, fetch }) => {
         session_id:     chatSessionId,
         sender_type:    'admin',
         message_type:   'action_card',
-        content:        '고객님 본인증명이 확인되었어요.',
+        content:        await resolveCardContent(admin, 'identity_approved', await loadCustomerNameVars(admin, userId), '고객님 본인증명이 확인되었어요.'),
         action_payload: {
           type:          'identity_approved',
           doc_type:      type,

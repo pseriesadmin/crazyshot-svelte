@@ -25,6 +25,7 @@ import {
   isReturnNoticeStage,
   returnSubmitPath,
 } from '$lib/utils/returnNotice'
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import { getReturnRegisterTimer } from '$lib/server/returnRegisterTimer'
 import { timerTimeToMinutes } from '$lib/utils/lockerGuideTimer'
 import type { RequestHandler } from './$types'
@@ -97,8 +98,10 @@ export const GET: RequestHandler = async ({ request }) => {
         const stage = row.stage
         const notifyType = RETURN_NOTICE_NOTIFY_TYPE[stage]
         const productName = row.product_name ?? '상품'
-        const content = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]?.body(productName)
-        if (!content) throw new Error(`안내 문구 없음: ${notifyType}`)
+        const defaultContent = CUSTOMER_LIFECYCLE_PUSH_COPY[notifyType]?.body(productName)
+        if (!defaultContent) throw new Error(`안내 문구 없음: ${notifyType}`)
+        // 푸시알림 설정에 등록한 안내문장이 있으면 카드도 그 문장으로(푸시·문자와 같은 정본, 2026-11-16)
+        const content = await resolveCardContent(admin, notifyType, await loadReservationCardVars(admin, row.reservation_id, row.product_name), defaultContent)
 
         const { data: cardResult, error: cardError } = await admin.rpc('send_return_notice_card', {
           p_reservation_id: row.reservation_id,

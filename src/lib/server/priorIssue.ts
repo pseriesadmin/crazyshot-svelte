@@ -3,6 +3,7 @@
 //  · cancelPriorIssue: 사전 접수 해제(반납 전 예약만)
 //  · submitPriorIssueReport: 고객이 폼에서 제출 → 관리자 푸시
 // 해당 예약이 반납완료가 되면 DB 트리거(#724)가 자동으로 inspection_status='issue' 로 시작해 검수 칩에 [사전접수건]으로 노출된다.
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import { CUSTOMER_LIFECYCLE_PUSH_COPY, sendPushToAdmins, sendReservationLifecyclePush } from '$lib/server/push'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { priorKindLabel, type PriorIssueReportInput } from '$lib/utils/inspection'
@@ -49,7 +50,8 @@ export async function sendIssueReportRequest(admin: AnyClient, reservationId: nu
     await admin.rpc('send_return_notice_card', {
       p_reservation_id: reservationId,
       p_notify_type: 'issue_report_request',
-      p_content: CUSTOMER_LIFECYCLE_PUSH_COPY.issue_report_request.body(name),
+      // 푸시알림 설정에 등록한 안내문장이 있으면 카드도 그 문장으로(2026-11-16)
+      p_content: await resolveCardContent(admin, 'issue_report_request', await loadReservationCardVars(admin, reservationId, name), CUSTOMER_LIFECYCLE_PUSH_COPY.issue_report_request.body(name)),
       p_button_label: ISSUE_REPORT_BUTTON_LABEL,
       p_action_url: issueReportPath(token),
     })

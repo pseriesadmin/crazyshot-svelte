@@ -1,3 +1,4 @@
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
@@ -188,7 +189,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
       session_id:   sessionId,
       sender_type:  'admin',
       message_type: 'action_card',
-      content:      '전자계약을 확인 후 서명을 등록해주세요.',
+      content:      await resolveCardContent(admin, 'contract_sent', await loadReservationCardVars(admin, contract.reservation_id), '전자계약을 확인 후 서명을 등록해주세요.'),
       action_payload: {
         type:         'contract_link',
         // 관리자 CMS 대화카드 모달이 ContractTemplatePreviewModal(viewOnly)로 고객이 보는
@@ -210,7 +211,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
     title: '전자계약이 도착했어요',
     body: '계약서를 확인하고 서명해주세요.',
     link: signingUrl,
-  })
+  }, { vars: await loadReservationCardVars(admin, contract.reservation_id) })
 
   // SMS 동시 발송 — 재발송도 매번 발송(force, Stephen 확정 2026-10-02). 링크는 서명 URL 그대로.
   await sendCardSms(admin, {

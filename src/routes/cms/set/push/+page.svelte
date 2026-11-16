@@ -161,7 +161,7 @@
   }
 
   // ─── 알림별 안내문장 편집(아코디언) ───
-  // 푸시·문자 같은 문장을 쓴다. 비어 있으면 코드의 기본 문구를 그대로 쓴다.
+  // 푸시·문자·채팅카드가 같은 문장을 쓴다(무인보관함 안내 제외 — 조립 문장). 비어 있으면 코드의 기본 문구를 그대로 쓴다.
   const ANSWER_TYPES = new Set(['admin_chat_reply', 'ai_auto_reply', 'canned_auto_reply'])
   // 알림별 "실행 조건 / 실행 요소" 한 줄 안내 — 실제 발송 코드 기준(2026-11-02 재대조). 푸시는 기본 포함(push:false 제외), 문자는 안내문장 규격(spec.sms) 또는 sms:true.
   // chat: 'card' = 채팅 대화카드, 'reply' = 채팅 답변 메시지, null = 채팅 발송 없음
@@ -557,6 +557,37 @@
     const pad = (n: number) => String(n).padStart(2, '0')
     return `${kst.getUTCFullYear()}.${pad(kst.getUTCMonth() + 1)}.${pad(kst.getUTCDate())} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`
   }
+  // ─── 테스트 발송(2026-11-16) — 알림별 실제 발송 경로(푸시·문자·채팅카드)로 CMS 직원 계정 1개에 보낸다 ───
+  let testTargetId = $state('')
+  let testSending = $state(false)
+  let testResults = $state<{ notifyType: string; push: string; sms: string; card: string }[]>([])
+  const testLabel = (type: string): string => pushConfig.find((r) => r.notify_type === type)?.label ?? type
+
+  async function runTestSend(): Promise<void> {
+    if (!testTargetId || testSending) return
+    testSending = true
+    testResults = []
+    const fd = new FormData()
+    fd.set('target_user_id', testTargetId)
+    fd.set('notify_type', 'all')
+    try {
+      const res = await fetch('?/sendTestNotice', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } })
+      const result = deserialize(await res.text())
+      if (result.type === 'success') {
+        testResults = (result.data as { results?: typeof testResults } | undefined)?.results ?? []
+        csToast.success(`테스트 발송 ${testResults.length}종을 처리했습니다.`)
+      } else if (result.type === 'failure') {
+        csToast.error((result.data as { message?: string } | undefined)?.message ?? '테스트 발송에 실패했습니다.')
+      } else {
+        csToast.error('테스트 발송에 실패했습니다.')
+      }
+    } catch {
+      csToast.error('테스트 발송에 실패했습니다.')
+    } finally {
+      testSending = false
+    }
+  }
+
 </script>
 
 {#snippet consultForm()}
@@ -908,6 +939,37 @@
             </div>
           </div>
         {/each}
+      </div>
+    </section>
+
+    <section class="setting-section">
+      <div class="section-head">
+        <h2 class="section-title">테스트 발송</h2>
+      </div>
+      <div class="entrance-box">
+        <div class="entrance-row">
+          <select class="msg-input" bind:value={testTargetId} disabled={testSending} aria-label="테스트 발송 대상 계정">
+            <option value="">대상 계정 선택</option>
+            {#each adminList as a (a.id)}
+              <option value={a.id}>{a.full_name || a.email}</option>
+            {/each}
+          </select>
+          <button type="button" class="btn-save-inline" class:dirty={!!testTargetId && !testSending} disabled={!testTargetId || testSending} onclick={runTestSend}>
+            {testSending ? '발송 중…' : '전체 테스트 발송'}
+          </button>
+        </div>
+        {#if testResults.length > 0}
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead><tr><th>알림</th><th>푸시</th><th>문자</th><th>채팅카드</th></tr></thead>
+              <tbody>
+                {#each testResults as r (r.notifyType)}
+                  <tr><td>{testLabel(r.notifyType)}</td><td>{r.push}</td><td>{r.sms}</td><td>{r.card}</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
       </div>
     </section>
 
