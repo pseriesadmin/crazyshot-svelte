@@ -1,5 +1,6 @@
 import { dev } from '$app/environment';
 import { loadProductBadgeMap } from '$lib/server/productBadges';
+import { loadCardKeywordMap } from '$lib/server/productCardKeywords';
 import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { getSupabaseUrl } from '$lib/env/supabasePublic';
@@ -479,11 +480,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// 대표 이미지·최신 등록 카드 배지(CMS 프로모션 '배지') — 화면의 상품 id 묶음으로 1회 조회
 	const productBadges = await loadProductBadgeMap(locals.supabase, [String(row.id), ...popularProducts.map((p) => p.id)]);
+	const productCardKeywords = await loadCardKeywordMap(locals.supabase, [String(row.id), ...popularProducts.map((p) => p.id)]);
 
 	return {
 		product: enriched,
 		productId: String(row.id),
 		productBadges,
+		productCardKeywords,
 		optionLinks,
 		bundleLinks,
 		availableStock,

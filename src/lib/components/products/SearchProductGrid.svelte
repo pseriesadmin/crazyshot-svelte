@@ -14,6 +14,7 @@
     href?: string
     wished?: boolean
     badges?: CustomerBadge[]
+    cardKeywords?: string[]
   }
 
   interface Props {
@@ -75,6 +76,7 @@
               href={p.href ?? `/products/${p.id}`}
               wished={p.wished ?? false}
               badges={p.badges ?? []}
+              cardKeywords={p.cardKeywords ?? []}
               onWishToggle={onWishToggle ? () => onWishToggle(String(p.id)) : undefined}
             />
           </div>

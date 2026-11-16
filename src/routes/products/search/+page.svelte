@@ -57,6 +57,7 @@
     href?: string
     wished?: boolean
     badges?: CustomerBadge[]
+    cardKeywords?: string[]
   }
   /** 서버에서 받아둔 검색 결과(한 번에 SEARCH_FETCH_LIMIT개) — 화면에는 visibleCount개만 보여주고 더보기로 늘린다 */
   let searchResults      = $state<SearchProduct[]>([])
@@ -100,6 +101,7 @@
       href:     slug ? `/products/${slug}` : undefined,
       wished:   Boolean(r['wished']),
       badges:   Array.isArray(r['badges']) ? (r['badges'] as CustomerBadge[]) : [],
+      cardKeywords: Array.isArray(r['card_keywords']) ? (r['card_keywords'] as string[]) : [],
     }
   }
 
