@@ -10,7 +10,6 @@
   import CalendarTimePicker from '$lib/components/products/CalendarTimePicker.svelte';
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte';
   import BadgeChip from '$lib/components/cms/badge/BadgeChip.svelte';
-  import { MAX_VISIBLE_BADGES } from '$lib/utils/resolveBadges';
   import type { Tables, ProductOptionLinkRow, ProductBundleLinkRow } from '$lib/types/database';
   import type { ContentBlock } from '$lib/types/content-editor';
   import { imageBlockBoxStyle } from '$lib/types/content-editor';
@@ -811,8 +810,8 @@
     manualViewerOpen = true;
   }
 
-  // 제목 카드에도 대표 이미지와 같은 배지를 같은 순서·개수로 노출한다(CMS 프로모션 '배지')
-  const titleBadges = $derived((data.productBadges?.[data.productId] ?? []).slice(0, MAX_VISIBLE_BADGES));
+  // 제목 카드에 배지를 개수 제한 없이 우선순위·선택 순서대로 노출한다(CMS 프로모션 '배지') — 대표 이미지에는 배지를 겹치지 않는다
+  const titleBadges = $derived(data.productBadges?.[data.productId] ?? []);
   const pageTitle = $derived(product?.name ? `${product.name} — CRAZYSHOT` : '상품상세 — CRAZYSHOT');
   /** 검색·AI용 설명 — 상품마다 이름·분류·캡션·요금으로 만든다(2026-10-27) */
   const pageDescription = $derived(
@@ -1000,7 +999,7 @@
         <div class="title-block">
           {#if titleBadges.length > 0}
             <div class="title-badges">
-              {#each titleBadges as b (b.badge_id)}
+              {#each titleBadges as b (`${b.badge_id}:${b.template_id}`)}
                 <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={26} />
               {/each}
             </div>

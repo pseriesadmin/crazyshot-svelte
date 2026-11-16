@@ -14,8 +14,10 @@ describe('상품상세 배지 — 제목 영역', () => {
     expect(block).toContain('<BadgeChip')
   })
 
-  it('개수 상한(MAX_VISIBLE_BADGES)을 쓰고, 대표 이미지에는 배지를 넘기지 않는다', () => {
-    expect(page).toMatch(/titleBadges = \$derived\(\(data\.productBadges\?\.\[data\.productId\] \?\? \[\]\)\.slice\(0, MAX_VISIBLE_BADGES\)\)/)
+  it('개수 상한 없이 전부 보여 주고(배지목록×배지타입 키), 대표 이미지에는 배지를 넘기지 않는다', () => {
+    expect(page).toMatch(/titleBadges = \$derived\(data\.productBadges\?\.\[data\.productId\] \?\? \[\]\)/)
+    expect(page).not.toContain('MAX_VISIBLE_BADGES')
+    expect(page).toContain('{#each titleBadges as b (`${b.badge_id}:${b.template_id}`)}')
     expect(page).not.toMatch(/<ProductHero[^>]*badges=/)
     const hero = readFileSync(path.resolve(process.cwd(), 'src/lib/components/products/ProductHero.svelte'), 'utf8')
     expect(hero).not.toMatch(/badge/i)

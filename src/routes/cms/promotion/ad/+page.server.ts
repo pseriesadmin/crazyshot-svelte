@@ -56,13 +56,25 @@ interface BadgeLoadData {
   templates: BadgeTemplate[]
   coupons: BadgeCouponOption[]
   productNames: BadgeProductName[]
+  /** 패널 썸네일 미리보기에 무작위로 쓸 실제 상품 대표 이미지(노출 중인 부모 상품, 실패하면 빈 배열) */
+  sampleImages: string[]
 }
-const EMPTY_BADGE_DATA: BadgeLoadData = { rules: [], templates: [], coupons: [], productNames: [] }
+const EMPTY_BADGE_DATA: BadgeLoadData = { rules: [], templates: [], coupons: [], productNames: [], sampleImages: [] }
 
 async function loadBadgeData(): Promise<BadgeLoadData> {
   const key = env.SUPABASE_SERVICE_ROLE_KEY
   if (!key) return EMPTY_BADGE_DATA
   const admin = createClient(getSupabaseUrl(), key)
+
+  // 배지목록 조회 — badge_no(#831)·template_ids(#830) 열이 아직 없는 환경(마이그레이션 미적용)에서는 있는 열만으로 다시 조회한다(fail-open: 배포 순서 사고로 화면이 비는 것 방지)
+  const loadRules = async () => {
+    const base = 'id, name, template_id, coupon_id, priority, valid_from, valid_until, is_active'
+    for (const cols of [`${base}, template_ids, badge_no`, `${base}, template_ids`, base]) {
+      const res = await admin.from('product_badges').select(cols).is('deleted_at', null).order('priority').order('created_at')
+      if (!res.error) return res
+    }
+    return admin.from('product_badges').select(base).is('deleted_at', null).order('priority').order('created_at')
+  }
 
   const [tpl, rul, tgt, cpn] = await Promise.all([
     admin
@@ -71,12 +83,7 @@ async function loadBadgeData(): Promise<BadgeLoadData> {
       .is('deleted_at', null)
       .order('sort_order')
       .order('created_at'),
-    admin
-      .from('product_badges')
-      .select('id, name, template_id, coupon_id, priority, valid_from, valid_until, is_active')
-      .is('deleted_at', null)
-      .order('priority')
-      .order('created_at'),
+    loadRules(),
     admin.from('product_badge_targets').select('badge_id, target_type, product_id, category_value'),
     admin
       .from('coupons')
@@ -92,8 +99,10 @@ async function loadBadgeData(): Promise<BadgeLoadData> {
   }
 
   const targets = (tgt.data ?? []) as Array<{ badge_id: string; target_type: string; product_id: string | null; category_value: string | null }>
-  const rules: BadgeRule[] = ((rul.data ?? []) as Array<Omit<BadgeRule, 'product_ids' | 'categories'>>).map((r) => ({
+  const rules: BadgeRule[] = ((rul.data ?? []) as Array<Omit<BadgeRule, 'product_ids' | 'categories' | 'template_ids'> & { template_ids?: string[] | null }>).map((r) => ({
     ...r,
+    // 배지타입 목록이 비어 있는 옛 행은 첫 번째 배지타입 한 개로 본다(DB 함수의 COALESCE 폴백과 같은 규칙)
+    template_ids: r.template_ids && r.template_ids.length > 0 ? r.template_ids : [r.template_id],
     product_ids: targets.filter((t) => t.badge_id === r.id && t.target_type === 'product' && t.product_id).map((t) => t.product_id as string),
     categories: targets.filter((t) => t.badge_id === r.id && t.target_type === 'category' && t.category_value).map((t) => t.category_value as string),
   }))
@@ -110,7 +119,25 @@ async function loadBadgeData(): Promise<BadgeLoadData> {
     label: c.display_name?.trim() || c.code || '이름 없는 쿠폰',
   }))
 
-  return { rules, templates: (tpl.data ?? []) as BadgeTemplate[], coupons, productNames }
+  // 미리보기용 샘플 이미지 — 조회 실패는 화면을 막지 않는다(빈 배열이면 패널이 기본 배경으로 그린다)
+  let sampleImages: string[]
+  try {
+    const { data: imgRows } = await admin
+      .from('products')
+      .select('image_urls')
+      .is('parent_product_id', null)
+      .is('deleted_at', null)
+      .eq('is_active', true)
+      .neq('image_urls', '[]') // 이미지가 없는 상품이 많은 환경(Stage)에서도 후보가 비지 않도록 이미지 있는 상품만 읽는다
+      .limit(200)
+    sampleImages = ((imgRows ?? []) as Array<{ image_urls: unknown }>)
+      .map((r) => (Array.isArray(r.image_urls) ? r.image_urls[0] : null))
+      .filter((u): u is string => typeof u === 'string' && /^https:\/\//.test(u))
+  } catch {
+    sampleImages = []
+  }
+
+  return { rules, templates: (tpl.data ?? []) as BadgeTemplate[], coupons, productNames, sampleImages }
 }
 
 type RpcResult = { ok: boolean; error?: string } | null
@@ -197,14 +224,15 @@ export const actions: Actions = {
     const f = await request.formData()
     const name = String(f.get('name') ?? '').trim()
     if (name === '' || name.length > 40) return fail(400, { error: '명칭은 1~40자로 입력해 주세요' })
-    const templateId = asUuidOrNull(f.get('template_id'))
-    if (!templateId) return fail(400, { error: '배지 템플릿을 선택해 주세요' })
+    // 선택한 순서를 유지하며 중복만 제거(배지 개수 상한 없음)
+    const templateIds = [...new Set(f.getAll('template_ids').map((v) => asUuidOrNull(v)).filter((v): v is string => v !== null))]
+    if (templateIds.length === 0) return fail(400, { error: '배지 템플릿을 선택해 주세요' })
     const productIds = f.getAll('product_ids').map((v) => asUuidOrNull(v)).filter((v): v is string => v !== null)
     const categories = f.getAll('categories').map((v) => String(v).trim()).filter((v) => v !== '')
     return callBadgeRpc(locals, 'cms_save_product_badge', {
       p_id: asUuidOrNull(f.get('id')),
       p_name: name,
-      p_template_id: templateId,
+      p_template_ids: templateIds,
       p_coupon_id: asUuidOrNull(f.get('coupon_id')),
       p_valid_from: asTimestampOrNull(f.get('valid_from')),
       p_valid_until: asTimestampOrNull(f.get('valid_until')),

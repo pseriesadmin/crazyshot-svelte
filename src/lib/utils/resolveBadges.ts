@@ -1,8 +1,8 @@
 // 상품에 노출할 배지 판정 — 대상(상품 직접 ∪ 카테고리)·노출기간·활성·우선순위 정렬.
 // 고객 화면용 DB 함수(get_product_badges)와 같은 규칙이다 — 함께 바꾼다(실서비스 판정은 DB 함수, 이 함수는 규칙의 기준 사본·시험용).
 // 템플릿 활성·삭제 조건은 DB 함수에서만 판정한다(이 함수는 규칙 단위만 받음).
-/** 카드·상세에 한 번에 보여 줄 배지 최대 개수(ProductDPCard·ProductHero 공통) */
-export const MAX_VISIBLE_BADGES = 3
+// 배지목록 1개에 배지타입을 여러 개 연결할 수 있다(Migration #830) — 카드·상세는 개수 상한 없이 전부 표시한다(2026-11-16, Stephen 확정).
+// 이 함수는 "배지목록 단위" 판정이라 배지타입 개수와 무관하다(고객용 DB 함수 get_product_badges 가 배지목록을 배지타입별로 펼친다).
 
 export interface BadgeRuleForResolve {
   id: string

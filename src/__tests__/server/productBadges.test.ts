@@ -3,7 +3,7 @@ import { groupBadgesByProduct, loadBadgeCouponIds, loadProductBadgeMap, markBadg
 import type { CustomerBadge } from '$lib/types/badge'
 
 const badge = (product_id: string, badge_id: string): CustomerBadge => ({
-  product_id, badge_id, priority: 0, kind: 'textbar', svg_url: null, text: 'NEW', bg_color: '#3B2F8A', text_color: '#FFFFFF',
+  product_id, badge_id, template_id: `t-${badge_id}`, priority: 0, kind: 'textbar', svg_url: null, text: 'NEW', bg_color: '#3B2F8A', text_color: '#FFFFFF',
 })
 
 describe('productBadges', () => {

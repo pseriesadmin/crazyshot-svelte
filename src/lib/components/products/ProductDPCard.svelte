@@ -2,7 +2,6 @@
   import { goto } from '$app/navigation'
   import type { ProductCategoryEnum } from '$lib/types/database'
   import type { CustomerBadge } from '$lib/types/badge'
-  import { MAX_VISIBLE_BADGES } from '$lib/utils/resolveBadges'
   import BadgeChip from '$lib/components/cms/badge/BadgeChip.svelte'
 
   interface Props {
@@ -33,8 +32,10 @@
     subCopy?: string | null
     /** 카테고리 줄 노출 — 표준은 숨김(기본 false, 2026-11-05 Stephen 지시). 필요한 영역만 true 로 켠다 */
     showCategory?: boolean
-    /** 썸네일 좌상단에 겹쳐 보일 상품 배지(우선순위 순, 최대 3개까지만 표시) — CMS 프로모션 '배지' 설정 */
+    /** 썸네일에 겹쳐 보일 상품 배지(우선순위 순, 개수 제한 없이 전부 표시) — CMS 프로모션 '배지' 설정 */
     badges?: CustomerBadge[]
+    /** 배지 기준 크기(px) — 미지정이면 표준 22(썸네일 변형은 16). CMS 배지 미리보기처럼 썸네일을 크게 보여 줄 때만 지정 */
+    badgeSize?: number
   }
 
   let {
@@ -53,12 +54,12 @@
     showCategory = false,
     subCopy = null,
     badges = [],
+    badgeSize,
   }: Props = $props()
 
-  const shownBadges = $derived(badges.slice(0, MAX_VISIBLE_BADGES))
-  // 이미지형은 좌상단, 바(텍스트)형은 하단 중앙 — 표시 개수 상한(3)은 둘을 합쳐서 적용
-  const iconBadges = $derived(shownBadges.filter((b) => b.kind !== 'textbar'))
-  const barBadges = $derived(shownBadges.filter((b) => b.kind === 'textbar'))
+  // 이미지형은 좌상단, 바(텍스트)형은 하단 중앙 — 표시 개수 상한은 두지 않는다(2026-11-16, Stephen 확정)
+  const iconBadges = $derived(badges.filter((b) => b.kind !== 'textbar'))
+  const barBadges = $derived(badges.filter((b) => b.kind === 'textbar'))
 
   /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조 — 2026-11-05 Stephen 지시로 list 도 동일) */
   const nameFirst = $derived(variant === 'pick-home' || variant === 'list' || variant === 'pick')
@@ -89,15 +90,15 @@
 
     {#if iconBadges.length > 0}
       <span class="pc-badges">
-        {#each iconBadges as b (b.badge_id)}
-          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={22} />
+        {#each iconBadges as b (`${b.badge_id}:${b.template_id}`)}
+          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={badgeSize ?? 22} />
         {/each}
       </span>
     {/if}
     {#if barBadges.length > 0}
       <span class="pc-badges-bar">
-        {#each barBadges as b (b.badge_id)}
-          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={22} />
+        {#each barBadges as b (`${b.badge_id}:${b.template_id}`)}
+          <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={badgeSize ?? 22} />
         {/each}
       </span>
     {/if}
@@ -175,15 +176,15 @@
       <img src={imageUrl} alt="" loading="lazy" class="pc-img" />
       {#if iconBadges.length > 0}
         <span class="pc-badges">
-          {#each iconBadges as b (b.badge_id)}
-            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={16} />
+          {#each iconBadges as b (`${b.badge_id}:${b.template_id}`)}
+            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={badgeSize ?? 16} />
           {/each}
         </span>
       {/if}
       {#if barBadges.length > 0}
         <span class="pc-badges-bar">
-          {#each barBadges as b (b.badge_id)}
-            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={16} />
+          {#each barBadges as b (`${b.badge_id}:${b.template_id}`)}
+            <BadgeChip kind={b.kind} svg_url={b.svg_url} text={b.text} bg_color={b.bg_color} text_color={b.text_color} size={badgeSize ?? 16} />
           {/each}
         </span>
       {/if}
