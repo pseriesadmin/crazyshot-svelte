@@ -1,3 +1,4 @@
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
@@ -352,9 +353,11 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
         }
 
         if (chatSessionId) {
-          const content = fullName
+          const defaultContent = fullName
             ? `${fullName} 고객님의 전자계약 서명이 완료되었습니다.`
             : '전자계약 서명이 완료되었습니다.'
+          // 푸시알림 설정에 등록한 안내문장이 있으면 카드도 그 문장으로(2026-11-16)
+          const content = await resolveCardContent(admin, 'contract_signed_customer', await loadReservationCardVars(admin, signReservationId), defaultContent)
 
           await admin
             .from('chat_messages')
@@ -383,7 +386,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
             title: '전자계약 서명이 완료됐어요',
             body: reservationCode ? `${reservationCode} 예약의 서명이 정상 접수됐어요.` : '서명이 정상적으로 접수됐어요.',
             link: '/account/rental',
-          }, { vars: reservationCode ? { 예약코드: reservationCode } : {} })
+          }, { vars: await loadReservationCardVars(admin, signReservationId) })
 
           // SMS 동시 발송(2026-10-02) — 채팅카드 contract_signed와 같은 링크
           await sendCardSms(admin, {

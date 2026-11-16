@@ -39,7 +39,7 @@ export type PushDeliveryResult = {
 // 고객 라이프사이클 푸시 기본 문구 — 코드에 고정(기존 send_rental_chat_notification RPC의 CASE 분기와 같은 패턴).
 // 2026-10-10부터 관리자가 /cms/set/push 에서 알림별 안내문장을 편집할 수 있다(push_notification_config.extra_config.message,
 // Migration #689) — 편집값이 있으면 아래 body 대신 그 문장(변수 치환 후)이 푸시·문자에 쓰이고, 비어 있으면 이 기본 문구를 그대로 쓴다.
-// 채팅카드(send_rental_chat_notification)는 DB 고정 문구라 이 편집의 대상이 아니다(service-operations.md §15).
+// 채팅카드도 같은 안내문장을 따른다(2026-11-16, Migration #835 · cardMessage.ts — service-operations.md §15).
 export const CUSTOMER_LIFECYCLE_PUSH_COPY: Record<string, { title: string; body: (productName: string) => string }> = {
   reservation_hold: {
     title: '예약 신청이 접수됐어요',

@@ -21,6 +21,7 @@ import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { sendPushToUser } from '$lib/server/push'
+import { resolveCardContent, loadCustomerNameVars } from '$lib/server/cardMessage'
 import { buildIdentityRequestPayload, identityRequestActionUrl, IDENTITY_REQUEST_CONTENT } from '$lib/server/identityDocRequest'
 
 const DOC_BUCKET = 'user-documents'
@@ -125,7 +126,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     .insert({
       session_id:     sessionId,
       sender_type:    'admin',
-      content:        IDENTITY_REQUEST_CONTENT,
+      content:        await resolveCardContent(admin, 'identity_request', await loadCustomerNameVars(admin, userId), IDENTITY_REQUEST_CONTENT), // 푸시와 같은 안내문장(2026-11-16)
       message_type:   'action_card',
       action_payload: actionPayload,
       is_read:        false,

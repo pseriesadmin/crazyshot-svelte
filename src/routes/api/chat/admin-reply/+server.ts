@@ -1,4 +1,5 @@
 // POST /api/chat/admin-reply — 관리자 메시지 전송
+import { clipAnswerVar } from '$lib/utils/notifyTemplate'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { json } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
@@ -166,7 +167,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     title: '상담 답장이 도착했어요',
     body: replyPreview,
     link: '/',
-  }, { vars: { 답변내용: replyPreview } })
+  }, { vars: { 답변내용: clipAnswerVar(content) } })
 
   return json({ message })
 }

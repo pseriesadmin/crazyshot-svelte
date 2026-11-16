@@ -101,12 +101,12 @@ export const NOTIFY_SPECS: NotifyTypeSpec[] = [
   { notifyType: 'event_coupon_issued', vars: ['고객이름', '할인내용'], sms: false, defaultMessage: '{{할인내용}} 쿠폰을 받으셨어요! 지금 확인해보세요.' },
   { notifyType: 'admin_chat_reply', vars: ['고객이름', '답변내용'], sms: false, defaultMessage: '{{답변내용}}' },
   { notifyType: 'chat_unanswered', vars: ['고객이름'], sms: false, defaultMessage: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.' },
-  { notifyType: 'contract_sent', vars: ['고객이름'], sms: true, defaultMessage: '계약서를 확인하고 서명해주세요.' },
-  { notifyType: 'contract_signed_customer', vars: ['고객이름', '예약코드'], sms: true, defaultMessage: '{{예약코드}} 예약의 서명이 정상 접수됐어요.' },
+  { notifyType: 'contract_sent', vars: ['고객이름', '상품명', '예약코드'], sms: true, defaultMessage: '계약서를 확인하고 서명해주세요.' },
+  { notifyType: 'contract_signed_customer', vars: ['고객이름', '상품명', '예약코드'], sms: true, defaultMessage: '{{예약코드}} 예약의 서명이 정상 접수됐어요.' },
   { notifyType: 'identity_approved', vars: ['고객이름'], sms: false, defaultMessage: '본인증명정보가 정상적으로 확인됐어요.' },
   { notifyType: 'identity_request', vars: ['고객이름'], sms: false, defaultMessage: '개인정보 메뉴에서 본인증명정보를 등록해주세요.' },
-  { notifyType: 'late_fee_paid', vars: ['고객이름', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제가 정상 처리됐어요.' },
-  { notifyType: 'late_fee_request', vars: ['고객이름', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제를 요청드려요. 대여 정보에서 확인해 주세요.' },
+  { notifyType: 'late_fee_paid', vars: ['고객이름', '상품명', '예약코드', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제가 정상 처리됐어요.' },
+  { notifyType: 'late_fee_request', vars: ['고객이름', '상품명', '예약코드', '연체료'], sms: true, defaultMessage: '연체료 {{연체료}} 결제를 요청드려요. 대여 정보에서 확인해 주세요.' },
   { notifyType: 'ai_auto_reply', vars: ['고객이름', '답변내용'], sms: false, defaultMessage: '{{답변내용}}' },
   { notifyType: 'canned_auto_reply', vars: ['고객이름', '답변내용'], sms: false, defaultMessage: '{{답변내용}}' },
 ]
@@ -130,6 +130,12 @@ export type NotifyVars = Partial<Record<NotifyVarKey, string>>
 const VAR_PATTERN = /\{\{\s*([^{}]+?)\s*\}\}/g
 
 export const MAX_NOTIFY_MESSAGE_CHARS = 1000
+
+/** 답변내용 변수에 넣는 최대 글자 수 — 푸시 기본 본문(60자 미리보기)과 달리 입력폼 문장에 쓰일 때는 더 길게 싣는다(2026-11-16) */
+export const MAX_ANSWER_VAR_CHARS = 300
+export function clipAnswerVar(text: string): string {
+  return text.length > MAX_ANSWER_VAR_CHARS ? `${text.slice(0, MAX_ANSWER_VAR_CHARS)}…` : text
+}
 const MAX_PUSH_ONLY_CHARS = 500
 
 /** 알림 유형별 글자 수 상한(기본은 MAX_NOTIFY_MESSAGE_CHARS) — 무인보관함 이용안내는 100자(Stephen 2026-11-12) */

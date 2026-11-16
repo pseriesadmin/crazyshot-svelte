@@ -4,6 +4,7 @@
 //                              (순수 SQL(pg_cron)에서는 푸시·문자를 보낼 수 없어 크론 /api/cron/late-fee-notice 가 이 함수를 호출한다).
 // 모든 단계는 fail-soft — 한 채널이 실패해도 나머지 채널과 호출 흐름은 계속된다.
 
+import { resolveCardContent, loadReservationCardVars } from '$lib/server/cardMessage'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendCardSms, sendPushToUser } from '$lib/server/push'
 
@@ -33,6 +34,8 @@ export async function notifyLateFeePaid(admin: SupabaseClient, input: LateFeeNot
   const userId = input.userId ?? (await reservationUserId(admin, input.reservationId))
   if (!userId) return
   const amountText = formatWon(input.feeAmount)
+  // 안내문장 변수(고객이름·상품명·예약코드·연체료) — 카드·푸시가 같은 값을 쓴다(2026-11-16)
+  const noticeVars = { ...(await loadReservationCardVars(admin, input.reservationId)), 연체료: amountText }
 
   // ① 채팅 대화카드 — 세션 조회는 공유 RPC 경유(service-operations.md §11)
   try {
@@ -47,7 +50,7 @@ export async function notifyLateFeePaid(admin: SupabaseClient, input: LateFeeNot
         session_id: sessionId,
         sender_type: 'admin',
         message_type: 'action_card',
-        content: `연체료 결제가 완료됐습니다. (${amountText})`,
+        content: await resolveCardContent(admin, 'late_fee_paid', noticeVars, `연체료 결제가 완료됐습니다. (${amountText})`),
         action_payload: {
           type: 'late_fee_paid',
           late_fee_id: input.lateFeeId,
@@ -70,7 +73,7 @@ export async function notifyLateFeePaid(admin: SupabaseClient, input: LateFeeNot
       userId,
       'late_fee_paid',
       { title: '연체료 결제가 완료됐어요', body: `연체료 ${amountText} 결제가 정상 처리됐어요.`, link: '/account/rental' },
-      { vars: { 연체료: amountText } },
+      { vars: noticeVars },
     )
   } catch (err) {
     console.error('[late-fee/notify] 결제 완료 푸시 실패(fail-soft):', err instanceof Error ? err.message : err)
@@ -93,6 +96,8 @@ export async function notifyLateFeeRequested(admin: SupabaseClient, input: LateF
   const userId = input.userId ?? (await reservationUserId(admin, input.reservationId))
   if (!userId) return false
   const amountText = formatWon(input.feeAmount)
+  // 안내문장 변수(고객이름·상품명·예약코드·연체료) — 카드·푸시가 같은 값을 쓴다(2026-11-16)
+  const noticeVars = { ...(await loadReservationCardVars(admin, input.reservationId)), 연체료: amountText }
   const payLink = `/pay/late-fee/${input.lateFeeId}`
 
   let pushDelivered = false
@@ -101,7 +106,7 @@ export async function notifyLateFeeRequested(admin: SupabaseClient, input: LateF
       userId,
       'late_fee_request',
       { title: '연체료 결제 요청이 도착했어요', body: `연체료 ${amountText} 결제를 요청드려요. 대여 정보에서 확인해 주세요.`, link: payLink },
-      { vars: { 연체료: amountText } },
+      { vars: noticeVars },
     )
     pushDelivered = result?.delivered === true
   } catch (err) {
