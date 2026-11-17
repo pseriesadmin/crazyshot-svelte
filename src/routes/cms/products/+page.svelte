@@ -5,6 +5,7 @@
   import { fly, slide } from 'svelte/transition'
   import { invalidateAll } from '$app/navigation'
   import ProductDetailPanel from '$lib/components/cms/ProductDetailPanel.svelte'
+  import { isPanelDataFor } from '$lib/utils/productPanelTab'
   import CmsSimilarNameInput from '$lib/components/cms/CmsSimilarNameInput.svelte'
   import CmsPagination from '$lib/components/cms/CmsPagination.svelte'
   import type { PageData } from './$types'
@@ -689,9 +690,9 @@
             </div>
           </button>
           <!-- 대표 상품 패널 (부모 선택 시) -->
-          {#if isRootOpen && repBodyOpen && activeDetail.selectedProduct}
-            <div class="rep-body" transition:slide={{ duration: 220 }}>
-              {#key activeSelectedId}
+          {#if repBodyOpen && activeDetail.selectedProduct && isPanelDataFor(activeDetail.selectedProduct.id, rp.id)}
+            <div class="rep-body" class:rep-body--stale={!isRootOpen} transition:slide={{ duration: 220 }}>
+              {#key activeDetail.selectedProduct.id}
                 <ProductDetailPanel
                   product={activeDetail.selectedProduct}
                   priceRules={activeDetail.selectedPriceRules}
@@ -780,9 +781,12 @@
                     {/if}
                   </div>
                   <!-- 아코디언 바디: 자식 상품 선택 시 (이력 탭만 편집 가능 — isChildProduct 자동 적용) -->
-                  {#if isActive && activeDetail.selectedProduct}
-                    <div class="inv-acc-body" transition:slide={{ duration: 220 }}>
-                      {#key activeSelectedId}
+                  <!-- 상세 조회가 끝나 selectedProduct 가 이 재고(unit)의 데이터가 된 뒤에만 연다 — 조회 중에는 PANEL-SWITCH-1 이 이전 상품 상세를 붙들고 있어
+                       그 데이터로 패널이 먼저 마운트되면 탭이 '기본정보'로 고정됐다(2026-11-16). 재고 간 전환 중에는 이전 재고 패널을 그대로 두었다가
+                       새 데이터가 도착하면 한 번에 교체한다(닫혔다 열리는 깜빡임 없음). 키는 실제 상품 id -->
+                  {#if activeDetail.selectedProduct && isPanelDataFor(activeDetail.selectedProduct.id, unit.id)}
+                    <div class="inv-acc-body" class:inv-acc-body--stale={!isActive} transition:slide={{ duration: 220 }}>
+                      {#key activeDetail.selectedProduct.id}
                         <ProductDetailPanel
                           product={activeDetail.selectedProduct}
                           priceRules={activeDetail.selectedPriceRules}
@@ -1341,6 +1345,8 @@
     color: var(--cs-purple);
   }
   .rep-body { overflow: hidden; }
+  /* 다른 상품을 선택해 상세를 불러오는 동안 이전 상품 본문은 흐리게·조작 불가 — 헤더(새 선택)와 본문(이전 상품) 불일치 구간 표시 */
+  .rep-body--stale { opacity: 0.5; pointer-events: none; }
 
   /* 실 상품코드 반영 목록 섹션 */
   .inv-section {
@@ -1533,6 +1539,7 @@
   .inv-acc-body {
     overflow: hidden;
   }
+  .inv-acc-body--stale { opacity: 0.5; pointer-events: none; }
 
   /* 토글 버튼 래퍼 */
   .inv-acc-header form {
