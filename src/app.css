@@ -65,6 +65,7 @@
   --crazy-shot-purple-100: #100B32;  /* 저장·등록·반영·발송 버튼 기본 */
   --crazy-shot-purple-80:  #3B2F8A;  /* 저장·등록·반영·발송 버튼 호버 */
   --cs-purple-light:  #553FE0;       /* 포인트 강조 = purple-60% */
+  --cs-purple-40:     #9383FF;       /* 밝은 퍼플 = purple-40% (2026-11-17 공통 토큰 등록, 첫 사용: 상품 카드 노출 키워드 바) */
   --cs-purple-pale:   #C1BBEC;       /* 연한 강조 = purple-20% */
   --cs-purple-op10:   #E1DEF3;       /* nav 배경 기본색 = purple-op-10% */
   --cs-focus-ring:    var(--cs-purple-pale); /* CMS 입력폼 포커스 아웃라인(2026-10-20, 기존 --cs-purple보다 옅게 — 입력폼 전역 단일 토큰) */
