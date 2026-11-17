@@ -1,13 +1,13 @@
 <script lang="ts">
   import { truncateKeywordLabel } from '$lib/utils/keywordDisplay'
 
-  /** 상품 카드·상세 제목 영역 공통 — CMS 에서 카드 노출로 선택한 키워드를 라운드 바로 표시 */
+  /** 상품 카드·상세 제목 영역 공통 — CMS 에서 카드 노출로 선택한 키워드를 라운드 바로 표시. 고객 화면에서는 '#' 없이 글자만 보인다(CMS 칩은 '#' 유지, 2026-11-17) */
   let { keywords = [] }: { keywords?: string[] } = $props()
 </script>
 
 {#if keywords.length > 0}
   <p class="pc-kw-row">
-    {#each keywords as kw (kw)}<span class="pc-kw">#{truncateKeywordLabel(kw)}</span>{/each}
+    {#each keywords as kw (kw)}<span class="pc-kw">{truncateKeywordLabel(kw)}</span>{/each}
   </p>
 {/if}
 
@@ -24,12 +24,11 @@
   /* 모바일 = PC 값 × 0.60(상하 8→4.8px·좌우 27→16.2px), 폰트는 모바일 토큰 14px Bold(PC 16px) — 2026-11-16 Stephen 지시 */
   .pc-kw {
     flex: 0 0 auto;
-    padding: 4.8px 16.2px;
+    padding: 3.84px 16.2px; /* 모바일 상하 4.8→3.84px(−20%, 2026-11-17 Stephen 지시), 좌우 16.2px 불변 */
     border-radius: var(--radius-full);
-    background: var(--cs-purple-40);
+    background: var(--cs-purple-light);
     color: var(--cs-white);
-    font: var(--text-m-script-12); /* 모바일 12px — 12px Bold 전용 토큰이 없어 12px 토큰(500)에 굵기 700 을 덧씌움(2026-11-17 Stephen 지시) */
-    font-weight: 700;
+    font: var(--text-m-tag-11); /* 모바일 11px Bold(토큰이 700 포함) — 12→11px 한 사이즈 작게(2026-11-17 Stephen 지시) */
     line-height: 1.2;
     white-space: nowrap;
   }
