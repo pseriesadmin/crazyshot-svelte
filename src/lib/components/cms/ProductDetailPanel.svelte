@@ -199,13 +199,8 @@
   let activeTab = $state<TabKey>(parsedInitialTab)
   // 자식 상품(빠른재고등록 생성) 여부 — history 탭만 수정 허용, 나머지 읽기 전용
   const isChildProduct = $derived(!!product.parent_product_id)
-  // 방어: 이전 상품 데이터로 마운트된 뒤 product 가 자식으로 바뀌어도 자식은 이력 탭으로 고정(탭 상태는 마운트 시 1회만 정해지므로)
-  $effect(() => {
-    if (isChildProduct && activeTab !== 'history') {
-      activeTab = 'history'
-      untrack(() => { if (!historyLoaded) loadHistory() })
-    }
-  })
+  // 탭 상태는 마운트 시 1회 정해진다 — 목록 화면이 {#key 실제 상품 id} 와 isPanelDataFor 로 '자기 데이터가 도착한 뒤에만' 마운트하므로
+  // 이 패널이 다른 상품 데이터로 먼저 열려 탭이 틀어지는 경로는 없다(별도 방어 효과를 두지 않는다 — 2026-11-16).
   // 부모 상품이면서 자식(인벤토리)이 1개 이상인 경우 — 이력 탭을 집계 모드로 표시
   const isAggregatedMode = $derived(!isChildProduct && inventoryList.length > 0)
 

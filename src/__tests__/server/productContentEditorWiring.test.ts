@@ -53,7 +53,7 @@ describe('편집기 읽기 전용 모드', () => {
     expect(editor).toMatch(/\{#if !isMobile && !readonly\}/)
     expect(editor).toMatch(/\{#if ctxKind && !readonly\}/)
     expect(editor).toMatch(/const showMobileBar = \$derived\(!readonly &&/)
-    expect(editor).toMatch(/<KeywordTagInput bind:keywords \{readonly\} \/>/)
+    expect(editor).toMatch(/<KeywordTagInput bind:keywords bind:cardKeywords \{readonly\} \/>/)
     expect(editor).toMatch(/editor\.setEditable\(!ro\)/)
   })
 
