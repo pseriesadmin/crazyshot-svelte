@@ -358,7 +358,7 @@
     line-height: 1;
   }
   .pc-price-num {
-    font: var(--text-m-body-16B);          /* 16px Bold → Black 오버라이드 */
+    font: var(--text-m-num-18B);           /* 18px Black D-DIN — 2026-11-17(Stephen 지시) 16→18px 한 사이즈 크게. 아래 font-family·weight 는 기존 방식 유지 */
     font-weight: 900;
     /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(--text-m-num-18B 와 같은 D-DIN, 한글 대체 포함) 적용 — 크기(16px)·색은 기존 유지, PC 는 아래 @media 의 font 축약형이 그대로 덮어써 무변경 */
     font-family: 'D-DIN Exp', var(--font-kr-heading);
@@ -417,8 +417,8 @@
     .pc-price-group{ gap: 5px; }
     .pc-price-row   { flex-wrap: nowrap; gap: 5px; letter-spacing: -0.5px; }
     .pc-price-label { font: var(--text-pc-body-14); font-weight: 700; line-height: 1; }     /* 14px Bold */
-    /* 18px · 2026-11-13(Stephen 지시): PC 도 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900(0.5px 외곽선) — 크기·색 기존 유지 */
-    .pc-price-num   { font: var(--text-pc-title-18); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; -webkit-text-stroke: 0.5px currentColor; }
+    /* 22px · 2026-11-13(Stephen 지시): PC 도 숫자 전용 폰트(D-DIN, 한글 대체 포함)·900(0.5px 외곽선) — 색 기존 유지. 2026-11-17(Stephen 지시): 크기 18→22px 한 사이즈 크게(--text-pc-hsub-22) */
+    .pc-price-num   { font: var(--text-pc-hsub-22); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; -webkit-text-stroke: 0.5px currentColor; }
     .pc-price-sep   { font: var(--text-pc-body-14); line-height: 1; color: inherit; }     /* 14px Bold */
     /* PC도 동일한 볼드 없는 폰트토큰 사용(요청: PC·모바일 동일 반영) */
     .pc-name        { font: var(--text-m-script-14); letter-spacing: -0.5px; line-height: 1; margin: 0; }
@@ -452,6 +452,11 @@
   .pc-card--pick .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1 / 1; }
   .pc-card--pick .pc-img { position: absolute; inset: 0; }
   .pc-card--pick .pc-category { text-transform: uppercase; }   /* 기존 .mdp-category */
+  /* MD 추천 카드(/products pick 139px·홈 pick-home 최대 174px)는 모바일 요금 숫자 16px 유지 — pick 은 18px 에서 Day/12H 가 한 줄에 안 들어가(실측 375px), 홈 pick-home 은 한 사이즈 작게(2026-11-17 Stephen 지시). PC(768px 이상)는 영향 없도록 모바일 범위만 */
+  @media (max-width: 767px) {
+    .pc-card--pick .pc-price-num,
+    .pc-card--pick-home .pc-price-num { font: var(--text-m-body-16B); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; line-height: 1; }
+  }
   @media (min-width: 768px) {
     .pc-card.pc-card--pick { width: 232px; }   /* 표준 290px 대비 20% 축소(요청 2026-09-29) */
   }
