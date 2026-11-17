@@ -452,6 +452,11 @@
   .pc-card--pick .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1 / 1; }
   .pc-card--pick .pc-img { position: absolute; inset: 0; }
   .pc-card--pick .pc-category { text-transform: uppercase; }   /* 기존 .mdp-category */
+  /* MD 추천 카드(/products pick 139px·홈 pick-home 최대 174px)는 모바일 요금 숫자 16px 유지 — pick 은 18px 에서 Day/12H 가 한 줄에 안 들어가(실측 375px), 홈 pick-home 은 한 사이즈 작게(2026-11-17 Stephen 지시). PC(768px 이상)는 영향 없도록 모바일 범위만 */
+  @media (max-width: 767px) {
+    .pc-card--pick .pc-price-num,
+    .pc-card--pick-home .pc-price-num { font: var(--text-m-body-16B); font-family: 'D-DIN Exp', var(--font-kr-heading); font-weight: 900; line-height: 1; }
+  }
   @media (min-width: 768px) {
     .pc-card.pc-card--pick { width: 232px; }   /* 표준 290px 대비 20% 축소(요청 2026-09-29) */
   }
