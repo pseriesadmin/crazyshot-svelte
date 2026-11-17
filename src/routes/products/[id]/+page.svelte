@@ -1623,6 +1623,14 @@
 
   .title-block { display: flex; flex-direction: column; gap: 7px; }   /* 10→7px(−30%, 모바일·PC 공통) */
   .title-block :global(.pc-kw-row) { margin-bottom: 10.5px; }   /* 키워드 바↔브랜드 간격 7→17.5px(×2.5, 모바일·PC 공통) */
+  /* 상세 제목 영역 키워드 바 모바일 글자만 12→14px 한 사이즈 크게(--text-m-script-14 + 굵기 700, 카드는 12px 유지·PC 는 컴포넌트의 PC 규칙 그대로) — 2026-11-17 Stephen 지시 */
+  @media (max-width: 767px) {
+    .title-block :global(.pc-kw) { font: var(--text-m-script-14); font-weight: 700; line-height: 1.2; }
+  }
+  /* PC 상세 제목 영역 키워드 바 글자만 14→16px 한 사이즈 크게(--text-pc-title-16, 굵기 700). 카드의 PC 14px 는 그대로 — 2026-11-17 Stephen 지시 */
+  @media (min-width: 768px) {
+    .title-block :global(.pc-kw) { font: var(--text-pc-title-16); line-height: 1.2; }
+  }
   .title-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .product-name {
     font: var(--text-m-htitle-24B);

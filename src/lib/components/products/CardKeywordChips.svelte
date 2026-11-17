@@ -26,18 +26,18 @@
     flex: 0 0 auto;
     padding: 4.8px 16.2px;
     border-radius: var(--radius-full);
-    background: var(--cs-lilac);
-    color: var(--cs-purple-light);
-    font: var(--text-m-script-14);
+    background: var(--cs-purple-40);
+    color: var(--cs-white);
+    font: var(--text-m-script-12); /* 모바일 12px — 12px Bold 전용 토큰이 없어 12px 토큰(500)에 굵기 700 을 덧씌움(2026-11-17 Stephen 지시) */
     font-weight: 700;
     line-height: 1.2;
     white-space: nowrap;
   }
   @media (min-width: 768px) {
-    /* PC: 폰트 16px(11→12→14→16 세 단계 업), 상하 4→8px(×2)·좌우 9→27px(×3) */
+    /* PC: 폰트 14px(--text-pc-body-14, 16px에서 한 사이즈 작게 — 2026-11-17 Stephen 지시), 상하 4→8px(×2)·좌우 9→27px(×3) */
     .pc-kw {
       padding: 8px 27px;
-      font: var(--text-pc-title-16);
+      font: var(--text-pc-body-14);
       line-height: 1.2;
     }
   }
