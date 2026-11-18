@@ -1,5 +1,31 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+
+  /** 스크롤해서 화면 안쪽에 충분히 들어올 때 한 번만 '팍' 터지듯 튀어나오는 모션(data-burst=in) — 보이기 전에는 숨겨 두었다가(data-burst=wait) 진입 시 재생. 모션 줄이기 설정이면 바로 표시 */
+  function burstIn(node: SVGElement): { destroy: () => void } {
+    if (typeof IntersectionObserver === 'undefined' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return { destroy: () => {} }
+    }
+    node.dataset.burst = 'wait'
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return
+      node.dataset.burst = 'in'
+      io.disconnect()
+    }, { threshold: 0.9, rootMargin: '0px 0px -12% 0px' })   // 화면 아래쪽 12% 띠를 뺀 안쪽에 충분히 들어왔을 때만 — 첫 화면 가장자리에 걸쳐 로딩 중 미리 재생되는 것 방지
+    io.observe(node)
+    return { destroy: () => io.disconnect() }
+  }
+
+  /** 카드 배경 이미지가 가로형이면 data-wide 표시 → CSS가 원본 비율대로 위쪽에 배치(정사각 cover 로 하단 글자 영역에 덮이는 현상 방지) */
+  function wideFit(node: HTMLImageElement): { destroy: () => void } {
+    const apply = (): void => {
+      if (node.naturalWidth > node.naturalHeight) node.dataset.wide = '1'
+      else delete node.dataset.wide
+    }
+    if (node.complete) apply()
+    node.addEventListener('load', apply)
+    return { destroy: () => node.removeEventListener('load', apply) }
+  }
   import { HOME_META_DESCRIPTION, HOME_PAGE_TITLE } from '$lib/utils/pageMeta'
   import SeoHead from '$lib/components/common/SeoHead.svelte'
   import { untrack } from 'svelte'
@@ -71,6 +97,12 @@
       ? [pcCarousel[pcCarousel.length - 1], ...pcCarousel, pcCarousel[0]]
       : pcCarousel
   )
+  /** 보고 있는 PC 히어로 실제 장 번호(0부터) — 복제 구간은 실제 장으로 환산 */
+  const pcActive = $derived.by(() => {
+    const n = pcCarousel.length
+    if (n <= 1) return 0
+    return pcPos === 0 ? n - 1 : pcPos === n + 1 ? 0 : pcPos - 1
+  })
   let pcDragX    = $state(0)
   let pcDragging = $state(false)
   let pcJump     = $state(false)
@@ -96,6 +128,14 @@
     pcPos += delta
     clearTimeout(pcSettleTimer)
     pcSettleTimer = setTimeout(pcSettle, HERO_ANIM_MS + 30)
+  }
+  /** 위치 표시를 누르면 그 장으로 이동 — 자동 넘김은 잠시 멈춘다(모바일 heroGoTo 와 동일) */
+  function pcGoTo(i: number): void {
+    const n = pcCarousel.length
+    if (n <= 1 || i === pcActive) return
+    if (pcPos === 0 || pcPos === n + 1) return
+    pcPos = i + 1
+    pcPausedUntil = Date.now() + HERO_PAUSE_MS
   }
   function pcDown(e: PointerEvent): void {
     if (pcCarousel.length <= 1 || pcPointer !== -1) return
@@ -176,6 +216,12 @@
       ? [mobileCarousel[mobileCarousel.length - 1], ...mobileCarousel, mobileCarousel[0]]
       : mobileCarousel
   )
+  /** 보고 있는 실제 장 번호(0부터) — 앞뒤 복제 구간(0, N+1)은 같은 그림의 실제 장으로 환산 */
+  const heroActive = $derived.by(() => {
+    const n = mobileCarousel.length
+    if (n <= 1) return 0
+    return heroPos === 0 ? n - 1 : heroPos === n + 1 ? 0 : heroPos - 1
+  })
   let heroDragX    = $state(0)
   let heroDragging = $state(false)
   let heroJump     = $state(false)    // 복제 구간 → 실제 장으로 되돌릴 때 전환 없이 즉시 이동
@@ -202,6 +248,15 @@
     heroPos += delta
     clearTimeout(heroSettleTimer)
     heroSettleTimer = setTimeout(heroSettle, HERO_ANIM_MS + 30)
+  }
+
+  /** 위치 표시를 터치하면 그 장으로 바로 이동(애니메이션) — 자동 넘김은 잠시 멈춘다 */
+  function heroGoTo(i: number): void {
+    const n = mobileCarousel.length
+    if (n <= 1 || i === heroActive) return
+    if (heroPos === 0 || heroPos === n + 1) return   // 복제 구간 정리 중(0.4초 이내)에는 보류
+    heroPos = i + 1
+    heroPausedUntil = Date.now() + HERO_PAUSE_MS
   }
 
   function heroDown(e: PointerEvent): void {
@@ -551,6 +606,22 @@
       <img src="/home/desktop/1fbafe64eb226e679021660588c1e5d840401f59.png" alt="" class="d-hero-left" aria-hidden="true"/>
       <img src="/home/desktop/1bbde5f74b1d99829b62da01db4cd68c18c25510.png" alt="" class="d-hero-right" aria-hidden="true"/>
     {/if}
+
+    <!-- 슬라이드 위치 표시(PC) — 모바일과 같은 스타일, 크기만 모바일의 60%(40% 축소, 2026-11-18 Stephen 지시) -->
+    {#if pcCarousel.length > 1}
+      <div class="m-hero-dots m-hero-dots--pc" role="group" aria-label="슬라이드 위치" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+        {#each pcCarousel as _, i}
+          <button
+            type="button"
+            class="m-hero-dot-btn"
+            class:active={i === pcActive}
+            aria-label={`${i + 1}번째 슬라이드`}
+            aria-current={i === pcActive ? 'true' : undefined}
+            onclick={() => pcGoTo(i)}
+          ><span class="m-hero-dot" class:active={i === pcActive}></span></button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <!-- ② 취향직격 PICK (PC) — Figma node 2072:5988 구조 그대로:
@@ -629,11 +700,8 @@
               tabindex={0}
               onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
             >
-              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="prod-card-img" loading="lazy"/>
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="prod-card-img" loading="lazy" use:wideFit/>
               <div class="prod-card-info">
-                <div class="prod-card-headline">
-                  <span class="prod-card-name">{prod.name}</span>
-                </div>
                 <div class="prod-card-price">
                   {#if prod.sale_only}
                     <span class="price-label">Price</span><span class="price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
@@ -642,6 +710,9 @@
                     {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
                     {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
                   {/if}
+                </div>
+                <div class="prod-card-headline">
+                  <span class="prod-card-name">{prod.name}</span>
                 </div>
               </div>
             </div>
@@ -750,10 +821,6 @@
             >
               <img src={p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="prod-card-img" loading="lazy"/>
               <div class="prod-card-info">
-                <div class="prod-card-headline">
-                  {#if p.category}<span class="prod-card-cat">{p.category}</span>{/if}
-                  <span class="prod-card-name">{p.name}</span>
-                </div>
                 <div class="prod-card-price">
                   {#if p.sale_only}
                     <span class="price-label">Price</span><span class="price-num">{(p.sale_price ?? 0).toLocaleString('ko-KR')}</span>
@@ -762,6 +829,10 @@
                     {#if p.price_24h && p.price_12h}<span class="price-sep">/</span>{/if}
                     {#if p.price_12h}<span class="price-label">12H</span><span class="price-num">{p.price_12h.toLocaleString('ko-KR')}</span>{/if}
                   {/if}
+                </div>
+                <div class="prod-card-headline">
+                  {#if p.category}<span class="prod-card-cat">{p.category}</span>{/if}
+                  <span class="prod-card-name">{p.name}</span>
                 </div>
                 {#if p.product_caption}<div class="prod-card-desc">{p.product_caption}</div>{/if}
               </div>
@@ -897,6 +968,22 @@
     {:else}
       <img src="/home/mobile/ac4438597a6842bccc5d44da173a03a9f3614d50.png" alt="" class="m-hero-bg" aria-hidden="true"/>
     {/if}
+
+    <!-- 슬라이드 위치 표시: 장 수만큼 원형 점, 보고 있는 장은 짧은 라운드 바로 펼쳐짐(2026-11-18 Stephen 지시) -->
+    {#if mobileCarousel.length > 1}
+      <div class="m-hero-dots" role="group" aria-label="슬라이드 위치" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+        {#each mobileCarousel as _, i}
+          <button
+            type="button"
+            class="m-hero-dot-btn"
+            class:active={i === heroActive}
+            aria-label={`${i + 1}번째 슬라이드`}
+            aria-current={i === heroActive ? 'true' : undefined}
+            onclick={() => heroGoTo(i)}
+          ><span class="m-hero-dot" class:active={i === heroActive}></span></button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <!-- ② 취향직격 테마그룹 (Mobile) -->
@@ -904,7 +991,7 @@
     <div class="section-head">
       <!-- PC(.theme-pick-title-wrap)와 동일한 스파클 아이콘을 모바일 비율로 축소 반영
            (2026-08-26, Stephen 지적 — 기존엔 다른 섹션과 공용인 일반 물결 아이콘을 오용) -->
-      <svg width="34" height="19" viewBox="0 0 38 21" fill="none" aria-hidden="true">
+      <svg width="34" height="19" viewBox="0 0 38 21" fill="none" aria-hidden="true" use:burstIn class="burst-icon">
         <path d="M17.8899 0.218353C18.6016 -0.0728023 19.3988 -0.072768 20.1106 0.218353L20.262 0.28476L20.387 0.349213C20.995 0.681504 21.3406 1.19289 21.5178 1.47714C21.7224 1.80539 21.9327 2.22721 22.1321 2.62265L24.2747 6.87363L28.9592 5.30624C29.4012 5.15823 29.8653 5.00075 30.2551 4.90878C30.6075 4.8257 31.3078 4.68499 32.052 4.96542C32.9 5.28515 33.5462 5.97536 33.8196 6.82675C34.058 7.57012 33.8969 8.25404 33.801 8.60507C33.6952 8.99225 33.5215 9.45227 33.3567 9.89511L31.8293 13.9967L36.8264 16.2633C37.8322 16.7196 38.2776 17.9049 37.8215 18.9107C37.3651 19.9163 36.1798 20.3621 35.1741 19.9059L29.7776 17.4586C29.5783 17.3682 29.3209 17.2523 29.1028 17.1314C28.8626 16.9983 28.5301 16.7857 28.2366 16.4303C27.8561 15.9694 27.6248 15.4047 27.5706 14.8131C27.5289 14.3582 27.6129 13.9752 27.6877 13.7125C27.756 13.4731 27.8555 13.2084 27.9329 13.0006L29.2639 9.42148L25.134 10.8053C24.9449 10.8686 24.6962 10.9535 24.47 11.0103C24.2191 11.0734 23.8562 11.1416 23.427 11.0953C22.8646 11.0345 22.3332 10.8121 21.8958 10.4586C21.5626 10.1893 21.3547 9.88693 21.2219 9.6666C21.1019 9.46734 20.9848 9.23285 20.8938 9.05234L18.9993 5.2955L17.1067 9.05136V9.05234C17.0157 9.23282 16.8986 9.46742 16.7786 9.6666C16.6458 9.8869 16.4377 10.1894 16.1047 10.4586C15.6673 10.8119 15.1358 11.0346 14.5735 11.0953C14.1442 11.1415 13.7813 11.0734 13.5305 11.0103C13.3042 10.9534 13.0556 10.8686 12.8665 10.8053L8.7356 9.42148L10.0676 13.0006C10.145 13.2085 10.2445 13.4731 10.3127 13.7125C10.3876 13.9752 10.4716 14.3581 10.4299 14.8131C10.3757 15.4046 10.1444 15.9694 9.76392 16.4303C9.47044 16.7855 9.13786 16.9983 8.89771 17.1314C8.67964 17.2522 8.42204 17.3683 8.2229 17.4586L2.82642 19.9059C1.82066 20.3619 0.635292 19.9164 0.178955 18.9107C-0.277049 17.905 0.168563 16.7197 1.17407 16.2633L6.17017 13.9967L4.6438 9.89511C4.479 9.45221 4.30527 8.99228 4.19946 8.60507C4.10357 8.25406 3.94252 7.57005 4.18091 6.82675L4.23657 6.66953C4.53582 5.89099 5.15351 5.26527 5.94849 4.96542L6.08716 4.91757C6.77856 4.70212 7.41493 4.83087 7.74536 4.90878C8.13518 5.00072 8.59918 5.1582 9.04126 5.30624L13.7249 6.87363L15.8684 2.62265C16.0677 2.22732 16.2781 1.80535 16.4827 1.47714C16.6716 1.17402 17.0524 0.611777 17.7385 0.28476L17.8899 0.218353Z" fill="#FF3535"/>
       </svg>
       <span class="section-title" style="color:{redDeep}">취·향·직·격 PICK!</span>
@@ -967,11 +1054,8 @@
               tabindex={0}
               onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
             >
-              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy"/>
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy" use:wideFit/>
               <div class="m-prod-info">
-                <div class="m-prod-headline">
-                  <span class="m-prod-name">{prod.name}</span>
-                </div>
                 <div class="m-prod-price">
                   {#if prod.sale_only}
                     <span class="price-label">Price</span><span class="price-num">{(prod.sale_price ?? 0).toLocaleString('ko-KR')}</span>
@@ -980,6 +1064,9 @@
                     {#if prod.price_24h && prod.price_12h}<span class="price-sep">/</span>{/if}
                     {#if prod.price_12h}<span class="price-label">12H</span><span class="price-num">{prod.price_12h.toLocaleString('ko-KR')}</span>{/if}
                   {/if}
+                </div>
+                <div class="m-prod-headline">
+                  <span class="m-prod-name">{prod.name}</span>
                 </div>
               </div>
             </div>
@@ -1394,6 +1481,18 @@
     flex-direction: column;
     gap: 24px;
   }
+  /* 화면 진입 시 '팍' 터지듯 튀어나오는 아이콘 모션(2026-11-18 Stephen 지시): 뒤(작고 흐릿)에서 앞으로 빠르게 튀어나와 크게 오버슈트 → 눌렸다가 정착. 보이기 전엔 숨김(.burst-wait), 진입 시 1회 재생(.burst-in) */
+  .burst-icon { transform-origin: 50% 70%; }
+  .burst-icon:global([data-burst='wait']) { opacity: 0; transform: scale(0.1); }
+  .burst-icon:global([data-burst='in']) { animation: burst-pop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+  @keyframes burst-pop {
+    0%   { opacity: 0; transform: scale(0.1) rotate(-14deg); filter: drop-shadow(0 0 0 rgba(255,53,53,0)); }
+    35%  { opacity: 1; transform: scale(1.75) rotate(7deg); filter: drop-shadow(0 0 8px rgba(255,53,53,0.9)); }   /* 팍 — 크게 터지며 번쩍 */
+    55%  { transform: scale(0.82) rotate(-3deg); filter: drop-shadow(0 0 4px rgba(255,53,53,0.5)); }              /* 눌림 */
+    75%  { transform: scale(1.14) rotate(1deg); }
+    100% { opacity: 1; transform: scale(1) rotate(0); filter: drop-shadow(0 0 0 rgba(255,53,53,0)); }
+  }
+
   .section-head {
     display: flex;
     flex-direction: column;
@@ -1848,45 +1947,60 @@
     scrollbar-width: none;
   }
   .prod-slider::-webkit-scrollbar { display: none; }
-  /* 표준 상품슬라이드 카드 — Figma node 600:862 스펙 그대로 반영 (정사각 300x300, radius 50px) */
-  /* 카드 자체는 고정 — hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌 효과) */
-  .prod-card {
+  /* 표준 상품슬라이드 카드 — PC(.prod-card*)·모바일(.m-prod-card*) 스타일 공유(2026-11-18 Stephen 지시: 비율은 달라도 스타일은 공유).
+     구조·색·정렬·모양은 이 블록 한 곳에서 정의하고, PC/모바일은 크기 값(--pc-*)만 다르다. 값을 바꿀 땐 아래 두 줄의 변수만 손댄다.
+     Figma node 600:862 스펙(정사각 300×300, 반경 50px) 기준, 모바일은 축소값 */
+  .prod-card   { --pc-size: 300px; --pc-radius: 50px; --pc-pad: 30px; --pc-gap: 10px; --pc-head-gap: 5px; --pc-cat: 12px; --pc-name: 18px; --pc-name-lh: 1.7; --pc-price-gap: 5px; --pc-label: 14px; --pc-num: 25px; --pc-desc: 12px; }
+  .m-prod-card { --pc-size: 260px; --pc-radius: 44px; --pc-pad: 24px; --pc-gap: 8px;  --pc-head-gap: 4px; --pc-cat: 11px; --pc-name: 16px; --pc-name-lh: 1.5; --pc-price-gap: 4px; --pc-label: 12px; --pc-num: 21px; --pc-desc: 11px; }
+
+  .prod-card, .m-prod-card {
     position: relative;
     flex-shrink: 0;
     overflow: hidden;
     cursor: pointer;
-    width: 300px; height: 300px;
-    border-radius: 50px;
+    width: var(--pc-size); height: var(--pc-size);
+    border-radius: var(--pc-radius);
+    background: #100b32;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
   }
-  .prod-card-img {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-    transition: transform 0.4s ease;
-  }
+  .m-prod-card { scroll-snap-align: center; transition: transform 0.15s; }
+  .m-prod-card:active { transform: scale(0.97); }
+  .prod-card-img, .m-prod-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* PC 카드는 hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌) — 카드 자체는 고정 */
+  .prod-card-img { transition: transform 0.4s ease; }
   .prod-card:hover .prod-card-img { transform: scale(1.25); }
-  .prod-card-info {
+  /* 업로드 이미지가 가로형(너비>높이)이면 정사각 카드에 억지로 채우지 않고 원본 비율 그대로 위쪽에 배치 — 카드 하단 글자 영역(그라데이션)에 인물이 덮여 눌려 보이던 현상 해결(2026-11-18).
+     남는 아래쪽은 카드 배경색(#100b32)이 채우고, 이미지 아래 끝은 마스크로 부드럽게 이어 붙인다. 세로형·정사각은 기존 cover 그대로. */
+  /* data-wide 는 스크립트(wideFit)가 붙이는 속성이라 Svelte 가 '미사용 선택자'로 지우지 않도록 :global 로 감싼다 */
+  .m-prod-card :global(.m-prod-img[data-wide]), .prod-card :global(.prod-card-img[data-wide]) {
+    inset: 0 0 auto 0; height: auto;
+    -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+  }
+  .prod-card-info, .m-prod-info {
     position: relative;
     width: 100%;
     box-sizing: border-box;
-    padding: 30px;
+    padding: var(--pc-pad);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--pc-gap);
     background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40.385%, #100b32 100%);
   }
-  .prod-card-headline { display: flex; flex-direction: column; gap: 5px; }
-  .prod-card-cat  { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
-  .prod-card-name { font-family: var(--font-kr); font-size: 18px; font-weight: 700; color: #fff; line-height: 1.7; }
-  .prod-card-price {
-    display: flex; align-items: center; gap: 5px;
+  .prod-card-headline, .m-prod-headline { display: flex; flex-direction: column; gap: var(--pc-head-gap); }
+  .prod-card-cat, .m-prod-cat   { font-family: var(--font-kr); font-size: var(--pc-cat); font-weight: 700; color: #fff; }
+  .prod-card-name, .m-prod-name { font-family: var(--font-kr); font-size: var(--pc-name); font-weight: 700; color: #fff; line-height: var(--pc-name-lh); }
+  .prod-card-price, .m-prod-price {
+    display: flex; align-items: center; gap: var(--pc-price-gap);
     color: #ff3535; letter-spacing: -0.5px;
   }
-  .prod-card-price .price-label { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
-  .prod-card-price .price-num   { font-family: 'D-DIN Exp', var(--font-kr); font-size: 25px; font-weight: 900; -webkit-text-stroke: 0.5px currentColor; /* 2026-11-13(Stephen 지시): PC 금액 숫자도 D-DIN 900 — 크기·색 기존 유지 */ }
-  .prod-card-price .price-sep   { font-family: var(--font-kr); font-size: 14px; font-weight: 700; }
-  .prod-card-desc { font-family: var(--font-kr); font-size: 12px; font-weight: 700; color: #fff; }
+  .prod-card-price .price-label, .m-prod-price .price-label { font-family: var(--font-kr); font-size: var(--pc-label); font-weight: 700; }
+  /* 금액 숫자: 숫자 전용 폰트 D-DIN(한글 대체 포함) — PC 2026-11-13·모바일 2026-11-12 Stephen 지시. D-DIN 최대 웨이트 700 → 900 보정(외곽선 0.5px) */
+  .prod-card-price .price-num, .m-prod-price .price-num { font-family: 'D-DIN Exp', var(--font-kr); font-size: var(--pc-num); font-weight: 900; -webkit-text-stroke: 0.5px currentColor; }
+  .prod-card-price .price-sep, .m-prod-price .price-sep { font-family: var(--font-kr); font-size: var(--pc-label); font-weight: 700; }
+  .prod-card-desc, .m-prod-desc { font-family: var(--font-kr); font-size: var(--pc-desc); font-weight: 700; color: #fff; }
 
   /* 카테고리 상품 슬라이더(PC) — /products 헤더 카드 슬라이더(.d-slider-relative/.d-slider-cards/.d-feat-card) 컨테이너 값 반영(2026-09-29)
      높이 500px(세로폭 Stephen 지정, /products는 580px) · 카드 3장 균등(gap 20px, 최소 300px) · 반경 50/20/50/20 · 카드 안쪽은 기존 prod-card 스타일 유지.
@@ -2033,6 +2147,46 @@
     will-change: transform;
   }
   .m-hero-track.dragging { transition: none; }
+  /* 슬라이드 위치 표시 — 히어로 하단 중앙, 터치하면 그 장으로 이동. 하단 탭바(70px)·히어로 끝에 붙지 않도록 여백 확보.
+     점은 크게(18px, 보고 있는 장은 54px 바 — 2026-11-18 1.5배 확대), 터치 영역은 점마다 66×66px */
+  .m-hero-dots { --hd-k: 1; }               /* 크기 배율 — PC(.m-hero-dots--pc)는 모바일의 0.6 */
+  .m-hero-dots--pc { --hd-k: 0.6; }
+  .m-hero-dots {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: calc(2px * var(--hd-k));                               /* 점 중심이 하단에서 50px → 35px(현재보다 30% 아래, 2026-11-18). 터치 영역 66px 기준 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2;
+  }
+  .m-hero-dot-btn {
+    height: calc(66px * var(--hd-k));
+    padding: 0 calc(13.6px * var(--hd-k));                         /* 원형 점 사이 간격 34px → 27.2px(−20%, 2026-11-18) */
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-hero-dot-btn.active { padding: 0 calc(3.2px * var(--hd-k)); }  /* 바와 이웃 점 사이 간격 21px → 16.8px(−20%, 2026-11-18) */
+  .m-hero-dot {
+    display: block;
+    width: calc(18px * var(--hd-k)); height: calc(18px * var(--hd-k));
+    border-radius: var(--radius-full);
+    background: rgba(255, 255, 255, 0.2);   /* 기본: 화이트 20% 원형 */
+    transition: width 0.3s ease, background-color 0.3s ease, transform 0.12s ease-out;
+  }
+  .m-hero-dot.active {
+    width: calc(54px * var(--hd-k));          /* 펼쳐진 장: 짧은 라운드 바 */
+    background: var(--cs-white);
+  }
+  .m-hero-dot-btn:active .m-hero-dot { transform: scale(0.8); }   /* 터치 순간 눌림 */
+  @media (prefers-reduced-motion: reduce) {
+    .m-hero-dot { transition: none; }
+  }
   .m-hero-slide {
     position: relative;
     flex: 0 0 100%;
@@ -2109,44 +2263,7 @@
   }
   .dot.active { width: 28px; opacity: 0.8; }
 
-  /* 표준 상품슬라이드 카드 — Figma node 600:862 스펙(정사각) 모바일 축소 적용 */
-  .m-prod-card {
-    position: relative;
-    flex-shrink: 0;
-    overflow: hidden;
-    cursor: pointer;
-    width: 260px; height: 260px;
-    border-radius: 44px;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    scroll-snap-align: center;
-    transition: transform 0.15s;
-  }
-  .m-prod-card:active { transform: scale(0.97); }
-  .m-prod-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .m-prod-info {
-    position: relative;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40.385%, #100b32 100%);
-  }
-  .m-prod-headline { display: flex; flex-direction: column; gap: 4px; }
-  .m-prod-cat  { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
-  .m-prod-name { font-family: var(--font-kr); font-size: 16px; font-weight: 700; color: #fff; line-height: 1.5; }
-  .m-prod-price {
-    display: flex; align-items: center; gap: 4px;
-    color: #ff3535; letter-spacing: -0.5px;
-  }
-  .m-prod-price .price-label { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
-  /* 2026-11-12(Stephen 지시): 모바일 금액 숫자에 숫자 전용 폰트(D-DIN, 한글 대체 포함) 적용 — 크기(21px)·굵기·색 기존 유지 */
-  .m-prod-price .price-num   { font-family: 'D-DIN Exp', var(--font-kr); font-size: 21px; font-weight: 900; -webkit-text-stroke: 0.5px currentColor; /* D-DIN 최대 웨이트 700 → 900 보정 */ }
-  .m-prod-price .price-sep   { font-family: var(--font-kr); font-size: 12px; font-weight: 700; }
-  .m-prod-desc { font-family: var(--font-kr); font-size: 11px; font-weight: 700; color: #fff; }
+  /* 표준 상품슬라이드 카드(모바일 .m-prod-*)는 위쪽 PC 블록과 공유 정의 — "표준 상품슬라이드 카드 — PC·모바일 스타일 공유" 참고 */
 
   /* ── MD 추천 (모바일 초기화면, /products의 md-picks-* 디자인 그대로 이식) ──
      기존 .m-prod-name/.m-prod-info(흰 글자, 이미지 오버레이용)와 완전히 다른 레이아웃
@@ -2376,7 +2493,7 @@
   .m-faq-section { gap: 0; }   /* 히어로 ↔ FAQ 목록 간격 24px → 0(2026-09-29) */
   /* 모바일 FAQ 헤더 — /help 히어로(hero-section·hero 계열·cat-card) 모바일 값 그대로(클래스만 mh- 접두사) */
   .mh-hero {
-    position: relative; width: 100%; overflow: hidden; border-radius: 30px 30px 0 0; min-height: 600px;   /* 하단 좌우 라운드 제거(2026-09-29) */
+    position: relative; width: 100%; overflow: hidden; border-radius: 30px 30px 0 0; min-height: 420px;   /* 하단 좌우 라운드 제거(2026-09-29) · 세로폭 600→420px(−30%, 2026-11-18 Stephen 지시 — PC는 .mh-hero--pc 가 자체 높이 사용) */
     /* 하단 36%를 투명 그라데이션으로 페이드아웃 — 64%부터 시작, 82% 지점 투명도 55%로 더 빠르게(2026-09-29) — 히어로 전체(이미지·텍스트)에 마스크가 걸리므로
        텍스트는 아래 .mh-hero-content 하단 여백으로 30% 위에 배치해 페이드 구간을 피한다 */
     -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 64%, rgba(0,0,0,0.45) 82%, transparent 100%);
@@ -2424,8 +2541,8 @@
     position: relative; z-index: 1;
     display: flex; flex-direction: column; justify-content: flex-end;
     gap: 24px;
-    padding: 96px 20px 84px;   /* 하단 24px + 히어로 높이(600px)의 10%(60px) — 30% 올렸던 문구를 20%(120px) 아래로 재배치(2026-09-29) */
-    min-height: 600px;
+    padding: 40px 20px 59px;   /* 2026-11-18 세로폭 −30%: 하단 84→59px(−30%), 상단 96→40px(줄어든 높이에 문구 4덩어리가 들어가도록). 이전 값: 하단 24px + 히어로 높이(600px)의 10%(60px) — 30% 올렸던 문구를 20%(120px) 아래로 재배치(2026-09-29) */
+    min-height: 420px;
   }
   .mh-hero-heading { display: flex; flex-direction: column; gap: 12px; color: white; }
   .mh-hero-logo { height: 72px; width: auto; align-self: flex-start; }   /* 제목 위 로고 — 48px에서 50% 확대, 히어로 전용 BI(logo-bi-hero.svg, 2026-09-29) */

@@ -65,16 +65,18 @@
   const iconBadges = $derived(badges.filter((b) => b.kind !== 'textbar'))
   const barBadges = $derived(badges.filter((b) => b.kind === 'textbar'))
 
-  /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조). list(상품 전체보기 목록)는 2026-11-05에 포함됐다가 2026-11-18 Stephen 지시로 다시 요금→상품명 순서로 맞바꿈 */
-  const nameFirst = $derived(variant === 'pick-home' || variant === 'pick')
+  // 2026-11-18: 모든 변형이 요금 → 상품명 순서(Stephen 지시 — list·pick 에 이어 홈 미칠 PICK(pick-home)도 맞바꿈, 기존 "상품명 먼저" 분기 삭제)
 
   let isWished = $state(false)
   $effect(() => { isWished = wished })
+  /** 찜 버튼을 직접 누른 뒤에만 true — 아이콘 팝 모션을 첫 렌더가 아닌 터치 순간에만 재생 */
+  let justToggled = $state(false)
 
   function handleWish(e: MouseEvent) {
     e.preventDefault() // list 변형(<a> 루트)에서 찜 클릭이 링크 이동으로 이어지지 않게 — 그 외 변형은 영향 없음
     e.stopPropagation()
     isWished = !isWished
+    justToggled = true
     onWishToggle?.(id)
   }
 
@@ -118,9 +120,23 @@
         aria-label={isWished ? '찜 해제' : '찜하기'}
         aria-pressed={isWished}
       >
-        <svg width="34" height="34" viewBox="0 0 63 63" fill="none" aria-hidden="true">
-          <path d="M31.3184 17.7266C34.3143 14.7584 39.1662 14.7584 42.1621 17.7266C45.1654 20.7024 45.1656 25.5331 42.1621 28.5088L29.5205 41.0322C27.7302 42.8059 24.8332 42.8059 23.043 41.0322C21.2452 39.2508 21.245 36.3565 23.043 34.5752L34.5674 23.1582C35.1558 22.5752 36.1054 22.5796 36.6885 23.168C37.2715 23.7564 37.2671 24.706 36.6787 25.2891L25.1543 36.707C24.5414 37.3146 24.5413 38.2939 25.1543 38.9014C25.7753 39.5166 26.7882 39.5165 27.4092 38.9014L40.0508 26.377C41.8692 24.575 41.8692 21.6594 40.0508 19.8574C38.2241 18.0477 35.2563 18.0477 33.4297 19.8574L20.7686 32.4014C17.744 35.3979 17.744 40.2506 20.7686 43.2471C23.8008 46.251 28.7227 46.2511 31.7549 43.2471L44.9443 30.1797C45.5328 29.5967 46.4824 29.6011 47.0654 30.1895C47.6484 30.7779 47.644 31.7275 47.0557 32.3105L33.8662 45.3779C29.6647 49.5405 22.8588 49.5405 18.6572 45.3779C14.4479 41.2076 14.448 34.4408 18.6572 30.2705L31.3184 17.7266Z" fill="currentColor"/>
-        </svg>
+        {#if isWished}
+          <svg class:pop={justToggled} viewBox="0 0 60 60" fill="none" aria-hidden="true">
+            <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="url(#cs-wish-on-grad)"/>
+            <path d="M39.7002 16C44.6707 16.0001 48.7002 20.0295 48.7002 25V36C48.7002 40.9705 44.6707 44.9999 39.7002 45H20C15.0294 45 11 40.9706 11 36V25C11 20.0294 15.0294 16 20 16H39.7002ZM29.8496 23.25C25.8455 23.25 22.5996 26.4959 22.5996 30.5C22.5996 34.5041 25.8455 37.75 29.8496 37.75C33.8535 37.7497 37.0996 34.5039 37.0996 30.5C37.0996 26.4961 33.8535 23.2503 29.8496 23.25ZM41.4492 20.3535C39.8478 20.3537 38.5498 21.6524 38.5498 23.2539C38.55 24.8552 39.8479 26.1531 41.4492 26.1533C43.0507 26.1533 44.3494 24.8554 44.3496 23.2539C44.3496 21.6523 43.0508 20.3535 41.4492 20.3535Z" fill-rule="evenodd" clip-rule="evenodd" fill="white"/>
+            <defs>
+              <linearGradient id="cs-wish-on-grad" x1="0" y1="30" x2="60" y2="30" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#FF3535"/>
+                <stop offset="0.408654" stop-color="#3B2F8A"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        {:else}
+          <svg class:pop={justToggled} viewBox="0 0 60 60" fill="none" aria-hidden="true">
+            <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="#C1BBEC" fill-opacity="0.3"/>
+            <path d="M39.7002 16C44.6707 16.0001 48.7002 20.0295 48.7002 25V36C48.7002 40.9705 44.6707 44.9999 39.7002 45H20C15.0294 45 11 40.9706 11 36V25C11 20.0294 15.0294 16 20 16H39.7002ZM29.8496 23.25C25.8455 23.25 22.5996 26.4959 22.5996 30.5C22.5996 34.5041 25.8455 37.75 29.8496 37.75C33.8535 37.7497 37.0996 34.5039 37.0996 30.5C37.0996 26.4961 33.8535 23.2503 29.8496 23.25ZM41.4492 20.3535C39.8478 20.3537 38.5498 21.6524 38.5498 23.2539C38.55 24.8552 39.8479 26.1531 41.4492 26.1533C43.0507 26.1533 44.3494 24.8554 44.3496 23.2539C44.3496 21.6523 43.0508 20.3535 41.4492 20.3535Z" fill-rule="evenodd" clip-rule="evenodd" fill="white"/>
+          </svg>
+        {/if}
       </button>
     {/if}
   </div>
@@ -132,10 +148,6 @@
     {/if}
     {#if category && showCategory}
       <p class="pc-category">{category}</p>
-    {/if}
-
-    {#if nameFirst}
-      <p class="pc-name">{name}</p>
     {/if}
 
     {#if isSaleOnly}
@@ -165,9 +177,7 @@
       </div>
     {/if}
 
-    {#if !nameFirst}
-      <p class="pc-name">{name}</p>
-    {/if}
+    <p class="pc-name">{name}</p>
 
     {#if subCopy}
       <p class="pc-subcopy">{subCopy}</p>
@@ -287,7 +297,7 @@
     height: 22px;
     border-radius: 50%;
     border: none;
-    background: color-mix(in srgb, var(--cs-red-xlight) 80%, transparent); /* 비찜 상태 red-5 토큰(#FFEAEA), 알파 80% 유지 */
+    background: transparent; /* 2026-11-18: 원 배경이 아이콘 SVG 안에 포함(OFF #C1BBEC / ON 레드→퍼플 그라데이션) */
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -297,22 +307,26 @@
     padding: 0;
   }
   .pc-clip svg {
-    width: 14px;
-    height: 14px;
+    width: 100%;
+    height: 100%;
   }
-  .pc-clip:hover {
-    background: #ffb8b8;
-    transform: scale(1.1);
+  /* 호버는 마우스 환경에서만 — 터치 기기에서 누른 뒤 확대가 남아 있는 현상 방지 */
+  @media (hover: hover) {
+    .pc-clip:hover { transform: scale(1.1); }
   }
-  .pc-clip.active {
-    background: rgba(255, 207, 207, 0.8);
-    color: #FF3535;
+  /* 터치 순간(2026-11-18 강조): 크게 눌림(0.9→0.7) + 손을 떼면 팝(.pop)으로 튀어 오르며 정착 */
+  .pc-clip { transition: transform 0.12s ease-out; -webkit-tap-highlight-color: transparent; }
+  .pc-clip:active { transform: scale(0.7); }
+  .pc-clip svg.pop { animation: pc-clip-pop 0.5s cubic-bezier(0.25, 0.1, 0.25, 1); }
+  @keyframes pc-clip-pop {
+    0%   { transform: scale(0.7); }
+    35%  { transform: scale(1.55); }
+    55%  { transform: scale(0.88); }
+    75%  { transform: scale(1.12); }
+    100% { transform: scale(1); }
   }
-  .pc-clip.active svg path {
-    fill: #FF3535;
-  }
-  .pc-clip:active {
-    transform: scale(0.9);
+  @media (prefers-reduced-motion: reduce) {
+    .pc-clip svg.pop { animation: none; }
   }
 
   .pc-info {
@@ -405,8 +419,8 @@
       height: 44px;
     }
     .pc-clip svg {
-      width: 34px;
-      height: 34px;
+      width: 100%;
+      height: 100%;
     }
 
     /* 카테고리/가격/상품명 간 여백 30% 축소(요청, 2026-09-27) — 20px(--spacing-5) → 14px */
@@ -445,7 +459,7 @@
   .pc-card--list .pc-img { position: absolute; inset: 0; }
   .pc-card--list:hover .pc-img { transform: none; }
   .pc-card--list .pc-clip { top: 11px; right: 11px; width: 32px; height: 32px; }   /* 기존 .mprod-clip */
-  .pc-card--list .pc-clip svg { width: 26px; height: 26px; }
+  .pc-card--list .pc-clip svg { width: 100%; height: 100%; }
   /* 모바일 목록 요금 — 카드(썸네일) 폭에 비례해 글자 크기를 줄여 다음 줄로 넘어가지 않게 한다(2026-11-17, Stephen 지시).
      상품정보 영역(.pc-info)을 컨테이너로 삼아 cqw(컨테이너 폭 %)로 지정, 기존 고정 크기(숫자 18·라벨 11·구분 14px)는 상한으로 유지.
      비율 기준: 숫자 18px ↔ 6자리 숫자 두 개(예 100,000 / 100,000)가 한 줄에 들어가는 카드 폭 약 170px → 숫자 10.2cqw, 라벨·구분·간격은 같은 비율 */
@@ -511,12 +525,12 @@
   .pc-card.pc-card--scroll-s { width: 122px; }
   .pc-card--scroll-s .pc-img-wrap { width: 122px; height: 122px; border-radius: 14px 6px 14px 6px; }
   .pc-card--scroll-s .pc-clip { width: 15px; height: 15px; top: 5px; right: 5px; }
-  .pc-card--scroll-s .pc-clip svg { width: 10px; height: 10px; }
+  .pc-card--scroll-s .pc-clip svg { width: 100%; height: 100%; }
   @media (min-width: 768px) {
     .pc-card.pc-card--scroll-s { width: 203px; }
     .pc-card--scroll-s .pc-img-wrap { width: 203px; height: 203px; border-radius: 23px 9px 23px 9px; }
     .pc-card--scroll-s .pc-clip { width: 31px; height: 31px; top: 10px; right: 10px; }
-    .pc-card--scroll-s .pc-clip svg { width: 24px; height: 24px; }
+    .pc-card--scroll-s .pc-clip svg { width: 100%; height: 100%; }
   }
 
   /* 홈 MD 추천 정보 구조 공통(pick-home·list): 썸네일↔정보 간격 10.8px +30%(2026-11-04 Stephen 지시), 상품명 볼드 + purple 토큰(2026-11-04 Stephen 지시), list 도 동일하게(2026-11-05) */
