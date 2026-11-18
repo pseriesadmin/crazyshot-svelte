@@ -38,17 +38,27 @@ beforeEach(() => {
 })
 
 describe('/api/search/suggest 핸들러 회귀', () => {
-  it('(a) 동의어 로드 실패·빈 배열이면 기존 index.search 결과와 같다 (원문 1회, fuzzy 0.2·prefix·limit)', async () => {
+  it('(a) 동의어 로드 실패·빈 배열이면 원문 검색(fuzzy 0.2·prefix·limit)은 기존과 같고 영문 발음 후보 1회만 추가된다', async () => {
     const hits = [hit('p1', 'Sony A'), hit('p2', 'Sony B')]
     for (const loader of [() => Promise.reject(new Error('db down')), () => Promise.resolve([])]) {
       search.mockReset()
       search.mockReturnValue(hits)
       loadSynonymGroups.mockImplementation(loader)
       const body = await call('q=소니&limit=8')
-      expect(search).toHaveBeenCalledTimes(1)
-      expect(search).toHaveBeenCalledWith('소니', { fuzzy: 0.2, prefix: true, limit: 8 })
+      // 원문 1회 + 한글 단어의 영문 발음 후보('soni', 정확 일치) 1회(2026-11-17) — 원문 호출 인자·결과는 기존과 같다
+      expect(search).toHaveBeenCalledTimes(2)
+      expect(search).toHaveBeenNthCalledWith(1, '소니', { fuzzy: 0.2, prefix: true, limit: 8 })
+      expect(search).toHaveBeenNthCalledWith(2, 'soni', { fuzzy: 0, prefix: true, limit: 8 })
       expect(body.results.map((r) => r.id)).toEqual(['p1', 'p2'])
     }
+  })
+
+  it('(a-2) 3글자 영문 발음 후보("pro")는 접두 일치를 끄고 호출한다(원문·4자 이상 후보는 접두 유지)', async () => {
+    search.mockReturnValue([hit('p1', 'Pro A')])
+    loadSynonymGroups.mockImplementation(() => Promise.resolve([]))
+    await call('q=프로&limit=8')
+    expect(search).toHaveBeenNthCalledWith(1, '프로', { fuzzy: 0.2, prefix: true, limit: 8 })
+    expect(search).toHaveBeenCalledWith('pro', { fuzzy: 0, prefix: false, limit: 8 })
   })
 
   it('(b) 동의어가 있으면 원문(fuzzy 0.2)과 동의어(fuzzy 0)로 각각 검색하고 결과를 섞는다', async () => {

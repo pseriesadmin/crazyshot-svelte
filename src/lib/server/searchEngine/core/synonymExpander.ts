@@ -12,6 +12,8 @@
  * 원칙: core/ 격리 원칙 준수 — nlsearch.md §3 "core/ 격리 원칙"
  */
 
+import { latinBridgeTerms, splitCompoundQuery } from './compoundQuery'
+
 // ── 타입 ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -126,4 +128,65 @@ export function expandQueryByTokens(
     }
   }
   return { whole, tokenVariants }
+}
+
+// ── 붙임말 분리 + 영문 발음 후보까지 포함한 검색어 확장 (2026-11-17) ─────────────────
+
+export interface QueryForSearchExpansion extends QueryTokenExpansion {
+  /**
+   * 붙여 쓴 검색어를 끝말 기준으로 나눈 형태("니콘카메라" → "니콘 카메라"). 나눌 게 없으면 입력 그대로(공백만 정리).
+   * tokenVariants 맨 앞에도 들어 있다(원문과 다를 때만) — 원문이 못 찾는 질의를 변형 검색으로 찾게 한다.
+   */
+  normalized: string
+  /**
+   * 한글 단어의 영문 발음 후보(니콘→nikon·nicon). "단어 전체 일치/접두" 방식의 검색(FTS·MiniSearch fuzzy 0)에만 쓴다 —
+   * 부분 문자열(ILIKE) 검색에 쓰면 'rait'가 'Portrait'에 걸리는 식의 잡음이 생긴다.
+   */
+  bridgeTerms: string[]
+}
+
+/**
+ * expandQueryByTokens + 붙임말 분리 + 영문 발음 후보. 기존 함수의 동작·시험은 그대로이고, 새 정보만 더한다.
+ *  · 분리된 검색어("니콘 카메라")에서 확정 동의어 치환도 한다("니콘" 그룹이 있으면 "Nikon 카메라")
+ *  · opts.tokens를 직접 준 호출(크레이지챗)에서는 분리하지 않는다 — 호출부가 이미 단어를 정했다
+ */
+export function expandQueryForSearch(
+  query: string,
+  groups: readonly SynonymGroup[],
+  opts: { tokens?: readonly string[]; maxVariants?: number; extraHeads?: readonly string[] } = {},
+): QueryForSearchExpansion {
+  const original = (query ?? '').trim()
+  if (!original) return { whole: [], tokenVariants: [], normalized: '', bridgeTerms: [] }
+
+  const normalized = opts.tokens ? original : splitCompoundQuery(original, opts.extraHeads)
+  const changed = normalized.toLowerCase() !== original.toLowerCase()
+  const base = expandQueryByTokens(normalized, groups, opts)
+
+  const seen = new Set<string>([original.toLowerCase()])
+  const push = (list: string[], term: string): void => {
+    const key = term.trim().toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    list.push(term.trim())
+  }
+
+  const whole: string[] = []
+  for (const w of base.whole) push(whole, w)
+  // 붙여 쓴 원문 자체가 동의어와 일치하는 경우("니콘카메라"라는 동의어 등)도 놓치지 않는다
+  if (changed) for (const w of expandQueryWithConfirmedSynonyms(original, [...groups])) push(whole, w)
+
+  const tokenVariants: string[] = []
+  if (changed) push(tokenVariants, normalized)
+  for (const v of base.tokenVariants) push(tokenVariants, v)
+
+  const bridgeTerms: string[] = []
+  if (!opts.tokens) {
+    // 확정 동의어가 이미 있는 단어(예: 소니↔Sony)는 영문 후보를 따로 만들지 않는다
+    const covered = new Set(
+      normalized.split(/\s+/).filter((t) => t && expandQueryWithConfirmedSynonyms(t, [...groups]).length > 0).map((t) => t.toLowerCase()),
+    )
+    for (const b of latinBridgeTerms(normalized, opts.extraHeads, covered)) push(bridgeTerms, b)
+  }
+
+  return { whole, tokenVariants, normalized, bridgeTerms }
 }

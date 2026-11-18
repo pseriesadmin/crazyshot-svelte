@@ -41,7 +41,7 @@ import { findParentIdsByDetailText } from '$lib/server/products/searchByDetailTe
 import { getProductSearchIndexForCms } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { isChosungQuery } from '$lib/server/searchEngine/core/koreanTokenizer'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
-import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryForSearch } from '$lib/server/searchEngine/core/synonymExpander'
 import type { RequestHandler } from './$types'
 import type { SimilarNameItem } from '$lib/types/cms-similar-name'
 
@@ -94,7 +94,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   if (q && !isChosung) {
     try {
       const groups = await loadSynonymGroups()
-      const expansion = expandQueryByTokens(q, groups)
+      const expansion = expandQueryForSearch(q, groups)
       searchTerms = [q, ...expansion.whole, ...expansion.tokenVariants]
     } catch (e) {
       console.error('[cms/products/search-suggestions] 동의어 확장 오류:', e)
@@ -339,11 +339,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       let expandedTerms: string[] = []
       // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch에서만 검색(ilike 재조회 없음)
       let tokenVariantTerms: string[] = []
+      // 한글 단어의 영문 발음 후보(니콘→nikon, 2026-11-17) — MiniSearch 정확 일치로만 찾는다(부분 문자열 ilike에는 쓰지 않음)
+      let bridgeTerms: string[] = []
       try {
         const synonymGroups = await loadSynonymGroups()
-        const expansion = expandQueryByTokens(q, synonymGroups)
+        const expansion = expandQueryForSearch(q, synonymGroups)
         expandedTerms = expansion.whole
         tokenVariantTerms = expansion.tokenVariants
+        bridgeTerms = expansion.bridgeTerms
 
         for (const expandedQ of expandedTerms) {
           if (finalItems.length >= limit) break
@@ -389,12 +392,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
           const index = await getProductSearchIndexForCms()
 
           // 단어 치환 변형을 원문보다 먼저 검색(원문이 limit을 먼저 채워 밀려나는 것 방지). 변형이 없으면 기존 순서 [q, ...확장어]
-          for (const qItem of [...tokenVariantTerms, q, ...expandedTerms]) {
+          // 영문 발음 후보(정확 일치)를 먼저 — 분리된 검색어("니콘 카메라")가 카메라 전체로 limit을 채워 브랜드 상품이 밀려나는 것을 막는다
+          for (const qItem of [...bridgeTerms, ...tokenVariantTerms, q, ...expandedTerms]) {
             if (finalItems.length >= limit) break
 
             const naturalResults = index.search(qItem, {
-              fuzzy: 0.2,
-              prefix: true,
+              fuzzy: bridgeTerms.includes(qItem) ? 0 : 0.2,
+              prefix: !(bridgeTerms.includes(qItem) && qItem.length < 4), // 3글자 후보는 접두 일치도 끈다
               limit: limit * 2, // dedupe 여유분 확보
             })
 

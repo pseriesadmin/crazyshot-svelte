@@ -30,7 +30,8 @@ import { supabase } from '$lib/services/supabase'
 import { getProductSearchIndex } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { recordSemanticShadow, semanticFallbackCandidates, withTimeout, SHADOW_MAX_WAIT_MS } from '$lib/server/searchEngine/adapters/semanticShadow'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
-import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryForSearch } from '$lib/server/searchEngine/core/synonymExpander'
+import { splitCompoundQuery } from '$lib/server/searchEngine/core/compoundQuery'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { getPriceMinForProducts } from '$lib/server/getPriceMinForProducts'
 import { getPrice12hForProducts } from '$lib/server/getPrice12hForProducts'
@@ -65,7 +66,10 @@ async function fetchRecentSearchLogId(query: string): Promise<string | null> {
 }
 
 export const GET: RequestHandler = async ({ url, locals }) => {
-  const q        = (url.searchParams.get('q') ?? '').trim()
+  const rawQ     = (url.searchParams.get('q') ?? '').trim()
+  // 붙여 쓴 검색어("니콘카메라")는 끝말 기준으로 나눠("니콘 카메라") 검색한다 — RPC의 분류 의도 판정·검색 기록·폴백이 모두 나눈 형태를 쓴다.
+  // 나눌 게 없으면 rawQ와 같다. 응답의 query는 사용자가 입력한 원문 그대로 돌려준다. (2026-11-17)
+  const q        = splitCompoundQuery(rawQ)
   const category = url.searchParams.get('category') || null
   const page     = Math.max(1, parseInt(url.searchParams.get('page') ?? '1'))
   const limit    = Math.min(50, Math.max(1, parseInt(url.searchParams.get('limit') ?? '20')))
@@ -81,18 +85,24 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   let expandedTerms: string[] = []
   // 단어 단위 치환 변형("소니 카메라" → "Sony 카메라") — MiniSearch 폴백에서도 쓴다.
   let tokenVariantTerms: string[] = []
+  // 한글 단어의 영문 발음 후보(니콘→nikon) — 상품 데이터에 영문 상호만 있는 경우를 잇는다. 동의어 조회가 실패해도 이 후보는 쓴다.
+  let bridgeTerms: string[] = []
   if (q.length >= 1) {
+    let synonymGroups: Awaited<ReturnType<typeof loadSynonymGroups>> = []
     try {
-      const synonymGroups = await loadSynonymGroups()
-      const expansion = expandQueryByTokens(q, synonymGroups)
-      expandedTerms = expansion.whole
-      tokenVariantTerms = expansion.tokenVariants
+      synonymGroups = await loadSynonymGroups()
     } catch (e) {
       // 동의어 확장 실패 시 확장어 없이 진행 — 서비스 중단 없음(장애를 알아챌 수 있게 로그만 남긴다)
       console.error('[api/search/products] 동의어 확장 오류:', e)
     }
+    const expansion = expandQueryForSearch(q, synonymGroups)
+    expandedTerms = expansion.whole
+    tokenVariantTerms = expansion.tokenVariants
+    bridgeTerms = expansion.bridgeTerms
   }
-  const extraTerms = [...tokenVariantTerms, ...expandedTerms]
+  // 보조어 순서(SQL은 앞 10개만 쓴다): 분리형·변형 → 붙여 쓴 원문 → 영문 발음 후보 → 동의어.
+  // 붙여 쓴 원문을 함께 보내야 기존에 '충전케이블' 같은 붙임말 키워드로 맞던 상품이 FTS 점수를 그대로 받는다(sp3 M1·M3, 2026-11-17).
+  const extraTerms = [...tokenVariantTerms, ...(rawQ && rawQ !== q ? [rawQ] : []), ...bridgeTerms, ...expandedTerms]
 
   // ── 1차: search_products RPC (기존 CTR 랭킹 · 학습자산 보존) ──────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -155,7 +165,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
       }
     })
     await observeShadow(q, category, page, searchLogId, results)
-    return json({ results, query: q, page, limit, search_log_id: searchLogId })
+    return json({ results, query: rawQ, page, limit, search_log_id: searchLogId })
   }
 
   // ── 2차: 동의어 확장 RPC 재조회 + 3차 MiniSearch 폴백 (약한 매칭 보강 — §E-2) ──
@@ -173,11 +183,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
     // 단어 치환 변형(두 단어를 모두 포함하는 더 구체적인 검색)을 원문보다 먼저 검색한다 — 원문(OR 매칭)이 limit을
     // 먼저 채워 변형 결과가 밀려나는 것을 막는다. 변형이 없으면(동의어 없음/단어 하나) 기존 순서 [q, ...확장어] 그대로.
-    for (const qItem of [...tokenVariantTerms, q, ...expandedTerms]) {
+    for (const qItem of [...bridgeTerms, ...tokenVariantTerms, q, ...expandedTerms]) {
       if (mergedResults.length >= limit) break
       const results = index.search(qItem, {
-        fuzzy: 0.2,
-        prefix: true,
+        fuzzy: bridgeTerms.includes(qItem) ? 0 : 0.2, // 영문 발음 후보는 정확 일치만(잡음 방지)
+        prefix: !(bridgeTerms.includes(qItem) && qItem.length < 4), // 3글자 후보는 접두 일치도 끈다('nai'→'Naia' 방지)
         limit: limit * 2,
       })
       for (const r of results) {
@@ -257,7 +267,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   })
 
   await observeShadow(q, category, page, searchLogId, results)
-  return json({ results, query: q, page, limit, search_log_id: searchLogId })
+  return json({ results, query: rawQ, page, limit, search_log_id: searchLogId })
 }
 
 // B-4(2026-10-10): 의미 점수 그림자 관찰 — 응답은 바꾸지 않는다. 설정(semantic.shadow)이 꺼져 있거나 모델이 없으면 즉시 반환하고,

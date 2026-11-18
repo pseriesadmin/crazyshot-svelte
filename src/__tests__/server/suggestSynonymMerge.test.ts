@@ -10,20 +10,20 @@ const groups = [
 
 describe('buildSuggestSearchPlan', () => {
   it('동의어가 없으면 원문 한 줄만 — 기존 동작과 동일', () => {
-    expect(buildSuggestSearchPlan('캐논', groups)).toEqual([{ term: '캐논', fuzzy: 0.2 }])
-    expect(buildSuggestSearchPlan('캐논', [])).toEqual([{ term: '캐논', fuzzy: 0.2 }])
+    expect(buildSuggestSearchPlan('캐논', groups)).toEqual([{ term: '캐논', fuzzy: 0.2, prefix: true }])
+    expect(buildSuggestSearchPlan('캐논', [])).toEqual([{ term: '캐논', fuzzy: 0.2, prefix: true }])
   })
 
   it('원문은 오타 허용으로, 동의어는 정확 검색(fuzzy 0)으로 — 엉뚱한 상품 혼입 방지', () => {
     expect(buildSuggestSearchPlan('소니', groups)).toEqual([
-      { term: '소니', fuzzy: 0.2 },
-      { term: 'Sony', fuzzy: 0 },
+      { term: '소니', fuzzy: 0.2, prefix: true },
+      { term: 'Sony', fuzzy: 0, prefix: true },
     ])
   })
 
   it('여러 단어 검색어는 단어 하나씩 바꾼 변형도 포함한다', () => {
     const plan = buildSuggestSearchPlan('소니 카메라', groups)
-    expect(plan[0]).toEqual({ term: '소니 카메라', fuzzy: 0.2 })
+    expect(plan[0]).toEqual({ term: '소니 카메라', fuzzy: 0.2, prefix: true })
     expect(plan.map((p) => p.term)).toContain('Sony 카메라')
     expect(plan.slice(1).every((p) => p.fuzzy === 0)).toBe(true)
   })
@@ -31,7 +31,7 @@ describe('buildSuggestSearchPlan', () => {
   it('전체 일치 동의어가 많아도 확장어는 4개까지만 — 공개 API 요청당 검색 횟수 상한', () => {
     const many = [{ canonicalTerm: '소니', confirmedTerms: ['소니', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7'] }]
     const plan = buildSuggestSearchPlan('소니', many)
-    expect(plan[0]).toEqual({ term: '소니', fuzzy: 0.2 })
+    expect(plan[0]).toEqual({ term: '소니', fuzzy: 0.2, prefix: true })
     expect(plan).toHaveLength(1 + MAX_WHOLE_SYNONYMS)
     expect(MAX_WHOLE_SYNONYMS).toBe(4)
   })

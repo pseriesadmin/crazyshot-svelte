@@ -7,29 +7,47 @@
  * ⚠️ core/ 격리 원칙: Supabase·$env·SvelteKit 의존 금지. 순수 TypeScript + synonymExpander 만 사용.
  */
 
-import { expandQueryByTokens, type SynonymGroup } from './synonymExpander'
+import { expandQueryByTokens, expandQueryForSearch, type SynonymGroup } from './synonymExpander'
 
 export interface SuggestSearchStep {
   term: string
   /** MiniSearch fuzzy 값 — 원문은 오타 허용, 동의어는 관리자가 확정한 정확한 말이라 0 */
   fuzzy: number
+  /** MiniSearch 접두 일치 — 4자 미만 영문 발음 후보("pro")는 끈다(Profoto·ProRes 등이 끼어드는 것 방지) */
+  prefix: boolean
 }
 
 const ORIGINAL_FUZZY = 0.2
 const SYNONYM_FUZZY = 0
+/** 영문 발음 후보가 이 글자 수 미만이면 접두 일치를 끈다 */
+export const BRIDGE_PREFIX_MIN_LENGTH = 4
 
 /** 검색어 전체가 동의어와 일치할 때 쓰는 확장어 상한 — 학습으로 멤버가 늘어도 공개 API 요청당 검색 횟수가 1+3(변형)+4로 묶인다 */
 export const MAX_WHOLE_SYNONYMS = 4
 
 /** 원문 한 줄 + (전체 일치 동의어, 단어 단위 변형) 줄들. 동의어가 없으면 원문 한 줄뿐 → 기존 동작과 동일 */
-export function buildSuggestSearchPlan(query: string, groups: readonly SynonymGroup[]): SuggestSearchStep[] {
+export function buildSuggestSearchPlan(
+  query: string,
+  groups: readonly SynonymGroup[],
+  opts: { compound?: boolean } = {},
+): SuggestSearchStep[] {
   const q = query.trim()
   if (!q) return []
+  if (opts.compound) {
+    // 붙임말 분리("니콘카메라" → "니콘 카메라") + 한글 단어의 영문 발음 후보("nikon") — 모두 정확 일치 줄(fuzzy 0)이라 원문 결과를 밀어내지 않는다
+    const { whole, tokenVariants, bridgeTerms } = expandQueryForSearch(q, groups)
+    return [
+      { term: q, fuzzy: ORIGINAL_FUZZY, prefix: true },
+      ...tokenVariants.map((term) => ({ term, fuzzy: SYNONYM_FUZZY, prefix: true })),
+      ...whole.slice(0, MAX_WHOLE_SYNONYMS).map((term) => ({ term, fuzzy: SYNONYM_FUZZY, prefix: true })),
+      ...bridgeTerms.map((term) => ({ term, fuzzy: SYNONYM_FUZZY, prefix: term.length >= BRIDGE_PREFIX_MIN_LENGTH })),
+    ]
+  }
   const { whole, tokenVariants } = expandQueryByTokens(q, groups)
   return [
-    { term: q, fuzzy: ORIGINAL_FUZZY },
-    ...tokenVariants.map((term) => ({ term, fuzzy: SYNONYM_FUZZY })),
-    ...whole.slice(0, MAX_WHOLE_SYNONYMS).map((term) => ({ term, fuzzy: SYNONYM_FUZZY })),
+    { term: q, fuzzy: ORIGINAL_FUZZY, prefix: true },
+    ...tokenVariants.map((term) => ({ term, fuzzy: SYNONYM_FUZZY, prefix: true })),
+    ...whole.slice(0, MAX_WHOLE_SYNONYMS).map((term) => ({ term, fuzzy: SYNONYM_FUZZY, prefix: true })),
   ]
 }
 

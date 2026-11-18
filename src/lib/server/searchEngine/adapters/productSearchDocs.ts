@@ -18,6 +18,7 @@
  */
 
 import { stripTrailingParticle } from '../core/koreanTokenizer'
+import { DEFAULT_COMPOUND_HEADS } from '../core/compoundQuery'
 import type { NaturalSearchProvider, SearchDocument, SearchOptions, SearchResult } from '../core/types'
 
 // ── 문서 타입 ────────────────────────────────────────────────────────────────
@@ -182,11 +183,7 @@ export function buildReviewsTextMap(rows: unknown): Map<string, ReviewsTextEntry
  * 끝말 후보 사전 — 상품 종류를 뜻하는 말. "OO카메라"처럼 이 말로 끝나는 붙임말에서 끝말만 뽑아 compound_heads에 넣는다.
  * 분류 이름(CMS 코드설정)은 호출부가 extraHeads로 함께 넘긴다. 새 종류가 필요하면 여기에 추가하고 테스트 표를 갱신한다.
  */
-export const COMPOUND_HEAD_WORDS: readonly string[] = [
-  '카메라', '렌즈', '삼각대', '모니터', '배터리', '마이크', '슬라이더', '캠코더', '조명', '짐벌', '드론',
-  '어댑터', '마운트', '거치대', '셀카봉', '스트랩', '하네스', '필터', '케이블', '충전기', '프롬프터', '스탠드', '후드',
-  '액션캠', '미러리스',
-]
+export const COMPOUND_HEAD_WORDS: readonly string[] = DEFAULT_COMPOUND_HEADS // 정본은 core/compoundQuery.ts — 질의 쪽 붙임말 분리(2026-11-17)와 같은 사전을 쓴다
 
 function normalizeHeads(extra: readonly string[]): string[] {
   const set = new Set<string>()

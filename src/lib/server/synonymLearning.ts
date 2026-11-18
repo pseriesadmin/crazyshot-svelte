@@ -308,13 +308,24 @@ export async function loadSynonymGroups(): Promise<SynonymGroupData[]> {
       synonym_groups: { canonical_term: string }
     }
 
-    const { data, error } = await admin
-      .from('synonym_group_members')
-      .select('term, synonym_groups!inner(canonical_term)')
-      .eq('status', 'confirmed')
-      .returns<RawRow[]>()
-
-    if (error || !data) return cachedSynonymGroups ?? []
+    // PostgREST는 한 번에 최대 행 수(기본 1000)까지만 돌려준다 — 시드 적용 후 확정 행이 그 이상이라
+    // 상한에서 오류 없이 잘리므로 id 순으로 정렬해 페이지 단위로 끝까지 읽는다(2026-11-18, sp3 B-1)
+    const PAGE = 1000
+    const MAX_PAGES = 50
+    const data: RawRow[] = []
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const { data: rows, error } = await admin
+        .from('synonym_group_members')
+        .select('term, synonym_groups!inner(canonical_term)')
+        .eq('status', 'confirmed')
+        .order('id', { ascending: true })
+        .range(page * PAGE, page * PAGE + PAGE - 1)
+        .returns<RawRow[]>()
+      // 중간에 실패하면 일부만 읽은 그룹으로 캐시하지 않고 기존 캐시(없으면 빈 배열)로 폴백
+      if (error || !rows) return cachedSynonymGroups ?? []
+      data.push(...rows)
+      if (rows.length < PAGE) break
+    }
 
     // term → canonical_term 그룹핑
     const groupMap = new Map<string, string[]>()
