@@ -446,6 +446,17 @@
   .pc-card--list:hover .pc-img { transform: none; }
   .pc-card--list .pc-clip { top: 11px; right: 11px; width: 32px; height: 32px; }   /* 기존 .mprod-clip */
   .pc-card--list .pc-clip svg { width: 26px; height: 26px; }
+  /* 모바일 목록 요금 — 카드(썸네일) 폭에 비례해 글자 크기를 줄여 다음 줄로 넘어가지 않게 한다(2026-11-17, Stephen 지시).
+     상품정보 영역(.pc-info)을 컨테이너로 삼아 cqw(컨테이너 폭 %)로 지정, 기존 고정 크기(숫자 18·라벨 11·구분 14px)는 상한으로 유지.
+     비율 기준: 숫자 18px ↔ 6자리 숫자 두 개(예 100,000 / 100,000)가 한 줄에 들어가는 카드 폭 약 170px → 숫자 10.2cqw, 라벨·구분·간격은 같은 비율 */
+  @media (max-width: 767px) {
+    .pc-card--list .pc-info { container-type: inline-size; }
+    .pc-card--list .pc-price-row { flex-wrap: nowrap; gap: 1.7cqw; letter-spacing: -0.44cqw; }
+    .pc-card--list .pc-price-group { gap: 1.7cqw; }
+    .pc-card--list .pc-price-label { font-size: min(11px, 6.1cqw); }
+    .pc-card--list .pc-price-num { font-size: min(18px, 10.2cqw); }
+    .pc-card--list .pc-price-sep { font-size: min(14px, 7.9cqw); }
+  }
 
   /* pick — /products MD 추천(.md-pick-card 이식): 가로 스크롤 트랙 안의 고정폭 카드 */
   .pc-card.pc-card--pick { width: 139px; color: inherit; }   /* PC 232px × 0.60 ≈ 139px */
