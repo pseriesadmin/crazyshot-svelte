@@ -1623,6 +1623,8 @@
 
   .title-block { display: flex; flex-direction: column; gap: 7px; }   /* 10→7px(−30%, 모바일·PC 공통) */
   .title-block :global(.pc-kw-row) { margin-bottom: 10.5px; }   /* 키워드 바↔브랜드 간격 7→17.5px(×2.5, 모바일·PC 공통) */
+  /* 상세 제목 영역 키워드 바만 퍼플 면(--cs-purple-40) + 흰 글자(--cs-white) — 카드의 레드 톤은 그대로 — 2026-11-18 Stephen 지시 */
+  .title-block :global(.pc-kw) { background: var(--cs-purple-40); color: var(--cs-white); }
   /* 상세 제목 영역 키워드 바 모바일 글자만 12→14px 한 사이즈 크게(--text-m-script-14 + 굵기 700, 카드는 12px 유지·PC 는 컴포넌트의 PC 규칙 그대로) — 2026-11-17 Stephen 지시 */
   @media (max-width: 767px) {
     .title-block :global(.pc-kw) { font: var(--text-m-script-14); font-weight: 700; line-height: 1.2; }
