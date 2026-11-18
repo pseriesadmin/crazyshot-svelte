@@ -2,6 +2,7 @@ import { getCategoryGroups } from '$lib/server/productCategorySettings'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
+import { loadMobileImageMap } from '$lib/server/productMobileImages'
 import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
 import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
@@ -150,6 +151,8 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 
   const productBadges = await loadProductBadgeMap(locals.supabase, allIds)
   const productCardKeywords = await loadCardKeywordMap(locals.supabase, allIds)
+  // MD 추천 슬라이드 카드는 PC·모바일 모두 '모바일 전용 대표 이미지'를 쓴다(없으면 PC 이미지) — 가로로 긴 PC 이미지의 좌우 잘림 완화
+  const mdMobileImages = await loadMobileImageMap(locals.supabase, mdProducts.map((p) => p.id))
 
   const pricedAll = await attachCardPrices(locals.supabase, [...heroProducts, ...gridProducts, ...mdProducts])
   const pricedHero = pricedAll.slice(0, heroProducts.length)
@@ -162,6 +165,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
     wishedIds,
     productBadges,
     productCardKeywords,
+    mdMobileImages,
     urlCategory,
     infiniteMode,
     infiniteLimit,

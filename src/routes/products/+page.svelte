@@ -902,7 +902,7 @@
             variant="pick"
             id={prod.id}
             name={prod.name}
-            imageUrl={productImg(prod)}
+            imageUrl={data.mdMobileImages?.[prod.id] ?? productImg(prod)}
             price24h={mdDay > 0 ? mdDay : null}
             price12h={prod.price_12h || null}
             isSaleOnly={prod.sale_only}
