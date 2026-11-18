@@ -26,8 +26,8 @@
     flex: 0 0 auto;
     padding: 3.84px 16.2px; /* 모바일 상하 4.8→3.84px(−20%, 2026-11-17 Stephen 지시), 좌우 16.2px 불변 */
     border-radius: var(--radius-full);
-    background: var(--cs-purple-light);
-    color: var(--cs-white);
+    background: var(--cs-red-xlight); /* 옅은 레드 red-5 #FFEAEA — 2026-11-18 Stephen 지시(구 --cs-purple-light 면 + 흰 글자) */
+    color: var(--cs-red);             /* 짙은 레드 red-100 #CF0000 */
     font: var(--text-m-tag-11); /* 모바일 11px Bold(토큰이 700 포함) — 12→11px 한 사이즈 작게(2026-11-17 Stephen 지시) */
     line-height: 1.2;
     white-space: nowrap;
