@@ -34,8 +34,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     // 동의어 로드 실패·동의어 없음이면 계획이 원문 한 줄뿐이라 기존 동작과 100% 동일(fail-open).
     const synonymGroups = await loadSynonymGroups().catch(() => [])
     const hitById = new Map<string, ReturnType<typeof index.search>[number]>()
-    const lists = buildSuggestSearchPlan(q, synonymGroups).map((step) =>
-      index.search(step.term, { fuzzy: step.fuzzy, prefix: true, limit }).map((h) => {
+    const lists = buildSuggestSearchPlan(q, synonymGroups, { compound: true }).map((step) =>
+      index.search(step.term, { fuzzy: step.fuzzy, prefix: step.prefix, limit }).map((h) => {
         if (!hitById.has(h.document.id)) hitById.set(h.document.id, h)
         return h.document.id
       }),

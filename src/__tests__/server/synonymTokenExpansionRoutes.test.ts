@@ -151,12 +151,28 @@ describe('/api/search/products — 동의어 단어 단위 치환', () => {
     expect(ids(r)).toEqual(['rpc-1', 'sony-1'])
   })
 
-  it('동의어 그룹이 없으면 기존과 동일 — RPC 1회, MiniSearch는 원문만', async () => {
+  it('붙여 쓴 검색어는 나눈 형태로 RPC를 부르되 붙여 쓴 원문도 p_extra_terms에 남겨 기존 전문검색 매칭을 유지한다(sp3 M1)', async () => {
+    groups = []
+    await call('충전케이블')
+    expect(rpcCalls).toHaveLength(1)
+    expect(rpcCalls[0].args.p_query).toBe('충전 케이블')
+    expect(rpcCalls[0].args.p_extra_terms).toContain('충전케이블')
+  })
+
+  it('나눌 게 없는 검색어는 원문을 보조어로 중복 전달하지 않는다', async () => {
+    groups = []
+    await call('소니 카메라')
+    expect(rpcCalls[0].args.p_query).toBe('소니 카메라')
+    expect(rpcCalls[0].args.p_extra_terms).not.toContain('소니 카메라')
+  })
+
+  it('동의어 그룹이 없으면 기존과 동일 — RPC 1회, MiniSearch는 원문(+영문 발음 후보 조회)', async () => {
     groups = []
     miniByQuery = { '소니 카메라': [doc('cam-1', '일반 카메라')] }
     const r = await call('소니 카메라')
     expect(rpcCalls).toHaveLength(1)
-    expect(miniSearchCalls).toEqual(['소니 카메라'])
+    // 한글 단어의 영문 발음 후보('soni')는 정확 일치 조회로 먼저 한 번 더 본다(2026-11-17) — 원문 검색과 결과는 그대로
+    expect(miniSearchCalls).toEqual(['soni', '소니 카메라'])
     expect(ids(r)).toEqual(['cam-1'])
   })
 
@@ -230,11 +246,11 @@ describe('/api/cms/products/search-suggestions — 동의어 단어 단위 치�
     expect(items.map((i) => i.id)).toEqual(['sony-1'])
   })
 
-  it('동의어 그룹이 없으면 MiniSearch는 원문만 검색한다(기존과 동일)', async () => {
+  it('동의어 그룹이 없으면 MiniSearch는 원문(+영문 발음 후보 조회)만 검색한다', async () => {
     groups = []
     miniByQuery = { '소니 카메라': [doc('cam-1', '일반 카메라')] }
     const items = await cmsCall('소니 카메라')
-    expect(miniSearchCalls).toEqual(['소니 카메라'])
+    expect(miniSearchCalls).toEqual(['soni', '소니 카메라']) // 영문 발음 후보(정확 일치) 조회가 먼저 추가됨(2026-11-17) — 원문 결과는 그대로
     expect(items.map((i) => i.id)).toEqual(['cam-1'])
   })
 

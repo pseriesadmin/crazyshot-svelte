@@ -7,7 +7,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { PageServerLoad, Actions } from './$types'
 import { productSearchOrFilterForTerms } from '$lib/utils/similarNameSuggest'
 import { loadSynonymGroups } from '$lib/server/synonymLearning'
-import { expandQueryByTokens } from '$lib/server/searchEngine/core/synonymExpander'
+import { expandQueryForSearch } from '$lib/server/searchEngine/core/synonymExpander'
 import { rankProductsByRelevance, parsePinId } from '$lib/utils/productSearchRanking'
 import { invalidateProductSearchCache, getProductSearchIndexForCms } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import { registerCrossLingualCandidatesFromParts } from '$lib/server/crossLingualSynonymScan'
@@ -396,14 +396,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   // 동의어 변환어(예: 소니→Sony)도 항상 함께 검색한다 — 일반 검색 결과가 4건 이상이면 아래 자연어 보강이 실행되지 않아
   // 영문 표기 상품이 통째로 빠지던 문제(2026-10-27). 동의어 조회 실패 시 원 검색어만 사용.
   let searchTerms: string[] = q ? [q] : []
+  // 붙여 쓴 검색어("니콘카메라" → "니콘 카메라")·한글 단어의 영문 발음 후보("nikon")는 자연어 보강(MiniSearch)에서만 쓴다 —
+  // 부분 문자열(ilike) 검색에 영문 후보를 쓰면 'rait'가 'Portrait'에 걸리는 식의 잡음이 생긴다. (2026-11-17)
+  let naturalExtraTerms: string[] = []
+  let bridgeTermSet = new Set<string>()
   if (q) {
+    let groups: Awaited<ReturnType<typeof loadSynonymGroups>> = []
     try {
-      const groups = await loadSynonymGroups()
-      const expansion = expandQueryByTokens(q, groups)
-      searchTerms = [q, ...expansion.whole, ...expansion.tokenVariants]
+      groups = await loadSynonymGroups()
     } catch (e) {
       console.error('[cms/products] 동의어 확장 오류:', e)
     }
+    const expansion = expandQueryForSearch(q, groups)
+    searchTerms = [q, ...expansion.whole, ...expansion.tokenVariants]
+    bridgeTermSet = new Set(expansion.bridgeTerms)
+    naturalExtraTerms = [...(expansion.normalized && expansion.normalized !== q ? [expansion.normalized] : []), ...expansion.bridgeTerms]
   }
   const searchOr = q ? productSearchOrFilterForTerms(searchTerms) : ''
 
@@ -467,6 +474,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
           limit: 50, // PAGE_SIZE(20)보다 충분히 큰 값 — dedupe 여유 확보
         })
         naturalIds = naturalResults.map((r) => r.document.id)
+        // 붙임말 분리·영문 발음 후보는 정확 일치(fuzzy 0)로만 찾아 원문 결과를 밀어내지 않는다 — 원문 결과 뒤에 덧붙인다
+        for (const extra of naturalExtraTerms) {
+          const extraResults = index.search(extra, { fuzzy: 0, prefix: !(bridgeTermSet.has(extra) && extra.length < 4), limit: 50 })
+          for (const r of extraResults) if (!naturalIds.includes(r.document.id)) naturalIds.push(r.document.id)
+        }
       } catch (e) {
         console.error('[cms/products] NLSearch 폴백 오류:', e)
       }
