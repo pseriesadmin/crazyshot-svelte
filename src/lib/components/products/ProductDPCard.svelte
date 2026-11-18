@@ -65,8 +65,8 @@
   const iconBadges = $derived(badges.filter((b) => b.kind !== 'textbar'))
   const barBadges = $derived(badges.filter((b) => b.kind === 'textbar'))
 
-  /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조 — 2026-11-05 Stephen 지시로 list 도 동일) */
-  const nameFirst = $derived(variant === 'pick-home' || variant === 'list' || variant === 'pick')
+  /** 상품명이 가격 위에 오는 변형(홈 MD 추천 구조). list(상품 전체보기 목록)는 2026-11-05에 포함됐다가 2026-11-18 Stephen 지시로 다시 요금→상품명 순서로 맞바꿈 */
+  const nameFirst = $derived(variant === 'pick-home' || variant === 'pick')
 
   let isWished = $state(false)
   $effect(() => { isWished = wished })
@@ -451,6 +451,8 @@
      비율 기준: 숫자 18px ↔ 6자리 숫자 두 개(예 100,000 / 100,000)가 한 줄에 들어가는 카드 폭 약 170px → 숫자 10.2cqw, 라벨·구분·간격은 같은 비율 */
   @media (max-width: 767px) {
     .pc-card--list .pc-info { container-type: inline-size; }
+    /* 상품명 말줄임 없이 전부 표시(줄바꿈, 2026-11-18) */
+    .pc-card--list .pc-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.3; }
     .pc-card--list .pc-price-row { flex-wrap: nowrap; gap: 1.7cqw; letter-spacing: -0.44cqw; }
     .pc-card--list .pc-price-group { gap: 1.7cqw; }
     .pc-card--list .pc-price-label { font-size: min(11px, 6.1cqw); }
@@ -493,6 +495,8 @@
   @media (max-width: 640px) {
     .pc-card.pc-card--fluid-mobile { width: 100%; max-width: 100%; min-width: 0; flex-shrink: 1; }
     .pc-card--fluid-mobile .pc-img-wrap { width: 100%; height: auto; aspect-ratio: 1; flex-shrink: 1; }
+    /* 하이프팩 테마 목록 — 상품명을 말줄임 없이 전부 표시(줄바꿈, 2026-11-18) */
+    .pc-card--fluid-mobile .pc-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.3; }
   }
 
   /* scroll-m — 모바일 139px(= PC 232px × 0.60, 반경 20/8), PC 232px(표준 290px −20%, 반경 33/13) — 기존 상품 상세 '최신 등록 상품' 오버라이드 이식 */
