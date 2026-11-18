@@ -202,6 +202,10 @@
     return b && src ? { src, link_url: safeHref(b.link_url), alt: b.alt } : null
   })
 
+  // 카테고리 배너 자리(PC·모바일 공통 판정) — 배너가 없고 관리자도 아니면 빈 자리·여백을 만들지 않는다
+  let showDesktopBanner = $derived(activeCategory !== 'all' && (!!activeBanner || data.isCms))
+  let showMobileBanner = $derived(activeCategory !== 'all' && (!!activeBannerMobile || data.isCms))
+
   // ── 슬라이드 (DB 설정값만 사용) ────────────────────────────────────
   let useDbGrid  = $derived(data.gridProducts.length > 0)
 
@@ -473,36 +477,11 @@
         </div>
       {/if}
 
-      <!-- Mobile: section header (category label + chevron + more) -->
-      <div class="m-sec-header">
-        <span class="m-sec-label">{activeCategoryLabel}</span>
-      </div>
-
     </div>
 
     <!-- ── MOBILE SLIDER ───────────────────────────────────────────────────── -->
-    <!-- 카테고리 메뉴 선택 시(모바일): 헤더 슬라이드 대신 카테고리별 모바일 배너(가로 100% × 세로 200px) 노출.
-         모바일 이미지가 없으면 PC 이미지로 대체(2026-09-29, Stephen 지시) -->
-    {#if activeCategory !== 'all'}
-    <div class="m-banner-outer" style="position:relative">
-      {#if data.isCms}
-        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
-          ✦ 카테고리 배너 설정
-        </button>
-      {/if}
-      {#if activeBannerMobile}
-        {#if activeBannerMobile.link_url}
-          <a class="m-banner-link" href={activeBannerMobile.link_url} aria-label={activeBannerMobile.alt || '배너'}>
-            <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
-          </a>
-        {:else}
-          <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
-        {/if}
-      {:else if data.isCms}
-        <div class="m-banner-empty">등록된 카테고리 배너가 없습니다.</div>
-      {/if}
-    </div>
-    {:else}
+    <!-- 전체 분류(모바일): 헤더 슬라이드 노출. 카테고리 선택 시 배너는 상품 목록(.m-list) 아래로 이동(2026-11-17, Stephen 지시) -->
+    {#if activeCategory === 'all'}
     <div class="m-slider-outer" style="position:relative">
       {#if data.isCms}
         <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="헤더 상품 설정">
@@ -567,28 +546,7 @@
     {/if}
 
     <!-- ── DESKTOP SLIDER ─────────────────────────────────────────────────── -->
-    <!-- 카테고리 메뉴 선택 시(PC): 헤더 슬라이드를 감추고 카테고리별 배너(가로 100% × 세로 150px) 노출
-         (2026-09-29, Stephen 지시 — 배너 관리는 '헤더 상품 설정' 모달 내) -->
-    {#if activeCategory !== 'all'}
-    <div class="d-banner-outer" style="position:relative">
-      {#if data.isCms}
-        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
-          ✦ 카테고리 배너 설정
-        </button>
-      {/if}
-      {#if activeBanner}
-        {#if activeBanner.link_url}
-          <a class="d-banner-link" href={activeBanner.link_url} aria-label={activeBanner.alt || '배너'}>
-            <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
-          </a>
-        {:else}
-          <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
-        {/if}
-      {:else if data.isCms}
-        <div class="d-banner-empty">등록된 카테고리 배너가 없습니다.</div>
-      {/if}
-    </div>
-    {/if}
+    <!-- 전체 분류(PC): 헤더 슬라이드 노출. 카테고리 선택 시 배너는 상품 목록(.d-list) 아래·MD 추천 위로 이동(2026-11-17, Stephen 지시) -->
     {#if activeCategory === 'all'}
     <div class="d-slider-outer" style="position:relative">
       {#if data.isCms}
@@ -802,8 +760,31 @@
     {/if}
   </div>
 
+  <!-- 카테고리 선택 시(모바일): 카테고리별 모바일 배너(가로 100% × 세로 200px)를 상품 목록 아래에 노출.
+       모바일 이미지가 없으면 PC 이미지로 대체(2026-09-29), 위치는 목록 아래로 이동(2026-11-17, Stephen 지시) -->
+  {#if showMobileBanner}
+  <div class="m-banner-outer" style="position:relative">
+    {#if data.isCms}
+      <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
+        ✦ 카테고리 배너 설정
+      </button>
+    {/if}
+    {#if activeBannerMobile}
+      {#if activeBannerMobile.link_url}
+        <a class="m-banner-link" href={activeBannerMobile.link_url} aria-label={activeBannerMobile.alt || '배너'}>
+          <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
+        </a>
+      {:else}
+        <img class="m-banner-img" src={activeBannerMobile.src} alt={activeBannerMobile.alt} />
+      {/if}
+    {:else if data.isCms}
+      <div class="m-banner-empty">등록된 카테고리 배너가 없습니다.</div>
+    {/if}
+  </div>
+  {/if}
+
   <!-- DESKTOP list -->
-  <div class="d-list" class:loading={categoryLoading} aria-busy={categoryLoading}>
+  <div class="d-list" class:loading={categoryLoading} class:has-banner={showDesktopBanner} aria-busy={categoryLoading}>
     <div class="d-list-inner">
       <div class="d-list-header" style="position:relative">
         <span class="d-list-cat">{activeCategoryLabel}</span>
@@ -854,6 +835,29 @@
     </div>
   </div>
 
+  <!-- 카테고리 선택 시(PC): 카테고리별 배너(가로 100% × 세로 150px)를 상품 목록 아래·MD 추천 위에 노출
+       (2026-09-29 배너 도입 → 2026-11-17 위치를 목록 아래로 이동, Stephen 지시 — 배너 관리는 '헤더 상품 설정' 모달 내) -->
+  {#if showDesktopBanner}
+  <div class="d-banner-outer" style="position:relative">
+    {#if data.isCms}
+      <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'hero' }} aria-label="카테고리 배너 설정">
+        ✦ 카테고리 배너 설정
+      </button>
+    {/if}
+    {#if activeBanner}
+      {#if activeBanner.link_url}
+        <a class="d-banner-link" href={activeBanner.link_url} aria-label={activeBanner.alt || '배너'}>
+          <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
+        </a>
+      {:else}
+        <img class="d-banner-img" src={activeBanner.image_url ?? ''} alt={activeBanner.alt} />
+      {/if}
+    {:else if data.isCms}
+      <div class="d-banner-empty">등록된 카테고리 배너가 없습니다.</div>
+    {/if}
+  </div>
+  {/if}
+
   <!-- ─────────────────────────────────────────────────────────────────────── -->
   <!-- MD 추천 상품 (DB 설정 시 표시) — 전체 상품 목록(모바일 .m-list / PC .d-list)
        아래로 재배치 (2026-09-29, Stephen 지시 — 모바일에만 적용되고 PC에는
@@ -871,6 +875,7 @@
     class="bottom-dock"
     bind:clientHeight={wrapH}
     class:dock-on={dockOn}
+    class:has-banner={showDesktopBanner}
     class:dock-visible={dockVisible}
     class:dock-expanded={dockExpanded}
     class:dock-above-tab={tabBarShown}
@@ -985,7 +990,7 @@
     padding: 0 25px;
     /* 모바일 공통 GNB 아래 본문 시작 여백 토큰(120px) — 하입팩·테마·헬프·크레이지로그와 통일 */
     padding-top: var(--layout-mob-gnb-offset);
-    padding-bottom: 50px;
+    padding-bottom: 35px; /* 모바일: 분류 아이콘 ↔ 상품 목록 카드 사이 여백 50→35px(30% 축소, 2026-11-17 Stephen 지시) — PC는 아래 @media에서 별도 지정 */
     display: flex;
     flex-direction: column;
     gap: 30px;
@@ -1184,35 +1189,19 @@
   /* 키워드 칩 hover·active — BG 색상 변경만(front-uiux.md §26) */
   .kw-pill:hover, .kw-pill:active { background: #d4d0ec; }
 
-  /* Mobile section header (category label + icon) */
-  .m-sec-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 0;
-  }
-  .m-sec-label {
-    font-family: 'Noto Sans KR', sans-serif;
-    font-weight: 700;
-    font-size: 21px;
-    color: #100b32;
-    letter-spacing: -0.3px;
-    line-height: 1.6;
-  }
-
   /* ── MOBILE SLIDER ── */
   /* 모바일 슬라이더: 부모(.body-wrap) 좌우 25px 패딩을 상쇄해 화면 좌우 끝까지 노출(full-bleed)하고,
      트랙 자체 패딩으로 시작·끝 여백 25px을 유지 — 크레이지로그 .m-carousel과 동일 방식(2026-09-29) */
   .m-slider-outer { overflow: hidden; margin: 0 calc(var(--layout-mob-pad) * -1); }
 
-  /* 모바일 카테고리 배너 — 가로 100%(화면 좌우 끝까지, 부모 25px 패딩 상쇄) × 세로 200px.
-     화면 끝까지 닿는 형태라 모서리 라운드는 두지 않음 */
-  .m-banner-outer { margin: 0 calc(var(--layout-mob-pad) * -1); }
-  .m-banner-link { display: block; width: 100%; height: 200px; overflow: hidden; }
-  .m-banner-img { display: block; width: 100%; height: 200px; object-fit: cover; }
+  /* 모바일 카테고리 배너 — 상품 목록 카드 아래, 가로 90% 가운데 정렬 × 세로 200px.
+     모서리 라운드 = 사각면 모바일 값 20px(front-uiux.md §4 '중' Mobile — PC 배너 30px 대응, 2026-11-17 Stephen 지시) */
+  .m-banner-outer { width: 90%; margin: 35px auto 0; } /* 목록 카드와 배너 사이 여백 35px(위 분류 아이콘↔목록 여백과 동일, 2026-11-17 Stephen 지시) */
+  .m-banner-link { display: block; width: 100%; height: 200px; overflow: hidden; border-radius: 20px; }
+  .m-banner-img { display: block; width: 100%; height: 200px; object-fit: cover; border-radius: 20px; }
   .m-banner-empty {
     display: flex; align-items: center; justify-content: center;
-    width: 100%; height: 200px; background: var(--cs-lilac); color: var(--cs-text-light);
+    width: 100%; height: 200px; border-radius: 20px; background: var(--cs-lilac); color: var(--cs-text-light);
     font: var(--text-m-script-12);
   }
 
@@ -1616,7 +1605,7 @@
   .m-list {
     background: white;
     border-radius: 30px 30px 50px 50px; /* 상단 좌우 30px = 지침 card 대 Mobile(front-uiux.md §4, 2026-09-29) · 하단 50px는 기존(요청 2026-09-29) 유지 */
-    padding: 70px 25px 100px;
+    padding: 40px 25px 100px; /* 상단 여백 70→40px(2026-11-17, Stephen 지시: 중복 분류명 영역 제거 후 목록 제목 위 여백 축소) */
     display: flex;
     flex-direction: column;
     gap: 60px;
@@ -1936,7 +1925,6 @@
 
     /* Desktop: hide mobile-only elements */
     .m-keywords { display: none; }
-    .m-sec-header { display: none; }
     .m-slider-outer { display: none; }
     .m-banner-outer { display: none; }
 
@@ -1945,7 +1933,10 @@
       display: block;
       padding: 0;
     }
-    .d-banner-outer { display: block; padding: 0; }
+    .d-banner-outer { display: block; padding: 0; max-width: 1240px; margin: 50px auto 24px; } /* 상품 목록(흰 영역) 아래·MD 추천 위 — 위 여백 50px, 아래는 MD 추천 상단 패딩(26px)과 합쳐 약 50px */
+    /* 배너가 목록과 MD 추천 사이에 끼므로, 흰 목록 자체의 하단 모서리를 둥글게(대 PC 50px) 하고 MD 추천 상단의 모서리 채움 장치는 끈다 */
+    .d-list.has-banner { border-radius: 0 0 var(--radius-2xl) var(--radius-2xl); }
+    .bottom-dock.has-banner:not(.dock-on)::before { display: none; }
 
     /* Desktop list */
     .m-list { display: none; }
