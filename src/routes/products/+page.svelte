@@ -698,11 +698,6 @@
         <img src={midBanner.image_url || '/images/products/ellipse.png'} alt={midBanner.title} loading="lazy" />
       </div>
       <div class="m-cta-text">
-        <div class="m-cta-arrow-icon" aria-hidden="true">
-          <svg width="34" height="16" viewBox="0 0 38 20" fill="none">
-            <path d="M2 10H36M36 10L26 2M36 10L26 18" stroke="#FF3535" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
         <p class="m-cta-title">{midBanner.title}</p>
         <p class="m-cta-pick">{midBanner.sub}</p>
       </div>
@@ -1746,29 +1741,36 @@
     color: inherit;
     border-radius: 30px;
     background: linear-gradient(135deg, #ff3535 0%, #3b2f8a 60%);
-    padding: 25px;
+    padding: 15px 25px;   /* 상하 25→15px(2026-11-18 Stephen 지시), 좌우 25px 유지 */
+    min-height: 160px;    /* 이미지가 흐름에서 빠져도 이전 카드 높이(이미지 130 + 상하 30) 유지 */
     display: flex;
     align-items: center;
     justify-content: space-between;
     position: relative;
     overflow: hidden;
   }
+  /* 이미지 — 원형이 아니라 배너 좌측 끝에서 가로 절반까지 전체 높이로 깔고, 오른쪽으로 갈수록 투명해져 배너 그라데이션과 겹쳐 보이게(2026-11-18 Stephen 지시) */
   .m-cta-img {
-    width: 100px;
-    height: 100px;
-    border-radius: 50%;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 70%;   /* 50→70%: 선명한 왼쪽 구간은 그대로 두고 투명해지는 끝을 오른쪽(글자 쪽)으로 넓힘(2026-11-18 Stephen 지시) */
     overflow: hidden;
-    flex-shrink: 0;
+    /* 투명해지는 구간을 길게 잡고 여러 단계로 완만하게(ease) 줄여, 이미지 끝과 배경이 만나는 경계선이 보이지 않게 한다. 왼쪽 선명 구간(카드 폭의 약 11%)은 이전과 같은 위치 */
+    -webkit-mask-image: linear-gradient(to right, #000 0%, #000 16%, rgba(0,0,0,0.92) 25%, rgba(0,0,0,0.78) 35%, rgba(0,0,0,0.58) 46%, rgba(0,0,0,0.38) 57%, rgba(0,0,0,0.2) 68%, rgba(0,0,0,0.08) 80%, rgba(0,0,0,0.02) 92%, transparent 100%);
+    mask-image: linear-gradient(to right, #000 0%, #000 16%, rgba(0,0,0,0.92) 25%, rgba(0,0,0,0.78) 35%, rgba(0,0,0,0.58) 46%, rgba(0,0,0,0.38) 57%, rgba(0,0,0,0.2) 68%, rgba(0,0,0,0.08) 80%, rgba(0,0,0,0.02) 92%, transparent 100%);
   }
-  .m-cta-img img { width: 100%; height: 100%; object-fit: cover; }
+  .m-cta-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .m-cta-text {
+    position: relative;   /* 절대 배치 이미지 위에 글자가 오도록 */
+    margin-left: 50%;     /* 글자는 배너 오른쪽 절반에 */
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     flex: 1;
   }
-  .m-cta-arrow-icon { height: 16px; display: flex; align-items: center; }
   .m-cta-title {
     font-family: 'Noto Sans KR', sans-serif;
     font-weight: 900;
@@ -1785,7 +1787,7 @@
     line-height: 1.3;
     margin: 0;
   }
-  .m-cta-chevron { flex-shrink: 0; }
+  .m-cta-chevron { flex-shrink: 0; position: relative; }
 
   /* DESKTOP LIST – hidden on mobile */
   .d-list { display: none; background: white; }
