@@ -7,6 +7,7 @@
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
   import type { ProductListMode } from '$lib/utils/productListOrder'
+  import { csToast } from '$lib/utils/toast'
 
   interface ProductItem {
     id: string
@@ -80,6 +81,9 @@
   let midTitle = $state<string>(midInit?.title ?? '촬영본능')
   let midSub = $state<string>(midInit?.sub ?? 'PICK!')
   let midLink = $state<string>(midInit?.link_url ?? '')
+  // 배너 이미지는 cms-assets 버킷에 올라가며 이 버킷의 파일 크기 한도는 5MB(Stage·Production 동일) — 공통 10MB 검사만으로는 저장 때 'exceeded the maximum allowed size'로 실패하므로 선택 시점에 막는다
+  const CMS_ASSETS_MAX_BYTES = 5 * 1024 * 1024
+  const CMS_ASSETS_SIZE_ERROR = '배너 이미지는 5MB 이하만 올릴 수 있어요. 용량을 줄여 다시 선택해 주세요.'
   let midFile = $state<File | null>(null)
   let midPreview = $state<string | null>(null)
 
@@ -89,10 +93,10 @@
     input.value = ''
     if (!file) return
     const v = validateUploadFile(file)
-    if (!v.ok || !file.type.startsWith('image/')) { error = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
-    const sz = validateUploadFileSize(file)
-    if (!sz.ok) { error = sz.error ?? null; return }
-    error = null
+    if (!v.ok || !file.type.startsWith('image/')) { midError = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
+    const sz = validateUploadFileSize(file, CMS_ASSETS_MAX_BYTES)
+    if (!sz.ok) { midError = CMS_ASSETS_SIZE_ERROR; return }
+    midError = null
     if (midPreview) URL.revokeObjectURL(midPreview)
     midFile = file
     midPreview = URL.createObjectURL(file)
@@ -134,10 +138,10 @@
     input.value = ''
     if (!file) return
     const v = validateUploadFile(file)
-    if (!v.ok || !file.type.startsWith('image/')) { error = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
-    const sz = validateUploadFileSize(file)
-    if (!sz.ok) { error = sz.error ?? null; return }
-    error = null
+    if (!v.ok || !file.type.startsWith('image/')) { bannerError = 'PNG, JPEG, WebP, HEIF 이미지 파일만 업로드할 수 있어요.'; return }
+    const sz = validateUploadFileSize(file, CMS_ASSETS_MAX_BYTES)
+    if (!sz.ok) { bannerError = CMS_ASSETS_SIZE_ERROR; return }
+    bannerError = null
     bannerRows = bannerRows.map((r) => {
       if (r.category_id !== id) return r
       if (variant === 'mobile') {
@@ -179,8 +183,13 @@
   let searchResults = $state<ProductItem[]>([])
   let isSearching = $state(false)
   let isLoadingInitial = $state(false)
-  let isSaving = $state(false)
-  let error = $state<string | null>(null)
+  // 모듈별 저장 상태·오류 — ① 슬라이드 ② 카테고리 배너 ③ 목록 중간 배너
+  let savingSlide = $state(false)
+  let savingBanner = $state(false)
+  let savingMid = $state(false)
+  let slideError = $state<string | null>(null)
+  let bannerError = $state<string | null>(null)
+  let midError = $state<string | null>(null)
   let debounceTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let pickerSelectedId = $state<string | null>(null)
   // I-3: 마지막 실제 검색어 추적
@@ -226,13 +235,18 @@
     setTimeout(() => { pickerSelectedId = null; searchResults = [] }, 0)
   }
 
-  // Fix 1 — 초기 저장 상품 복원
+  // Fix 1 — 초기 저장 상품 복원(모달이 열릴 때 1회만)
+  // 모듈별 저장 뒤 invalidateAll() 로 initialSettings 가 새 객체가 되어도 다시 복원하지 않는다 —
+  // 다시 실행하면 다른 모듈을 저장하는 순간 아직 저장하지 않은 슬라이드 상품 편집분이 저장본으로 덮어써진다(sp3 M1, 2026-11-18)
+  let restoredOnce = false
   $effect(() => {
     const ids = initialSettings.products
       .slice()
       .sort((a, b) => a.order - b.order)
       .map((p) => p.id)
       .filter(Boolean)
+    if (restoredOnce) return
+    restoredOnce = true
     if (!ids.length) return
     isLoadingInitial = true
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -294,20 +308,25 @@
     selected = selected.filter((s) => s.id !== id)
   }
 
-  async function save() {
-    isSaving = true
-    error = null
-    // 링크 형식은 어떤 저장보다 먼저 검증 — 잘못된 링크로 헤더 설정만 먼저 저장되는 일 방지
-    if (isHero) {
-      try {
-        for (const r of bannerRows) normalizeLink(r.link_url, catName(r.category_id))
-        normalizeLink(midLink, '목록 중간 배너')
-      } catch (e) {
-        error = e instanceof Error ? e.message : '링크 형식이 올바르지 않습니다.'
-        isSaving = false
-        return
-      }
-    }
+  // ── 저장은 모듈별로 나눈다(2026-11-18 Stephen 지시) ─────────────────────────────
+  // ① 슬라이드(노출 방식·상품) ② 카테고리 배너 ③ 목록 중간 배너 — 각자 [저장]으로 그 모듈만 저장하고, 한 번에 모두 저장하는 버튼은 두지 않는다.
+  // ②·③은 같은 설정 키(product_page_category_banners)에 items / mid_banner 로 함께 들어가므로, 저장하지 않는 쪽은
+  // '마지막으로 저장된 값'을 그대로 다시 써서 서로 덮어쓰지 않게 한다(저장 성공 때마다 아래 기준값을 갱신).
+  let savedItems: CategoryBanner[] = [...(initialBanners.items ?? [])]
+  let savedMid: MidBanner | null = initialBanners.mid_banner ?? null
+
+  async function writeBanners(items: CategoryBanner[], mid: MidBanner | null): Promise<string | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: bErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
+      p_key: BANNER_KEY,
+      p_value: { items, ...(mid ? { mid_banner: mid } : {}) },
+    })
+    return bErr ? (bErr as { message: string }).message : null
+  }
+
+  async function persistSlide(): Promise<boolean> {
+    savingSlide = true
+    slideError = null
     const value: HeroSettings = {
       products: selected.map((p, i) => ({ id: p.id, order: i })),
       mode,
@@ -318,50 +337,92 @@
       p_value: value,
     })
     if (err) {
-      error = (err as { message: string }).message
-      isSaving = false
-      return
-    }
-    if (isHero) {
-      try {
-        const items: CategoryBanner[] = []
-        for (const r of bannerRows) {
-          const image_url = await uploadBanner(r, 'pc')
-          const mobile_image_url = await uploadBanner(r, 'mobile')
-          if (!image_url && !mobile_image_url && !r.link_url && !r.alt) continue
-          items.push({
-            category_id: r.category_id,
-            image_url,
-            mobile_image_url,
-            link_url: normalizeLink(r.link_url, catName(r.category_id)),
-            alt: r.alt.trim(),
-            enabled: r.enabled && (!!image_url || !!mobile_image_url),
-          })
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: bErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
-          p_key: BANNER_KEY,
-          p_value: {
-            items,
-            mid_banner: {
-              enabled: midEnabled,
-              image_url: await uploadMidImage(),
-              title: midTitle.trim(),
-              sub: midSub.trim(),
-              link_url: normalizeLink(midLink, '목록 중간 배너'),
-            } satisfies MidBanner,
-          },
-        })
-        if (bErr) throw new Error((bErr as { message: string }).message)
-      } catch (e) {
-        error = e instanceof Error ? e.message : '배너 저장에 실패했습니다.'
-        isSaving = false
-        return
-      }
+      slideError = (err as { message: string }).message
+      savingSlide = false
+      return false
     }
     await invalidateAll()
-    onclose()
-    isSaving = false
+    savingSlide = false
+    return true
+  }
+
+  /** ① 슬라이드 모듈 저장 — 열린 채로 유지(다른 모듈을 이어서 편집 가능) */
+  async function saveSlide() {
+    if (await persistSlide()) csToast.success('저장했어요.')
+  }
+
+  /** MD 추천 픽 모달(모듈 1개뿐)의 저장 — 저장 후 닫기 */
+  async function save() {
+    if (await persistSlide()) onclose()
+  }
+
+  /** ② 카테고리 배너 모듈 저장 */
+  async function saveCategoryBanners() {
+    savingBanner = true
+    bannerError = null
+    try {
+      for (const r of bannerRows) normalizeLink(r.link_url, catName(r.category_id))
+      const items: CategoryBanner[] = []
+      for (const r of bannerRows) {
+        const image_url = await uploadBanner(r, 'pc')
+        const mobile_image_url = await uploadBanner(r, 'mobile')
+        if (!image_url && !mobile_image_url && !r.link_url && !r.alt) continue
+        items.push({
+          category_id: r.category_id,
+          image_url,
+          mobile_image_url,
+          link_url: normalizeLink(r.link_url, catName(r.category_id)),
+          alt: r.alt.trim(),
+          enabled: r.enabled && (!!image_url || !!mobile_image_url),
+        })
+      }
+      const msg = await writeBanners(items, savedMid)
+      if (msg) throw new Error(msg)
+      savedItems = items
+      // 창이 열린 채 유지되므로 행을 저장 결과로 맞춘다(같은 파일을 다음 저장 때 다시 올리지 않도록 파일·미리보기 정리)
+      bannerRows = bannerRows.map((r) => {
+        if (r._preview) URL.revokeObjectURL(r._preview)
+        if (r._mPreview) URL.revokeObjectURL(r._mPreview)
+        const s = items.find((i) => i.category_id === r.category_id)
+        return {
+          ...r,
+          image_url: s?.image_url ?? null,
+          mobile_image_url: s?.mobile_image_url ?? null,
+          enabled: s?.enabled ?? false,
+          _file: null, _preview: null, _mFile: null, _mPreview: null,
+        }
+      })
+      await invalidateAll()
+      csToast.success('저장했어요.')
+    } catch (e) {
+      bannerError = e instanceof Error ? e.message : '카테고리 배너 저장에 실패했습니다.'
+    } finally {
+      savingBanner = false
+    }
+  }
+
+  /** ③ 목록 중간 배너 모듈 저장 */
+  async function saveMidBanner() {
+    savingMid = true
+    midError = null
+    try {
+      const link_url = normalizeLink(midLink, '목록 중간 배너')
+      const image_url = await uploadMidImage()
+      const mid: MidBanner = { enabled: midEnabled, image_url, title: midTitle.trim(), sub: midSub.trim(), link_url }
+      const msg = await writeBanners(savedItems, mid)
+      if (msg) throw new Error(msg)
+      savedMid = mid
+      if (midPreview) URL.revokeObjectURL(midPreview)
+      midPreview = null
+      midFile = null
+      midImageUrl = image_url
+      await invalidateAll()
+      csToast.success('저장했어요.')
+    } catch (e) {
+      midError = e instanceof Error ? e.message : '목록 중간 배너 저장에 실패했습니다.'
+    } finally {
+      savingMid = false
+    }
   }
 </script>
 
@@ -458,6 +519,13 @@
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
     {/if}
     </div>
+    <!-- ① 슬라이드 모듈 저장 — 헤더 상품 설정 모달(isHero)에서만. MD 추천 픽 모달은 하단 [저장] 하나가 이 모듈 전체다 -->
+    {#if isHero}
+      {#if slideError}<p class="save-error" role="alert">{slideError}</p>{/if}
+      <div class="module-actions">
+        <button type="button" class="btn-save" onclick={saveSlide} disabled={savingSlide}>{savingSlide ? '저장 중…' : '저장'}</button>
+      </div>
+    {/if}
     </div>
 
     <!-- 카테고리 선택 시 노출 배너 — 카테고리별 1개, 가로 100% × 세로 150px -->
@@ -536,6 +604,11 @@
             {/if}
           </div>
         {/each}
+        <!-- ② 카테고리 배너 모듈 저장 -->
+        {#if bannerError}<p class="save-error" role="alert">{bannerError}</p>{/if}
+        <div class="module-actions">
+          <button type="button" class="btn-save" onclick={saveCategoryBanners} disabled={savingBanner}>{savingBanner ? '저장 중…' : '저장'}</button>
+        </div>
       </div>
     {/if}
 
@@ -552,37 +625,39 @@
               <span>노출</span>
             </label>
           </div>
+          <!-- 이미지에 마우스를 올리거나 선택(포커스)하면 [이미지 선택] 버튼이 나타나고 누르면 파일 선택창이 열린다(별도 상시 버튼 없음) -->
           <div class="banner-thumb banner-thumb-mid">
             <img src={midPreview ?? midImageUrl ?? MID_DEFAULT_IMAGE} alt="목록 중간 배너 이미지 미리보기" />
-          </div>
-          <div class="banner-actions">
-            <label class="banner-file-btn">
-              이미지 선택
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={onMidFile} hidden />
+            <label class="mid-pick">
+              <span class="banner-file-btn">이미지 선택</span>
+              <input type="file" class="mid-pick-input" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={onMidFile} />
             </label>
-            {#if midImageUrl || midPreview}
-              <button type="button" class="remove-btn" aria-label="목록 중간 배너 이미지 제거(기본 이미지로 복원)"
-                onclick={() => { if (midPreview) URL.revokeObjectURL(midPreview); midPreview = null; midFile = null; midImageUrl = null }}>✕</button>
-            {/if}
           </div>
           <input type="text" class="f-input" placeholder="타이틀 (예: 촬영본능)" maxlength="20" bind:value={midTitle} />
           <input type="text" class="f-input" placeholder="서브 텍스트 (예: PICK!)" maxlength="20" bind:value={midSub} />
           <input type="text" class="f-input" placeholder="연결 링크 (예: /hype-pack 또는 https://…, 비우면 링크 없음)" maxlength="500" bind:value={midLink} />
         </div>
+        <!-- ③ 목록 중간 배너 모듈 저장 -->
+        {#if midError}<p class="save-error" role="alert">{midError}</p>{/if}
+        <div class="module-actions">
+          <button type="button" class="btn-save" onclick={saveMidBanner} disabled={savingMid}>{savingMid ? '저장 중…' : '저장'}</button>
+        </div>
       </div>
     {/if}
+  </div>
 
-    {#if error}
-      <p class="save-error" role="alert">{error}</p>
+  <!-- 헤더 상품 설정 모달(isHero)은 모듈마다 [저장]이 있어 하단 통합 저장 버튼을 두지 않는다(2026-11-18). MD 추천 픽 모달만 하단 [취소]/[저장] 유지 -->
+  {#if !isHero}
+    {#if slideError}
+      <p class="save-error save-error-footer" role="alert">{slideError}</p>
     {/if}
-  </div>
-
-  <div class="modal-footer">
-    <button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
-    <button class="btn-save" onclick={save} disabled={isSaving}>
-      {isSaving ? '저장 중…' : '저장'}
-    </button>
-  </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick={onclose} disabled={savingSlide}>취소</button>
+      <button class="btn-save" onclick={save} disabled={savingSlide}>
+        {savingSlide ? '저장 중…' : '저장'}
+      </button>
+    </div>
+  {/if}
 </aside>
 
 <style>
@@ -853,6 +928,10 @@
   }
   .btn-save:hover:not(:disabled) { background: var(--cs-purple-hover); }
   .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* 모듈별 [저장] — 각 모듈 카드 맨 아래 오른쪽 */
+  .module-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+  /* MD 추천 픽 모달 — 오류 문구를 하단 버튼줄 위에 보이도록(본문 영역을 벗어난 위치라 좌우 여백만 맞춘다) */
+  .save-error-footer { margin: 0 24px 12px; }
 
   .banner-help { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
   .group-wrap { display: flex; flex-direction: column; gap: 16px; }
@@ -891,7 +970,14 @@
   .banner-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .banner-thumb-empty span { font: var(--text-pc-script-12); color: var(--cs-text-light); }
   .banner-sub { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 4px 0 0; }
-  .banner-thumb-mid { aspect-ratio: 1 / 1; max-width: 120px; border-radius: 50%; }
+  .banner-thumb-mid { aspect-ratio: 1 / 1; max-width: 120px; border-radius: 50%; position: relative; }
+  /* 목록 중간 배너 이미지 — 올리거나(hover)·선택(focus)했을 때만 [이미지 선택] 버튼을 이미지 가운데에 노출 */
+  .mid-pick {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0; transition: opacity 0.15s;
+  }
+  .mid-pick:hover, .mid-pick:focus-within { opacity: 1; }
+  .mid-pick-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   .banner-thumb-m { aspect-ratio: 680 / 400; max-width: 260px; }
   .banner-actions { display: flex; align-items: center; gap: 8px; }
   .banner-file-btn {
