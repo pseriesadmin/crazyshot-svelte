@@ -128,6 +128,7 @@ describe('cron dhero-sync — 자동전이 연동', () => {
       'crazydelivery',
       'crazydelivery',
       'shipped',
+      expect.objectContaining({ key: expect.any(String) }), // 같은 접수번호 알림 1회 묶음
     )
   })
 
@@ -191,6 +192,7 @@ describe('cron dhero-sync — 자동전이 연동', () => {
       'crazydelivery',
       'crazydelivery',
       'return_requested',
+      expect.objectContaining({ key: expect.any(String) }), // 같은 접수번호 알림 1회 묶음
     )
   })
 
@@ -361,6 +363,7 @@ describe('cron dhero-sync — 자동전이 연동', () => {
       'crazydelivery',
       'crazydelivery',
       'in_use',
+      expect.objectContaining({ key: expect.any(String) }), // 같은 접수번호 알림 1회 묶음
     )
   })
 })

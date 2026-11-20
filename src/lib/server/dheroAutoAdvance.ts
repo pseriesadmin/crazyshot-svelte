@@ -36,6 +36,7 @@ const AUTO_NOTIFY: Partial<Record<string, string>> = {
  * @param pickupMethod  rental_reservations.pickup_method
  * @param returnMethod  rental_reservations.return_method
  * @param currentStatus 현재 알려진 예약 status (EC-2 방어를 위해 DB 재확인 병행)
+ * @param notifyDedup   같은 접수번호(=같은 주문)의 여러 상품이 한 번의 크론에서 차례로 전이될 때 고객 알림을 접수번호당 1회만 보내기 위한 묶음(없으면 항상 발송 — 수동 새로고침)
  */
 export async function maybeAutoAdvanceOnDheroDelivered(
   admin: AnySupabaseClient,
@@ -45,6 +46,7 @@ export async function maybeAutoAdvanceOnDheroDelivered(
   pickupMethod: string | null,
   returnMethod: string | null,
   currentStatus: string,
+  notifyDedup?: { sent: Set<string>; key: string },
 ): Promise<void> {
   try {
     // 배송완료(5)만 트리거 — 절대금지: 6(반송)/7(분실)은 자동전이 금지
@@ -102,7 +104,10 @@ export async function maybeAutoAdvanceOnDheroDelivered(
     // AUTO_NOTIFY 채팅알림 + 푸시 (fail-soft — 전이 성공 결과에 영향 없음)
     try {
       const notifyType = AUTO_NOTIFY[newStatus]
-      if (notifyType) {
+      // 같은 접수번호(주문)의 다른 상품이 이미 이번 실행에서 알림을 보냈다면 건너뛴다 — 주문당 1회(수동 [수령 확인]과 동일, 2026-11-18)
+      const alreadySent = notifyDedup ? notifyDedup.sent.has(`${newStatus}:${notifyDedup.key}`) : false
+      if (notifyType && !alreadySent) {
+        if (notifyDedup) notifyDedup.sent.add(`${newStatus}:${notifyDedup.key}`)
         await admin.rpc('send_rental_chat_notification', {
           p_reservation_id: reservationId,
           p_notify_type:    notifyType,

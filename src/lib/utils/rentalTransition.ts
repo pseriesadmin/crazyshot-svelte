@@ -19,10 +19,10 @@ export function nextStatus(s: string, pickupMethod?: string | null, returnMethod
 
 export function nextLabel(s: string, pickupMethod?: string | null, returnMethod?: string | null): string {
   if (s === 'confirmed') {
-    return pickupMethod === 'visit' ? '방문 출고 처리' : '택배 출고 처리'
+    return pickupMethod === 'visit' ? '방문 출고 처리' : '배송 출고 등록'
   }
   if (s === 'shipped') {
-    return pickupMethod === 'visit' ? '방문수령 확인' : '택배수령 확인'
+    return pickupMethod === 'visit' ? '방문수령 확인' : '배송완료 확인'
   }
   if (s === 'in_use') {
     // 방문 반납: 현장 즉시 반납완료 처리 / 택배·퀵: 고객 채팅 반납접수 후 처리

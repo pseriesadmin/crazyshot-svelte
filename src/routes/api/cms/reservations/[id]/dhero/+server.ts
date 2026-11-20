@@ -155,7 +155,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     )
 
     const returnDhero = await loadReturnLeg(admin, reservationId, res)
-    return json({ dhero: status, returnDhero, reservation: resPublic, is_dhero_integration: isDheroIntegration })
+    // 자동 전이 결과(패널의 [배송완료 확인] 버튼이 "전환됐는지"를 안내하는 데 사용) — 조회 실패는 무시
+    let statusAfter: string | null = null
+    try {
+      const { data: after } = await (admin as unknown as { from: (t: string) => { select: (c: string) => { eq: (c: string, v: number) => { maybeSingle: () => PromiseLike<{ data: { status?: string } | null }> } } } })
+        .from('rental_reservations').select('status').eq('id', reservationId).maybeSingle()
+      statusAfter = after?.status ?? null
+    } catch { /* 안내용 값 — 없어도 무방 */ }
+    return json({ dhero: status, returnDhero, reservation: resPublic, is_dhero_integration: isDheroIntegration, status_after: statusAfter })
   } catch (e) {
     const dheroError = e instanceof DheroApiError
       ? { message: e.message, statusCode: e.statusCode }

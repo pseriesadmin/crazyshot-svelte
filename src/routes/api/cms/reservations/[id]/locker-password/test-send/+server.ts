@@ -19,7 +19,7 @@ import { applyParentFieldsToRowProducts } from '$lib/server/products/resolvePare
 import { sendSms, buildLockerGuideSms, buildLockerReturnGuideSms } from '$lib/server/sms'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
-import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
+import { withSmsPrefix } from '$lib/utils/notifyTemplate'
 import { isValidLockerNumber, isValidLockerPassword, isValidLockerGuideLegs, legListFromLegs, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR, LOCKER_GUIDE_LEGS_ERROR } from '$lib/utils/lockerFields'
 import type { RequestHandler } from './$types'
 
@@ -100,7 +100,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
     const fallback = leg === 'return'
       ? buildLockerReturnGuideSms(productName, lockerNumber, password, entrance)
       : buildLockerGuideSms(productName, lockerNumber, password, entrance)
-    messages.push({ leg, message: composed ? `${SMS_BRAND_PREFIX}${composed}` : fallback })
+    messages.push({ leg, message: composed ? withSmsPrefix(composed) : fallback })
   }
 
   try {

@@ -239,6 +239,61 @@ describe('maybeAutoAdvanceOnDheroDelivered', () => {
   })
 })
 
+describe('maybeAutoAdvanceOnDheroDelivered — 같은 주문 알림 주문당 1회 (2026-11-18)', () => {
+  beforeEach(() => {
+    mockSendPush.mockReset()
+    mockAwardPoints.mockReset()
+  })
+
+  it('같은 접수번호의 두 상품이 연달아 전이돼도 상태는 둘 다 바뀌고 알림(채팅·푸시)은 1회만 나간다', async () => {
+    const admin = makeAdmin({ freshStatus: 'shipped' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+    const dedup = { sent: new Set<string>(), key: 'BOOK-1' }
+
+    await maybeAutoAdvanceOnDheroDelivered(admin, 301, 'pickup', 5, 'crazydelivery', null, 'shipped', dedup)
+    await maybeAutoAdvanceOnDheroDelivered(admin, 302, 'pickup', 5, 'crazydelivery', null, 'shipped', dedup)
+
+    const statusCalls = admin._mockRpc.mock.calls.filter((c: unknown[]) => c[0] === 'update_reservation_status')
+    const chatCalls = admin._mockRpc.mock.calls.filter((c: unknown[]) => c[0] === 'send_rental_chat_notification')
+    expect(statusCalls).toHaveLength(2)
+    expect(chatCalls).toHaveLength(1)
+    expect(mockSendPush).toHaveBeenCalledTimes(1)
+  })
+
+  it('접수번호가 다르면(다른 주문) 각각 알림이 나간다', async () => {
+    const admin = makeAdmin({ freshStatus: 'shipped' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+    const sent = new Set<string>()
+
+    await maybeAutoAdvanceOnDheroDelivered(admin, 311, 'pickup', 5, 'crazydelivery', null, 'shipped', { sent, key: 'BOOK-A' })
+    await maybeAutoAdvanceOnDheroDelivered(admin, 312, 'pickup', 5, 'crazydelivery', null, 'shipped', { sent, key: 'BOOK-B' })
+
+    expect(mockSendPush).toHaveBeenCalledTimes(2)
+  })
+
+  it('전이가 실패한 상품은 알림 기록을 남기지 않아 다음 상품이 알림을 보낼 수 있다', async () => {
+    const failing = makeAdmin({ freshStatus: 'shipped', rpcOk: false })
+    const ok = makeAdmin({ freshStatus: 'shipped' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+    const dedup = { sent: new Set<string>(), key: 'BOOK-2' }
+
+    await maybeAutoAdvanceOnDheroDelivered(failing, 321, 'pickup', 5, 'crazydelivery', null, 'shipped', dedup)
+    await maybeAutoAdvanceOnDheroDelivered(ok, 322, 'pickup', 5, 'crazydelivery', null, 'shipped', dedup)
+
+    expect(mockSendPush).toHaveBeenCalledTimes(1)
+  })
+
+  it('묶음 정보를 주지 않으면(수동 새로고침) 기존처럼 항상 발송한다', async () => {
+    const admin = makeAdmin({ freshStatus: 'shipped' })
+    const { maybeAutoAdvanceOnDheroDelivered } = await import('$lib/server/dheroAutoAdvance')
+
+    await maybeAutoAdvanceOnDheroDelivered(admin, 331, 'pickup', 5, 'crazydelivery', null, 'shipped')
+    await maybeAutoAdvanceOnDheroDelivered(admin, 332, 'pickup', 5, 'crazydelivery', null, 'shipped')
+
+    expect(mockSendPush).toHaveBeenCalledTimes(2)
+  })
+})
+
 // ── cron 연동 테스트는 별도 파일로 분리 ─────────────────────────────────────
 // src/__tests__/server/dheroSyncCron.test.ts 참조
 // 이유: vi.mock('$lib/server/dheroAutoAdvance', ...) 가 파일 최상위에 있으면
