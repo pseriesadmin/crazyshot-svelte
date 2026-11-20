@@ -1,6 +1,10 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { invalidateAll } from '$app/navigation'
   import { fly } from 'svelte/transition'
+  import ComboDropConfirm from './_ComboDropConfirm.svelte'
+  import { callCodesAction } from './_groupMoveClient'
+  import type { GroupComboMove, GroupComboMoveResult } from '$lib/utils/codeGroupMove'
   import { csToast } from '$lib/utils/toast'
   import type { PageData, ActionData } from './$types'
   import type { MappingGroup, MappingItem, TaxonomyCode, CodeFormat } from './+page.server'
@@ -318,6 +322,63 @@
         break
     }
   })
+
+  // ── 코드조합 카테고리 이동(결합·분리) — superadmin 전용 ─────────────────
+  // 오른쪽 상세의 조합 행을 왼쪽 카테고리 카드로 끌어 놓으면 확인창이 열린다(드래그 한 번 = 조합 1개)
+  const canMove = $derived(data.cmsRole === 'superadmin')
+  let dragCombo = $state<{ comboId: string; fromGroupId: string } | null>(null)
+  let overGroupId = $state<string | null>(null)
+  let pendingMove = $state<{ move: GroupComboMove; restOffer: boolean } | null>(null)
+
+  /** 놓을 수 있는 카테고리: 출발과 다르고 협력사 유형이 같은 곳(서버도 같은 규칙으로 거절) */
+  function canDropOn(group: MappingGroup): boolean {
+    if (!dragCombo || group.id === dragCombo.fromGroupId) return false
+    const from = (data.mappingGroups ?? []).find((g) => g.id === dragCombo!.fromGroupId)
+    return !!from && from.is_partner_type === group.is_partner_type
+  }
+  function onComboDragStart(e: DragEvent, comboId: string, fromGroupId: string) {
+    dragCombo = { comboId, fromGroupId }
+    e.dataTransfer?.setData('text/plain', comboId)
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+  }
+  function onComboDragEnd() {
+    dragCombo = null
+    overGroupId = null
+  }
+  function onGroupDrop(e: DragEvent, group: MappingGroup) {
+    e.preventDefault()
+    const drag = dragCombo
+    onComboDragEnd()
+    if (!drag || group.id === drag.fromGroupId) return
+    const from = (data.mappingGroups ?? []).find((g) => g.id === drag.fromGroupId)
+    if (!from || from.is_partner_type !== group.is_partner_type) return
+    const restOffer =
+      combosForGroup(from.id).length === 1 && !!from.default_category && from.default_category !== group.default_category
+    pendingMove = { move: { combo_row_id: drag.comboId, from_group_id: drag.fromGroupId, to_group_id: group.id }, restOffer }
+  }
+
+  async function undoMove(batchId: string) {
+    const r = await callCodesAction('undoGroupComboMove', { batch_id: batchId })
+    if (!r.ok) {
+      csToast.error(r.error)
+      return
+    }
+    await invalidateAll()
+    const u = r.data['undone'] as { combosBack: number; productsBack: number; productsSkipped: number } | undefined
+    const skipped = u && u.productsSkipped > 0 ? ` (그 사이 바뀐 상품 ${u.productsSkipped}개는 그대로 둠)` : ''
+    csToast.success(`이동을 되돌렸습니다.${skipped}`)
+  }
+
+  async function onMoveApplied(res: GroupComboMoveResult) {
+    pendingMove = null
+    await invalidateAll()
+    const products = res.parents + res.children + res.rest
+    csToast.success(`조합 ${res.combos}개를 옮겼습니다. 상품 ${products}개의 카테고리가 바뀌었습니다.`, {
+      actionLabel: '되돌리기',
+      duration: 15000,
+      onClick: () => { void undoMove(res.batch_id) },
+    })
+  }
 </script>
 
 <div class="am-root">
@@ -366,7 +427,13 @@
           class="group-card"
           class:group-card-selected={selectedId === group.id}
           class:group-card-inactive={!group.is_active}
+          class:group-card-drop={overGroupId === group.id && canDropOn(group)}
+          class:group-card-droppable={!!dragCombo && canDropOn(group) && overGroupId !== group.id}
+          class:group-card-blocked={!!dragCombo && !canDropOn(group)}
           role="listitem"
+          ondragover={(e) => { if (canMove && canDropOn(group)) { e.preventDefault(); overGroupId = group.id } }}
+          ondragleave={() => { if (overGroupId === group.id) overGroupId = null }}
+          ondrop={(e) => { if (canMove) onGroupDrop(e, group) }}
         >
           <button
             class="gc-body"
@@ -596,7 +663,17 @@
                 {@const isActiveCurrent = activeComboId === combo.combo_row_id}
                 {@const isEditingCombo = comboEditSet[combo.combo_row_id] || isActiveCurrent}
                 {@const isNewUnsavedCombo = isActiveCurrent && !comboEditSet[combo.combo_row_id]}
-                <div class="combo-row" class:combo-row-active={isActiveCurrent} class:combo-row-editing={isEditingCombo}>
+                <div
+                  class="combo-row"
+                  role="group"
+                  class:combo-row-active={isActiveCurrent}
+                  class:combo-row-editing={isEditingCombo}
+                  class:combo-row-draggable={canMove && !isEditingCombo}
+                  class:combo-row-dragging={dragCombo?.comboId === combo.combo_row_id}
+                  draggable={canMove && !isEditingCombo}
+                  ondragstart={(e) => { if (canMove && !isEditingCombo) onComboDragStart(e, combo.combo_row_id, selectedGroup!.id) }}
+                  ondragend={onComboDragEnd}
+                >
 
                   {#if isEditingCombo}
                     <!-- 상단 독립 행: 항상 닫기(✕, 저장 없이 편집만 종료 — 비파괴, 새/기존 조합 공통).
@@ -992,6 +1069,18 @@
   </div>
 
 </div>
+
+<!-- 조합 행 → 카테고리 카드 드롭 확인창 -->
+{#if pendingMove && canMove}
+  <ComboDropConfirm
+    move={pendingMove.move}
+    fromName={(data.mappingGroups ?? []).find((g) => g.id === pendingMove!.move.from_group_id)?.name ?? ''}
+    toName={(data.mappingGroups ?? []).find((g) => g.id === pendingMove!.move.to_group_id)?.name ?? ''}
+    restOffer={pendingMove.restOffer}
+    onclose={() => { pendingMove = null }}
+    onapplied={onMoveApplied}
+  />
+{/if}
 
 <!-- 삭제 확인 모달 -->
 {#if showDelConfirm && selectedGroup}
@@ -2135,6 +2224,17 @@
   transition: background 0.12s;
 }
 .btn-cancel:hover { background: rgba(59,47,138,0.04); }
+
+/* 조합 행 드래그 이동 (superadmin) — 면 색만 사용 */
+.combo-row-draggable { cursor: grab; }
+/* 끌고 있는 조합 행: 흐리게 + 연보라 면 */
+.combo-row-dragging { opacity: 0.45; background: var(--cs-purple-op10); }
+/* 드래그 중: 놓을 수 있는 카테고리 = 연보라 면, 놓을 수 없는 카테고리 = 흐림 */
+.group-card-droppable { outline: 2px dashed var(--cs-purple); outline-offset: -2px; }
+.group-card-blocked { opacity: 0.4; }
+/* 지금 위에 올라간 카테고리: 진보라 면으로 꽉 채워 "여기에 담김"을 표시 */
+.group-card-drop { background: var(--cs-purple); transform: scale(1.015); transition: background 0.12s, transform 0.12s; }
+.group-card-drop .gc-name { color: var(--cs-white); }
 
 /* 삭제 확인 모달 */
 .confirm-backdrop {
