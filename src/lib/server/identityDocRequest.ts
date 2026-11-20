@@ -12,7 +12,7 @@ import { getDocGateStatus, docLandingKind, type DocGateRow } from '$lib/utils/do
 import { sendPushToUser } from '$lib/server/push'
 import { sendSms } from '$lib/server/sms'
 import { getNotifyMessageOverride } from '$lib/server/notifyMessages'
-import { applyNotifyTemplate, SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
+import { applyNotifyTemplate, withSmsPrefix } from '$lib/utils/notifyTemplate'
 
 export const IDENTITY_REQUEST_CONTENT = '개인정보 메뉴에서 본인증명정보를 등록 부탁드립니다.'
 export const IDENTITY_REQUEST_BUTTON_LABEL = '본인증명 등록요청'
@@ -206,7 +206,7 @@ export async function requestIdentityDocRegistration(
     if (!dev && phone) {
       try {
         const smsBody = customText
-          ? `${SMS_BRAND_PREFIX}${customText}`
+          ? withSmsPrefix(customText)
           : force
             ? '[크레이지샷] 등록하신 본인증명 서류를 확인하기 어려워 재등록을 부탁드립니다.'
             : '[크레이지샷] 예약 진행을 위해 본인증명정보를 등록해 주세요.'

@@ -8,7 +8,7 @@ import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
 import { getLockerGuideTimer } from '$lib/server/lockerGuideTimer'
 import { timerTimeToMinutes } from '$lib/utils/lockerGuideTimer'
-import { SMS_BRAND_PREFIX } from '$lib/utils/notifyTemplate'
+import { withSmsPrefix } from '$lib/utils/notifyTemplate'
 import { checkUndeliveredSms, type SmsAlertResult } from '$lib/server/smsDeliveryAlert'
 import type { RequestHandler } from './$types'
 
@@ -66,7 +66,7 @@ export const GET: RequestHandler = async ({ request }) => {
     const fallbackSms = isReturn
       ? buildLockerReturnGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
       : buildLockerGuideSms(row.product_name, row.locker_number, row.password as string, entrancePassword)
-    const smsText = composed ? `${SMS_BRAND_PREFIX}${composed}` : fallbackSms
+    const smsText = composed ? withSmsPrefix(composed) : fallbackSms
 
     // 비밀번호가 담긴 문자를 가장 먼저 보낸다 — 실패하면 채팅·푸시를 보내지 않고(중복 방지) 이 건을 재시도 대상으로 되돌린다.
     const canSms = !!(row.phone && row.password)

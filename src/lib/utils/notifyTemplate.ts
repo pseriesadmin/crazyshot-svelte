@@ -219,6 +219,11 @@ const EMOJI_PATTERN = /\p{Extended_Pictographic}|️|‍/u
 
 export const SMS_BRAND_PREFIX = '[크레이지샷] '
 
+/** 문자 본문 앞에 브랜드 접두어를 붙인다. 안내문장이 이미 접두어로 시작하면 중복해 붙이지 않는다(2026-11-16 — "[크레이지샷] [크레이지샷] …" 방지). */
+export function withSmsPrefix(text: string): string {
+  return text.trimStart().startsWith(SMS_BRAND_PREFIX.trim()) ? text.trimStart() : `${SMS_BRAND_PREFIX}${text}`
+}
+
 // 문자 본문에 덧붙는 링크의 대략적 길이(자동 부착분 — sms.ts가 'http'가 없으면 줄바꿈 후 링크를 붙인다)
 function smsLinkBudget(notifyType: string): number {
   return notifyType === 'contract_sent' ? 70 : 40
@@ -241,7 +246,7 @@ export function estimateNotifyMessage(notifyType: string, template: string): Not
     const bytes = smsByteLength(body)
     return { worstText: body, smsBytes: bytes, smsKind: classifySms(bytes) }
   }
-  let text = `${SMS_BRAND_PREFIX}${body}`
+  let text = withSmsPrefix(body)
   if (!text.includes('http')) text += `\n${'x'.repeat(smsLinkBudget(notifyType))}`
   const bytes = smsByteLength(text)
   return { worstText: text, smsBytes: bytes, smsKind: classifySms(bytes) }

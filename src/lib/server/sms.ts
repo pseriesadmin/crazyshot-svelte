@@ -2,7 +2,7 @@ import { dev } from '$app/environment'
 import { env } from '$env/dynamic/private'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SolapiMessageService } from 'solapi'
-import { SMS_BRAND_PREFIX, classifySms, smsByteLength } from '$lib/utils/notifyTemplate'
+import { classifySms, smsByteLength, withSmsPrefix } from '$lib/utils/notifyTemplate'
 import { returnSubmitPath } from '$lib/utils/returnNotice'
 
 // SMS 발송: Solapi SDK (HMAC 서명 인증 — IP 등록 불필요, Vercel 서버리스에 최적)
@@ -252,7 +252,7 @@ export async function sendLifecycleSms(
     }
 
     const link = toAbsoluteUrl(linkOverride ?? defaultLinkPath(notifyType, reservationId))
-    let message = customMessage ? `${SMS_BRAND_PREFIX}${customMessage}` : msgFn(productName, link)
+    let message = customMessage ? withSmsPrefix(customMessage) : msgFn(productName, link)
     if (!customMessage && trackingText) message = `${message}\n${trackingText}`
     if (!message.includes('http')) message = `${message}\n${link}`
 
