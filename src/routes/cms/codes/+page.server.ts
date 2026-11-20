@@ -5,6 +5,9 @@ import { createClient } from '@supabase/supabase-js'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { buildComboCategoryCode } from '$lib/utils/comboCategoryCode'
+import { parseGroupComboMoves } from '$lib/utils/codeGroupMove'
+import { runGroupComboMove, runGroupMoveUndo } from '$lib/server/codeGroupMove'
+import { invalidateProductSearchCache } from '$lib/server/searchEngine/adapters/productSearchIndex'
 import type { PageServerLoad, Actions } from './$types'
 
 const FORMAT_KEY   = 'reservation_code_format'
@@ -993,6 +996,64 @@ export const actions: Actions = {
 
     if (error) return fail(500, { action: 'removeGroupCombo', error: '삭제 실패: ' + error.message })
     return { action: 'removeGroupCombo', success: true }
+  },
+
+  // ── 코드조합 카테고리 이동(결합·분리) — superadmin 전용 (2026-11-19, Migration 841) ──────────
+  // 조합 행의 소속 그룹과 해당 상품의 카테고리 값만 바꾼다. 코드품번(product_code·code_series)은 건드리지 않는다.
+  // 미리보기는 같은 DB 함수를 실행한 뒤 롤백해 건수·경고만 돌려준다.
+  previewGroupComboMove: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'previewGroupComboMove', error: '인증 필요' })
+    const admin = db()
+    if (!(await checkSuperadmin(admin, session.user.id)))
+      return fail(403, { action: 'previewGroupComboMove', error: '접근권한이 없습니다.' })
+
+    const form = await request.formData()
+    const moves = parseGroupComboMoves((form.get('moves') as string) ?? '')
+    if (!moves) return fail(400, { action: 'previewGroupComboMove', error: '옮길 조합 정보가 올바르지 않습니다.' })
+    const includeRest = form.get('include_rest') === '1'
+
+    const outcome = await runGroupComboMove(admin, { moves, actorId: session.user.id, includeRest, dryRun: true })
+    if (!outcome.ok) return fail(400, { action: 'previewGroupComboMove', error: outcome.error })
+    return { action: 'previewGroupComboMove', success: true, preview: outcome.result, warnings: outcome.warnings }
+  },
+
+  applyGroupComboMove: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'applyGroupComboMove', error: '인증 필요' })
+    const admin = db()
+    if (!(await checkSuperadmin(admin, session.user.id)))
+      return fail(403, { action: 'applyGroupComboMove', error: '접근권한이 없습니다.' })
+
+    const form = await request.formData()
+    const moves = parseGroupComboMoves((form.get('moves') as string) ?? '')
+    if (!moves) return fail(400, { action: 'applyGroupComboMove', error: '옮길 조합 정보가 올바르지 않습니다.' })
+    const includeRest = form.get('include_rest') === '1'
+
+    const outcome = await runGroupComboMove(admin, { moves, actorId: session.user.id, includeRest, dryRun: false })
+    if (!outcome.ok) return fail(400, { action: 'applyGroupComboMove', error: outcome.error })
+
+    // 카테고리 값이 바뀐 상품이 있으면 검색 색인 캐시를 비운다(다른 서버 인스턴스는 60초 안에 따라옴)
+    if (outcome.result.parents + outcome.result.children + outcome.result.rest > 0) invalidateProductSearchCache()
+    return { action: 'applyGroupComboMove', success: true, applied: outcome.result }
+  },
+
+  undoGroupComboMove: async ({ request, locals }) => {
+    const { session } = await locals.safeGetSession()
+    if (!session) return fail(401, { action: 'undoGroupComboMove', error: '인증 필요' })
+    const admin = db()
+    if (!(await checkSuperadmin(admin, session.user.id)))
+      return fail(403, { action: 'undoGroupComboMove', error: '접근권한이 없습니다.' })
+
+    const form = await request.formData()
+    const batchId = ((form.get('batch_id') as string) ?? '').trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batchId))
+      return fail(400, { action: 'undoGroupComboMove', error: '되돌릴 이동 정보가 올바르지 않습니다.' })
+
+    const outcome = await runGroupMoveUndo(admin, { batchId, actorId: session.user.id })
+    if (!outcome.ok) return fail(400, { action: 'undoGroupComboMove', error: outcome.error })
+    if (outcome.productsBack > 0) invalidateProductSearchCache()
+    return { action: 'undoGroupComboMove', success: true, undone: outcome }
   },
 
   // ── 그룹 코드 제거 (개별 코드) ───────────────────────────────────────
