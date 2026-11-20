@@ -3,6 +3,8 @@
   import { invalidateAll } from '$app/navigation'
   import { fly } from 'svelte/transition'
   import ComboDropConfirm from './_ComboDropConfirm.svelte'
+  import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
+  import type { SuggestPickerOption } from '$lib/types/suggest-picker'
   import { callCodesAction } from './_groupMoveClient'
   import type { GroupComboMove, GroupComboMoveResult } from '$lib/utils/codeGroupMove'
   import { csToast } from '$lib/utils/toast'
@@ -217,6 +219,7 @@
     comboKwsMap = { ...comboKwsMap, [rowId]: getComboKws(rowId, lead).filter(k => k !== kw) }
   }
   function enterComboEdit(rowId: string, lead: MappingItem) {
+    if (movePickFor === rowId) closeMovePick()   // 편집 진입 시 '그룹이동' 입력창 닫기
     comboEditSet    = { ...comboEditSet,    [rowId]: true }
     comboNameMap    = { ...comboNameMap,    [rowId]: lead.combo_name ?? '' }
     comboKwsMap     = { ...comboKwsMap,     [rowId]: [...(lead.combo_keywords ?? [])] }
@@ -345,16 +348,52 @@
     dragCombo = null
     overGroupId = null
   }
+  /** 끌어 놓기·'그룹이동' 선택 공통: 이동 확인창을 연다(규칙은 서버와 같음) */
+  function requestMove(comboId: string, fromGroupId: string, group: MappingGroup) {
+    if (group.id === fromGroupId) return
+    const from = (data.mappingGroups ?? []).find((g) => g.id === fromGroupId)
+    if (!from || from.is_partner_type !== group.is_partner_type) return
+    const restOffer =
+      combosForGroup(from.id).length === 1 && !!from.default_category && from.default_category !== group.default_category
+    pendingMove = { move: { combo_row_id: comboId, from_group_id: fromGroupId, to_group_id: group.id }, restOffer }
+  }
   function onGroupDrop(e: DragEvent, group: MappingGroup) {
     e.preventDefault()
     const drag = dragCombo
     onComboDragEnd()
-    if (!drag || group.id === drag.fromGroupId) return
-    const from = (data.mappingGroups ?? []).find((g) => g.id === drag.fromGroupId)
-    if (!from || from.is_partner_type !== group.is_partner_type) return
-    const restOffer =
-      combosForGroup(from.id).length === 1 && !!from.default_category && from.default_category !== group.default_category
-    pendingMove = { move: { combo_row_id: drag.comboId, from_group_id: drag.fromGroupId, to_group_id: group.id }, restOffer }
+    if (!drag) return
+    requestMove(drag.comboId, drag.fromGroupId, group)
+  }
+
+  // '그룹이동' 텍스트 메뉴 → 그룹 목록 SuggestPicker → 선택 즉시 같은 이동 확인창
+  let movePickFor = $state<string | null>(null)
+  let movePickSel = $state<string | null>(null)
+  const movePickOptions = $derived.by((): SuggestPickerOption[] => {
+    const from = selectedGroup
+    if (!from) return []
+    return (data.mappingGroups ?? [])
+      .filter((g: MappingGroup) => g.id !== from.id && g.is_partner_type === from.is_partner_type)
+      .map((g: MappingGroup) => ({ id: g.id, label: g.name }))
+  })
+  $effect(() => { void selectedId; closeMovePick() })   // 다른 그룹으로 전환하면 입력창 닫기
+  function openMovePick(comboId: string) {
+    movePickSel = null
+    movePickFor = comboId
+  }
+  function closeMovePick() {
+    movePickFor = null
+    movePickSel = null
+  }
+  function pickMoveTarget(comboId: string, groupId: string) {
+    const group = (data.mappingGroups ?? []).find((g: MappingGroup) => g.id === groupId)
+    const from = selectedGroup
+    closeMovePick()
+    if (group && from) requestMove(comboId, from.id, group)
+  }
+  // 마운트 직후(이벤트 연결 뒤)에 포커스를 줘야 피커의 onfocus가 목록을 연다
+  function focusOnMount(node: HTMLInputElement) {
+    const t = setTimeout(() => node.focus(), 0)
+    return { destroy: () => clearTimeout(t) }
   }
 
   async function undoMove(batchId: string) {
@@ -932,6 +971,40 @@
                           disabled={deletingComboRowId === combo.combo_row_id}
                         >{deletingComboRowId === combo.combo_row_id ? '삭제 중...' : comboDeleteConfirm === combo.combo_row_id ? '한번 더 누르면 삭제됩니다' : '삭제'}</button>
                       </form>
+
+                      {#if canMove && movePickFor === combo.combo_row_id}
+                        <div class="combo-move-pick">
+                          <SuggestPicker
+                            id="move-pick-{combo.combo_row_id}"
+                            listLabel="그룹 목록"
+                            bind:selectedId={movePickSel}
+                            options={movePickOptions}
+                            placeholder="이동할 그룹 검색 또는 선택..."
+                            onselect={(opt) => pickMoveTarget(combo.combo_row_id, opt.id)}
+                          >
+                            {#snippet field(c)}
+                              <input type="text" class="f-input" id={c.id}
+                                placeholder={c.placeholder} value={c.value}
+                                oninput={c.oninput}
+                                onkeydown={(e) => { if (e.key === 'Escape') closeMovePick(); else c.onkeydown(e) }}
+                                onfocus={c.onfocus}
+                                onblur={() => { c.onblur(); setTimeout(() => { if (movePickFor === combo.combo_row_id) closeMovePick() }, 250) }}
+                                aria-autocomplete={c.ariaAutocomplete}
+                                aria-expanded={c.ariaExpanded}
+                                aria-controls={c.ariaControls}
+                                autocomplete="off"
+                                use:focusOnMount />
+                            {/snippet}
+                          </SuggestPicker>
+                        </div>
+                      {:else if canMove}
+                        <button
+                          type="button"
+                          class="btn-combo-move"
+                          onclick={() => openMovePick(combo.combo_row_id)}
+                          aria-label="그룹이동"
+                        >그룹이동</button>
+                      {/if}
                     {/if}
                     </div> <!-- /combo-controls -->
                   </div> <!-- /combo-main-line -->
@@ -1668,7 +1741,7 @@
   align-items: flex-start;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 10px 20px;
+  padding: 12.4px 20px;
   border: none;
   border-radius: var(--cms-radius-sm);
   background: var(--cs-lilac);
@@ -1676,6 +1749,8 @@
   transition: background 0.1s;
 }
 .combo-row:hover { background: var(--cs-purple-op10); }
+/* 그룹이동 입력창(높이 36px)이 나타나도 행 높이가 변하지 않도록 평소 행 높이를 입력창 기준으로 확보 */
+.combo-row:not(.combo-row-editing) .combo-main-line { min-height: 36px; }
 .combo-row-active { background: var(--cs-purple-op10) !important; }
 
 /* 편집 모드: 상단(삭제)/중간(칩+필드 결합)/하단(저장·취소) 3구역을 세로로 쌓음 */
@@ -2224,6 +2299,32 @@
   transition: background 0.12s;
 }
 .btn-cancel:hover { background: rgba(59,47,138,0.04); }
+
+/* '그룹이동' 텍스트 메뉴 — 행 우측 끝, 아웃라인 없이 글자만(호버는 면 색) */
+.btn-combo-move {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--cs-text-mid);
+  font: var(--text-pc-descript-10);
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.btn-combo-move:hover { background: var(--cs-purple-op10); }
+.combo-move-pick { margin-left: auto; width: 220px; flex-shrink: 0; }
+/* 그룹 목록은 5개까지만 보이고 나머지는 스크롤 (항목 약 40px × 5 + 위아래 테두리 3px) */
+.combo-move-pick :global(.suggest-picker-layer) { max-height: 203px; }
+.combo-move-pick .f-input {
+  width: 100%; height: 36px; box-sizing: border-box; padding: 0 12px;
+  border: none; border-radius: var(--radius-sm);
+  background: var(--cs-white); color: var(--cs-text); font: var(--text-pc-script-12);
+}
+.combo-move-pick .f-input:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
 
 /* 조합 행 드래그 이동 (superadmin) — 면 색만 사용 */
 .combo-row-draggable { cursor: grab; }
