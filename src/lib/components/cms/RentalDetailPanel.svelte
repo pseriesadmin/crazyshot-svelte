@@ -2051,7 +2051,7 @@
   // 서버(rentals/+page.server.ts sendChatNotify)가 같은 단계 규칙(NOTIFY_ALLOWED_STATUSES)을 다시 검사한다.
   // return_remind = 반납 요청(사진 등록 링크 카드) / return_registration = 반납 방법 선택 카드(대여중 이후엔 고객 쪽 만료 표시).
   const NOTIFY_BUTTONS: ReadonlyArray<{ type: string; label: string; statuses: readonly string[]; stageHint: string }> = [
-    { type: 'shipment_notify',     label: '반출 알림 발송',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
+    { type: 'shipment_notify',     label: '배송알림 발송',  statuses: ['confirmed'],                      stageHint: '계약완료 단계에서 사용할 수 있어요' },
     { type: 'return_remind',       label: '반납 요청',       statuses: ['in_use', 'return_requested'],     stageHint: '대여중·반납접수 단계에서 사용할 수 있어요' },
     { type: 'return_registration', label: '반납 정보 요청',  statuses: ['return_requested'],               stageHint: '반납접수 단계에서 사용할 수 있어요' },
   ]
@@ -2232,6 +2232,49 @@
     returnDheroData  = null
     dheroError       = null
     dheroCourierCode = null
+  }
+
+  // ── 반출중 단계의 [배송완료 확인] — 두발히어로 자동 접수 건은 자동 전환(10분 조회)에 맡기고, 자동으로 안 넘어간 경우에만 노출(2026-11-18, Stephen 확정) ──
+  // 판정은 목록 행 값만 쓴다(대여정보 탭을 열지 않아도 동작): 두발히어로가 저장한 접수(번호·동기화 시각 있음, 라벨이 '취소' 아님)면 두발히어로 연동 건이다.
+  //  · 연동 건: 배송완료(5)가 기록됐는데 아직 반출중이거나, 마지막 동기화가 30분 넘게 멈춘 경우에만 버튼을 보여 두발히어로를 직접 조회한다(조회 결과가 배송완료일 때만 대여중으로 전환).
+  //  · 그 외(타 택배사·방문·취소된 접수 등 조회할 API가 없는 건): 기존처럼 관리자가 바로 전환한다.
+  const DHERO_SYNC_STALE_MS = 30 * 60 * 1000
+  let dheroDeliveryCheckLoading = $state(false)
+  const dheroManagedShipped = $derived(
+    row.status === 'shipped' && row.pickup_method !== 'visit' &&
+    !!row.tracking_number && !!row.dhero_synced_at && row.dhero_status !== '취소'
+  )
+  const dheroDeliveryCheckNeeded = $derived(
+    dheroManagedShipped && (
+      row.dhero_status_code === 5 ||
+      (Date.now() - new Date(row.dhero_synced_at as string).getTime() > DHERO_SYNC_STALE_MS)
+    )
+  )
+
+  async function checkDheroDeliveryManually(): Promise<void> {
+    dheroDeliveryCheckLoading = true
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/dhero`)
+      const d = await res.json() as { dhero?: DheroInfo | null; dhero_error?: { message: string }; status_after?: string | null; error?: string }
+      if (!res.ok) { csToast.error(d.error ?? '두발히어로 상태를 확인하지 못했습니다.'); return }
+      if (d.dhero_error) { csToast.error(`두발히어로 상태를 확인하지 못했습니다: ${d.dhero_error.message}`); return }
+      const code = d.dhero?.status
+      if (code === 5 && d.status_after && d.status_after !== 'shipped') {
+        csToast.success('배송완료를 확인해 대여중으로 전환했습니다.')
+      } else if (code === 5) {
+        csToast.warning('두발히어로는 배송완료이지만 대여중 전환이 되지 않았습니다. 잠시 후 다시 확인해 주세요.')
+      } else {
+        const label = d.dhero ? (DHERO_STATUS_LABEL[d.dhero.status] ?? String(d.dhero.status)) : '확인 불가'
+        csToast.warning(`두발히어로 현재 상태는 '${label}'로 아직 배송완료가 아닙니다.`)
+      }
+      rentalSiblingsFetchedForId = null
+      dheroFetchedForId = null
+      onrefresh()
+    } catch {
+      csToast.error('두발히어로 상태 확인 중 오류가 발생했습니다.')
+    } finally {
+      dheroDeliveryCheckLoading = false
+    }
   }
 
   async function registerDheroDelivery(): Promise<void> {
@@ -4351,10 +4394,26 @@
         <!-- 대여 라이프사이클: 출고 처리 → 수령 확인 → 반납 접수/처리 (2026-10-27 ④, Stephen 확정 — 하단 버튼 하나).
              같은 주문에 상품이 여러 개여도 버튼 하나가 주문 전체를 다음 단계로 처리한다(updateOrderStatus — 가장 덜 진행된 단계의 상품 대상, 고객 알림·두발히어로 접수는 주문당 1회).
              상품별 처리 줄(구 Q1 B안)은 위쪽 "상품 정보"와 정보가 중복이라 제거했다. 상품별 실물 확인은 모바일 QR 스캔이 맡는다. 단일 상품 주문은 기존 updateStatus 그대로. -->
+        {:else if dheroManagedShipped && nextStatus(row.status, row.pickup_method, row.return_method)}
+          <!-- 두발히어로 자동 접수 건(반출중): 자동 전환에 맡기고, 자동으로 안 넘어간 경우에만 [배송완료 확인]으로 두발히어로를 직접 조회한다(2026-11-18, Stephen 확정) -->
+          {#if dheroDeliveryCheckNeeded}
+            <button
+              type="button"
+              class="btn-action"
+              style:order={1}
+              disabled={dheroDeliveryCheckLoading}
+              onclick={checkDheroDeliveryManually}
+              title="두발히어로에서 배송 상태를 직접 조회해, 배송완료이면 대여중으로 전환합니다"
+            >
+              {@render tileText(dheroDeliveryCheckLoading ? '확인 중...' : nextLabel(row.status, row.pickup_method, row.return_method))}
+            </button>
+          {/if}
         {:else if nextStatus(row.status, row.pickup_method, row.return_method)}
+          <!-- 반출중(shipped) 단계의 [수령 확인]은 [배송알림 발송] 바로 오른쪽에 둔다(2026-11-18, Stephen 지시) — 알림 버튼 줄과 같은 줄에서 CSS order 로만 위치 조정 -->
           <form
             method="POST"
             action={isMultiOrder ? '/cms/reservation?/updateOrderStatus' : '/cms/reservation?/updateStatus'}
+            style:order={row.status === 'shipped' ? 1 : null}
             use:enhance={() => {
               isSubmitting = true
               return async ({ result, update }) => {
@@ -4401,6 +4460,7 @@
             <form
               method="POST"
               action="/cms/rentals?/sendChatNotify"
+              style:order={row.status === 'shipped' && nb.type !== 'shipment_notify' ? 2 : null}
               use:enhance={() => {
                 isSubmitting = true
                 return async ({ result, update }) => {

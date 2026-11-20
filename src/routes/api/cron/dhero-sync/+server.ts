@@ -84,6 +84,8 @@ export const GET: RequestHandler = async ({ request }) => {
     return true
   })
 
+  // 고객 알림을 접수번호(같은 주문의 상품들이 공유)당 1회만 보내기 위한 기록 — 이번 실행 안에서만 유효
+  const notifiedBooks = new Set<string>()
   let synced = 0
   const skipped = 0
   let failed = 0
@@ -125,6 +127,7 @@ export const GET: RequestHandler = async ({ request }) => {
           pickupMethod,
           returnMethod,
           currentStatus,
+          { sent: notifiedBooks, key: bookId },
         )
       }
     } catch (e) {
@@ -189,6 +192,7 @@ export const GET: RequestHandler = async ({ request }) => {
         pickupMethod,
         returnMethod,
         currentStatus,
+        { sent: notifiedBooks, key: returnBookId },
       )
     } catch (e) {
       console.error(`[dhero-sync] return leg fail-soft for ${reservationId}:`, e instanceof Error ? e.message : e)

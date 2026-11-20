@@ -9,7 +9,7 @@
   import { PUSH_KINDS, OTHER_KIND, pushKindOf, mergeTabOrder } from '$lib/utils/pushKinds'
   import {
     NOTIFY_VARIABLES,
-    SMS_BRAND_PREFIX,
+    withSmsPrefix,
     applyNotifyTemplate,
     getNotifySpec,
     notifyMaxChars,
@@ -168,7 +168,7 @@
   const FLOW: Record<string, { cond: string; chat: 'card' | 'reply' | null; push?: false; sms?: true; manual?: string }> = {
     reservation_hold: { cond: '대여예약 신청접수 시', chat: 'card' },
     reservation_approval: { cond: '고객 서명·결제 완료 감지 시 (자동)', chat: 'card' },
-    shipment_notify: { cond: '[택배 출고 처리]로 배송중 전환 시', chat: 'card', manual: '[반출 알림 발송] · 계약완료 단계' },
+    shipment_notify: { cond: '[택배 출고 처리]로 배송중 전환 시', chat: 'card', manual: '[배송알림 발송] · 계약완료 단계' },
     rental_confirm: { cond: '[방문 출고 처리]·[수령 확인]으로 대여중 전환 시', chat: 'card' },
     return_registration: { cond: '[반납 접수]로 반납접수 전환 시 (고객 직접 제출은 제외) · 방문·퀵·무인보관함 반납은 아래에서 지정한 반납일 당일 시각 (반납정보 미등록 건)', chat: 'card', manual: '[반납 정보 요청] · 반납접수 단계' },
     return_remind: { cond: '반납예정일 당일 09:00 (방문·미지정)', chat: 'card', manual: '[반납 요청] · 대여중·반납접수 단계' },
@@ -191,7 +191,7 @@
     payment_cancelled_reissue: { cond: '예약변경으로 결제 취소 후 계약서 재발송 시', chat: 'card' },
     event_coupon_issued: { cond: '이벤트·쿠폰 발행 시', chat: 'card' },
     admin_chat_reply: { cond: '관리자가 상담에 답장할 때', chat: 'reply' },
-    chat_unanswered: { cond: '고객 문의 후 30분간 답변이 없을 때', chat: null },
+    chat_unanswered: { cond: '고객 문의 후 30분간 답변이 없을 때', chat: 'reply' },
     contract_sent: { cond: '전자계약 발송 시', chat: 'card' },
     contract_signed_customer: { cond: '고객 전자계약 서명 완료 시', chat: 'card' },
     identity_approved: { cond: '본인증명 서류 승인 시', chat: 'card' },
@@ -221,7 +221,7 @@
     { button: '반납 접수', stage: '대여중 · 반납 방식이 방문 외', result: '반납접수로 전환 · 두발히어로 연동 방식은 반품 접수 자동 호출', notices: ['return_registration'] },
     { button: '방문 반납 처리', stage: '대여중 · 반납 방식이 방문', result: '반납완료로 전환 · 정시 반납 포인트 적립', notices: [] },
     { button: '반납 처리 / 집하지 회수 확인 / 무인함 회수 확인', stage: '반납접수', result: '반납완료로 전환 · 정시 반납 포인트 적립', notices: [] },
-    { button: '반출 알림 발송', stage: '계약완료', result: '알림만 발송 (상태 변경 없음)', notices: ['shipment_notify'] },
+    { button: '배송알림 발송', stage: '계약완료', result: '알림만 발송 (상태 변경 없음)', notices: ['shipment_notify'] },
     { button: '반납 요청', stage: '대여중 · 반납접수', result: '알림만 발송 (상태 변경 없음)', notices: ['return_remind'] },
     { button: '반납 정보 요청', stage: '반납접수', result: '알림만 발송 (상태 변경 없음)', notices: ['return_registration'] },
     { button: 'CS 접수 등록', stage: '계약완료~반납접수 (매니저 이상)', result: '사전 접수 표시 · 증빙 폼 링크 발급 (반납완료되면 자동으로 검수 칩)', notices: ['issue_report_request'] },
@@ -702,7 +702,7 @@
       {@const hasDraft = draft.trim() !== ''}
       {@const previewBody = applyNotifyTemplate(hasDraft ? draft : spec.defaultMessage, SAMPLE_VARS)}
       {@const smsDefault = data.smsDefaults[row.notify_type]}
-      {@const smsPreview = hasDraft || !smsDefault ? `${SMS_BRAND_PREFIX}${previewBody}${previewBody.includes('http') || row.notify_type === 'locker_guide' || row.notify_type === 'locker_return_guide' ? '' : `\n${SAMPLE_LINK}`}` : smsDefault}
+      {@const smsPreview = hasDraft || !smsDefault ? `${withSmsPrefix(previewBody)}${previewBody.includes('http') || row.notify_type === 'locker_guide' || row.notify_type === 'locker_return_guide' ? '' : `\n${SAMPLE_LINK}`}` : smsDefault}
       <div class="msg-panel" id="msg-{row.notify_type}">
         <div class="msg-editor">
           <div class="msg-editor-head">

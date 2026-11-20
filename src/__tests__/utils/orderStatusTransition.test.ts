@@ -4,7 +4,7 @@ import { planOrderTransition, summarizeOrderTransition, ORDER_LIFECYCLE_TARGETS 
 /**
  * ④ 주문 단위 단일 처리 버튼 — 대상 선정 규칙 (2026-10-27, Stephen 확정 "기본값대로 진행")
  * 한 주문(예약코드 1개)의 상품들을 하단 버튼 하나로 다음 단계로 처리한다.
- *  OT-1  같은 상태의 상품 전부가 대상이다 (택배 출고 처리 = confirmed → shipped)
+ *  OT-1  같은 상태의 상품 전부가 대상이다 (배송 출고 등록 = confirmed → shipped)
  *  OT-2  상태가 섞여 있으면 "가장 덜 진행된 단계"의 상품만 대상 — 더 진행된 상품은 건드리지 않는다
  *  OT-3  취소·만료·완료·파손·신청대기 등 대여 진행 상태가 아닌 상품은 계산에서 제외한다
  *  OT-4  요청한 다음 단계가 그 상태의 다음 단계가 아니면 대상이 없다(화면과 어긋난 요청 방어)

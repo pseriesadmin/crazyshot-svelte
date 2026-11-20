@@ -21,6 +21,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/dhero-book",
+      "schedule": "0 0 * * *"
+    },
+    {
       "path": "/api/cron/return-remind",
       "schedule": "0 0 * * *"
     },
