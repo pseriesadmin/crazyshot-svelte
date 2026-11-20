@@ -7,6 +7,7 @@
 	import { initializeAuth, subscribeToAuthChanges, authState } from '$lib/stores/auth';
 	import { trackPageView } from '$lib/analytics/behaviorTracker';
 	import FloatingBar from '$lib/components/common/FloatingBar.svelte';
+	import WishMdSheet from '$lib/components/common/WishMdSheet.svelte';
 	import GNB from '$lib/components/common/GNB.svelte';
 	import LoadingIndicator from '$lib/components/common/LoadingIndicator.svelte';
 	import PushNotificationInit from '$lib/components/common/PushNotificationInit.svelte';
@@ -195,6 +196,11 @@
 			userHandle={chatUserHandle}
 			hideMobile={page.url.pathname.startsWith('/auth/login')}
 		/>
+	{/if}
+
+	<!-- 찜 추가 직후 'MD 추천' 바텀 팝업(2026-11-18) — 찜 버튼이 있는 사용자 화면 전체에서 공통으로 쓰는 1개 인스턴스. 열림 상태는 $lib/stores/wishMdSheet.svelte -->
+	{#if !page.url.pathname.startsWith('/cms')}
+		<WishMdSheet />
 	{/if}
 
 	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/issue-report')}
