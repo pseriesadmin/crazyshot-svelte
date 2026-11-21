@@ -51,7 +51,7 @@
         코드목록
       </button>
       <button class="tab-btn" class:tab-active={activeTab==='mapping'} onclick={() => activeTab='mapping'}>
-        코드조합
+        분류목록
       </button>
       <button class="tab-btn" class:tab-active={activeTab==='customer'} onclick={() => activeTab='customer'}>
         고객코드
