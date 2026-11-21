@@ -70,6 +70,16 @@ async function getComboRowLinkedCount(admin: AdminClient, combo_row_id: string):
   return counts.reduce((sum, c) => sum + c, 0)
 }
 
+/** 세션 사용자가 manager 이상(superadmin 포함)인지 확인 — 코드조합 카테고리 이동용 */
+async function checkManagerOrAbove(admin: AdminClient, userId: string): Promise<boolean> {
+  const { data } = await admin
+    .from('user_profiles')
+    .select('cms_role')
+    .eq('id', userId)
+    .maybeSingle()
+  return hasSettingsAccess((data as { cms_role: string | null } | null)?.cms_role ?? '')
+}
+
 /** 세션 사용자가 superadmin인지 확인 */
 async function checkSuperadmin(admin: AdminClient, userId: string): Promise<boolean> {
   const { data } = await admin
@@ -998,14 +1008,14 @@ export const actions: Actions = {
     return { action: 'removeGroupCombo', success: true }
   },
 
-  // ── 코드조합 카테고리 이동(결합·분리) — superadmin 전용 (2026-11-19, Migration 841) ──────────
+  // ── 코드조합 카테고리 이동(결합·분리) — manager 이상 (2026-11-19, Migration 841) ──────────
   // 조합 행의 소속 그룹과 해당 상품의 카테고리 값만 바꾼다. 코드품번(product_code·code_series)은 건드리지 않는다.
   // 미리보기는 같은 DB 함수를 실행한 뒤 롤백해 건수·경고만 돌려준다.
   previewGroupComboMove: async ({ request, locals }) => {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'previewGroupComboMove', error: '인증 필요' })
     const admin = db()
-    if (!(await checkSuperadmin(admin, session.user.id)))
+    if (!(await checkManagerOrAbove(admin, session.user.id)))
       return fail(403, { action: 'previewGroupComboMove', error: '접근권한이 없습니다.' })
 
     const form = await request.formData()
@@ -1022,7 +1032,7 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'applyGroupComboMove', error: '인증 필요' })
     const admin = db()
-    if (!(await checkSuperadmin(admin, session.user.id)))
+    if (!(await checkManagerOrAbove(admin, session.user.id)))
       return fail(403, { action: 'applyGroupComboMove', error: '접근권한이 없습니다.' })
 
     const form = await request.formData()
@@ -1042,7 +1052,7 @@ export const actions: Actions = {
     const { session } = await locals.safeGetSession()
     if (!session) return fail(401, { action: 'undoGroupComboMove', error: '인증 필요' })
     const admin = db()
-    if (!(await checkSuperadmin(admin, session.user.id)))
+    if (!(await checkManagerOrAbove(admin, session.user.id)))
       return fail(403, { action: 'undoGroupComboMove', error: '접근권한이 없습니다.' })
 
     const form = await request.formData()

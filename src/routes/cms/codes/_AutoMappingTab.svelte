@@ -8,6 +8,7 @@
   import { callCodesAction } from './_groupMoveClient'
   import type { GroupComboMove, GroupComboMoveResult } from '$lib/utils/codeGroupMove'
   import { csToast } from '$lib/utils/toast'
+  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
   import type { PageData, ActionData } from './$types'
   import type { MappingGroup, MappingItem, TaxonomyCode, CodeFormat } from './+page.server'
   import { ROOT_COLORS, datePart } from './_shared'
@@ -326,9 +327,9 @@
     }
   })
 
-  // ── 코드조합 카테고리 이동(결합·분리) — superadmin 전용 ─────────────────
+  // ── 코드조합 카테고리 이동(결합·분리) — manager 이상 ─────────────────
   // 오른쪽 상세의 조합 행을 왼쪽 카테고리 카드로 끌어 놓으면 확인창이 열린다(드래그 한 번 = 조합 1개)
-  const canMove = $derived(data.cmsRole === 'superadmin')
+  const canMove = $derived(hasSettingsAccess(data.cmsRole ?? ''))
   let dragCombo = $state<{ comboId: string; fromGroupId: string } | null>(null)
   let overGroupId = $state<string | null>(null)
   let pendingMove = $state<{ move: GroupComboMove; restOffer: boolean } | null>(null)
