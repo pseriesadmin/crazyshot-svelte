@@ -9,6 +9,8 @@
   import { contractSignRemainingSeconds, formatCountdown, isContractSignUrgent } from '$lib/utils/holdContractTimer'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import { RENTAL_TAB_CONFIG, findRentalSortOption, isApplicationOverdue, nextSortForColumn, sortOptionsForColumn, type RentalSortColumn, type RentalTabKey } from '$lib/utils/rentalListSort'
 
   interface Props { data: PageData }
   let { data }: Props = $props()
@@ -172,6 +174,8 @@
     if (contractPending) params.set('contract_pending', '1')
     else                 params.delete('contract_pending')
     params.delete('page')
+    params.delete('sort')   // 탭별 정렬·필터는 탭이 바뀌면 그 탭 기본값으로 돌아간다
+    params.delete('filter')
     params.delete('selected') // 칩 이동 시 열린 패널 선택은 해제 — 취소된 예약 링크의 칩 자동 전환(서버 리다이렉트)과 충돌하지 않게
     userGoto(`/cms/rentals?${params.toString()}`, { replaceState: true })
   }
@@ -271,7 +275,90 @@
     if (!method) return '-'
     return PICKUP_LABELS[method] ?? method
   }
+
+  // 탭별 정렬·필터(2026-11-20, '예약대여현황 탭별 정렬·필터 정리 v1') — 옵션 목록·기본값은 rentalListSort.ts, 집행은 get_rental_list(#842)
+  const tabCfg = $derived(data.tabKey ? RENTAL_TAB_CONFIG[data.tabKey as RentalTabKey] : null)
+  const currentSort = $derived(data.tabKey ? findRentalSortOption(data.tabKey as RentalTabKey, data.sortValue) : null)
+  const filterCfg = $derived(tabCfg?.filter ?? null)
+
+  function setListParams(updates: Record<string, string | null>) {
+    const params = new URLSearchParams(window.location.search)
+    for (const [k, v] of Object.entries(updates)) {
+      if (v == null || v === '') params.delete(k)
+      else params.set(k, v)
+    }
+    params.delete('page')
+    userGoto(`/cms/rentals?${params.toString()}`, { replaceState: true })
+  }
+
+  // 표 헤더 정렬(2026-11-20) — 상태(전환 시점)·대여기간(수령·반납 예정일시)·신청일 헤더를 누르면 그 컬럼의 정렬 옵션이 순환한다. 기본 정렬로 돌아오면 ?sort= 를 지운다
+  function sortByColumn(column: RentalSortColumn) {
+    if (!tabCfg || !data.tabKey) return
+    const next = nextSortForColumn(data.tabKey as RentalTabKey, currentSort?.value, column)
+    if (!next || next.value === currentSort?.value) return
+    setListParams({ sort: next.value === tabCfg.defaultSort ? null : next.value })
+  }
+  function columnSortable(column: RentalSortColumn): boolean {
+    return !!data.tabKey && sortOptionsForColumn(data.tabKey as RentalTabKey, column).length > 0
+  }
+
+  // 그룹 정렬 구분 — 같은 출고일(계약완료·배송중)·같은 반납일(대여중·반납일·방식순) 안에서 방식 순서(크레이지배송 → 방문픽업 → 퀵서비스)로 묶이므로 날짜가 바뀔 때 구분 행을 넣는다
+  function groupOf(row: RentalListRow): { key: string; label: string } | null {
+    if (row.cancel_pending) return null
+    const sort = data.sortValue
+    if (sort === 'pickup_asc' || sort === 'delay_pickup_asc') return row.rental_start ? { key: row.rental_start, label: `${formatDate(row.rental_start)} 출고` } : null
+    if (sort === 'delay_return_asc' || sort === 'return_group_asc') return row.rental_end ? { key: row.rental_end, label: `${formatDate(row.rental_end)} 반납` } : null
+    if (sort === 'changed_group_desc' || sort === 'changed_group_asc') {
+      // 반납중 기본 — 반납 전환일(KST)별 묶음
+      if (!row.status_changed_at) return null
+      const day = new Date(Date.parse(row.status_changed_at) + 9 * 3600 * 1000).toISOString().slice(0, 10)
+      return { key: day, label: `${day} 반납 전환` }
+    }
+    return null
+  }
+  // 그룹 정렬 탭에서 어느 방식(수령/반납)으로 묶였는지 — 상태 칸 색 표식에 쓴다
+  function groupMethod(row: RentalListRow): string | null {
+    const sort = data.sortValue
+    if (sort === 'pickup_asc' || sort === 'delay_pickup_asc') return row.pickup_method
+    if (sort === 'delay_return_asc' || sort === 'return_group_asc' || sort === 'changed_group_desc' || sort === 'changed_group_asc') return row.return_method
+    return null
+  }
+
+  function toggleFilter(value: string) {
+    if (!filterCfg) return
+    const cur = data.filterSelected ?? []
+    const next = filterCfg.multi
+      ? (cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value])
+      : (cur.includes(value) ? [] : [value])
+    setListParams({ filter: next.join(',') })
+  }
+
+  // 수령·반납 방식 색 구분 — 같은 출고일·반납일 안에서 방식 순서(크레이지배송 → 방문픽업 → 퀵서비스)가 한눈에 보이게. 색은 이 화면의 기존 상태 배지 색을 재사용한다
+  const METHOD_STYLE_TABS = ['confirmed', 'shipped', 'in_use', 'returning']
+  function methodStyle(method: string | null): { bg: string; color: string } | null {
+    if (!METHOD_STYLE_TABS.includes(data.status ?? '')) return null
+    if (method === 'crazydelivery') return STATUS_STYLE.in_use
+    if (method === 'visit' || method === 'locker') return STATUS_STYLE.confirmed
+    if (method === 'quick') return STATUS_STYLE.return_requested
+    return null
+  }
 </script>
+
+{#snippet sortTh(column: RentalSortColumn, label: string, extra: string = '')}
+  {@const active = currentSort?.column === column}
+  {#if columnSortable(column)}
+    <th class={extra} aria-sort={active ? (currentSort?.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" class="th-sort" class:th-sort-active={active} onclick={() => sortByColumn(column)} title={active ? currentSort?.label : `${label} 기준 정렬`}>
+        {label}
+        <span class="th-sort-arrow" class:th-sort-arrow-off={!active}>
+          <ChevronIcon direction={active && currentSort?.dir === 'asc' ? 'up' : 'down'} size={5} color={active ? '#3B2F8A' : '#aaaaaa'} />
+        </span>
+      </button>
+    </th>
+  {:else}
+    <th class={extra}>{label}</th>
+  {/if}
+{/snippet}
 
 <div class="page-wrap">
   <!-- 툴바 — 검색 UI와 필터 UI를 별도 행으로 분리(2026-08-20) -->
@@ -290,7 +377,22 @@
         <input class="date-in" type="date" bind:value={dateTo} onchange={applyFilters} aria-label="대여 종료일 필터" />
       </div>
 
-      <span class="count-badge">총 {data.totalCount ?? 0}건</span>
+      <div class="tb-tools">
+        {#if filterCfg}
+          <div class="filter-pills" role="group" aria-label={filterCfg.label}>
+            {#each filterCfg.options as opt (opt.value)}
+              <button
+                type="button"
+                class="filter-pill"
+                class:active={(data.filterSelected ?? []).includes(opt.value)}
+                aria-pressed={(data.filterSelected ?? []).includes(opt.value)}
+                onclick={() => toggleFilter(opt.value)}
+              >{opt.label}</button>
+            {/each}
+          </div>
+        {/if}
+        <span class="count-badge">총 {data.totalCount ?? 0}건</span>
+      </div>
     </div>
 
     <!-- 예약 → 대여 진행 순서를 겸하는 내비게이터형 필터 — 신청대기→...→검수는 버튼 내부 화살표로 "단계"임을 드러내고,
@@ -350,23 +452,31 @@
         <table>
           <thead>
             <tr>
-              <th>상태</th>
-              <th class="col-hide">예약번호</th>
-              <th>고객명</th>
-              <th>상품명</th>
-              <th class="col-hide">상품코드</th>
-              <th>대여기간</th>
-              <th class="col-hide">수령방식</th>
-              <th class="col-hide">반납방식</th>
-              <th class="col-hide">결제금액</th>
-              <th>계약</th>
-              <th class="col-hide">신청일</th>
+              {@render sortTh('status', '상태')}
+              {@render sortTh('code', '예약번호', 'col-hide')}
+              {@render sortTh('customer', '고객명')}
+              {@render sortTh('product', '상품명')}
+              {@render sortTh('productCode', '상품코드', 'col-hide')}
+              {@render sortTh('period', '대여기간')}
+              {@render sortTh('pickupMethod', '수령방식', 'col-hide')}
+              {@render sortTh('returnMethod', '반납방식', 'col-hide')}
+              {@render sortTh('amount', '결제금액', 'col-hide')}
+              {@render sortTh('contract', '계약')}
+              {@render sortTh('created', '신청일', 'col-hide')}
             </tr>
           </thead>
           <tbody>
-            {#each data.rentals as row (row.reservation_id)}
+            {#each data.rentals as row, i (row.reservation_id)}
+              {@const gk = groupOf(row)}
+              {@const prevGk = i > 0 ? groupOf(data.rentals[i - 1]) : null}
+              {@const gms = methodStyle(groupMethod(row))}
+              {#if gk && gk.key !== prevGk?.key}
+                <tr class="group-row"><td colspan="11">{gk.label}</td></tr>
+              {/if}
               {@const st = STATUS_STYLE[row.status] ?? STATUS_STYLE['pending']}
               {@const cb = contractBadge(row)}
+              {@const pms = methodStyle(row.pickup_method)}
+              {@const rms = methodStyle(row.return_method)}
               <!-- 계약 발송 후 서명·결제 제한 시간 잔여(초) — 관리자 목록 전용. 타이머가 없거나 종료되면 null이라 가린다. -->
               {@const remainSec = nowMs !== null ? contractSignRemainingSeconds(row, nowMs) : null}
               <tr
@@ -389,6 +499,10 @@
                     <span class="status-badge" style="background:{st.bg};color:{st.color}">
                       {rowStatusLabel(row)}
                     </span>
+                  {/if}
+                  {#if row.status === 'hold' && !data.contractPending && (data.status ?? '') === 'hold' && isApplicationOverdue(row.rental_start)}
+                    <!-- 신청대기에서 대여 시작일이 지난 건 — 신청대기 탭의 '지연' 표시(2026-11-20) -->
+                    <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">지연</span>
                   {/if}
                   {#if row.status_mixed && !row.cancel_pending}
                     <!-- 주문 1건 = 1행(Migration 618): 같은 주문의 상품들이 서로 다른 단계일 때 표기(상태는 가장 덜 진행된 단계) -->
@@ -413,6 +527,10 @@
                   {#if row.prior_issue}
                     <!-- CS 사전 이슈 접수 건(3단계) — 반납완료 시 검수 칩으로 자동 이동, 고객 증빙과 실물을 비교 검수 -->
                     <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}">사전접수건</span>
+                  {/if}
+                  {#if gms && selectedId != null}
+                    <!-- 상세 패널이 열리면 수령·반납방식 칸이 숨겨지므로 그룹 방식(크레이지배송·방문픽업·퀵서비스) 색 표식을 상태 칸에도 둔다 -->
+                    <span class="status-badge" style="background:{gms.bg};color:{gms.color}">{pickupLabel(groupMethod(row))}</span>
                   {/if}
                   {#if row.dhero_status}
                     <span class="dhero-mini-badge">{row.dhero_status}</span>
@@ -456,10 +574,10 @@
                   </span>
                 </td>
                 <td class="col-hide">
-                  <span class="method-value">{pickupLabel(row.pickup_method)}</span>
+                  {#if pms}<span class="status-badge" style="background:{pms.bg};color:{pms.color}">{pickupLabel(row.pickup_method)}</span>{:else}<span class="method-value">{pickupLabel(row.pickup_method)}</span>{/if}
                 </td>
                 <td class="col-hide">
-                  <span class="method-value">{pickupLabel(row.return_method)}</span>
+                  {#if rms}<span class="status-badge" style="background:{rms.bg};color:{rms.color}">{pickupLabel(row.return_method)}</span>{:else}<span class="method-value">{pickupLabel(row.return_method)}</span>{/if}
                 </td>
                 <td class="col-hide">
                   {#if row.order_amount != null}
@@ -697,6 +815,43 @@
     .chip:hover .chip-text, .chip:hover .chip-count, .chip:active .chip-text, .chip:active .chip-count { transform: none; }
     .chip-active::before, .chip-active::after { display: none; }
     .wave-strip { animation: none; transform: translateX(-25%); }
+  }
+
+  /* 탭별 정렬 버튼(CMS 표준 §7-13)·필터 콤보버튼(§7-12-A 툴바형) */
+  .tb-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .filter-pills { display: flex; align-items: center; gap: 6px; }
+  .filter-pill {
+    height: 30px;
+    padding: 0 16px;
+    border-radius: var(--radius-xl, 30px);
+    border: none;
+    background: var(--cs-lilac);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+    color: var(--cs-text);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .filter-pill.active { background: var(--cs-purple); color: var(--cs-white); }
+  .filter-pill:hover:not(.active) { color: var(--cs-purple); }
+  /* 표 헤더 정렬 — 배경 변경만으로 호버 표현(아웃라인 없음) */
+  .th-sort {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: none; padding: 4px 6px; margin: -4px -6px;
+    border-radius: var(--radius-sm);
+    font: inherit; color: inherit; cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .th-sort:hover { background: rgba(59, 47, 138, 0.08); }
+  .th-sort-active { color: var(--cs-purple); }
+  .th-sort-arrow { display: inline-flex; align-items: center; }
+  .th-sort-arrow-off { opacity: 0.5; }
+  /* 그룹 정렬 구분 행(같은 출고일·반납일 묶음의 시작) */
+  .group-row td {
+    background: var(--cs-surface-gray);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    padding: 6px 12px;
   }
 
   .count-badge {

@@ -17,6 +17,7 @@ import { hasMenuAccess, type CmsMenuPermissionOverride } from '$lib/constants/cm
 import { escapeLikePattern } from '$lib/server/escapeLikePattern'
 import { isReturnDue } from '$lib/utils/returnDue'
 import { loadReservationStageRows, loadReservationChipCounts } from '$lib/server/cms/reservationStageList'
+import { rentalTabKeyOf, resolveRentalSort, resolveRentalFilter, rpcSortFor } from '$lib/utils/rentalListSort'
 
 import type { RentalListRow } from '../reservation/+page.server'
 export type { RentalListRow }
@@ -79,6 +80,16 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   // '반납중' 칩(status=returning, 2026-10-19): 반납요청 + 반납완료(검수 대기) + 반납 예정일 도래·알림 발송된 대여중. 검수 이슈 건은 '검수' 칩으로 간다.
   const isReturningView = status === 'returning'
 
+  // 탭별 정렬·필터(2026-11-20, '예약대여현황 탭별 정렬·필터 정리 v1') — ?sort=·?filter= 를 탭 옵션으로 검증, 정렬·필터 집행은 get_rental_list(#842)
+  const tabKey = rentalTabKeyOf(status, contractPending)
+  const sortOpt = tabKey ? resolveRentalSort(tabKey, url.searchParams.get('sort')) : null
+  const filt = tabKey ? resolveRentalFilter(tabKey, url.searchParams.get('filter')) : null
+  const sortArgs = {
+    p_sort:           tabKey ? rpcSortFor(tabKey, sortOpt) : null,
+    p_pickup_filter:  filt?.pickup ?? null,
+    p_return_filter:  filt?.return ?? null,
+    p_payment_stage:  filt?.payment ?? null,
+  }
 
   // 칩(?status=) 없이 예약만 가리키는 링크(채팅 카드·알림·옛 북마크 — 예약현황/대여현황이 합쳐지기 전 주소 포함)는 그 예약이 속한 칩으로 보낸다
   if (selectedId != null && !url.searchParams.has('status')) {
@@ -137,7 +148,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   let totalCount: number
   if (isDraftView || isHoldView) {
     const stage = await loadReservationStageRows(admin, {
-      status: isDraftView ? 'draft' : 'hold', contractPending, search, dateFrom, dateTo, page, selectedId,
+      status: isDraftView ? 'draft' : 'hold', contractPending, search, dateFrom, dateTo, page, selectedId, sortArgs,
     })
     rentals = stage.rentals
     totalCount = stage.totalCount
@@ -155,6 +166,7 @@ export const load: PageServerLoad = async ({ parent, url }) => {
       p_include_statuses: isCancelledView ? ['cancelled', 'expired'] : isReturningView ? ['in_use', 'return_requested', 'returned'] : status === 'completed' ? ['completed', 'damage_claimed'] : RENTAL_STATUSES, // '완료' 칩 = 완료 + 파손신고(옛 '전체' 칩에만 보이던 건)
       // 장바구니 다중 상품 = 하나의 코드품번·하나의 행(주문 단위 대표 행, Migration 618)
       p_group_by_order:   true,
+      ...sortArgs,
     })
     if (error) console.error('[cms/rentals] get_rental_list error:', error.message)
     rentals = (rows ?? []) as RentalListRow[]
@@ -229,9 +241,18 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   await attachPriorIssue(admin, rentals)
   // 반납 진행 단계 배지(반납요청 예정/발송, 반납등록) — '반납중' 칩에서는 예정 → 발송 → 등록 순으로 정렬
   await attachReturnStage(admin, rentals)
+  // 반납중 기본 정렬(전환일별 방식순) — 화면이 날짜 구분 행을 그리도록 각 행의 상태 전환 시각을 붙인다
+  if (sortOpt?.value.startsWith('changed_group') && rentals.length > 0) {
+    const { data: chgRows, error: chgErr } = await admin.from('rental_reservations').select('id, status_changed_at').in('id', rentals.map((r) => r.reservation_id))
+    if (chgErr) console.error('[cms/rentals] 상태 전환 시각 조회 실패:', chgErr.message)
+    const chgMap = new Map(((chgRows ?? []) as { id: number; status_changed_at: string | null }[]).map((r) => [r.id, r.status_changed_at]))
+    for (const r of rentals) r.status_changed_at = chgMap.get(r.reservation_id) ?? null
+  }
+  // 취소대기·사전접수 상단 고정은 유지(CSV 미언급, Stephen 확정). 반납 진행 단계순은 '반납 진행 단계순' 정렬을 고른 때만(기본은 전환 최신순).
+  // 배열 정렬은 안정 정렬이라 위 조건이 같은 행은 DB 정렬 순서가 그대로 남는다.
   rentals.sort((a, b) =>
     (Number(!!b.cancel_pending) - Number(!!a.cancel_pending)) ||
-    (isReturningView ? (RETURN_STAGE_RANK[a.return_stage ?? 'registered'] ?? 3) - (RETURN_STAGE_RANK[b.return_stage ?? 'registered'] ?? 3) : 0) ||
+    (isReturningView && sortOpt?.returnStage ? (RETURN_STAGE_RANK[a.return_stage ?? 'registered'] ?? 3) - (RETURN_STAGE_RANK[b.return_stage ?? 'registered'] ?? 3) : 0) ||
     (isInspectionView ? Number(!!b.prior_issue) - Number(!!a.prior_issue) : 0))
   await attachRentalDaysLabel(admin, rentals)
   const totalPages = Math.max(1, Math.ceil(totalCount / 30))
@@ -305,7 +326,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
     cancelled_refunded: cancelCsToday,
     confirmed: cConfirmed, shipped: cShipped, in_use: cInUse, returning: cReturning, inspection: cInspection,
   }
-  return { rentals, chipCounts, totalCount, totalPages, status, search, dateFrom, dateTo, contractPending, page, selectedId, cmsRole, canChangeOrCancelReservation }
+  return {
+    rentals, chipCounts, totalCount, totalPages, status, search, dateFrom, dateTo, contractPending, page, selectedId, cmsRole, canChangeOrCancelReservation,
+    tabKey, sortValue: sortOpt?.value ?? null, filterSelected: filt?.selected ?? [],
+  }
 }
 
 export const actions: Actions = {

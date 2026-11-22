@@ -4,6 +4,7 @@
 
   import { goto } from '$app/navigation'
   import { tick } from 'svelte'
+  import { CHAT_SORT_OPTIONS, chatDefaultSort, sortChatSessions, type ChatSortMode, type ChatSortTab } from '$lib/utils/chatSessionSort'
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
   import CustomerDetailPanel from './CustomerDetailPanel.svelte'
@@ -747,8 +748,17 @@
     }
   }
 
+  // 탭별 정렬(2026-11-20, '예약대여현황 탭별 정렬·필터 정리 v1') — 스토어는 새 메시지가 오면 세션을 맨 앞으로 옮기므로 표시 직전에 탭 규칙으로 다시 정렬한다
+  let chatSortMode = $state<Record<ChatSortTab, ChatSortMode>>({ open: chatDefaultSort('open'), pending: chatDefaultSort('pending'), closed: chatDefaultSort('closed') })
+  let chatSortOptions = $derived(CHAT_SORT_OPTIONS[filterTab])
+  let chatSortCurrent = $derived(chatSortOptions.find((o) => o.value === chatSortMode[filterTab]) ?? chatSortOptions[0])
+  let chatSortChanged = $derived(chatSortCurrent.value !== chatDefaultSort(filterTab))
+  function setChatSort(value: ChatSortMode) {
+    if (chatSortOptions.some((o) => o.value === value)) chatSortMode[filterTab] = value
+  }
+
   let filteredSessions = $derived(
-    chatStore.sessions.filter((s) => s.status === filterTab)
+    sortChatSessions(chatStore.sessions.filter((s) => s.status === filterTab), filterTab, chatSortCurrent.value)
   )
 
   let selectedSession = $derived(
@@ -1419,6 +1429,21 @@
       {/each}
     </div>
 
+    <div class="chat-sort-row">
+      <select
+        class="chat-sort-select"
+        class:chat-sort-changed={chatSortChanged}
+        aria-label="정렬"
+        value={chatSortCurrent.value}
+        disabled={chatSortOptions.length < 2}
+        onchange={(e) => setChatSort(e.currentTarget.value as ChatSortMode)}
+      >
+        {#each chatSortOptions as opt (opt.value)}
+          <option value={opt.value}>{opt.value === chatDefaultSort(filterTab) ? `${opt.label} (기본)` : opt.label}</option>
+        {/each}
+      </select>
+    </div>
+
     <ul class="session-list" role="listbox" aria-label="채팅 세션 목록">
       {#if filterTab === 'open'}
         {#each agentRequests as req (req.id)}
@@ -2006,6 +2031,21 @@
     transition: color 0.15s;
   }
   .refresh-btn:hover { color: var(--cs-dark); }
+
+  /* 탭별 정렬 셀렉트 */
+  .chat-sort-row { display: flex; justify-content: flex-end; padding: 8px 12px; }
+  .chat-sort-select {
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    cursor: pointer;
+  }
+  .chat-sort-select:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
+  .chat-sort-changed { color: var(--cs-purple); }
+  .chat-sort-select:disabled { cursor: default; color: var(--cs-text-mid); }
 
   .filter-tabs {
     display: flex;

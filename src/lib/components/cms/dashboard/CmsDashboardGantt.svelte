@@ -3,6 +3,7 @@
   import { fly } from 'svelte/transition'
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import type { RentalListRow } from '../../../../routes/cms/reservation/+page.server'
+  import { sortGanttRows, type GanttSortOrder } from '$lib/utils/dashboardGanttSort'
 
   interface Props {
     initial: { from: string; to: string; rows: RentalListRow[] }
@@ -55,13 +56,10 @@
   interface MonthGroup { key: string; label: string; count: number }
   let monthGroups = $derived(groupDaysByMonth(days))
 
-  let sortedRows = $derived(
-    [...rowsMap.values()].sort(
-      (a, b) =>
-        a.product_name.localeCompare(b.product_name) ||
-        a.rental_start.localeCompare(b.rental_start)
-    )
-  )
+  // 행 정렬(2026-11-20, '예약대여현황 탭별 정렬·필터 정리 v1'): 상태 우선순위 → 같은 예약코드 묶음 → 신청일 최신/오래된 순 (dashboardGanttSort.ts)
+  let ganttOrder = $state<GanttSortOrder>('newest')
+  const GANTT_ORDER_LABEL: Record<GanttSortOrder, string> = { newest: '최신순', oldest: '오래된 순' }
+  let sortedRows = $derived(sortGanttRows([...rowsMap.values()], todayStr, ganttOrder))
 
   // 오늘 컬럼 X 좌표 (로드된 범위 안에 있을 때만)
   let todayX = $derived(
@@ -365,7 +363,17 @@
       <div class="gantt-day-row">
         <!-- 헤더 코너: sticky-x + sticky-y 교차점 -->
         <div class="gantt-label-col gantt-label-header" style="width:{LABEL_W}px;min-width:{LABEL_W}px">
-          상품 / 고객
+          <span>상품 / 고객</span>
+          <select
+            class="gantt-sort-select"
+            class:gantt-sort-changed={ganttOrder !== 'newest'}
+            aria-label="정렬"
+            value={ganttOrder}
+            onchange={(e) => (ganttOrder = e.currentTarget.value as GanttSortOrder)}
+          >
+            <option value="newest">{GANTT_ORDER_LABEL.newest} (기본)</option>
+            <option value="oldest">{GANTT_ORDER_LABEL.oldest}</option>
+          </select>
         </div>
         <!-- 날짜 헤더 -->
         <div class="gantt-day-headers" style="min-width:{days.length * COL_W}px">
@@ -552,10 +560,25 @@
     border-bottom: 2px solid var(--cs-lilac);
   }
 
+  /* 정렬 셀렉트 — 헤더 높이(40px) 안에 들어가는 크기 */
+  .gantt-sort-select {
+    background: var(--cs-surface-gray);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    font: var(--text-pc-script-12);
+    color: var(--cs-text);
+    cursor: pointer;
+    max-width: 120px;
+  }
+  .gantt-sort-select:focus { outline: 2px solid var(--cs-focus-ring); outline-offset: -2px; }
+  .gantt-sort-changed { color: var(--cs-purple); }
+
   .gantt-label-header {
     /* 헤더 코너: sticky-x + sticky-y 교차 — z-index는 데이터 라벨보다 높여야 함 */
     z-index: 4 !important;
     height: 40px;
+    justify-content: space-between;
     display: flex;
     align-items: center;
     padding: 0 12px;
