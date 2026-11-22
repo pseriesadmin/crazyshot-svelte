@@ -13,6 +13,13 @@ export interface ReservationStageQuery {
   dateTo: string
   page: number
   selectedId: number | null
+  /** 탭별 정렬·필터 인자(get_rental_list #842) — 없으면 기존 신청일 최신순 */
+  sortArgs?: {
+    p_sort: string | null
+    p_pickup_filter: string[] | null
+    p_return_filter: string[] | null
+    p_payment_stage: string | null
+  }
 }
 
 const LIFECYCLE_STATUSES = ['confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed']
@@ -40,6 +47,7 @@ export async function loadReservationStageRows(
     p_require_contract_sent_unsigned:  q.contractPending || null,
     p_exclude_contract_sent:           isReservationPendingTab || null,
     p_group_by_order:                  true,
+    ...(q.sortArgs ?? {}),
   })
   if (error) console.error('[cms/rentals] 예약 단계 목록 조회 실패:', error.message)
 
