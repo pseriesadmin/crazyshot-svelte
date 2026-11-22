@@ -65,6 +65,7 @@ export type ActionCardButtonColor = 'purple' | 'red' | 'green' | 'orange'
 export type CtaModalRequest =
   | { kind: 'reservation'; title: string; reservationId: number; menuUrl: string | null; initialTab?: 'rental' | 'contract' | 'inspection' }
   | { kind: 'contract-preview'; title: string; contractId: string; reservationId: number }
+  | { kind: 'customer-contract'; title: string; url: string }
   | { kind: 'inquiry'; title: string }
   | { kind: 'inquiry-reply-form'; title: string; postId: string }
   | { kind: 'coupon'; title: string }

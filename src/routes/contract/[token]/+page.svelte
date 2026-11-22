@@ -364,6 +364,7 @@
   })
 
   async function submitPay() {
+    if (data.adminPreview) return // 관리자 미리보기는 결제를 시작하지 않는다
     payError = ''
     paying   = true
     try {
@@ -848,7 +849,7 @@
         <button
           class="btn-sign"
           onclick={submitPay}
-          disabled={paying || (payTotal > 0 && !tossWidgets)}
+          disabled={paying || data.adminPreview || (payTotal > 0 && !tossWidgets)}
         >
           {paying ? '결제 처리 중...' : `${payTotal.toLocaleString('ko-KR')}원 결제하기`}
         </button>
