@@ -7,6 +7,7 @@ import { error, redirect } from '@sveltejs/kit'
 import { recordAuditLog } from '$lib/contract-signature/auditLog'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
+import { isContractPaymentPending, readReservationPayState, readSigningRef } from '$lib/utils/contractPayable'
 import { findCurrentFinalDocument } from '$lib/server/contractArchive/loadArchivedPdf'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
@@ -75,7 +76,7 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
   const { data: signingRow } = await admin
     .from('contract_signings')
     .select(`
-      id, signed_at, ip_address, signature_data, stroke_count, signed_content_snapshot,
+      id, token, signed_at, ip_address, signature_data, stroke_count, signed_content_snapshot,
       contracts!inner (
         id, title, content_blocks, specifications, authoring_mode,
         canvas_document, spreadsheet_document, html_document, reservation_id
@@ -91,6 +92,22 @@ export const load: PageServerLoad = async ({ params, locals, url }) => {
     // 목록 페이지는 서명 완료 건에만 버튼을 노출하지만, 그 사이 상태가 바뀌었을 수 있는
     // 엣지케이스 — 하드 에러 대신 화면에서 안내 문구로 처리
     return { reservation: res, contract: null, mySignature: null, customer: null, issuerSignatures: [], shippingAddress: null, orderData: null, serviceInfo: null, finalPdfReady: false, finalPdfUnavailable: false }
+  }
+
+  // 서명은 끝났지만 결제가 남은 예약(hold·미결제) — 읽기 전용 열람 대신 서명 링크(/contract/[token])로 보낸다.
+  // 그 화면이 "서명 완료 → 결제" 단계를 그대로 이어서 보여준다(채팅 '전자계약서명' 요청 카드와 같은 도착지).
+  // 만료·취소·결제 완료 건은 그대로 열람 화면을 유지한다.
+  const signedRef = readSigningRef(signingRow)
+  if (signedRef.reservationId != null && signedRef.token) {
+    const { data: payRow } = await admin
+      .from('rental_reservations')
+      .select('status, payment_confirmed_at')
+      .eq('id', signedRef.reservationId)
+      .maybeSingle()
+    const pay = readReservationPayState(payRow)
+    if (isContractPaymentPending(pay.status, pay.paymentConfirmedAt)) {
+      throw redirect(303, `/contract/${signedRef.token}`)
+    }
   }
 
   const liveContract = signingRow.contracts as unknown as {

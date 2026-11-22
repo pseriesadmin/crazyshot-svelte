@@ -317,6 +317,9 @@
   let ctaModalContractId = $state<string | null>(null)
   let ctaModalContractReservationId = $state<number | null>(null)
 
+  // 'customer-contract' 전용 — 고객이 같은 카드 버튼을 눌렀을 때 보게 되는 전자계약(서명 완료 → 결제 이어가기) 화면
+  let ctaModalCustomerUrl = $state<string | null>(null)
+
   // 'inquiry' 전용
   let ctaModalInquiries = $state<CtaModalInquiryItem[]>([])
 
@@ -396,6 +399,7 @@
     ctaModalInitialTab = undefined
     ctaModalContractId = null
     ctaModalContractReservationId = null
+    ctaModalCustomerUrl = null
     ctaModalInquiries = []
     ctaModalPostId = null
     ctaModalPost = null
@@ -410,6 +414,8 @@
     } else if (info.kind === 'contract-preview') {
       ctaModalContractId = info.contractId
       ctaModalContractReservationId = info.reservationId
+    } else if (info.kind === 'customer-contract') {
+      ctaModalCustomerUrl = info.url
     } else if (info.kind === 'inquiry') {
       ctaModalMenuUrl = '/cms/customers/inquiry'
       void loadCtaModalInquiries()
@@ -432,6 +438,7 @@
     ctaModalInitialTab = undefined
     ctaModalContractId = null
     ctaModalContractReservationId = null
+    ctaModalCustomerUrl = null
     ctaModalInquiries = []
     ctaModalPostId = null
     ctaModalPost = null
@@ -1918,6 +1925,12 @@
           <button class="close-btn" type="button" aria-label="닫기" onclick={closeCtaModal}>✕</button>
         </div>
         <div class="cta-modal-empty">불러오는 중...</div>
+      {:else if ctaModalKind === 'customer-contract' && ctaModalCustomerUrl}
+        <div class="cta-modal-titlebar">
+          <span class="cta-modal-title">{ctaModalTitle}</span>
+          <button class="close-btn" type="button" aria-label="닫기" onclick={closeCtaModal}>✕</button>
+        </div>
+        <iframe class="cta-modal-customer-frame" src={ctaModalCustomerUrl} title="고객 전자계약 화면"></iframe>
       {:else if ctaModalKind === 'reservation' && ctaModalRow}
         <div class="cta-modal-panel-wrap">
           <RentalDetailPanel
@@ -3044,6 +3057,15 @@
   .cta-modal-panel-wrap {
     flex: 1;
     min-height: 0;
+  }
+
+  /* 고객 전자계약 화면(서명 완료 → 결제 이어가기) 미리보기 — 고객이 보는 페이지 그대로 */
+  .cta-modal-customer-frame {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+    background: var(--cs-lilac);
   }
 
   /* PcInquiryPanel 마운트 래퍼 — RentalDetailPanel과 달리 자체 height:100%/내부 스크롤이

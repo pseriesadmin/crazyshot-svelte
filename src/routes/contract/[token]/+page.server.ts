@@ -9,10 +9,20 @@ import { isUserCouponExhausted, userCouponUsedCount } from '$lib/utils/couponUsa
 import { isContractIssueBlocked } from '$lib/utils/contractIssueGuard'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
 import type { PageServerLoad } from './$types'
+import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, url, locals }) => {
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+  // 관리자 채팅의 '고객 입장 화면' 미리보기(?adminPreview=1) — manager 이상 CMS 로그인 상태에서만 인정한다.
+  // 미리보기는 고객 열람 기록(viewed_at·감사로그 viewed)을 남기지 않고 결제 시작을 막는다(+page.svelte).
+  let adminPreview = false
+  if (url?.searchParams?.get('adminPreview') === '1') {
+    const previewRole = await getCmsRoleForAction(locals)
+    adminPreview = !!previewRole && hasSettingsAccess(previewRole)
+  }
 
   const { data: signing, error: signingErr } = await admin
     .from('contract_signings')
@@ -91,8 +101,8 @@ export const load: PageServerLoad = async ({ params }) => {
     throw redirect(302, '/contract/expired')
   }
 
-  // viewed_at 최초 기록 + P8A-3: viewed 감사로그
-  if (!signing.viewed_at) {
+  // viewed_at 최초 기록 + P8A-3: viewed 감사로그 (관리자 미리보기는 고객 열람이 아니므로 기록하지 않는다)
+  if (!adminPreview && !signing.viewed_at) {
     await admin
       .from('contract_signings')
       .update({ viewed_at: new Date().toISOString() })
@@ -105,7 +115,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
   // P8A-3: viewed 이벤트 기록 (최초/재방문 모두 기록 — append-only)
   const contractId = (signing.contracts as { id?: string } | null)?.id ?? null
-  if (contractId) {
+  if (contractId && !adminPreview) {
     await recordAuditLog(admin as Parameters<typeof recordAuditLog>[0], {
       contractId,
       eventType:  'viewed',
@@ -425,5 +435,6 @@ export const load: PageServerLoad = async ({ params }) => {
     // EC-1 방어(위 참고) — 이미 서명된 상태(결제만 남음)로 재진입했음을 +page.svelte에 알려
     // 서명 UI 대신 결제 단계를 바로 렌더링하게 한다.
     alreadySigned: !!signing.signed_at,
+    adminPreview,
   }
 }

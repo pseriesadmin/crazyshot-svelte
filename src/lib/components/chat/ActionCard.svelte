@@ -313,6 +313,13 @@
     'confirmed', 'shipped', 'in_use', 'return_requested', 'returned', 'completed', 'damage_claimed',
   ])
 
+  // 고객 입장 화면 미리보기(관리자 전용) — 서명은 끝났고 결제만 남은 계약이면, 고객이 이 카드를 눌렀을 때 보게 되는
+  // "서명 완료 → 결제 이어가기" 화면 주소를 서버에서 받는다. 해당하지 않거나 조회 실패면 null → 기존 관리자 화면으로 동작.
+  async function resolveCustomerContractUrl(contractId: string): Promise<string | null> {
+    const data = await fetchJsonSafe<{ payable?: boolean; url?: string | null }>(`/api/cms/contracts/${encodeURIComponent(contractId)}/customer-view`)
+    return data?.payable === true && typeof data.url === 'string' ? safeActionUrl(data.url) : null
+  }
+
   // 관리자 CTA 모달 컨텍스트 결정 — 예약 컨텍스트(reservation_id/reservation_no/late_fee_id)가
   // 있는 카드는 고객 화면(/account/...)이 아니라 RentalDetailPanel을 모달에 직접 마운트해
   // 보여준다(iframe 아님 — CMS 목록 페이지 전체가 아니라 패널 레이아웃만 노출하기 위함,
@@ -410,6 +417,14 @@
     if (onaction) onaction(payload)
     if (ctaUrl) {
       if (isAdmin) {
+        // 전자계약 카드(서명 요청·서명 완료) — 서명 후 결제 대기 건이면 고객이 보는 결제 이어가기 화면을 그대로 보여준다
+        if ((payload.type === 'contract_link' || payload.type === 'contract_signed') && payload.contract_id) {
+          const customerUrl = await resolveCustomerContractUrl(payload.contract_id)
+          if (customerUrl) {
+            onctamodal?.({ kind: 'customer-contract', title: ctaLabel, url: customerUrl })
+            return
+          }
+        }
         // 카드 타입별로 모달에 마운트할 컴포넌트가 다르다 — 전부 null이어도 모달은 연다
         // ("관리 화면 정보 없음" 상태를 보여주기 위함, 고객 페이지로 조용히 폴백하지 않음).
         //

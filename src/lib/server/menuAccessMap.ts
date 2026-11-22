@@ -117,6 +117,7 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       // 1c 후속(Stephen 확정 2026-10-04): 예약 상세 패널 계약서 탭 API — 고객 경로 호출 없음 확인
       'src/routes/api/cms/contracts/[id]/compare-file',
       'src/routes/api/cms/contracts/[id]/content',
+      'src/routes/api/cms/contracts/[id]/customer-view',
       'src/routes/api/cms/contracts/[id]/final-pdf',
       'src/routes/api/cms/contracts/[id]/final-pdf-status',
       'src/routes/api/cms/contracts/[id]/issuer-sign',
