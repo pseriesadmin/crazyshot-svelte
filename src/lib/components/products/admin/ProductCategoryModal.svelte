@@ -390,6 +390,8 @@
       </div>
     {/if}
     </div><!-- /.kw-area -->
+
+    <p class="icon-size-help">아이콘 PC 88×88 · 모바일 70×70 · 둥근 사각형</p>
   </div><!-- /.modal-scroll -->
 
   <div class="modal-footer">
@@ -496,6 +498,13 @@
   }
 
   /* 아이콘 박스 */
+  .icon-size-help {
+    margin: 24px 0 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--cs-text-mid, #666);
+  }
+
   .cat-card-icon {
     width: 44px;
     height: 44px;

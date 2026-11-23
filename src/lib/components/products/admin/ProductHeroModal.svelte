@@ -519,6 +519,9 @@
       <p class="empty-msg">위 검색창에서 상품을 추가하세요.</p>
     {/if}
     </div>
+    {#if !isHero}
+      <p class="banner-help size-help">카드 PC 232×232 · 모바일 139×139 · 둥근 사각형</p>
+    {/if}
     <!-- ① 슬라이드 모듈 저장 — 헤더 상품 설정 모달(isHero)에서만. MD 추천 픽 모달은 하단 [저장] 하나가 이 모듈 전체다 -->
     {#if isHero}
       {#if slideError}<p class="save-error" role="alert">{slideError}</p>{/if}
@@ -615,7 +618,7 @@
     <!-- 모바일 목록 중간 배너(촬영본능 PICK! 카드) 관리 -->
     {#if isHero}
       <div class="section banner-section">
-        <p class="section-label">모바일 목록 중간 배너 <span class="count-badge">모바일 전용</span></p>
+        <p class="section-label">모바일 목록 중간 배너 <span class="count-badge">모바일 카드 화면폭×160px · 둥근 사각형</span></p>
         <p class="banner-help">모바일 상품 목록 중간의 "촬영본능 PICK!" 카드입니다. 이미지·문구·링크를 바꾸거나 노출을 끌 수 있습니다.</p>
         <div class="banner-row">
           <div class="banner-row-head">
@@ -934,6 +937,16 @@
   .save-error-footer { margin: 0 24px 12px; }
 
   .banner-help { font: var(--text-pc-script-12); color: var(--cs-text-light); margin: 0; }
+  .size-help {
+    width: fit-content;
+    margin: 16px auto 0;
+    background: rgba(59, 47, 138, 0.1);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full);
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 700;
+  }
   .group-wrap { display: flex; flex-direction: column; gap: 16px; }
   /* 그룹(노출방식·상품)과 카테고리 배너 사이 여백 +100% (기본 body gap 20px → 40px) */
   .group-wrap + .banner-section { margin-top: 20px; }

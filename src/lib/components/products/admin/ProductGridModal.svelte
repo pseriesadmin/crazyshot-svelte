@@ -393,6 +393,8 @@
     {#if error}
       <p class="save-error" role="alert">{error}</p>
     {/if}
+
+    <p class="size-help">PC 290×290 · 모바일 157×157(375px 기준) · 둥근 사각형</p>
   </div>
 
   <div class="modal-footer">
@@ -513,7 +515,8 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 9px 16px;
+    height: 31.5px;   /* 상하폭 30% 축소(45→31.5px) */
+    padding: 0 16px;
     border-radius: var(--radius-xl);
     border: 1.5px solid #DCDCDC;
     background: #fff;
@@ -535,7 +538,7 @@
   }
   .combo-btn-active .combo-label { color: #fff; }
   @media (max-width: 640px) {
-    .combo-btn   { padding: 8px 12px; }
+    .combo-btn   { padding: 0 12px; }
   }
 
 
@@ -673,6 +676,17 @@
   }
 
   /* front 관리모달 푸터 표준(front-uiux.md §9-2-A ④) */
+  .size-help {
+    width: fit-content;
+    margin: 16px auto 0;
+    background: rgba(59, 47, 138, 0.1);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full);
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
   .modal-footer {
     flex-shrink: 0;
     padding: 16px 24px;

@@ -2,6 +2,7 @@
   // 찜 추가 직후 열리는 'MD 추천' 바텀 팝업(2026-11-18 Stephen 지시) — 루트 레이아웃에서 1개만 렌더링.
   // 열림 상태: $lib/stores/wishMdSheet.svelte. 내용: /products 의 MD 추천과 같은 상품(조회: GET /products/_md), 카드는 표준 ProductDPCard 'pick' 변형.
   // 닫기: 바깥(백드롭) 터치 · ✕ · 핸들을 잡아 아래로 끌기 · ESC. 모달은 transform 이 걸린 조상 밖(루트)에 둔다(position:fixed 충돌 방지).
+  import { untrack } from 'svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import { wishMdSheet, closeWishMdSheet } from '$lib/stores/wishMdSheet.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
@@ -49,9 +50,10 @@
   }
 
   // 열릴 때마다 최신 상태(방금 찜한 상품 반영)로 다시 조회하고 포커스를 시트로 옮긴다
+  // load() 안에서 읽는 loading·payload 가 이 효과의 의존성으로 잡히면 조회가 끝날 때마다 다시 조회하는 반복이 생기므로 untrack 으로 감싼다(sp3 M1)
   $effect(() => {
     if (!wishMdSheet.open) return
-    void load()
+    untrack(() => { void load() })
   })
   $effect(() => {
     if (wishMdSheet.open && dialogEl) dialogEl.focus()

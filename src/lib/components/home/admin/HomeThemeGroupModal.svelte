@@ -492,6 +492,8 @@
     {:else}
       <p class="tg-max-notice">최대 {MAX_GROUPS}개까지 등록 가능합니다.</p>
     {/if}
+
+    <p class="tg-size-help">PC 180×180 · 모바일 140×140 · 원형(정사각 이미지 권장)</p>
   </div>
 
   <!-- 푸터 -->
@@ -852,6 +854,13 @@
     transition: background 0.15s, border-color 0.15s;
   }
   .tg-add-btn:hover { background: #f0eefb; border-color: var(--cs-purple, #3b2f8a); }
+
+  .tg-size-help {
+    margin: 8px 0 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--cs-text-mid, #666);
+  }
 
   .tg-max-notice {
     text-align: center;

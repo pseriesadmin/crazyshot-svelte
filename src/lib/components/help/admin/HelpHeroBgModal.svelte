@@ -135,6 +135,7 @@
       <button class="upload-btn" onclick={openFilePicker} disabled={isUploading}>
         {#if isUploading}업로드 중…{:else}+ 이미지 추가{/if}
       </button>
+      <p class="size-help">PC 1240×500 · 모바일 화면폭×600 · 둥근 사각형</p>
       <input
         bind:this={fileInput}
         type="file"
@@ -243,6 +244,17 @@
     align-items: center;
     gap: 8px;
     margin: 0;
+  }
+
+  .size-help {
+    width: fit-content;
+    margin: 0;
+    background: rgba(59, 47, 138, 0.1);
+    color: var(--cs-purple);
+    border-radius: var(--radius-full);
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 700;
   }
 
   .hint {
