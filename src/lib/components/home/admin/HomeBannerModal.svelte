@@ -31,9 +31,11 @@
     pcFirstId: string | null
     mobileFirstId: string | null
     onclose: () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?: boolean
   }
 
-  let { pcBanners, mobileBanners, pcMode, mobileMode, pcFirstId, mobileFirstId, onclose }: Props = $props()
+  let { pcBanners, mobileBanners, pcMode, mobileMode, pcFirstId, mobileFirstId, onclose, embedded = false }: Props = $props()
 
   const MAX = 10
 
@@ -297,14 +299,18 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{/if}
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="홈 히어로 배너 관리">
-  <div class="modal-header">
-    <span class="modal-title">홈 히어로 배너 관리</span>
-    <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+<aside class="modal-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="홈 히어로 배너 관리">
+  {#if !embedded}
+    <div class="modal-header">
+      <span class="modal-title">홈 히어로 배너 관리</span>
+      <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <div class="modal-body">
 
@@ -490,7 +496,7 @@
   </div>
 
   <div class="modal-footer">
-    <button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
+    {#if !embedded}<button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>{/if}
     <button class="btn-save" onclick={save} disabled={isSaving}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
@@ -498,6 +504,10 @@
 </aside>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .modal-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .modal-panel.embedded .modal-body { overflow: visible; flex: none; }
+
   .modal-backdrop {
     position: fixed;
     inset: 0;

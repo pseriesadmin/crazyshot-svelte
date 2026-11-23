@@ -30,17 +30,12 @@
   import SeoHead from '$lib/components/common/SeoHead.svelte'
   import { untrack } from 'svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
-  import HomeBannerModal from '$lib/components/home/admin/HomeBannerModal.svelte'
   import HeroMedia from '$lib/components/home/HeroMedia.svelte'
   import { heroBannerMediaKind } from '$lib/utils/heroBannerMedia'
-  import HomeThemeGroupModal from '$lib/components/home/admin/HomeThemeGroupModal.svelte'
-  import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
-  import HomeCategoryProductsModal from '$lib/components/home/admin/HomeCategoryProductsModal.svelte'
-  import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
+  import HomeSettingsModal, { type HomeSettingsSection } from '$lib/components/home/admin/HomeSettingsModal.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
-  import HelpHeroBgModal from '$lib/components/help/admin/HelpHeroBgModal.svelte'
   import {
     HELP_HERO_DEFAULT_TITLE, HELP_HERO_DEFAULT_SUB, HELP_HERO_DEFAULT_BG,
   } from '$lib/constants/helpHero'
@@ -322,14 +317,35 @@
   $effect(() => () => clearTimeout(heroSettleTimer))
 
   // ── CMS 배너 관리 모달 ──────────────────────────────────────────────
-  let showBannerModal         = $state(false)
-  let showThemeGroupModal     = $state(false)
-  let showCategoryModal       = $state(false)
-  let showCatProductsModal    = $state(false)
+  // 홈 화면 설정 통합 모달 — 열린 섹션(null = 닫힘). 각 관리 버튼은 이 모달의 해당 섹션으로 연다
+  let homeSettingsSection     = $state<HomeSettingsSection | null>(null)
   let catProductsTabId        = $state('')
   let catProductsTabName      = $state('')
-  let showMdPickModal         = $state(false)
-  let showHelpHeroModal       = $state(false)
+
+  // 통합 모달에서 보고 있는 설정이 홈 화면에서 적용되는 실제 위치 — 화면 폭에 따라 PC·모바일 중 보이는 쪽으로 이동
+  const HOME_LAND_SELECTORS: Record<HomeSettingsSection, string[]> = {
+    banner: ['.desktop-wrap .d-hero', '.mobile-wrap .m-hero'],
+    theme: ['.desktop-wrap .d-theme-section', '.mobile-wrap .m-theme-section'],
+    category: ['.desktop-wrap .cat-tabs'],
+    catproducts: ['.desktop-wrap .prod-area'],
+    md: ['.mobile-wrap .md-picks-section'],
+    helphero: ['.mh-hero'],
+  }
+  function landHome(section: HomeSettingsSection): void {
+    for (const sel of HOME_LAND_SELECTORS[section]) {
+      const el = Array.from(document.querySelectorAll<HTMLElement>(sel)).find((e) => e.getClientRects().length > 0)
+      if (!el) continue
+      const top = el.getBoundingClientRect().top + window.scrollY - 100 // 고정 GNB 높이만큼 여유
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      return
+    }
+  }
+  function openHomeSettings(section: HomeSettingsSection): void {
+    // 어느 버튼으로 열든 '카테고리 상품 슬라이드' 섹션이 지금 선택된 카테고리 탭 기준이 되도록 항상 갱신
+    catProductsTabId = activeTab
+    catProductsTabName = CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? activeTab
+    homeSettingsSection = section
+  }
   // ── 로컬 컬러 (app.css 토큰에 없는 값) ──────────────────────────
   const navy     = '#100b32'
   const navyDeep = '#201857'
@@ -537,7 +553,7 @@
   <section class="mh-hero {extra}">
     <img src={data.faqHeroBgUrl || HELP_HERO_DEFAULT_BG} alt="" class="mh-hero-bg" />
     {#if data.isCms}
-      <button class="mh-hero-edit-btn" onclick={() => (showHelpHeroModal = true)} aria-label="헬프 히어로 배경·문구 관리">
+      <button class="mh-hero-edit-btn" onclick={() => openHomeSettings('helphero')} aria-label="헬프 히어로 배경·문구 관리">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -573,7 +589,7 @@
     onclickcapture={pcClickCapture}
   >
     {#if data.isCms}
-      <button class="hero-cms-btn" onclick={() => (showBannerModal = true)}>⚙ 배너 관리</button>
+      <button class="hero-cms-btn" onclick={() => openHomeSettings('banner')}>⚙ 배너 관리</button>
     {/if}
     {#if pcCarousel.length > 0}
       <div
@@ -638,7 +654,7 @@
         </div>
         <p class="theme-pick-desc">취향에 따라 상황에 맞춘 고민 따위 필요없이<br/>찰떡궁합 촬영 패키지 추천 받으세요.</p>
         {#if data.isCms}
-          <button class="theme-cms-btn" onclick={() => (showThemeGroupModal = true)}>⚙ 테마그룹 관리</button>
+          <button class="theme-cms-btn" onclick={() => openHomeSettings('theme')}>⚙ 테마그룹 관리</button>
         {/if}
       </div>
 
@@ -794,16 +810,17 @@
 
     {#if data.isCms}
       <div class="cat-cms-btns cat-cms-btns-edge">
-        <button class="cat-cms-btn cat-cms-btn-std" onclick={() => (showCategoryModal = true)}>⚙ 카테고리 메뉴 설정</button>
+        <button class="cat-cms-btn cat-cms-btn-std" onclick={() => openHomeSettings('category')}>⚙ 카테고리 메뉴 설정</button>
       </div>
     {/if}
 
     <div class="prod-area">
     {#if data.isCms}
       <div class="cat-cms-btns cat-cms-btns-slider">
-        <button class="cat-cms-btn" onclick={() => { catProductsTabId = activeTab; catProductsTabName = CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? activeTab; showCatProductsModal = true }}>
+        <button class="cat-cms-btn" onclick={() => openHomeSettings('catproducts')}>
           ⚙ {CATEGORY_TABS.find((t) => t.id === activeTab)?.label ?? ''} 상품 슬라이드 설정
         </button>
+        <button class="cat-cms-btn cat-cms-btn-wide" onclick={() => openHomeSettings('md')}>✦ 모바일 초기 추천 설정</button>
       </div>
     {/if}
 
@@ -819,7 +836,7 @@
               tabindex={0}
               onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (p.slug || p.id))}
             >
-              <img src={p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="prod-card-img" loading="lazy"/>
+              <img src={data.categoryMobileImages?.[p.id] ?? p.image_urls?.[0] ?? '/favicon.png'} alt={p.name} class="prod-card-img" loading="lazy"/>
               <div class="prod-card-info">
                 <div class="prod-card-price">
                   {#if p.sale_only}
@@ -1124,8 +1141,8 @@
   {#if data.mdProducts && data.mdProducts.length > 0}
     <div class="m-section md-picks-section" style="position:relative">
       {#if data.isCms}
-        <button class="md-picks-cms-btn" onclick={() => (showMdPickModal = true)} aria-label="MD 추천 설정">
-          ✦ MD 추천 설정
+        <button class="md-picks-cms-btn" onclick={() => openHomeSettings('md')} aria-label="모바일 초기 추천 설정">
+          ✦ 모바일 초기 추천
         </button>
       {/if}
       <!-- 미칠 PICK 헤딩 — 모바일 전용 노출(PC 홈에서는 제거, 2026-09-29) -->
@@ -1157,7 +1174,7 @@
     </div>
   {:else if data.isCms}
     <div class="m-section md-picks-section md-picks-empty">
-      <button class="md-picks-cms-btn md-picks-cms-btn--empty" onclick={() => (showMdPickModal = true)}>
+      <button class="md-picks-cms-btn md-picks-cms-btn--empty" onclick={() => openHomeSettings('md')}>
         ✦ MD 추천 상품 설정하기
       </button>
     </div>
@@ -1278,59 +1295,37 @@
   <BottomTabBar />
 </div><!-- /mobile-wrap -->
 
-{#if data.isCms && showBannerModal}
-  <HomeBannerModal
-    pcBanners={data.heroBannerRowsRaw?.hero_pc ?? []}
-    mobileBanners={data.heroBannerRowsRaw?.hero_mobile ?? []}
-    pcMode={data.heroBannerSettings?.pc_mode ?? 'fixed'}
-    mobileMode={data.heroBannerSettings?.mobile_mode ?? 'fixed'}
-    pcFirstId={data.heroBannerSettings?.pc_first_id ?? null}
-    mobileFirstId={data.heroBannerSettings?.mobile_first_id ?? null}
-    onclose={() => (showBannerModal = false)}
-  />
-{/if}
-
-{#if data.isCms && showThemeGroupModal}
-  <HomeThemeGroupModal
-    groups={data.themeGroupsAdmin ?? []}
-    onclose={() => (showThemeGroupModal = false)}
-  />
-{/if}
-
-{#if data.isCms && showCategoryModal}
-  <ProductCategoryModal
-    categories={data.categories}
-    initialSettings={data.categoryPageSettings}
-    initialKeywordsSettings={data.keywordsPageSettings}
-    onclose={() => (showCategoryModal = false)}
-  />
-{/if}
-
-{#if data.isCms && showCatProductsModal}
-  {#key catProductsTabId}
-    <HomeCategoryProductsModal
-      categoryId={catProductsTabId}
-      categoryName={catProductsTabName}
-      allSettings={data.homeCategoryProductsRaw}
-      onclose={() => (showCatProductsModal = false)}
-    />
-  {/key}
-{/if}
-
-{#if data.isCms && showMdPickModal}
-  <ProductMdPickModal
-    initialSettings={data.mdPicksRaw ?? { products: [], mode: 'fixed' }}
-    onclose={() => (showMdPickModal = false)}
-  />
-{/if}
-
-{#if data.isCms && showHelpHeroModal}
-  <HelpHeroBgModal
-    initialImages={data.faqHeroBgImages}
-    initialMode={data.faqHeroBgMode}
-    initialTitle={data.faqHeroTitle}
-    initialSub={data.faqHeroSub}
-    onclose={() => (showHelpHeroModal = false)}
+{#if data.isCms && homeSettingsSection}
+  <HomeSettingsModal
+    banner={{
+      pcBanners: data.heroBannerRowsRaw?.hero_pc ?? [],
+      mobileBanners: data.heroBannerRowsRaw?.hero_mobile ?? [],
+      pcMode: data.heroBannerSettings?.pc_mode ?? 'fixed',
+      mobileMode: data.heroBannerSettings?.mobile_mode ?? 'fixed',
+      pcFirstId: data.heroBannerSettings?.pc_first_id ?? null,
+      mobileFirstId: data.heroBannerSettings?.mobile_first_id ?? null,
+    }}
+    theme={{ groups: data.themeGroupsAdmin ?? [] }}
+    category={{
+      categories: data.categories,
+      initialSettings: data.categoryPageSettings,
+      initialKeywordsSettings: data.keywordsPageSettings,
+    }}
+    catProducts={{
+      categoryId: catProductsTabId,
+      categoryName: catProductsTabName,
+      allSettings: data.homeCategoryProductsRaw,
+    }}
+    md={{ initialSettings: data.mdPicksRaw ?? { products: [], mode: 'fixed' } }}
+    helpHero={{
+      initialImages: data.faqHeroBgImages,
+      initialMode: data.faqHeroBgMode,
+      initialTitle: data.faqHeroTitle,
+      initialSub: data.faqHeroSub,
+    }}
+    initialSection={homeSettingsSection}
+    onclose={() => (homeSettingsSection = null)}
+    onland={landHome}
   />
 {/if}
 
@@ -1390,6 +1385,7 @@
     text-overflow: ellipsis;
   }
   .cat-cms-btn:hover { background: rgba(16, 11, 50, 0.6); }
+  .cat-cms-btn-wide { width: 260px; } /* 가로폭 30% 확대(200→260px) — '모바일 초기 추천 설정' 버튼 */
   /* front 설정버튼 표준(front-uiux.md §9-1-B): 200×50 고정 · BG 40% · 한 단계 큰 폰트 */
   .cat-cms-btn-std {
     width: 200px;
@@ -1403,7 +1399,7 @@
   /* 레이아웃 컨테이너(.d-section, 좌우 padding 40px) 콘텐츠 우측 끝에 정렬 */
   .cat-cms-btns-edge { right: 40px; }
   /* .prod-area(=콘텐츠 폭) 기준 우측 끝 */
-  .cat-cms-btns-slider { right: 0; top: -50px; } /* 버튼 하단이 슬라이더 시작선에 닿도록 위로 올림 */
+  .cat-cms-btns-slider { right: 0; top: -106px; } /* 버튼 2개(50px×2+간격 6px)의 하단이 슬라이더 시작선에 닿도록 위로 올림 */
   .cat-cms-btn-std:hover { background: rgba(16, 11, 50, 0.6); }
   .cat-empty-notice {
     font-size: 12px;

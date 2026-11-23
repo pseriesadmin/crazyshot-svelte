@@ -27,9 +27,11 @@
     categoryName: string
     allSettings:  AllSettings
     onclose:      () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?:    boolean
   }
 
-  let { categoryId, categoryName, allSettings, onclose }: Props = $props()
+  let { categoryId, categoryName, allSettings, onclose, embedded = false }: Props = $props()
 
   // 이 카테고리의 기존 설정 — 마운트 시 1회 추출 (categoryId 변경 시 {#key}로 재마운트)
   const existingEntry = allSettings.items.find((it) => it.category_id === categoryId)
@@ -170,14 +172,18 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="hcp-backdrop" onclick={onclose} role="presentation"></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="hcp-backdrop" onclick={onclose} role="presentation"></div>
+{/if}
 
-<aside class="hcp-panel" role="dialog" aria-modal="true" aria-label="상품 슬라이드 설정 {categoryName}">
-  <div class="hcp-header">
-    <span class="hcp-title">상품 슬라이드 설정 <span class="hcp-title-cat">{categoryName}</span></span>
-    <button class="hcp-close" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+<aside class="hcp-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="상품 슬라이드 설정 {categoryName}">
+  {#if !embedded}
+    <div class="hcp-header">
+      <span class="hcp-title">상품 슬라이드 설정 <span class="hcp-title-cat">{categoryName}</span></span>
+      <button class="hcp-close" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <div class="hcp-body">
     <!-- 노출 방식 -->
@@ -267,10 +273,12 @@
     {#if error}
       <p class="hcp-error" role="alert">{error}</p>
     {/if}
+
+    <p class="hcp-size-help">카드 PC 폭 300px 이상 × 높이 500px · 둥근 사각형 · 상품 기본 이미지의 모바일 버전 자동 반영</p>
   </div>
 
   <div class="hcp-footer">
-    <button class="hcp-btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
+    {#if !embedded}<button class="hcp-btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>{/if}
     <button class="hcp-btn-save"   onclick={save}    disabled={isSaving}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
@@ -278,6 +286,10 @@
 </aside>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .hcp-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .hcp-panel.embedded .hcp-body { overflow: visible; flex: none; }
+
   .hcp-backdrop {
     position: fixed;
     inset: 0;
@@ -347,6 +359,13 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+  .hcp-size-help {
+    margin: auto 0 0;
+    padding-top: 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--cs-text-mid);
   }
   .hcp-count {
     font-weight: 400;
