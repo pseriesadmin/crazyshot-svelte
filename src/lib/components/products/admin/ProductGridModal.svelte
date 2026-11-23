@@ -637,7 +637,6 @@
     color: var(--cs-purple);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     font: var(--text-pc-script-12);
-    font-size: 13px;
     font-weight: 700;
     white-space: nowrap;
   }
