@@ -4,6 +4,7 @@
   import CmsColorPicker from '$lib/components/cms/CmsColorPicker.svelte'
   import CmsDeleteButton from '$lib/components/cms/CmsDeleteButton.svelte'
   import BadgeChip from './BadgeChip.svelte'
+  import BadgeImageEditor from './BadgeImageEditor.svelte'
   import { postBadgeAction } from './badgeApi'
   import { badgeTextColor, isHexColor } from '$lib/utils/badgeColor'
   import { BADGE_SVG_SIZE_MESSAGE, MAX_BADGE_SVG_BYTES } from '$lib/utils/badgeSvgUrl'
@@ -19,7 +20,7 @@
   let { template, onclose, onsaved }: Props = $props()
 
   // 마운트 시 1회 초기화 — 부모가 {#key} 로 감싸 항목이 바뀌면 재마운트된다(core-rules: $state(prop) 금지 패턴 1)
-  let kind = $state<BadgeKind>(template?.kind ?? 'textbar')
+  let kind = $state<BadgeKind>(template?.kind ?? 'image')
   let name = $state(template?.name ?? '')
   let svgUrl = $state(template?.svg_url ?? '')
   let text = $state(template?.text ?? '')
@@ -44,8 +45,17 @@
     const file = input.files?.[0]
     input.value = ''
     if (!file) return
+    await uploadImage(file)
+  }
+
+  // 파일 가져오기·배지 편집기 적용이 함께 쓰는 업로드 — 서버(/api/cms/badges/icon)가 종류·크기를 다시 검증한다
+  // 성공하면 true, 실패(안내 토스트는 이미 띄움)하면 false — 편집기의 저장 흐름이 실패 시 저장을 이어가지 않는 데 쓴다
+  async function uploadImage(file: File): Promise<boolean> {
     // 크기는 선택 즉시 확인한다(서버로 올리기 전에 거절 — 서버·정화기·버킷도 같은 한도)
-    if (file.size > MAX_BADGE_SVG_BYTES) return csToast.error(BADGE_SVG_SIZE_MESSAGE)
+    if (file.size > MAX_BADGE_SVG_BYTES) {
+      csToast.error(BADGE_SVG_SIZE_MESSAGE)
+      return false
+    }
     uploading = true
     try {
       const fd = new FormData()
@@ -54,13 +64,15 @@
       const body = (await res.json().catch(() => null)) as { url?: string; path?: string; message?: string } | null
       if (!res.ok || !body?.url) {
         csToast.error(body?.message ?? '이미지를 가져오지 못했어요')
-        return
+        return false
       }
       if (pendingPath) await removeUploaded(pendingPath)
       pendingPath = body.path ?? null
       svgUrl = body.url
+      return true
     } catch {
       csToast.error('이미지를 가져오지 못했어요')
+      return false
     } finally {
       uploading = false
     }
@@ -146,6 +158,7 @@
               <input type="file" accept="image/svg+xml,.svg,image/png,.png" onchange={onFile} disabled={uploading} hidden />
             </label>
           </div>
+          <BadgeImageEditor onapply={uploadImage} busy={uploading} {name} onsave={async () => { await save() }} saveDisabled={saving || name.trim() === ''} confirmOverwrite={template !== null && svgUrl !== ''} />
         {:else}
           <div class="inline-row">
             <label class="vr-label" for="bt-text">문구</label>
@@ -193,7 +206,7 @@
   .detail-panel { display: flex; flex-direction: column; flex-shrink: 0; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
   .tab-content { padding: 26px 26px 65px; }
   .section { display: flex; flex-direction: column; gap: 16px; }
-  .section-header { display: flex; align-items: center; justify-content: space-between; }
+  .section-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--cs-surface-gray); border-radius: var(--radius-lg); }
   .section-title { font: var(--text-pc-title-16); color: var(--cs-text); }
 
   /* 섹션 인라인 저장 버튼 btn-save-inline (cms-uiux.md §0-10-D, ProductDetailPanel 값) */

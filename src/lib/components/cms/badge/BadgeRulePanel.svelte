@@ -308,7 +308,7 @@
   .detail-panel { display: flex; flex-direction: column; flex-shrink: 0; background: var(--cs-white); border-radius: var(--cms-radius-lg); overflow: hidden; }
   .tab-content { padding: 26px 26px 65px; }
   .section { display: flex; flex-direction: column; gap: 16px; }
-  .section-header { display: flex; align-items: center; justify-content: space-between; }
+  .section-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--cs-surface-gray); border-radius: var(--radius-lg); }
   .section-title { font: var(--text-pc-title-16); color: var(--cs-text); }
 
   /* 섹션 인라인 저장 버튼 btn-save-inline (cms-uiux.md §0-10-D, ProductDetailPanel 값) */

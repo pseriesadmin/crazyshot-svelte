@@ -1,6 +1,7 @@
 import { env } from '$env/dynamic/private'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
+import { loadMobileImageMap } from '$lib/server/productMobileImages'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { PageServerLoad } from './$types'
@@ -442,12 +443,14 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
   // MD 추천 카드 썸네일 배지(CMS 프로모션 '배지') — 화면의 상품 id 묶음으로 1회 조회
   const productBadges = await loadProductBadgeMap(locals.supabase, mdProducts.map((p) => p.id))
   const productCardKeywords = await loadCardKeywordMap(locals.supabase, mdProducts.map((p) => p.id))
+  // MD 추천(미·칠 PICK) 카드는 PC·모바일 모두 '모바일 전용 대표 이미지'를 쓴다(없으면 PC 이미지) — /products MD 추천과 동일
+  const mdMobileImages = await loadMobileImageMap(locals.supabase, mdProducts.map((p) => p.id))
 
   return {
     bannerMap, isCms, categories, crazylogPosts, bannerSlots, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
     heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
-    mdPicksRaw, mdProducts,
+    mdPicksRaw, mdProducts, mdMobileImages,
     isLoggedIn: !!session?.user.id, wishedIds, productBadges, productCardKeywords,
   }
 }

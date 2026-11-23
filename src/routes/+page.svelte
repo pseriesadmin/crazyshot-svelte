@@ -1141,7 +1141,7 @@
             subCopy={prod.product_caption}
             id={prod.id}
             name={prod.name}
-            imageUrl={prod.image_urls?.[0] ?? '/favicon.png'}
+            imageUrl={data.mdMobileImages?.[prod.id] ?? prod.image_urls?.[0] ?? '/favicon.png'}
             price24h={prod.price_24h || null}
             price12h={prod.price_12h || null}
             isSaleOnly={prod.sale_only}
