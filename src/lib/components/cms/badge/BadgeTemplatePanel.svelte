@@ -157,6 +157,9 @@
               {uploading ? '가져오는 중…' : '이미지 가져오기'}
               <input type="file" accept="image/svg+xml,.svg,image/png,.png" onchange={onFile} disabled={uploading} hidden />
             </label>
+            {#if svgUrl}
+              <div class="preview"><BadgeChip kind="image" svg_url={svgUrl} size={32} /></div>
+            {/if}
           </div>
           <BadgeImageEditor onapply={uploadImage} busy={uploading} {name} onsave={async () => { await save() }} saveDisabled={saving || name.trim() === ''} confirmOverwrite={template !== null && svgUrl !== ''} />
         {:else}
@@ -170,16 +173,16 @@
           </div>
         {/if}
 
-        <div class="inline-row">
-          <span class="vr-label">미리보기</span>
-          <div class="preview">
-            {#if kind === 'image' && svgUrl}
-              <BadgeChip kind="image" svg_url={svgUrl} size={32} />
-            {:else if kind === 'textbar' && text.trim()}
-              <BadgeChip kind="textbar" text={text.trim()} bg_color={bgColor} text_color={textColor} size={32} />
-            {/if}
+        {#if kind === 'textbar'}
+          <div class="inline-row">
+            <span class="vr-label">미리보기</span>
+            <div class="preview">
+              {#if text.trim()}
+                <BadgeChip kind="textbar" text={text.trim()} bg_color={bgColor} text_color={textColor} size={32} />
+              {/if}
+            </div>
           </div>
-        </div>
+        {/if}
       </div>
 
       {#if template}
