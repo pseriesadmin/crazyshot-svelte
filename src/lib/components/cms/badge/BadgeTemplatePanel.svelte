@@ -170,16 +170,16 @@
           </div>
         {/if}
 
-        {#if kind === 'textbar'}
-          <div class="inline-row">
-            <span class="vr-label">미리보기</span>
-            <div class="preview">
-              {#if text.trim()}
-                <BadgeChip kind="textbar" text={text.trim()} bg_color={bgColor} text_color={textColor} size={32} />
-              {/if}
-            </div>
+        <div class="inline-row">
+          <span class="vr-label">미리보기</span>
+          <div class="preview">
+            {#if kind === 'image' && svgUrl}
+              <BadgeChip kind="image" svg_url={svgUrl} size={32} />
+            {:else if kind === 'textbar' && text.trim()}
+              <BadgeChip kind="textbar" text={text.trim()} bg_color={bgColor} text_color={textColor} size={32} />
+            {/if}
           </div>
-        {/if}
+        </div>
       </div>
 
       {#if template}
