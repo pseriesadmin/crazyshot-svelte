@@ -11,13 +11,15 @@
   interface Props {
     initialSettings: HeroSettings
     onclose: () => void
+    embedded?: boolean
   }
 
-  let { initialSettings, onclose }: Props = $props()
+  let { initialSettings, onclose, embedded = false }: Props = $props()
 </script>
 
 <ProductHeroModal
   settingKey="product_page_md_picks"
   {initialSettings}
   {onclose}
+  {embedded}
 />

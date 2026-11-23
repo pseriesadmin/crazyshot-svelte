@@ -54,6 +54,8 @@
     categories?: { id: string; name: string }[]
     initialBanners?: { items: CategoryBanner[]; mid_banner?: MidBanner | null }
     onclose: () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?: boolean
   }
 
   let {
@@ -62,6 +64,7 @@
     categories = [],
     initialBanners = { items: [] },
     onclose,
+    embedded = false,
   }: Props = $props()
 
   const BANNER_KEY = 'product_page_category_banners'
@@ -426,16 +429,20 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{/if}
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="헤더 상품 설정">
-  <div class="modal-header">
-    <span class="modal-title">
-      {settingKey === 'product_page_md_picks' ? 'MD 추천 픽 설정' : '공통 상품 슬라이드 설정'}
-    </span>
-    <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+<aside class="modal-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="헤더 상품 설정">
+  {#if !embedded}
+    <div class="modal-header">
+      <span class="modal-title">
+        {settingKey === 'product_page_md_picks' ? 'MD 추천 픽 설정' : '공통 상품 슬라이드 설정'}
+      </span>
+      <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <div class="modal-body">
     <!-- 노출 방식 + 상품 추가 + 선택된 상품 — 카드 스타일 없이 div로만 그룹핑 -->
@@ -655,7 +662,7 @@
       <p class="save-error save-error-footer" role="alert">{slideError}</p>
     {/if}
     <div class="modal-footer">
-      <button class="btn-cancel" onclick={onclose} disabled={savingSlide}>취소</button>
+      {#if !embedded}<button class="btn-cancel" onclick={onclose} disabled={savingSlide}>취소</button>{/if}
       <button class="btn-save" onclick={save} disabled={savingSlide}>
         {savingSlide ? '저장 중…' : '저장'}
       </button>
@@ -664,6 +671,10 @@
 </aside>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .modal-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .modal-panel.embedded .modal-body { overflow: visible; flex: none; }
+
   .modal-backdrop {
     position: fixed;
     inset: 0;

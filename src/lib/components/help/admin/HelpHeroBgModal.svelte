@@ -17,9 +17,11 @@
     initialTitle?: string
     initialSub?: string
     onclose: () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?: boolean
   }
 
-  let { initialImages, initialMode, initialTitle = '', initialSub = '', onclose }: Props = $props()
+  let { initialImages, initialMode, initialTitle = '', initialSub = '', onclose, embedded = false }: Props = $props()
 
   let images = $state<ImageItem[]>(initialImages.map((img) => ({ ...img })))
   let mode = $state<'random' | 'fixed'>(initialMode)
@@ -93,14 +95,18 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{/if}
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="도움말 히어로 배경·문구 관리">
-  <div class="modal-header">
-    <span class="modal-title">도움말 히어로 관리 (배경·문구)</span>
-    <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+<aside class="modal-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="도움말 히어로 배경·문구 관리">
+  {#if !embedded}
+    <div class="modal-header">
+      <span class="modal-title">도움말 히어로 관리 (배경·문구)</span>
+      <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <div class="modal-body">
     <!-- 메인·서브 문구 -->
@@ -117,16 +123,24 @@
     <!-- 노출 방식 -->
     <div class="section">
       <p class="section-label">노출 방식</p>
-      <div class="radio-group">
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="random" checked={mode === 'random'} onchange={() => (mode = 'random')} />
-          <span>랜덤 노출</span>
-        </label>
-        <label class="radio-opt">
-          <input type="radio" name="mode" value="fixed" checked={mode === 'fixed'} onchange={() => (mode = 'fixed')} />
-          <span>첫 번째 고정</span>
-        </label>
-      </div>
+      {#if embedded}
+        <!-- 통합 홈 화면 설정 모달: 다른 섹션과 같은 콤보 버튼(mode-chip) 규격 — 스타일은 HomeSettingsModal 공통 레이어 -->
+        <div class="mode-chips">
+          <button type="button" class="mode-chip" class:mode-chip--on={mode === 'random'} aria-pressed={mode === 'random'} onclick={() => (mode = 'random')}>랜덤 노출</button>
+          <button type="button" class="mode-chip" class:mode-chip--on={mode === 'fixed'} aria-pressed={mode === 'fixed'} onclick={() => (mode = 'fixed')}>첫 번째 고정</button>
+        </div>
+      {:else}
+        <div class="radio-group">
+          <label class="radio-opt">
+            <input type="radio" name="mode" value="random" checked={mode === 'random'} onchange={() => (mode = 'random')} />
+            <span>랜덤 노출</span>
+          </label>
+          <label class="radio-opt">
+            <input type="radio" name="mode" value="fixed" checked={mode === 'fixed'} onchange={() => (mode = 'fixed')} />
+            <span>첫 번째 고정</span>
+          </label>
+        </div>
+      {/if}
     </div>
 
     <!-- 이미지 업로드 -->
@@ -170,7 +184,7 @@
   </div>
 
   <div class="modal-footer">
-    <button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
+    {#if !embedded}<button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>{/if}
     <button class="btn-save" onclick={save} disabled={isSaving || isUploading}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
@@ -178,6 +192,10 @@
 </aside>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .modal-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .modal-panel.embedded .modal-body { overflow: visible; flex: none; }
+
   .modal-backdrop {
     position: fixed;
     inset: 0;

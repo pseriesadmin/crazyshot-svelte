@@ -42,8 +42,10 @@
   interface Props {
     groups: ThemeGroupRow[]
     onclose: () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?: boolean
   }
-  let { groups, onclose }: Props = $props()
+  let { groups, onclose, embedded = false }: Props = $props()
 
   const MAX_GROUPS   = 10
   const MAX_PRODUCTS = 10
@@ -300,17 +302,21 @@
 </script>
 
 <!-- 배경 오버레이 -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="tg-backdrop" onclick={onclose}></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="tg-backdrop" onclick={onclose}></div>
+{/if}
 
 <!-- 패널 -->
-<div class="tg-panel" role="dialog" aria-modal="true" aria-label="테마그룹 관리">
+<div class="tg-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="테마그룹 관리">
   <!-- 헤더 -->
-  <div class="tg-header">
-    <span class="tg-header-title">취향직격 테마그룹 관리</span>
-    <button class="tg-close-btn" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+  {#if !embedded}
+    <div class="tg-header">
+      <span class="tg-header-title">취향직격 테마그룹 관리</span>
+      <button class="tg-close-btn" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <!-- 본문 -->
   <div class="tg-body">
@@ -498,7 +504,7 @@
 
   <!-- 푸터 -->
   <div class="tg-footer">
-    <button class="tg-cancel-btn" onclick={onclose} type="button" disabled={isSaving}>취소</button>
+    {#if !embedded}<button class="tg-cancel-btn" onclick={onclose} type="button" disabled={isSaving}>취소</button>{/if}
     <button class="tg-save-btn" onclick={save} type="button" disabled={isSaving}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
@@ -506,6 +512,10 @@
 </div>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .tg-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .tg-panel.embedded .tg-body { overflow: visible; flex: none; }
+
   /* ── 배경 오버레이 ── */
   .tg-backdrop {
     position: fixed;
