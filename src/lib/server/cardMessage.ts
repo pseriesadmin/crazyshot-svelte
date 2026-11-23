@@ -79,6 +79,35 @@ export async function loadReservationCardVars(
   return vars
 }
 
+const ANSWER_TOKEN = '§§ANSWER§§'
+const MAX_WRAPPED_CHARS = 4000
+
+/**
+ * 상담 자동응답(AI·빠른답변) 채팅 메시지 본문 — 푸시알림 설정의 안내문장(머리말·꼬리말 포함)이 있으면 그 문장 안에 답변을 넣어 보낸다(2026-11-16).
+ * 푸시는 이미 이 문장으로 나가므로, 대화창도 같은 문장이어야 고객이 보는 두 곳이 어긋나지 않는다.
+ *  · 안내문장이 없거나 {{답변내용}} 변수가 없으면 답변 원문 그대로(답변이 사라지는 일이 없도록)
+ *  · 답변은 줄 정리 없이 원문 그대로 끼워 넣는다(줄 앞뒤 공백·연속 공백 보존)
+ *  · 조회·치환 오류, 4000자 초과도 답변 원문
+ */
+export async function wrapAutoReply(
+  admin: SupabaseClient,
+  notifyType: string,
+  answer: string,
+  userId: string | null | undefined,
+): Promise<string> {
+  try {
+    const override = await getNotifyMessageOverride(admin, notifyType)
+    if (!override || !/\{\{\s*답변내용\s*\}\}/.test(override)) return answer
+    const vars = { ...(await loadCustomerNameVars(admin, userId)), 답변내용: ANSWER_TOKEN }
+    const rendered = applyNotifyTemplate(override, vars)
+    if (!rendered.includes(ANSWER_TOKEN)) return answer
+    const text = rendered.split(ANSWER_TOKEN).join(answer)
+    return text.length > MAX_WRAPPED_CHARS ? answer : text
+  } catch {
+    return answer
+  }
+}
+
 /** 사용자 기준(예약 없는 알림) 고객이름 변수 */
 export async function loadCustomerNameVars(admin: SupabaseClient, userId: string | null | undefined): Promise<NotifyVars> {
   if (!userId) return {}

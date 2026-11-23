@@ -6,6 +6,7 @@ import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
 import type { RequestHandler } from './$types'
 import { sendPushToUser } from '$lib/server/push'
+import { postUnansweredChatNotice } from '$lib/server/unansweredNotice'
 
 export const GET: RequestHandler = async ({ url, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'consulting.chat')
@@ -38,18 +39,24 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   // 실패는 목록 응답에 영향 없음(아래 catch).
   const unansweredTask = (async () => {
     try {
+      const markedSince = new Date().toISOString() // 이 시각 이후 표시된 세션에만 대화창 안내를 남긴다
       const { data: userIds, error: unansweredErr } = await admin.rpc('get_and_mark_unanswered_sessions') as { data: { user_id: string }[] | null; error: { message?: string } | null }
       if (unansweredErr) {
         console.error('[chat/sessions] get_and_mark_unanswered_sessions 실패(fail-soft):', unansweredErr.message)
       }
       if (userIds && userIds.length > 0) {
+        // 한 고객에게 표시된 세션이 여러 개면 같은 user_id가 여러 번 오므로 고객당 1회만 발송한다(안내 중복 방지)
         await Promise.allSettled(
-          userIds.map((row) =>
-            sendPushToUser(row.user_id, 'chat_unanswered', {
-              title: '아직 답변을 기다리고 있어요',
-              body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.',
-              link: '/',
-            })
+          [...new Set(userIds.map((row) => row.user_id))].map((userId) =>
+            Promise.allSettled([
+              sendPushToUser(userId, 'chat_unanswered', {
+                title: '아직 답변을 기다리고 있어요',
+                body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.',
+                link: '/',
+              }),
+              // 푸시와 같은 안내문장을 대화창에도 자동응답 메시지로 남긴다(2026-11-16)
+              postUnansweredChatNotice(admin, userId, markedSince),
+            ])
           )
         )
       }

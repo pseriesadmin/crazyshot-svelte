@@ -10,9 +10,10 @@ import { dev } from '$app/environment'
 import { CUSTOMER_LIFECYCLE_PUSH_COPY, sendCardSms, sendPushToUser, sendReservationLifecyclePush } from '$lib/server/push'
 import { sendSms } from '$lib/server/sms'
 import { composeLockerGuideMessage } from '$lib/server/lockerGuideMessage'
-import { loadReservationCardVars, resolveCardContent } from '$lib/server/cardMessage'
+import { loadCustomerNameVars, loadReservationCardVars, resolveCardContent, wrapAutoReply } from '$lib/server/cardMessage'
+import { UNANSWERED_DEFAULT_MESSAGE } from '$lib/server/unansweredNotice'
 import { getNotifyMessageOverride } from '$lib/server/notifyMessages'
-import { NOTIFY_SPECS, SMS_BRAND_PREFIX, applyNotifyTemplate, type NotifyVars } from '$lib/utils/notifyTemplate'
+import { NOTIFY_SPECS, applyNotifyTemplate, withSmsPrefix, type NotifyVars } from '$lib/utils/notifyTemplate'
 
 export const TEST_SEND_TYPES: string[] = NOTIFY_SPECS.map((s) => s.notifyType)
 
@@ -43,20 +44,24 @@ interface DirectDef {
   /** 문자 발송: sms.ts 발송 유형(sendCardSms) */
   smsType?: string
   smsVars?: NotifyVars
+  /** 채팅카드 — 실제 발송 지점과 같은 카드 종류·버튼(본문은 안내문장 우선, 없으면 fallback) */
+  card?: { payload: Record<string, unknown>; fallback: string }
+  /** 대화창 자동응답 메시지(카드가 아닌 텍스트) — 실제 발송 지점과 같은 문장 규칙 */
+  chat?: 'unanswered' | 'ai' | 'canned'
 }
 
 // 예약을 거치지 않고 푸시를 직접 보내는 유형 — 제목·본문은 실제 호출부의 기본 문구와 같다
 const DIRECT: Record<string, DirectDef> = {
-  contract_sent: { title: '전자계약이 도착했어요', body: '계약서를 확인하고 서명해주세요.', link: '/account/rental', smsType: 'contract_link' },
-  contract_signed_customer: { title: '전자계약 서명이 완료됐어요', body: '서명이 정상적으로 접수됐어요.', link: '/account/rental', smsType: 'contract_signed' },
-  identity_approved: { title: '본인증명이 확인됐어요', body: '본인증명정보가 정상적으로 확인됐어요.', link: '/account/profile?tab=profile' },
-  identity_request: { title: '본인증명 등록을 요청드려요', body: '개인정보 메뉴에서 본인증명정보를 등록해주세요.', link: '/account/profile?tab=profile' },
-  chat_unanswered: { title: '아직 답변을 기다리고 있어요', body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.', link: '/' },
+  contract_sent: { title: '전자계약이 도착했어요', body: '계약서를 확인하고 서명해주세요.', link: '/account/rental', smsType: 'contract_link', card: { payload: { type: 'contract_link', action_url: '/account/rental', button_label: '전자계약서명' }, fallback: '전자계약을 확인 후 서명을 등록해주세요.' } },
+  contract_signed_customer: { title: '전자계약 서명이 완료됐어요', body: '서명이 정상적으로 접수됐어요.', link: '/account/rental', smsType: 'contract_signed', card: { payload: { type: 'contract_signed', action_url: '/account/rental', button_label: '전자계약완료' }, fallback: '전자계약 서명이 완료되었습니다.' } },
+  identity_approved: { title: '본인증명이 확인됐어요', body: '본인증명정보가 정상적으로 확인됐어요.', link: '/account/profile?tab=profile', card: { payload: { type: 'identity_approved', action_url: '/account/profile?tab=profile', button_label: '내 정보 확인하기' }, fallback: '고객님 본인증명이 확인되었어요.' } },
+  identity_request: { title: '본인증명 등록을 요청드려요', body: '개인정보 메뉴에서 본인증명정보를 등록해주세요.', link: '/account/profile?tab=profile', card: { payload: { type: 'identity_review_request', action_url: '/account/profile?tab=profile', button_label: '본인증명정보 등록' }, fallback: '개인정보 메뉴에서 본인증명정보를 등록해주세요.' } },
+  chat_unanswered: { title: '아직 답변을 기다리고 있어요', body: '문의하신 내용에 아직 답변이 없어요. 잠시 후 다시 확인해 주세요.', link: '/', chat: 'unanswered' },
   admin_chat_reply: { title: '상담 답장이 도착했어요', body: '테스트 답변입니다.', link: '/', vars: { 답변내용: '테스트 답변입니다.' } },
-  ai_auto_reply: { title: '답변이 도착했어요', body: '테스트 답변입니다.', link: '/', vars: { 답변내용: '테스트 답변입니다.' } },
-  canned_auto_reply: { title: '답변이 도착했어요', body: '테스트 답변입니다.', link: '/', vars: { 답변내용: '테스트 답변입니다.' } },
-  event_coupon_issued: { title: '쿠폰이 도착했어요 🎁', body: '30% 할인 쿠폰을 받으셨어요! 지금 확인해보세요.', link: '/account/profile?tab=coupon', vars: { 할인내용: '30% 할인' } },
-  late_fee_paid: { title: '연체료 결제가 완료됐어요', body: '연체료 12,000원 결제가 정상 처리됐어요.', link: '/account/rental', vars: { 연체료: '12,000원' }, smsType: 'late_fee_paid', smsVars: { 연체료: '12,000원' } },
+  ai_auto_reply: { title: '답변이 도착했어요', body: '테스트 답변입니다.', link: '/', vars: { 답변내용: '테스트 답변입니다.' }, chat: 'ai' },
+  canned_auto_reply: { title: '답변이 도착했어요', body: '테스트 답변입니다.', link: '/', vars: { 답변내용: '테스트 답변입니다.' }, chat: 'canned' },
+  event_coupon_issued: { title: '쿠폰이 도착했어요 🎁', body: '30% 할인 쿠폰을 받으셨어요! 지금 확인해보세요.', link: '/account/profile?tab=coupon', vars: { 할인내용: '30% 할인' }, card: { payload: { type: 'COUPON_GIFT_CARD', discount_label: '30% 할인', action_url: '/account/profile?tab=coupon' }, fallback: '쿠폰을 보내드렸어요! (30% 할인)' } },
+  late_fee_paid: { title: '연체료 결제가 완료됐어요', body: '연체료 12,000원 결제가 정상 처리됐어요.', link: '/account/rental', vars: { 연체료: '12,000원' }, smsType: 'late_fee_paid', smsVars: { 연체료: '12,000원' }, card: { payload: { type: 'late_fee_paid', fee_amount: 12000, action_url: '/account/rental', button_label: '대여 정보 확인' }, fallback: '연체료 결제가 완료됐습니다. (12,000원)' } },
   late_fee_request: { title: '연체료 결제 요청이 도착했어요', body: '연체료 12,000원 결제를 요청드려요. 대여 정보에서 확인해 주세요.', link: '/account/rental', vars: { 연체료: '12,000원' }, smsType: 'late_fee_request', smsVars: { 연체료: '12,000원' } },
 }
 
@@ -99,8 +104,10 @@ export async function sendTestNotice(admin: SupabaseClient, userId: string, noti
 
     const { data: profile } = await admin.from('user_profiles').select('phone, full_name').eq('id', userId).maybeSingle()
     const phone = (profile as { phone?: string | null } | null)?.phone?.trim() || null
-    const { data: resv } = await admin.from('rental_reservations').select('id').eq('user_id', userId).order('id', { ascending: false }).limit(1)
-    const rid = (resv?.[0] as { id?: number } | undefined)?.id ?? null
+    // 변수(예약코드·수령/반납일시)가 채워지도록 예약코드·일정이 있는 가장 최근 예약을 쓴다(초안 예약은 이 값들이 비어 문장이 어색해진다). 없으면 가장 최근 예약.
+    const { data: complete } = await admin.from('rental_reservations').select('id').eq('user_id', userId).not('reservation_code', 'is', null).not('start_date', 'is', null).not('end_date', 'is', null).order('id', { ascending: false }).limit(1)
+    const { data: anyResv } = (complete?.length ?? 0) > 0 ? { data: complete } : await admin.from('rental_reservations').select('id').eq('user_id', userId).order('id', { ascending: false }).limit(1)
+    const rid = (anyResv?.[0] as { id?: number } | undefined)?.id ?? null
 
     const direct = DIRECT[notifyType]
     if (direct) {
@@ -120,14 +127,39 @@ export async function sendTestNotice(admin: SupabaseClient, userId: string, noti
           const text = (override && applyNotifyTemplate(override, (profile as { full_name?: string | null } | null)?.full_name ? { 고객이름: (profile as { full_name: string }).full_name } : {})) || '예약 진행을 위해 본인증명정보를 등록해 주세요.'
           if (dev) out.sms = '개발 환경이라 건너뜀'
           else {
-            await sendSms(phone, `${SMS_BRAND_PREFIX}${text}\nhttps://crazyshot.kr/account/profile?tab=profile`, { notifyType: 'identity_request' })
+            await sendSms(phone, `${withSmsPrefix(text)}\nhttps://crazyshot.kr/account/profile?tab=profile`, { notifyType: 'identity_request' })
             out.sms = '발송 요청함(로그 없음)'
           }
         }
       } else {
         out.sms = '문자 없는 알림'
       }
-      out.card = '테스트 범위 밖'
+      if (direct.card) {
+        // 실제 발송 지점과 같은 방식: 안내문장이 있으면 그 문장(변수 치환), 없으면 기본 문구
+        const vars = { ...(await loadReservationCardVars(admin, rid)), ...(direct.vars ?? {}) }
+        const content = await resolveCardContent(admin, notifyType, vars, direct.card.fallback)
+        const { data: sessionId, error: sessErr } = await admin.rpc('find_or_create_general_chat_session', { p_user_id: userId, p_reservation_id: rid })
+        if (sessErr || !sessionId) out.card = `실패: ${sessErr?.message ?? '세션 없음'}`
+        else {
+          const { error: insErr } = await admin.from('chat_messages').insert({
+            session_id: sessionId, sender_type: 'admin', message_type: 'action_card', content, action_payload: direct.card.payload, is_read: false,
+          })
+          out.card = insErr ? `실패: ${insErr.message}` : 'sent'
+        }
+      } else if (direct.chat) {
+        // 대화창 자동응답 메시지 — 실제 발송 지점과 같은 문장(설정 문구 우선, 없으면 기본)
+        const text = direct.chat === 'unanswered'
+          ? await resolveCardContent(admin, 'chat_unanswered', await loadCustomerNameVars(admin, userId), UNANSWERED_DEFAULT_MESSAGE)
+          : await wrapAutoReply(admin, direct.chat === 'ai' ? 'ai_auto_reply' : 'canned_auto_reply', '테스트 답변입니다.', userId)
+        const { data: sessionId, error: sessErr } = await admin.rpc('find_or_create_general_chat_session', { p_user_id: userId, p_reservation_id: rid })
+        if (sessErr || !sessionId) out.card = `실패: ${sessErr?.message ?? '세션 없음'}`
+        else {
+          const { error: insErr } = await admin.from('chat_messages').insert({ session_id: sessionId, sender_type: 'ai', content: text, message_type: 'text' })
+          out.card = insErr ? `실패: ${insErr.message}` : 'sent(대화 메시지)'
+        }
+      } else {
+        out.card = '카드·대화 메시지 없음(푸시 전용)'
+      }
       return out
     }
 
@@ -140,7 +172,7 @@ export async function sendTestNotice(admin: SupabaseClient, userId: string, noti
       if (!composed) return { ...out, push: '안내문장 조립 실패', sms: '건너뜀', card: '건너뜀' }
       if (phone && !dev) {
         try {
-          await sendSms(phone, `${SMS_BRAND_PREFIX}${composed}`)
+          await sendSms(phone, withSmsPrefix(composed))
           out.sms = '발송 요청함(로그 없음)'
         } catch (e) {
           out.sms = `실패: ${e instanceof Error ? e.message.slice(0, 80) : '오류'}`
