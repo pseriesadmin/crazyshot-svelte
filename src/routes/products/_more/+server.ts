@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit'
 import { getCategoryGroups } from '$lib/server/productCategorySettings'
-import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort } from '$lib/server/products/productGrid'
+import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, pickGridSortForCategory, resolveCategoryCase, resolveGridSort } from '$lib/server/products/productGrid'
 import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
@@ -28,6 +28,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const grid = ((settingsRaw as Record<string, unknown> | null)?.['product_page_grid'] ?? {}) as {
     category?: string
     sort?: string
+    sortByCategory?: Record<string, string>
     fixedProducts?: { id: string; order: number }[]
     fixedByCategory?: Record<string, { id: string; order: number }[]>
   }
@@ -41,13 +42,15 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       : (!grid.category || grid.category === 'all' ? null : grid.category),
     await getCategoryGroups().then((g) => g.map((c) => c.id)).catch(() => [] as string[]), // 카테고리 목록 조회 실패 시 입력값 그대로(종전 동작)
   )
+  // 노출 순서도 카테고리별 개별 설정을 따른다(페이지 load와 같은 규칙)
+  const gridSortSetting = pickGridSortForCategory(grid, gridCategory)
   const { data } = await fetchGridRowsWithFixed(locals.supabase, {
     category: gridCategory,
-    sort: resolveGridSort(grid.sort),
+    sort: resolveGridSort(gridSortSetting),
     limit: total,
     seed,
     userId: session?.user.id ?? null,
-    fixedIds: grid.sort === GRID_SORT_FIXED ? pickFixedIdsForCategory(grid, gridCategory) : [],
+    fixedIds: gridSortSetting === GRID_SORT_FIXED ? pickFixedIdsForCategory(grid, gridCategory) : [],
   })
 
   const rows = (data ?? []) as Record<string, unknown>[]

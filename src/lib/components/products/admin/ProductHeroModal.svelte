@@ -468,7 +468,7 @@
       <p class="section-label">상품 추가 <span class="count-badge count-badge-end">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
         <SuggestPicker
-          id="product-search"
+          id="product-search-{settingKey}"
           bind:selectedId={pickerSelectedId}
           options={pickerOptions}
           noFilter
@@ -511,7 +511,7 @@
     <!-- 선택된 상품 목록 (드래그 순서) -->
     {#if selected.length > 0}
       <div class="section">
-        <div id="selected-products-panel">
+        <div class="selected-products-panel">
           <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
             {#snippet renderItem(item)}
               <div class="selected-row">
@@ -974,7 +974,7 @@
     font-weight: 700;
     color: var(--cs-text-mid);
   }
-  #selected-products-panel { margin-top: 12px; }
+  .selected-products-panel { margin-top: 12px; }
   .banner-row {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;

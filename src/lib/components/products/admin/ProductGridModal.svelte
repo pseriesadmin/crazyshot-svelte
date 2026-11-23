@@ -16,7 +16,10 @@
   interface GridSettings {
     category: string
     count: number
+    /** 이전 단일 값 — 카테고리별 값이 없는 카테고리의 기본. 저장할 때는 '전체'의 값을 같이 기록한다 */
     sort: string
+    /** 노출 순서 — 카테고리(전체 포함)별 개별 값: { all: 'views', 카테고리id: 'fixed', … } */
+    sortByCategory?: Record<string, string>
     /** '고정노출 정렬'일 때 카테고리(전체 포함)별로 맨 앞에 지정 순서대로 노출할 상품 — { all: […], 카테고리id: […] }, 목록마다 최대 30개 */
     fixedByCategory?: Record<string, { id: string; order: number }[]>
     /** 이전 저장 형식(단일 목록) — '전체' 목록으로 읽는다. 저장할 때는 더 이상 쓰지 않는다 */
@@ -38,15 +41,27 @@
     categories: CategoryItem[]
     initialSettings: GridSettings
     onclose: () => void
+    /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
+    embedded?: boolean
   }
 
-  let { categories, initialSettings, onclose }: Props = $props()
+  let { categories, initialSettings, onclose, embedded = false }: Props = $props()
 
   let activeCategory = $state(initialSettings.category ?? 'all')
   let count = $state<number>(initialSettings.count ?? 16)
-  let sort = $state(initialSettings.sort ?? 'latest')
+  // 노출 순서는 위 '카테고리 필터' 칩에서 고른 카테고리(전체 포함)별로 따로 가진다 — 값이 없는 카테고리는 이전 단일 값(sort)을 기본으로 쓴다
+  const DEFAULT_SORT = initialSettings.sort ?? 'latest'
+  // svelte-ignore state_referenced_locally
+  let sortByCat = $state<Record<string, string>>({ ...(initialSettings.sortByCategory ?? {}) })
   let isSaving = $state(false)
   let error = $state<string | null>(null)
+
+  // 지금 선택한 카테고리의 노출 순서(키 대소문자 구분 없이 찾는다)
+  const sort = $derived(
+    sortByCat[activeCategory] ??
+      Object.entries(sortByCat).find(([k]) => k.toLowerCase() === activeCategory.toLowerCase())?.[1] ??
+      DEFAULT_SORT,
+  )
 
   const SORT_OPTIONS = [
     { value: 'latest',  label: '최신 등록순' },
@@ -116,6 +131,9 @@
     searchResults = []
     pickerSelectedId = null
   }
+
+  // 설정 카드 상단 내비 표시 — 위 카테고리 필터에서 고른 카테고리 이름(같은 선택값 activeCategory에 매핑)
+  const activeIdx = $derived(Math.max(0, chipOptions.findIndex((o) => o.id === activeCategory)))
 
   // 저장돼 있는 고정 상품 불러오기 — 모달은 열릴 때마다 새로 만들어지므로 처음 1회.
   // 이전 형식(fixedProducts 단일 목록)은 '전체' 목록으로 읽는다.
@@ -219,7 +237,12 @@
     for (const [key, list] of Object.entries(fixedByCat)) {
       if (list.length) fixedByCategory[key] = list.map((p, i) => ({ id: p.id, order: i }))
     }
-    const value: GridSettings = { category: activeCategory, count, sort, fixedByCategory }
+    // 노출 순서는 카테고리(전체 포함) 칩마다 현재 값을 기록한다. sort(이전 단일 값)에는 '전체'의 값을 같이 둔다
+    const sortOf = (key: string) =>
+      sortByCat[key] ?? Object.entries(sortByCat).find(([k]) => k.toLowerCase() === key.toLowerCase())?.[1] ?? DEFAULT_SORT
+    const sortByCategory: Record<string, string> = {}
+    for (const o of chipOptions) sortByCategory[o.id] = sortOf(o.id)
+    const value: GridSettings = { category: activeCategory, count, sort: sortOf(ALL_KEY), sortByCategory, fixedByCategory }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: err } = await (supabase.rpc as any)('upsert_product_page_setting', {
       p_key: 'product_page_grid',
@@ -235,16 +258,22 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{#if !embedded}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" onclick={onclose} role="presentation"></div>
+{/if}
 
-<aside class="modal-panel" role="dialog" aria-modal="true" aria-label="상품 그리드 설정">
-  <div class="modal-header">
-    <span class="modal-title">상품 그리드 설정</span>
-    <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
-  </div>
+<aside class="modal-panel" class:embedded role={embedded ? undefined : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label="상품 그리드 설정">
+  {#if !embedded}
+    <div class="modal-header">
+      <span class="modal-title">상품 그리드 설정</span>
+      <button class="modal-close" onclick={onclose} aria-label="닫기">✕</button>
+    </div>
+  {/if}
 
   <div class="modal-body">
+    <!-- 카테고리 필터(내비) + 그 카테고리의 노출 순서·고정노출 설정(카드) — 하나의 그룹 -->
+    <div class="cat-group">
     <!-- 카테고리 선택 -->
     <div class="section">
       <p class="fx-label">카테고리 필터</p>
@@ -285,6 +314,19 @@
     </div>
     -->
 
+    <!-- 하나의 카드 — 위 카테고리 필터에서 고른 카테고리의 노출 순서 + 고정노출 설정 -->
+    <div class="folder">
+    <!-- 서류 폴더 탭 — 위 카테고리 필터 목록 전체를 겹쳐 보여주고, 선택된 카테고리만 앞으로 나와 카드와 이어진다(나머지는 뒤에 깔린 비활성 탭 — 누르면 해당 카테고리가 열림) -->
+    <div class="folder-tabs">
+      {#each chipOptions as opt, i (opt.id)}
+        {#if opt.id === activeCategory}
+          <div class="folder-tab" class:folder-tab-first={i === 0} style:z-index="20" aria-live="polite">{opt.name}</div>
+        {:else}
+          <button type="button" class="folder-tab folder-tab-off" style:z-index={10 - Math.abs(i - activeIdx)} onclick={() => selectCategory(opt.id)}>{opt.name}</button>
+        {/if}
+      {/each}
+    </div>
+    <div class="fx-group">
     <!-- 노출 순서 -->
     <div class="section">
       <p class="section-label">노출 순서</p>
@@ -296,7 +338,7 @@
             class="combo-btn"
             class:combo-btn-active={sort === opt.value}
             aria-pressed={sort === opt.value}
-            onclick={() => (sort = opt.value)}
+            onclick={() => (sortByCat[activeCategory] = opt.value)}
           >
             <span class="combo-label">{opt.label}</span>
           </button>
@@ -307,8 +349,6 @@
     <!-- 고정노출 설정 — 노출 순서가 '고정노출 정렬'이 아니면 가리지 않고 비활성(흐리게·조작 불가)으로 보여 준다.
          inert: 포커스·클릭·드래그·키 입력을 모두 막는다. 둘째(상품 추가)·셋째(선택된 상품) 선택영역 구조 그대로 -->
     <div class="fx-root" class:fx-disabled={sort !== 'fixed'} inert={sort !== 'fixed'} aria-disabled={sort !== 'fixed'}>
-      <!-- 상품 추가 + 선택된 상품 — 카드형 그룹(ProductHeroModal .group-products 와 동일 스타일) -->
-      <div class="fx-group">
       <div class="section">
         <p class="fx-label fx-label-sm">
           고정노출 설정
@@ -387,7 +427,9 @@
       {:else if !isLoadingFixed}
         <p class="fx-empty">위 검색창에서 상품을 검색해 추가하세요. 이 카테고리에 고정 상품이 없으면 조회수순으로 노출됩니다.</p>
       {/if}
-      </div>
+    </div>
+    </div>
+    </div>
     </div>
 
     {#if error}
@@ -398,7 +440,7 @@
   </div>
 
   <div class="modal-footer">
-    <button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>
+    {#if !embedded}<button class="btn-cancel" onclick={onclose} disabled={isSaving}>취소</button>{/if}
     <button class="btn-save" onclick={save} disabled={isSaving || isLoadingFixed || fixedLoadFailed}>
       {isSaving ? '저장 중…' : '저장'}
     </button>
@@ -406,6 +448,10 @@
 </aside>
 
 <style>
+  /* 통합 설정 모달 안에 섹션으로 박히는 모드(embedded) — 오버레이·헤더 없이 본문 흐름에 배치 */
+  .modal-panel.embedded { position: static; height: auto; width: auto; max-width: none; z-index: auto; border-radius: 0; box-shadow: none; background: transparent; display: block; overflow: visible; }
+  .modal-panel.embedded .modal-body { overflow: visible; flex: none; }
+
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -570,17 +616,69 @@
   }
   /* 탭(칩) 안의 설정된 상품 수 표시 */
 
-  /* 고정노출 설정 전체 래퍼 — modal-body 와 같은 세로 간격을 유지하고, 비활성일 때는 흐리게 보인다 */
-  .fx-root { display: flex; flex-direction: column; gap: 24px; transition: opacity 0.15s; }
+  /* 카테고리 필터(내비) + 설정 카드를 하나로 묶는 그룹 — 필터와 카드 사이는 modal-body 의 큰 간격이 아니라 좁게 둬 한 덩어리로 읽히게 한다 */
+  .cat-group { display: flex; flex-direction: column; gap: 12px; }
+
+  /* 서류 폴더 UI — 카드 위로 카테고리 필터 전체가 폴더 탭처럼 겹쳐 놓인다.
+     선택된 탭(.folder-tab)은 카드와 같은 연보라 면으로 맨 앞에 나와 카드와 한 덩어리로 이어지고(양옆 ::before/::after 로 안쪽 둥글게),
+     나머지(.folder-tab-off)는 더 어두운 면·낮은 높이로 뒤에 깔린다. 카드의 왼쪽 위 모서리는 직각. */
+  .folder { display: flex; flex-direction: column; }
+  .folder-tabs { display: flex; align-items: flex-end; min-width: 0; }
+  .folder-tab {
+    position: relative;
+    flex: 0 0 auto;
+    height: 36px;
+    min-width: 84px;
+    padding: 0 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--cs-lilac);
+    color: var(--cs-purple);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    font: var(--text-pc-script-12);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .folder-tab:not(:first-child) { margin-left: -14px; }
+  .folder-tab::before,
+  .folder-tab::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    width: 15px;
+    height: 15px;
+  }
+  .folder-tab::after { left: 100%; background: radial-gradient(circle at 100% 0, transparent 15px, var(--cs-lilac) 15.5px); }
+  .folder-tab::before { right: 100%; background: radial-gradient(circle at 0 0, transparent 15px, var(--cs-lilac) 15.5px); }
+  .folder-tab-first::before { display: none; } /* 맨 왼쪽 탭은 카드 왼쪽 모서리와 바로 이어짐 */
+  .folder-tab-off {
+    flex: 0 1 auto;
+    min-width: 0;
+    height: 30px;
+    background: color-mix(in srgb, var(--cs-lilac) 55%, var(--cs-purple-pale));
+    color: var(--cs-text-mid);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border: 0;
+    cursor: pointer;
+  }
+  .folder-tab-off:hover { background: color-mix(in srgb, var(--cs-lilac) 35%, var(--cs-purple-pale)); } /* 호버 = 배경색 변경만 */
+  .folder-tab-off::before,
+  .folder-tab-off::after { display: none; }
+
+  /* 고정노출 설정 영역(카드 안) — '고정노출 정렬'이 아니면 흐리게 보이고 조작은 막는다(카드 배경은 그대로) */
+  .fx-root { display: flex; flex-direction: column; gap: 16px; transition: opacity 0.15s; }
   .fx-root.fx-disabled { opacity: 0.45; }
 
-  /* 카드형 그룹 — ProductHeroModal .group-products 와 동일(연보라 카드·반경 15px·패딩 12px 20px·내부 간격 16px) */
+  /* 카드형 그룹 — ProductHeroModal .group-products 와 동일(연보라 카드·반경 15px·패딩 20px·내부 간격 20px). 노출 순서 + 고정노출 설정이 한 카드 안에 있다 */
   .fx-group {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 20px;
     background: var(--cs-lilac);
-    border-radius: var(--radius-md);
+    border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md); /* 왼쪽 위는 폴더 탭과 이어지도록 직각 */
     padding: 20px;
   }
 

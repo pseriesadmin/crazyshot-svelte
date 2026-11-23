@@ -12,10 +12,7 @@
   import { tabBarState } from '$lib/stores/tabBar.svelte'
   import BrandMarquee from '$lib/components/products/BrandMarquee.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
-  import ProductCategoryModal from '$lib/components/products/admin/ProductCategoryModal.svelte'
-  import ProductHeroModal from '$lib/components/products/admin/ProductHeroModal.svelte'
-  import ProductGridModal from '$lib/components/products/admin/ProductGridModal.svelte'
-  import ProductMdPickModal from '$lib/components/products/admin/ProductMdPickModal.svelte'
+  import ProductsSettingsModal, { type ProductsSettingsSection } from '$lib/components/products/admin/ProductsSettingsModal.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
 
   let { data }: { data: PageData } = $props()
@@ -411,7 +408,24 @@
   }
 
   // ── 관리자 모달 ───────────────────────────────────────────────────────
-  let activeModal = $state<'categories' | 'hero' | 'grid' | 'md_picks' | null>(null)
+  let activeModal = $state<ProductsSettingsSection | null>(null)
+
+  // 통합 모달에서 보고 있는 설정이 상품목록 화면에서 적용되는 실제 위치 — 화면 폭에 따라 PC·모바일 중 보이는 쪽으로 이동
+  const PRODUCTS_LAND_SELECTORS: Record<ProductsSettingsSection, string[]> = {
+    categories: ['.cat-section'],
+    hero: ['.m-slider-outer', '.d-slider-outer'],
+    grid: ['.m-list', '.d-prod-grid'],
+    md: ['.md-picks-section'],
+  }
+  function landProducts(section: ProductsSettingsSection): void {
+    for (const sel of PRODUCTS_LAND_SELECTORS[section]) {
+      const el = Array.from(document.querySelectorAll<HTMLElement>(sel)).find((e) => e.getClientRects().length > 0)
+      if (!el) continue
+      const top = el.getBoundingClientRect().top + window.scrollY - 100 // 고정 GNB 높이만큼 여유
+      window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+      return
+    }
+  }
 </script>
 
 <SeoHead title={PRODUCTS_PAGE_TITLE} description={PRODUCTS_META_DESCRIPTION} path="/products" />
@@ -882,7 +896,7 @@
   {#if data.mdProducts.length > 0}
     <div class="md-picks-section" style="position:relative">
       {#if data.isCms}
-        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'md_picks' }} aria-label="MD 추천 설정">
+        <button class="admin-edit-btn admin-float-btn" onclick={() => { activeModal = 'md' }} aria-label="MD 추천 설정">
           ✦ MD 추천 설정
         </button>
       {/if}
@@ -914,7 +928,7 @@
     </div>
   {:else if data.isCms}
     <div class="md-picks-section md-picks-empty">
-      <button class="admin-edit-btn admin-md-empty-btn" onclick={() => { activeModal = 'md_picks' }}>
+      <button class="admin-edit-btn admin-md-empty-btn" onclick={() => { activeModal = 'md' }}>
         ✦ MD 추천 상품 설정하기
       </button>
     </div>
@@ -931,37 +945,25 @@
 <!-- ─────────────────────────────────────────────────────────────────────── -->
 <!-- 관리자 설정 모달 (isCms 시에만 렌더) -->
 <!-- ─────────────────────────────────────────────────────────────────────── -->
-{#if data.isCms}
-  {#if activeModal === 'categories'}
-    <ProductCategoryModal
-      categories={data.categories}
-      initialSettings={data.settings.categories}
-      initialKeywordsSettings={data.settings.keywordsRaw}
-      onclose={() => { activeModal = null }}
-    />
-  {/if}
-  {#if activeModal === 'hero'}
-    <ProductHeroModal
-      settingKey="product_page_hero"
-      initialSettings={data.settings.hero}
-      categories={displayCats.map((c) => ({ id: c.id, name: c.name }))}
-      initialBanners={data.settings.categoryBanners}
-      onclose={() => { activeModal = null }}
-    />
-  {/if}
-  {#if activeModal === 'grid'}
-    <ProductGridModal
-      categories={data.categories}
-      initialSettings={data.settings.grid}
-      onclose={() => { activeModal = null }}
-    />
-  {/if}
-  {#if activeModal === 'md_picks'}
-    <ProductMdPickModal
-      initialSettings={data.settings.mdPicks}
-      onclose={() => { activeModal = null }}
-    />
-  {/if}
+{#if data.isCms && activeModal}
+  <ProductsSettingsModal
+    categories={{
+      categories: data.categories,
+      initialSettings: data.settings.categories,
+      initialKeywordsSettings: data.settings.keywordsRaw,
+    }}
+    hero={{
+      settingKey: 'product_page_hero',
+      initialSettings: data.settings.hero,
+      categories: displayCats.map((c) => ({ id: c.id, name: c.name })),
+      initialBanners: data.settings.categoryBanners,
+    }}
+    grid={{ categories: data.categories, initialSettings: data.settings.grid }}
+    md={{ initialSettings: data.settings.mdPicks }}
+    initialSection={activeModal}
+    onclose={() => { activeModal = null }}
+    onland={landProducts}
+  />
 {/if}
 
 <style>
