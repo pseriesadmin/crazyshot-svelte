@@ -104,6 +104,7 @@
   let pcStartX   = 0
   let pcMoved    = false
   let pcPointer  = -1
+  let pcCaptureEl: HTMLElement | null = null
   let pcPausedUntil = 0
   let pcSettleTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -142,12 +143,16 @@
     pcMoved = false
     pcDragging = true
     pcDragX = 0
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    // 포인터 캡처는 실제로 끌기 시작한 뒤(pcMove)에만 — 누르자마자 잡으면 마우스 클릭이 배너 링크(<a>)가 아니라 이 영역으로 전달돼 링크가 열리지 않는다
+    pcCaptureEl = e.currentTarget as HTMLElement
   }
   function pcMove(e: PointerEvent): void {
     if (e.pointerId !== pcPointer) return
     const dx = e.clientX - pcStartX
-    if (Math.abs(dx) > 6) pcMoved = true
+    if (Math.abs(dx) > 6) {
+      pcMoved = true
+      if (pcCaptureEl && !pcCaptureEl.hasPointerCapture(e.pointerId)) pcCaptureEl.setPointerCapture(e.pointerId)
+    }
     pcDragX = dx
   }
   function pcUp(e: PointerEvent): void {
@@ -156,6 +161,7 @@
     const dx = e.clientX - pcStartX
     const limit = Math.max(HERO_SWIPE_MIN_PX, w * HERO_SWIPE_RATIO)
     pcPointer = -1
+    pcCaptureEl = null
     pcDragging = false
     pcDragX = 0
     if (e.type === 'pointerup' && dx <= -limit) pcGo(1)

@@ -23,6 +23,23 @@
     _uploading: boolean
   }
 
+  type Slot = 'pc' | 'mobile'
+
+  // 통합 목록의 한 줄 — PC·모바일 이미지는 따로, 제목·서브카피·링크는 하나를 PC·모바일에 같이 저장한다
+  interface SlotMedia {
+    id: string | null     // DB id (null = 이 쪽 이미지 없음/신규)
+    image_url: string
+    _uploading: boolean
+  }
+  interface BannerRow {
+    _tempId: string       // CmsDragList 키 (로컬 전용)
+    title: string
+    sub_copy: string
+    link_url: string
+    pc: SlotMedia
+    mobile: SlotMedia
+  }
+
   interface Props {
     pcBanners: SourceBanner[]
     mobileBanners: SourceBanner[]
@@ -35,30 +52,41 @@
     embedded?: boolean
   }
 
-  let { pcBanners, mobileBanners, pcMode, mobileMode, pcFirstId, mobileFirstId, onclose, embedded = false }: Props = $props()
+  // mobileMode 는 PC 기준으로 통합해 쓰지 않는다(호출부 호환을 위해 Props 에는 남김)
+  let { pcBanners, mobileBanners, pcMode, pcFirstId, mobileFirstId, onclose, embedded = false }: Props = $props()
 
   const MAX = 10
 
-  function toLocal(banners: SourceBanner[]): LocalBanner[] {
-    return banners.map((b) => ({
-      _tempId: b.id,
-      id: b.id,
-      title: b.title ?? '',
-      sub_copy: b.sub_copy ?? '',
-      image_url: b.image_url,
-      link_url: b.link_url ?? '',
-      _uploading: false,
-    }))
+  // ── 로컬 상태 ─────────────────────────────────────────────────────
+  function emptyMedia(): SlotMedia {
+    return { id: null, image_url: '', _uploading: false }
+  }
+  function mediaOf(b: SourceBanner | undefined): SlotMedia {
+    return b ? { id: b.id, image_url: b.image_url, _uploading: false } : emptyMedia()
+  }
+  // 순번대로 PC·모바일 배너를 한 줄로 짝짓는다(개수가 다르면 남는 쪽은 반대편 이미지 없음).
+  // 제목·서브카피·링크는 PC 값을 우선하고, 비어 있으면 모바일 값을 쓴다
+  function toRows(pcList: SourceBanner[], mobileList: SourceBanner[]): BannerRow[] {
+    const n = Math.max(pcList.length, mobileList.length)
+    return Array.from({ length: n }, (_, i) => {
+      const p = pcList[i]
+      const m = mobileList[i]
+      return {
+        _tempId: p?.id ?? m?.id ?? crypto.randomUUID(),
+        title: p?.title || m?.title || '',
+        sub_copy: p?.sub_copy || m?.sub_copy || '',
+        link_url: p?.link_url || m?.link_url || '',
+        pc: mediaOf(p),
+        mobile: mediaOf(m),
+      }
+    })
   }
 
-  // ── 로컬 상태 ─────────────────────────────────────────────────────
-  let localPc = $state<LocalBanner[]>([])
-  let localMobile = $state<LocalBanner[]>([])
-  let localPcMode = $state<'random' | 'fixed'>('fixed')
-  let localMobileMode = $state<'random' | 'fixed'>('fixed')
-  // '먼저 노출' 배너(행 키 _tempId — 저장된 배너는 DB id 와 같다). 슬롯마다 최대 1개
-  let localPcFirst = $state<string | null>(null)
-  let localMobileFirst = $state<string | null>(null)
+  let rows = $state<BannerRow[]>([])
+  // 노출 방식·'먼저 노출'은 PC·모바일 공통 하나(저장 시 두 슬롯에 같은 값 기록)
+  let localMode = $state<'random' | 'fixed'>('fixed')
+  // '먼저 노출' 배너(행 키 _tempId). 최대 1개
+  let localFirst = $state<string | null>(null)
   let origPcIds = $state<Set<string>>(new Set())
   let origMobileIds = $state<Set<string>>(new Set())
   let isSaving = $state(false)
@@ -66,36 +94,29 @@
 
   // prop 동기화 ($state(prop) 초기화 금지 — $effect 패턴 사용)
   $effect(() => {
-    localPc = toLocal(pcBanners)
-    localMobile = toLocal(mobileBanners)
-    localPcMode = pcMode
-    localMobileMode = mobileMode
-    localPcFirst = pcBanners.some((b) => b.id === pcFirstId) ? pcFirstId : null
-    localMobileFirst = mobileBanners.some((b) => b.id === mobileFirstId) ? mobileFirstId : null
+    const next = toRows(pcBanners, mobileBanners)
+    rows = next
+    // 기존에 PC·모바일 설정이 달랐다면 PC 기준으로 통합
+    localMode = pcMode
+    localFirst =
+      next.find((r) => r.pc.id !== null && r.pc.id === pcFirstId)?._tempId ??
+      next.find((r) => r.mobile.id !== null && r.mobile.id === mobileFirstId)?._tempId ??
+      null
     origPcIds = new Set(pcBanners.map((b) => b.id))
     origMobileIds = new Set(mobileBanners.map((b) => b.id))
   })
 
   // ── 행 추가 / 제거 ─────────────────────────────────────────────────
-  function addBanner(slot: 'pc' | 'mobile') {
-    const newRow: LocalBanner = {
-      _tempId: crypto.randomUUID(),
-      id: null,
-      title: '',
-      sub_copy: '',
-      image_url: '',
-      link_url: '',
-      _uploading: false,
-    }
-    if (slot === 'pc') localPc = [...localPc, newRow]
-    else localMobile = [...localMobile, newRow]
+  function addBanner() {
+    rows = [
+      ...rows,
+      { _tempId: crypto.randomUUID(), title: '', sub_copy: '', link_url: '', pc: emptyMedia(), mobile: emptyMedia() },
+    ]
   }
 
-  function removeBanner(slot: 'pc' | 'mobile', tempId: string) {
-    if (slot === 'pc' && localPcFirst === tempId) localPcFirst = null
-    if (slot === 'mobile' && localMobileFirst === tempId) localMobileFirst = null
-    if (slot === 'pc') localPc = localPc.filter((b) => b._tempId !== tempId)
-    else localMobile = localMobile.filter((b) => b._tempId !== tempId)
+  function removeBanner(tempId: string) {
+    if (localFirst === tempId) localFirst = null
+    rows = rows.filter((r) => r._tempId !== tempId)
   }
 
   // ── '먼저 노출' — 썸네일을 2초간 누르면(마우스·터치) 해당 배너를 토글. 짧게 누르면 기존처럼 파일 교체 ──
@@ -103,15 +124,14 @@
   let holdTimer: ReturnType<typeof setTimeout> | undefined
   let holdFired = false
 
-  function toggleFirst(slot: 'pc' | 'mobile', tempId: string) {
-    if (slot === 'pc') localPcFirst = localPcFirst === tempId ? null : tempId
-    else localMobileFirst = localMobileFirst === tempId ? null : tempId
+  function toggleFirst(tempId: string) {
+    localFirst = localFirst === tempId ? null : tempId
   }
-  function holdStart(slot: 'pc' | 'mobile', b: LocalBanner) {
+  function holdStart(r: BannerRow, slot: Slot) {
     holdFired = false
     clearTimeout(holdTimer)
-    if (!b.image_url || b._uploading) return
-    holdTimer = setTimeout(() => { holdFired = true; toggleFirst(slot, b._tempId) }, FIRST_HOLD_MS)
+    if (!r[slot].image_url || r[slot]._uploading) return
+    holdTimer = setTimeout(() => { holdFired = true; toggleFirst(r._tempId) }, FIRST_HOLD_MS)
   }
   function holdCancel() { clearTimeout(holdTimer) }
   function thumbClick(e: MouseEvent) {
@@ -120,19 +140,18 @@
     e.preventDefault()   // 2초 누름이 끝난 뒤의 클릭이 파일 선택창을 열지 않도록
   }
 
+  function patchMedia(tempId: string, slot: Slot, patch: Partial<SlotMedia>) {
+    rows = rows.map((r) => (r._tempId === tempId ? { ...r, [slot]: { ...r[slot], ...patch } } : r))
+  }
+
   // ── 이미지 업로드 (행별) ────────────────────────────────────────────
-  async function onImageChange(slot: 'pc' | 'mobile', tempId: string, e: Event) {
+  async function onImageChange(slot: Slot, tempId: string, e: Event) {
     const input = e.target as HTMLInputElement
     const file = input.files?.[0]
     if (!file) return
     input.value = ''
 
-    const mark = (upld: boolean) => {
-      const update = (list: LocalBanner[]) =>
-        list.map((b) => (b._tempId === tempId ? { ...b, _uploading: upld } : b))
-      if (slot === 'pc') localPc = update(localPc)
-      else localMobile = update(localMobile)
-    }
+    const mark = (upld: boolean) => patchMedia(tempId, slot, { _uploading: upld })
 
     const nameKind = heroBannerMediaKind(file.name)
     const mediaKind: 'html' | 'video' | null =
@@ -183,26 +202,12 @@
     } catch {
       saveError = '업로드에 실패했어요. 네트워크를 확인해 주세요.'
     }
-    if (uploadedUrl) {
-      const url = uploadedUrl
-      const update = (list: LocalBanner[]) =>
-        list.map((b) => (b._tempId === tempId ? { ...b, image_url: url } : b))
-      if (slot === 'pc') localPc = update(localPc)
-      else localMobile = update(localMobile)
-    }
+    if (uploadedUrl) patchMedia(tempId, slot, { image_url: uploadedUrl })
     mark(false)
   }
 
-  function updateField(
-    slot: 'pc' | 'mobile',
-    tempId: string,
-    field: keyof Pick<LocalBanner, 'title' | 'sub_copy' | 'link_url'>,
-    value: string,
-  ) {
-    const update = (list: LocalBanner[]) =>
-      list.map((b) => (b._tempId === tempId ? { ...b, [field]: value } : b))
-    if (slot === 'pc') localPc = update(localPc)
-    else localMobile = update(localMobile)
+  function updateField(tempId: string, field: 'title' | 'sub_copy' | 'link_url', value: string) {
+    rows = rows.map((r) => (r._tempId === tempId ? { ...r, [field]: value } : r))
   }
 
   // ── RPC 헬퍼 ──────────────────────────────────────────────────────
@@ -267,25 +272,54 @@
     return { err: null, ids }
   }
 
+  // 한 줄의 PC·모바일 이미지를 슬롯별 배너 목록으로 나눈다(이미지 없는 쪽은 그 슬롯에서 제외 → 기존 행이면 삭제)
+  function slotList(slot: Slot): LocalBanner[] {
+    return rows
+      .filter((r) => r[slot].image_url)
+      .map((r) => ({
+        _tempId: r._tempId,
+        id: r[slot].id,
+        title: r.title,
+        sub_copy: r.sub_copy,
+        image_url: r[slot].image_url,
+        link_url: r.link_url,
+        _uploading: false,
+      }))
+  }
+
+  // 슬롯 저장 결과(행 키 → DB id)를 화면 상태에 반영 — 중간에 실패해 같은 화면에서 다시 저장해도 이미 만든 배너를 또 만들지 않는다
+  function applySavedIds(slot: Slot, ids: Record<string, string>) {
+    rows = rows.map((r) => (ids[r._tempId] ? { ...r, [slot]: { ...r[slot], id: ids[r._tempId] } } : r))
+    const saved = new Set(Object.values(ids))
+    if (slot === 'pc') origPcIds = saved
+    else origMobileIds = saved
+  }
+
   async function save() {
+    if (rows.some((r) => r.pc._uploading || r.mobile._uploading)) {
+      saveError = '이미지 업로드가 끝난 뒤 저장해 주세요.'
+      return
+    }
     isSaving = true
     saveError = null
     try {
-      const pcRes = await saveBannerSlot('pc', localPc, origPcIds)
+      const pcRes = await saveBannerSlot('pc', slotList('pc'), origPcIds)
+      applySavedIds('pc', pcRes.ids)
       if (pcRes.err) { saveError = pcRes.err; return }
 
-      const mobileRes = await saveBannerSlot('mobile', localMobile, origMobileIds)
+      const mobileRes = await saveBannerSlot('mobile', slotList('mobile'), origMobileIds)
+      applySavedIds('mobile', mobileRes.ids)
       if (mobileRes.err) { saveError = mobileRes.err; return }
 
-      // 설정 저장
+      // 설정 저장 — 노출 방식·먼저 노출은 PC·모바일 공통 값을 두 슬롯에 같이 기록
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: settingsErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
         p_key: 'home_hero_banner_settings',
         p_value: {
-          pc_mode: localPcMode,
-          mobile_mode: localMobileMode,
-          pc_first_id: localPcFirst ? (pcRes.ids[localPcFirst] ?? null) : null,
-          mobile_first_id: localMobileFirst ? (mobileRes.ids[localMobileFirst] ?? null) : null,
+          pc_mode: localMode,
+          mobile_mode: localMode,
+          pc_first_id: localFirst ? (pcRes.ids[localFirst] ?? null) : null,
+          mobile_first_id: localFirst ? (mobileRes.ids[localFirst] ?? null) : null,
         },
       })
       if (settingsErr) { saveError = `설정 저장 실패: ${settingsErr.message}`; return }
@@ -294,8 +328,9 @@
       onclose()
     } catch (e) {
       saveError = e instanceof Error ? e.message : '저장 실패'
+    } finally {
+      isSaving = false
     }
-    isSaving = false
   }
 </script>
 
@@ -314,77 +349,85 @@
 
   <div class="modal-body">
 
-    <!-- ── PC 배너 섹션 ──────────────────────────────────────── -->
     <div class="section">
-      <p class="section-label">PC 배너 <span class="hint">데스크탑 히어로 영역</span></p>
+      <p class="section-label">홈 히어로 배너 <span class="hint">PC·모바일 공통</span></p>
       <div class="mode-chips">
-        <button type="button" class="mode-chip" class:mode-chip--on={localPcMode === 'fixed'} aria-pressed={localPcMode === 'fixed'} onclick={() => (localPcMode = 'fixed')}>순서대로 노출</button>
-        <button type="button" class="mode-chip" class:mode-chip--on={localPcMode === 'random'} aria-pressed={localPcMode === 'random'} onclick={() => (localPcMode = 'random')}>랜덤 노출</button>
+        <button type="button" class="mode-chip" class:mode-chip--on={localMode === 'fixed'} aria-pressed={localMode === 'fixed'} onclick={() => (localMode = 'fixed')}>순서대로 노출</button>
+        <button type="button" class="mode-chip" class:mode-chip--on={localMode === 'random'} aria-pressed={localMode === 'random'} onclick={() => (localMode = 'random')}>랜덤 노출</button>
       </div>
-      <p class="spec-note">권장 1920×936px (가로형). 위 100px · 아래 80px · 좌우 10%에는 중요한 글자를 두지 마세요.</p>
+      <p class="spec-note">PC 권장 1920×936px (가로형). 위 100px · 아래 80px · 좌우 10%에는 중요한 글자를 두지 마세요.</p>
+      <p class="spec-note">모바일 권장 1170×2160px (세로형). 위 80px · 아래 100px · 좌우 10%에는 중요한 글자를 두지 마세요.</p>
     </div>
 
-    {#if localPc.length > 0}
+    {#snippet thumb(r: BannerRow, slot: Slot)}
+      <label
+        class="thumb-wrap"
+        title="{slot === 'pc' ? 'PC' : '모바일'} 이미지 — 클릭하여 교체 · 2초간 누르면 먼저 노출"
+        onpointerdown={() => holdStart(r, slot)}
+        onpointerup={holdCancel}
+        onpointerleave={holdCancel}
+        onpointercancel={holdCancel}
+        onclick={thumbClick}
+        oncontextmenu={(e) => e.preventDefault()}
+      >
+        {#if localFirst === r._tempId && r[slot].image_url}<span class="first-badge">먼저 노출</span>{/if}
+        <span class="slot-tag">{slot === 'pc' ? 'PC' : '모바일'}</span>
+        {#if r[slot]._uploading}
+          <div class="thumb-uploading">업로드 중…</div>
+        {:else if r[slot].image_url && heroBannerMediaKind(r[slot].image_url) === 'video'}
+          <video src={r[slot].image_url} class="banner-thumb" muted playsinline preload="metadata"></video>
+        {:else if r[slot].image_url && heroBannerMediaKind(r[slot].image_url) === 'html'}
+          <div class="thumb-empty">HTML</div>
+        {:else if r[slot].image_url}
+          <img src={r[slot].image_url} alt={r.title || 'banner'} class="banner-thumb" />
+        {:else}
+          <div class="thumb-empty">이미지 없음</div>
+        {/if}
+        <input
+          type="file"
+          class="hidden-input"
+          accept={HERO_MEDIA_ACCEPT}
+          onchange={(e) => onImageChange(slot, r._tempId, e)}
+        />
+      </label>
+    {/snippet}
+
+    {#if rows.length > 0}
       <div class="section">
         <p class="section-label sub">배너 목록 <span class="hint">드래그로 순서 변경 · 최대 {MAX}개</span></p>
-        <CmsDragList bind:items={localPc} itemKey={(b) => b._tempId} class="hero-drag-list">
-          {#snippet renderItem(b)}
+        <CmsDragList bind:items={rows} itemKey={(r) => r._tempId} class="hero-drag-list">
+          {#snippet renderItem(r)}
             <div class="banner-row">
-              <label
-                class="thumb-wrap"
-                title="클릭하여 이미지 교체 · 2초간 누르면 먼저 노출"
-                onpointerdown={() => holdStart('pc', b)}
-                onpointerup={holdCancel}
-                onpointerleave={holdCancel}
-                onpointercancel={holdCancel}
-                onclick={thumbClick}
-                oncontextmenu={(e) => e.preventDefault()}
-              >
-                {#if localPcFirst === b._tempId}<span class="first-badge">먼저 노출</span>{/if}
-                {#if b._uploading}
-                  <div class="thumb-uploading">업로드 중…</div>
-                {:else if b.image_url && heroBannerMediaKind(b.image_url) === 'video'}
-                  <video src={b.image_url} class="banner-thumb" muted playsinline preload="metadata"></video>
-                {:else if b.image_url && heroBannerMediaKind(b.image_url) === 'html'}
-                  <div class="thumb-empty">HTML</div>
-                {:else if b.image_url}
-                  <img src={b.image_url} alt={b.title || 'banner'} class="banner-thumb" />
-                {:else}
-                  <div class="thumb-empty">이미지 없음</div>
-                {/if}
-                <input
-                  type="file"
-                  class="hidden-input"
-                  accept={HERO_MEDIA_ACCEPT}
-                  onchange={(e) => onImageChange('pc', b._tempId, e)}
-                />
-              </label>
+              <div class="thumbs">
+                {@render thumb(r, 'pc')}
+                {@render thumb(r, 'mobile')}
+              </div>
               <div class="banner-fields">
                 <input
                   type="text"
                   class="cms-field"
                   placeholder="제목 (alt 텍스트)"
-                  value={b.title}
-                  oninput={(e) => updateField('pc', b._tempId, 'title', (e.target as HTMLInputElement).value)}
+                  value={r.title}
+                  oninput={(e) => updateField(r._tempId, 'title', (e.target as HTMLInputElement).value)}
                 />
                 <input
                   type="text"
                   class="cms-field"
                   placeholder="서브카피 (선택)"
-                  value={b.sub_copy}
-                  oninput={(e) => updateField('pc', b._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
+                  value={r.sub_copy}
+                  oninput={(e) => updateField(r._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
                 />
                 <input
                   type="url"
                   class="cms-field"
                   placeholder="링크 URL (선택)"
-                  value={b.link_url}
-                  oninput={(e) => updateField('pc', b._tempId, 'link_url', (e.target as HTMLInputElement).value)}
+                  value={r.link_url}
+                  oninput={(e) => updateField(r._tempId, 'link_url', (e.target as HTMLInputElement).value)}
                 />
               </div>
               <button
                 class="btn-remove"
-                onclick={() => removeBanner('pc', b._tempId)}
+                onclick={() => removeBanner(r._tempId)}
                 aria-label="배너 삭제"
               >✕</button>
             </div>
@@ -392,100 +435,11 @@
         </CmsDragList>
       </div>
     {:else}
-      <p class="empty-msg">PC 배너를 추가하면 데스크탑 히어로에 표시됩니다.</p>
+      <p class="empty-msg">배너를 추가하면 PC·모바일 히어로에 표시됩니다.</p>
     {/if}
 
-    {#if localPc.length < MAX}
-      <button class="btn-add" onclick={() => addBanner('pc')}>+ PC 배너 추가</button>
-    {:else}
-      <p class="max-warn">최대 {MAX}개 배너입니다</p>
-    {/if}
-
-    <div class="divider"></div>
-
-    <!-- ── 모바일 배너 섹션 ───────────────────────────────────── -->
-    <div class="section">
-      <p class="section-label">모바일 배너 <span class="hint">모바일 히어로 영역</span></p>
-      <div class="mode-chips">
-        <button type="button" class="mode-chip" class:mode-chip--on={localMobileMode === 'fixed'} aria-pressed={localMobileMode === 'fixed'} onclick={() => (localMobileMode = 'fixed')}>순서대로 노출</button>
-        <button type="button" class="mode-chip" class:mode-chip--on={localMobileMode === 'random'} aria-pressed={localMobileMode === 'random'} onclick={() => (localMobileMode = 'random')}>랜덤 노출</button>
-      </div>
-      <p class="spec-note">권장 1170×2160px (세로형). 위 80px · 아래 100px · 좌우 10%에는 중요한 글자를 두지 마세요.</p>
-    </div>
-
-    {#if localMobile.length > 0}
-      <div class="section">
-        <p class="section-label sub">배너 목록 <span class="hint">드래그로 순서 변경 · 최대 {MAX}개</span></p>
-        <CmsDragList bind:items={localMobile} itemKey={(b) => b._tempId} class="hero-drag-list">
-          {#snippet renderItem(b)}
-            <div class="banner-row">
-              <label
-                class="thumb-wrap"
-                title="클릭하여 이미지 교체 · 2초간 누르면 먼저 노출"
-                onpointerdown={() => holdStart('mobile', b)}
-                onpointerup={holdCancel}
-                onpointerleave={holdCancel}
-                onpointercancel={holdCancel}
-                onclick={thumbClick}
-                oncontextmenu={(e) => e.preventDefault()}
-              >
-                {#if localMobileFirst === b._tempId}<span class="first-badge">먼저 노출</span>{/if}
-                {#if b._uploading}
-                  <div class="thumb-uploading">업로드 중…</div>
-                {:else if b.image_url && heroBannerMediaKind(b.image_url) === 'video'}
-                  <video src={b.image_url} class="banner-thumb" muted playsinline preload="metadata"></video>
-                {:else if b.image_url && heroBannerMediaKind(b.image_url) === 'html'}
-                  <div class="thumb-empty">HTML</div>
-                {:else if b.image_url}
-                  <img src={b.image_url} alt={b.title || 'banner'} class="banner-thumb" />
-                {:else}
-                  <div class="thumb-empty">이미지 없음</div>
-                {/if}
-                <input
-                  type="file"
-                  class="hidden-input"
-                  accept={HERO_MEDIA_ACCEPT}
-                  onchange={(e) => onImageChange('mobile', b._tempId, e)}
-                />
-              </label>
-              <div class="banner-fields">
-                <input
-                  type="text"
-                  class="cms-field"
-                  placeholder="제목 (alt 텍스트)"
-                  value={b.title}
-                  oninput={(e) => updateField('mobile', b._tempId, 'title', (e.target as HTMLInputElement).value)}
-                />
-                <input
-                  type="text"
-                  class="cms-field"
-                  placeholder="서브카피 (선택)"
-                  value={b.sub_copy}
-                  oninput={(e) => updateField('mobile', b._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
-                />
-                <input
-                  type="url"
-                  class="cms-field"
-                  placeholder="링크 URL (선택)"
-                  value={b.link_url}
-                  oninput={(e) => updateField('mobile', b._tempId, 'link_url', (e.target as HTMLInputElement).value)}
-                />
-              </div>
-              <button
-                class="btn-remove"
-                onclick={() => removeBanner('mobile', b._tempId)}
-                aria-label="배너 삭제"
-              >✕</button>
-            </div>
-          {/snippet}
-        </CmsDragList>
-      </div>
-    {:else}
-      <p class="empty-msg">모바일 배너를 추가하면 모바일 히어로에 표시됩니다.</p>
-    {/if}
-
-    {#if localMobile.length < MAX}
-      <button class="btn-add" onclick={() => addBanner('mobile')}>+ 모바일 배너 추가</button>
+    {#if rows.length < MAX}
+      <button class="btn-add" onclick={addBanner}>+ 배너 추가</button>
     {:else}
       <p class="max-warn">최대 {MAX}개 배너입니다</p>
     {/if}
@@ -565,12 +519,6 @@
     gap: 16px;
   }
 
-  .divider {
-    height: 1px;
-    background: var(--cs-lilac);
-    margin: 4px 0;
-  }
-
   .section { display: flex; flex-direction: column; gap: 8px; }
 
   .section-label {
@@ -647,6 +595,28 @@
     :global(.hero-drag-list .drag-list-item:hover) .banner-row { transform: none; }
   }
 
+  /* PC·모바일 이미지 두 칸을 세로로 */
+  .thumbs {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .slot-tag {
+    position: absolute;
+    bottom: 3px;
+    left: 3px;
+    z-index: 1;
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: var(--cs-dark);
+    color: var(--cs-white);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.3;
+    pointer-events: none;
+  }
+
   .thumb-wrap {
     position: relative;
     user-select: none;
@@ -654,7 +624,7 @@
     -webkit-touch-callout: none;
     flex-shrink: 0;
     width: 64px;
-    height: 52px;
+    height: 48px;
     border-radius: 6px;
     overflow: hidden;
     cursor: pointer;
