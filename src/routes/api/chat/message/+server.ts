@@ -7,6 +7,8 @@
 // Anthropic 클라이언트·history 로드·호출 로직은 전부 그대로 보존돼 있다.
 // 재활성화: Anthropic 콘솔에서 크레딧 잔액 확인 후 ANTHROPIC_ENABLED를 true로 변경.
 
+import { clipAnswerVar } from '$lib/utils/notifyTemplate'
+import { wrapAutoReply } from '$lib/server/cardMessage'
 import { json } from '@sveltejs/kit'
 import Anthropic from '@anthropic-ai/sdk'
 import { env } from '$env/dynamic/private'
@@ -278,7 +280,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             .insert({
               session_id: body.session_id,
               sender_type: 'admin',
-              content: match.content,
+              // 푸시알림 설정의 '빠른답변 자동응답' 안내문장(머리말·꼬리말)이 있으면 대화창에도 같은 문장으로(푸시와 일치, 2026-11-16)
+              content: await wrapAutoReply(admin, 'canned_auto_reply', match.content, session.user.id),
               message_type: hasCta ? 'action_card' : 'text',
               action_payload: cannedActionPayload,
             })
@@ -355,7 +358,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               title: '답변이 도착했어요',
               body: cannedPreview,
               link: '/',
-            }, { vars: { 답변내용: cannedPreview } })
+            }, { vars: { 답변내용: clipAnswerVar(match.content) } })
 
             return json(
               {
@@ -547,7 +550,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       .insert({
         session_id: body.session_id,
         sender_type: 'ai',
-        content: classified.reply,
+        // 푸시알림 설정의 'AI 자동응답' 안내문장(머리말·꼬리말)이 있으면 대화창에도 같은 문장으로(푸시와 일치, 2026-11-16)
+        content: admin ? await wrapAutoReply(admin, 'ai_auto_reply', classified.reply, session.user.id) : classified.reply,
         message_type: enrichedPayload ? 'action_card' : 'text',
         action_payload: enrichedPayload,
       })
@@ -600,7 +604,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       title: '답변이 도착했어요',
       body: aiReplyPreview,
       link: '/',
-    }, { vars: { 답변내용: aiReplyPreview } })
+    }, { vars: { 답변내용: clipAnswerVar(classified.reply) } })
   }
 
   return json(
