@@ -3,7 +3,7 @@ import { getWishedProductIds } from '$lib/server/getWishedProductIds'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
 import { loadMobileImageMap } from '$lib/server/productMobileImages'
-import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
+import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, pickGridSortForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
 import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
 import type { PageServerLoad } from './$types'
@@ -41,7 +41,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
   const settings = ((settingsRaw as unknown) as Record<string, unknown>) ?? {}
 
   type HeroSettings     = { products: { id: string; order: number }[]; mode: ProductListMode }
-  type GridSettings     = { category: string; count: number; sort: string; fixedProducts?: { id: string; order: number }[]; fixedByCategory?: Record<string, { id: string; order: number }[]> }
+  type GridSettings     = { category: string; count: number; sort: string; sortByCategory?: Record<string, string>; fixedProducts?: { id: string; order: number }[]; fixedByCategory?: Record<string, { id: string; order: number }[]> }
   type MdSettings       = { products: { id: string; order: number }[]; mode: ProductListMode }
   type CatSettings      = { items: { code_id: string; icon_key: string; sort_order: number }[] }
   type KeywordsSettings = { items: string[] }
@@ -106,6 +106,9 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
     CMS_CATEGORIES.map((c) => c.id),
   )
 
+  // 노출 순서는 지금 보여 줄 카테고리(전체 포함)별로 따로 설정된 값을 쓴다(없으면 이전 단일 값)
+  const gridSortSetting = pickGridSortForCategory(gridSettings, gridCategory)
+
   const heroIds = heroSettings.products.map((p) => p.id)
   const mdIds   = mdSettings.products.map((p) => p.id)
 
@@ -121,12 +124,12 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
     // 노출 순서가 '고정노출 정렬'이면 관리자가 지정한 상품을 지정 순서대로 맨 앞에 두고 나머지는 조회수순으로 잇는다
     fetchGridRowsWithFixed(locals.supabase, {
       category: gridCategory,
-      sort: resolveGridSort(gridSettings.sort),
+      sort: resolveGridSort(gridSortSetting),
       limit: infiniteMode ? infiniteLimit : mobileGridCount,
       seed,
       userId: session?.user.id ?? null,
       // 고정 목록은 지금 보여 줄 카테고리(전체 포함)별로 따로 설정된 것을 쓴다
-      fixedIds: gridSettings.sort === GRID_SORT_FIXED ? pickFixedIdsForCategory(gridSettings, gridCategory) : [],
+      fixedIds: gridSortSetting === GRID_SORT_FIXED ? pickFixedIdsForCategory(gridSettings, gridCategory) : [],
     }),
 
     // MD 추천 픽

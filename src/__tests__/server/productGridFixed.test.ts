@@ -6,6 +6,7 @@ import {
   mergeFixedFirst,
   normalizeFixedProducts,
   pickFixedIdsForCategory,
+  pickGridSortForCategory,
   resolveCategoryCase,
   resolveGridSort,
 } from '$lib/server/products/productGrid'
@@ -203,5 +204,37 @@ describe('resolveCategoryCase (카테고리 대소문자 구분 없음)', () => 
   it('등록된 카테고리에 없으면 그대로, null은 null', () => {
     expect(resolveCategoryCase('drone', known)).toBe('drone')
     expect(resolveCategoryCase(null, known)).toBeNull()
+  })
+})
+
+
+describe('pickGridSortForCategory — 노출 순서 카테고리별 개별 적용', () => {
+  it('카테고리별 값이 있으면 그 값을 쓴다(전체=null 은 all 키)', () => {
+    const setting = { sort: 'latest', sortByCategory: { all: 'views', CAM: 'fixed', LGT: 'random' } }
+    expect(pickGridSortForCategory(setting, null)).toBe('views')
+    expect(pickGridSortForCategory(setting, 'CAM')).toBe('fixed')
+    expect(pickGridSortForCategory(setting, 'LGT')).toBe('random')
+  })
+
+  it('키는 대소문자를 구분하지 않는다', () => {
+    expect(pickGridSortForCategory({ sortByCategory: { cam: 'rentals' } }, 'CAM')).toBe('rentals')
+  })
+
+  it('개별 값이 없는 카테고리는 이전 단일 값(sort)을 쓴다', () => {
+    expect(pickGridSortForCategory({ sort: 'rentals', sortByCategory: { CAM: 'fixed' } }, 'AUD')).toBe('rentals')
+    expect(pickGridSortForCategory({ sort: 'rentals' }, 'CAM')).toBe('rentals')
+  })
+
+  it('아무 값도 없거나 잘못된 형식이면 views', () => {
+    expect(pickGridSortForCategory({}, null)).toBe('views')
+    expect(pickGridSortForCategory({ sortByCategory: ['x'], sort: '' }, 'CAM')).toBe('views')
+    expect(pickGridSortForCategory({ sortByCategory: { CAM: 3 } }, 'CAM')).toBe('views')
+  })
+
+  it("카테고리마다 'fixed' 여부가 따로라 고정 목록도 그 카테고리에서만 쓰인다", () => {
+    const setting = { sort: 'views', sortByCategory: { CAM: 'fixed', AUD: 'latest' }, fixedByCategory: { CAM: [{ id: 'a', order: 0 }], AUD: [{ id: 'b', order: 0 }] } }
+    const useFixed = (cat: string) => (pickGridSortForCategory(setting, cat) === 'fixed' ? pickFixedIdsForCategory(setting, cat) : [])
+    expect(useFixed('CAM')).toEqual(['a'])
+    expect(useFixed('AUD')).toEqual([])
   })
 })

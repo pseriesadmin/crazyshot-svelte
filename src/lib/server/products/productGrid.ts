@@ -83,6 +83,29 @@ export function pickFixedIdsForCategory(setting: FixedGridSetting, category: str
   return []
 }
 
+export interface GridSortSetting {
+  /** 이전 단일 값 — 카테고리별 값이 없을 때의 기본 */
+  sort?: unknown
+  /** 카테고리별 노출 순서: { all: 'views', 카테고리id: 'fixed', … } (2026-11-23 이후) */
+  sortByCategory?: unknown
+}
+
+/**
+ * 지금 보여 줄 카테고리(null=전체)에 쓸 노출 순서 값.
+ * - 그 카테고리(전체 포함)의 개별 설정이 있으면 그 값(키는 대소문자 구분 없음), 없으면 이전 단일 값(sort), 그것도 없으면 'views'.
+ * 반환값은 설정 원본 그대로('fixed' 포함)라 DB 정렬에 쓸 때는 resolveGridSort 를 다시 거친다.
+ */
+export function pickGridSortForCategory(setting: GridSortSetting, category: string | null): string {
+  const key = (category ?? FIXED_ALL_KEY).toLowerCase()
+  const byCat = setting.sortByCategory
+  if (byCat && typeof byCat === 'object' && !Array.isArray(byCat)) {
+    for (const [k, v] of Object.entries(byCat as Record<string, unknown>)) {
+      if (k.toLowerCase() === key && typeof v === 'string' && v) return v
+    }
+  }
+  return typeof setting.sort === 'string' && setting.sort ? setting.sort : 'views'
+}
+
 /**
  * 주소의 카테고리 값을 등록된 카테고리 표기(대소문자)로 맞춘다 — 대소문자는 구분하지 않는다(2026-10-15).
  * 일반 목록 조회(DB 함수)는 대소문자까지 같아야 매칭되므로, 등록된 카테고리 중 같은 글자(대소문자 무시)가 있으면 그 표기를 쓴다.
