@@ -4,7 +4,9 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
+  import CardToneSelect from '$lib/components/common/CardToneSelect.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import type { CardTone } from '$lib/utils/cardTone'
 
   // ── 타입 ─────────────────────────────────────────────────────────────
   interface ProductItem {
@@ -13,6 +15,8 @@
     slug: string
     image_urls: string[] | null
     base_price_daily: number
+    /** 슬라이드 카드 바탕색: 'white'(흰색)·'dark'(다크)·'lilac'(옅은 퍼플) — 비어 있으면 기존 다크 */
+    card_tone?: CardTone | null
   }
 
   interface ThemeGroupRow {
@@ -227,6 +231,12 @@
     }
   }
 
+  // 카드 바탕색 선택 — 입력 중 목록이 다시 그려지지 않게 해당 상품 항목만 직접 바꾼다(비운 값 = 기존 다크)
+  function setCardTone(productId: string, tone: CardTone) {
+    const item = activeProductsList.find((p) => p.id === productId)
+    if (item) item.card_tone = tone
+  }
+
   function removeProduct(productId: string) {
     activeProductsList = activeProductsList.filter((p) => p.id !== productId)
   }
@@ -260,7 +270,10 @@
       // 3. 생성 / 수정
       for (let i = 0; i < withUrls.length; i++) {
         const g = withUrls[i]
-        const productIds = g.productItems.map((p, order) => ({ id: p.id, order }))
+        // tone: 바탕색을 고른 상품에만 담는다(비어 있으면 기존 다크 카드)
+        const productIds = g.productItems.map((p, order) => (
+          p.card_tone ? { id: p.id, order, tone: p.card_tone } : { id: p.id, order }
+        ))
         const params = {
           p_title:       g.title,
           p_sub_copy:    g.sub_copy || null,
@@ -472,6 +485,7 @@
                           {#if p.base_price_daily > 0}
                             <span class="tg-prod-price">{fmtPrice(p.base_price_daily)}</span>
                           {/if}
+                          <CardToneSelect value={p.card_tone} defaultTone="dark" onselect={(t) => setCardTone(p.id, t)} />
                         </div>
                         <button
                           class="tg-prod-del"

@@ -1,5 +1,6 @@
 import type { ServerLoad } from '@sveltejs/kit'
 import { getServiceInfoSettings } from '$lib/services/serviceInfoSettings'
+import { GNB_BADGE_SETTING_KEY, normalizeGnbBadge } from '$lib/utils/gnbBadgeBanner'
 
 /**
  * 루트 레이아웃 서버 로드 — 탈퇴 자동복구 통합 지점
@@ -23,8 +24,17 @@ export const load: ServerLoad = async ({ locals }) => {
   // SvelteKit이 클라이언트 내비게이션 시 재요청하지 않고 캐시된 값을 재사용한다).
   const serviceInfo = await getServiceInfoSettings(locals.supabase)
 
+  // 모바일 GNB 중앙 '배지 배너' 설정(공개 읽기 키) — 서비스 정보와 같은 이유로 세션·URL과 무관하게 조회(클라이언트 이동 시 재요청 없음, 관리자 저장 때만 invalidateAll 로 갱신).
+  // 조회 실패·값 없음은 '배지 없음'으로 처리해 페이지 로드를 막지 않는다.
+  const { data: gnbBadgeRow } = await locals.supabase
+    .from('cms_settings')
+    .select('value')
+    .eq('key', GNB_BADGE_SETTING_KEY)
+    .maybeSingle()
+  const gnbBadge = normalizeGnbBadge((gnbBadgeRow as { value: unknown } | null)?.value)
+
   if (!session) {
-    return { serviceInfo }
+    return { serviceInfo, gnbBadge }
   }
 
   // PK 단건 조회 — withdrawal_status만 확인 (저비용)
@@ -50,13 +60,13 @@ export const load: ServerLoad = async ({ locals }) => {
     }
     if (restore?.admin_blocked) {
       await locals.supabase.auth.signOut()
-      return { serviceInfo, accountNotice: 'admin_deleted' as const }
+      return { serviceInfo, gnbBadge, accountNotice: 'admin_deleted' as const }
     }
     if (restore?.restored) {
       // 클라이언트가 "탈퇴 신청이 취소되어 계정이 복원되었습니다" 안내 모달을 한 번 띄운다
-      return { serviceInfo, withdrawalRestored: true }
+      return { serviceInfo, gnbBadge, withdrawalRestored: true }
     }
   }
 
-  return { serviceInfo }
+  return { serviceInfo, gnbBadge }
 }

@@ -76,7 +76,8 @@ describe('+layout.server load — 탈퇴 자동복구 통합 지점', () => {
     const result = await (load as LoadFn)({ locals })
 
     expect(result).toBeDefined()
-    expect(locals._mockFrom).not.toHaveBeenCalled()
+    // 2026-11 모바일 GNB 배지 배너 설정(cms_settings 공개 키) 조회가 세션과 무관하게 추가됐으므로, 이 테스트의 관심사인 user_profiles 조회만 센다
+    expect(locals._mockFrom).not.toHaveBeenCalledWith('user_profiles')
     expect(restoreCalls(locals._mockRpc)).toHaveLength(0)
   })
 
