@@ -17,7 +17,8 @@
     code_id:      string
     icon_key:     string
     sort_order:   number
-    name:         string
+    name:         string          // 카테고리 원래 이름(코드그룹 정본)
+    label:        string          // 메뉴에 표시할 이름(수정 가능, 원래 이름과 같으면 저장 시 변경 없음으로 처리)
     icon_url:     string | null   // 저장된 커스텀 아이콘 URL (OFF: 기본 상태)
     icon_active_url: string | null // 저장된 ON 아이콘 URL (호버·선택 상태, 상자 배경 포함 SVG)
     _preview:     string | null   // 로컬 blob preview (미업로드)
@@ -29,7 +30,7 @@
   interface Props {
     categories: CategoryItem[]
     initialSettings: {
-      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null; icon_active_url?: string | null }[]
+      items: { code_id: string; icon_key: string; sort_order: number; name?: string | null; icon_url?: string | null; icon_active_url?: string | null }[]
     }
     initialKeywordsSettings: { items: string[] }
     onclose: () => void
@@ -57,6 +58,7 @@
         icon_key:   cat.code,
         sort_order: item.sort_order,
         name:       cat.name,
+        label:      item.name?.trim() || cat.name,
         icon_url:   item.icon_url ?? null,
         icon_active_url: item.icon_active_url ?? null,
         _preview:   null,
@@ -133,6 +135,7 @@
         icon_key:   cat.code,
         sort_order: selected.length,
         name:       cat.name,
+        label:      cat.name,
         icon_url:   null,
         icon_active_url: null,
         _preview:   null,
@@ -149,6 +152,24 @@
     if (item?._preview) URL.revokeObjectURL(item._preview)
     if (item?._aPreview) URL.revokeObjectURL(item._aPreview)
     selected = selected.filter((s) => s.code_id !== codeId)
+  }
+
+  const LABEL_MAX = 20
+
+  // 이름 입력 — 항목 객체를 직접 갱신해 입력 중 목록이 다시 그려지지 않게 한다
+  function onLabelInput(codeId: string, e: Event) {
+    const item = selected.find((s) => s.code_id === codeId)
+    if (item) item.label = (e.target as HTMLInputElement).value
+  }
+
+  // 비워 두고 포커스를 옮기면 원래 이름으로 되돌린다
+  function onLabelBlur(codeId: string, e: Event) {
+    const item = selected.find((s) => s.code_id === codeId)
+    if (!item) return
+    if (!item.label.trim()) {
+      item.label = item.name
+      ;(e.target as HTMLInputElement).value = item.name
+    }
   }
 
   function onFileChange(codeId: string, e: Event, variant: 'off' | 'on' = 'off') {
@@ -195,6 +216,7 @@
         icon_key:   s.icon_key,
         icon_url:   s.icon_url ?? null,
         icon_active_url: s.icon_active_url ?? null,
+        name:       s.label.trim() && s.label.trim() !== s.name ? s.label.trim() : null,
         sort_order: i,
       }))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -237,7 +259,7 @@
 
   <!-- 스크롤 영역: 모달 내 전체 콘텐츠 -->
   <div class="modal-scroll">
-    <p class="section-label">카테고리 선택</p>
+    <p class="section-label">분류선택 메뉴등록</p>
     <SuggestPicker
       id="cat-picker"
       bind:selectedId={pickerSelectedId}
@@ -278,30 +300,14 @@
           {#snippet renderItem(item)}
             <div class="cat-card-inner">
 
-              <!-- 아이콘 미리보기: 이미지 임포트 전 빈 상태 -->
-              <div class="cat-card-icon">
+              <!-- OFF 이미지: 미리보기 칸을 눌러 바로 등록 -->
+              <label class="icon-tile" class:filled={!!(item._preview || item.icon_url)} title="OFF(기본) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
                 {#if item._preview}
-                  <img src={item._preview} alt={item.name} class="icon-img" />
+                  <img src={item._preview} alt="{item.name} OFF" class="icon-img" />
                 {:else if item.icon_url}
-                  <img src={item.icon_url} alt={item.name} class="icon-img" />
+                  <img src={item.icon_url} alt="{item.name} OFF" class="icon-img" />
                 {/if}
-              </div>
-
-              <!-- ON 아이콘 미리보기(호버·선택 상태) -->
-              <div class="cat-card-icon cat-card-icon-on" title="ON 이미지(호버·선택)">
-                {#if item._aPreview}
-                  <img src={item._aPreview} alt="{item.name} ON" class="icon-img" />
-                {:else if item.icon_active_url}
-                  <img src={item.icon_active_url} alt="{item.name} ON" class="icon-img" />
-                {/if}
-              </div>
-
-              <!-- 카테고리 이름 -->
-              <span class="cat-card-name">{item.name}</span>
-
-              <!-- 아이콘 이미지 선택 -->
-              <label class="btn-icon-pick" title="OFF(기본) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
-                <span class="pick-label">OFF</span>
+                <span class="tile-tag">OFF</span>
                 <input
                   type="file"
                   accept="image/svg+xml,image/png"
@@ -310,9 +316,14 @@
                 />
               </label>
 
-              <!-- ON 아이콘 이미지 선택 (호버·선택 상태 공용) -->
-              <label class="btn-icon-pick" title="ON(호버·선택) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
-                <span class="pick-label">ON</span>
+              <!-- ON 이미지(호버·선택 상태 공용) -->
+              <label class="icon-tile" class:filled={!!(item._aPreview || item.icon_active_url)} title="ON(호버·선택) 아이콘 이미지 선택 — 상자 배경 포함 SVG 권장">
+                {#if item._aPreview}
+                  <img src={item._aPreview} alt="{item.name} ON" class="icon-img" />
+                {:else if item.icon_active_url}
+                  <img src={item.icon_active_url} alt="{item.name} ON" class="icon-img" />
+                {/if}
+                <span class="tile-tag">ON</span>
                 <input
                   type="file"
                   accept="image/svg+xml,image/png"
@@ -320,6 +331,17 @@
                   onchange={(e) => onFileChange(item.code_id, e, 'on')}
                 />
               </label>
+
+              <!-- 카테고리 이름 (수정 가능) -->
+              <input
+                type="text"
+                class="cat-name-input"
+                value={item.label}
+                maxlength={LABEL_MAX}
+                aria-label="{item.name} 표시 이름"
+                oninput={(e) => onLabelInput(item.code_id, e)}
+                onblur={(e) => onLabelBlur(item.code_id, e)}
+              />
 
               <!-- 삭제 -->
               <button
@@ -515,7 +537,8 @@
     color: var(--cs-text-mid, #666);
   }
 
-  .cat-card-icon {
+  .icon-tile {
+    position: relative;
     width: 44px;
     height: 44px;
     flex-shrink: 0;
@@ -525,46 +548,49 @@
     background: var(--cs-lilac);
     border-radius: var(--radius-sm);
     overflow: hidden;
+    cursor: pointer;
+    transition: background 0.12s;
   }
+  .icon-tile:hover { background: var(--cs-purple-op10); }
   .icon-img {
     width: 100%;
     height: 100%;
     object-fit: contain;
   }
-
-  /* 카테고리 이름 */
-  .cat-card-name {
-    flex: 1;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /* 이미지 선택 레이블-버튼 */
-  .btn-icon-pick {
-    display: inline-flex;
+  /* OFF/ON 글자: 비어 있으면 칸 정중앙에 항상 표시, 이미지가 채워지면 호버 때만 반투명으로 표시 */
+  .tile-tag {
+    position: absolute;
+    inset: 0;
+    display: flex;
     align-items: center;
-    gap: 4px;
+    justify-content: center;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text-mid, #666);
+    pointer-events: none;
+    transition: opacity 0.12s;
+  }
+  .icon-tile.filled .tile-tag {
+    opacity: 0;
+    color: var(--cs-white);
+    background: rgba(16, 11, 50, 0.45);
+  }
+  .icon-tile.filled:hover .tile-tag { opacity: 1; }
+
+  /* 카테고리 이름 입력 */
+  .cat-name-input {
+    flex: 1;
+    min-width: 0;
     height: 34px;
     padding: 0 10px;
     background: var(--cs-surface-gray);
-    border: 1px solid #ECEBF4;
+    border: none;
     border-radius: var(--cms-radius-sm);
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-    cursor: pointer;
-    flex-shrink: 0;
-    white-space: nowrap;
-    transition: background 0.12s, border-color 0.12s;
+    font: var(--text-pc-body-14);
+    color: var(--cs-text);
+    box-sizing: border-box;
   }
-  .btn-icon-pick:hover {
-    background: rgba(59, 47, 138, 0.06);
-    border-color: var(--cs-purple);
-    color: var(--cs-purple);
-  }
-  .pick-label { font: var(--text-pc-script-12); }
+  .cat-name-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
+
   .sr-only {
     position: absolute;
     width: 1px; height: 1px;
