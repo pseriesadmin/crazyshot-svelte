@@ -11,6 +11,8 @@ export interface CatSettingsItem {
   code_id: string
   icon_key: string
   sort_order: number
+  /** 관리자가 바꾼 메뉴 표시 이름 — 없으면 카테고리 원래 이름 */
+  name?: string | null
   icon_url?: string | null
   /** ON 아이콘(호버·선택 공용, 상자 배경 포함 SVG) — 없으면 기존 CSS 효과 */
   icon_active_url?: string | null
@@ -84,7 +86,7 @@ export function joinDisplayCategories(catItems: CatSettingsItem[], groups: Categ
       return [{
         id: group.id,
         code: group.code,
-        name: group.name,
+        name: item.name?.trim() || group.name,
         sort_order: item.sort_order,
         icon_url: item.icon_url ?? null,
         icon_active_url: item.icon_active_url ?? null,
