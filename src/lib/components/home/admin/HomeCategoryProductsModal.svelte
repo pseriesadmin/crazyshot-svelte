@@ -4,17 +4,21 @@
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import CardToneSelect from '$lib/components/common/CardToneSelect.svelte'
+  import { normalizeCardTone, type CardTone } from '$lib/utils/cardTone'
 
   interface ProductItem {
     id: string
     name: string
     image_urls: string[] | null
     base_price_daily: number
+    /** 슬라이드 카드 바탕색 — 비어 있으면 기존 다크 */
+    card_tone?: CardTone | null
   }
 
   interface CatProductEntry {
     category_id: string
-    products: { id: string; order: number }[]
+    products: { id: string; order: number; tone?: CardTone | null }[]
     mode: 'random' | 'fixed'
   }
 
@@ -86,7 +90,11 @@
             })
           }
         }
-        selected = ids.map((id) => map.get(id)).filter((x): x is ProductItem => !!x)
+        const toneById = new Map((existingEntry?.products ?? []).map((p) => [p.id, normalizeCardTone(p.tone)]))
+        selected = ids
+          .map((id) => map.get(id))
+          .filter((x): x is ProductItem => !!x)
+          .map((x) => ({ ...x, card_tone: toneById.get(x.id) ?? null }))
         isLoadingInitial = false
       }
     )
@@ -142,13 +150,20 @@
     isSearching = false
   }
 
+  // 카드 바탕색 선택 — 해당 상품 항목만 직접 바꾼다(목록이 다시 그려지지 않게)
+  function setCardTone(productId: string, tone: CardTone): void {
+    const item = selected.find((p) => p.id === productId)
+    if (item) item.card_tone = tone
+  }
+
   async function save() {
     isSaving = true
     error    = null
     try {
       const newEntry: CatProductEntry = {
         category_id: categoryId,
-        products:    selected.map((p, i) => ({ id: p.id, order: i })),
+        // tone: 바탕색을 고른 상품에만 담는다(비어 있으면 기존 다크 카드)
+        products:    selected.map((p, i) => (p.card_tone ? { id: p.id, order: i, tone: p.card_tone } : { id: p.id, order: i })),
         mode,
       }
       const otherItems   = allSettings.items.filter((it) => it.category_id !== categoryId)
@@ -256,7 +271,10 @@
         <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
           {#snippet renderItem(item)}
             <div class="hcp-selected-row">
-              <span class="hcp-selected-name">{item.name}</span>
+              <div class="hcp-selected-info">
+                <span class="hcp-selected-name">{item.name}</span>
+                <CardToneSelect value={item.card_tone} defaultTone="dark" onselect={(t) => setCardTone(item.id, t)} />
+              </div>
               <button
                 class="hcp-remove-btn"
                 onclick={() => { selected = selected.filter((s) => s.id !== item.id) }}
@@ -443,6 +461,7 @@
     border-radius: var(--radius-sm);
     gap: 8px;
   }
+  .hcp-selected-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .hcp-selected-name {
     font: var(--text-pc-script-12);
     font-weight: 700;

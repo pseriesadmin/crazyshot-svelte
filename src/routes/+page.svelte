@@ -16,15 +16,60 @@
     return { destroy: () => io.disconnect() }
   }
 
-  /** 카드 배경 이미지가 가로형이면 data-wide 표시 → CSS가 원본 비율대로 위쪽에 배치(정사각 cover 로 하단 글자 영역에 덮이는 현상 방지) */
-  function wideFit(node: HTMLImageElement): { destroy: () => void } {
-    const apply = (): void => {
-      if (node.naturalWidth > node.naturalHeight) node.dataset.wide = '1'
-      else delete node.dataset.wide
+  /** PC 마우스로 잡아끌어 좌우 슬라이드 — 마우스에만 적용(터치는 기본 스크롤 그대로). 6px 넘게 끌었을 때만 드래그로 보고, 그 직후 한 번의 클릭(상품 이동)은 막는다 */
+  function dragScroll(node: HTMLElement): { destroy: () => void } {
+    let startX = 0
+    let startLeft = 0
+    let pressed = false
+    let dragged = false
+
+    const onDown = (e: PointerEvent): void => {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return
+      pressed = true
+      dragged = false
+      startX = e.clientX
+      startLeft = node.scrollLeft
     }
-    if (node.complete) apply()
-    node.addEventListener('load', apply)
-    return { destroy: () => node.removeEventListener('load', apply) }
+    const onMove = (e: PointerEvent): void => {
+      if (!pressed) return
+      const dx = e.clientX - startX
+      if (!dragged && Math.abs(dx) > 6) {
+        dragged = true
+        node.classList.add('is-dragging')
+        node.setPointerCapture(e.pointerId)
+      }
+      if (dragged) node.scrollLeft = startLeft - dx
+    }
+    const onUp = (e: PointerEvent): void => {
+      if (!pressed) return
+      pressed = false
+      node.classList.remove('is-dragging')
+      if (node.hasPointerCapture(e.pointerId)) node.releasePointerCapture(e.pointerId)
+    }
+    const onClickCapture = (e: MouseEvent): void => {
+      if (!dragged) return
+      e.preventDefault()
+      e.stopPropagation()
+      dragged = false
+    }
+    const onDragStart = (e: Event): void => e.preventDefault()   // 이미지가 브라우저 기본 끌기로 따라오는 것 방지
+
+    node.addEventListener('pointerdown', onDown)
+    node.addEventListener('pointermove', onMove)
+    node.addEventListener('pointerup', onUp)
+    node.addEventListener('pointercancel', onUp)
+    node.addEventListener('click', onClickCapture, true)
+    node.addEventListener('dragstart', onDragStart)
+    return {
+      destroy: () => {
+        node.removeEventListener('pointerdown', onDown)
+        node.removeEventListener('pointermove', onMove)
+        node.removeEventListener('pointerup', onUp)
+        node.removeEventListener('pointercancel', onUp)
+        node.removeEventListener('click', onClickCapture, true)
+        node.removeEventListener('dragstart', onDragStart)
+      },
+    }
   }
   import { HOME_META_DESCRIPTION, HOME_PAGE_TITLE } from '$lib/utils/pageMeta'
   import SeoHead from '$lib/components/common/SeoHead.svelte'
@@ -336,6 +381,7 @@
     catproducts: ['.desktop-wrap .prod-area'],
     md: ['.mobile-wrap .md-picks-section'],
     helphero: ['.mh-hero'],
+    gnbbadge: ['.gnb-mobile-nav'],   // 고정 GNB — 화면 맨 위로 이동(모바일 폭에서만 보임)
   }
   function landHome(section: HomeSettingsSection): void {
     for (const sel of HOME_LAND_SELECTORS[section]) {
@@ -425,7 +471,7 @@
         if (!cat) return []
         return [{
           id:       cat.id,
-          label:    cat.name,
+          label:    (item as { name?: string | null }).name?.trim() || cat.name,
           icon:     CATEGORY_ICON_BY_CODE[cat.code] ?? 'wrench',
           icon_url: (item as { icon_url?: string | null }).icon_url ?? null,
           icon_active_url: (item as { icon_active_url?: string | null }).icon_active_url ?? null,
@@ -713,16 +759,18 @@
     {#if data.themeGroups && data.themeGroups.length > 0}
       {#if activeThemeProducts.length > 0}
         <!-- 표준 상품슬라이드 디자인(prod-card, "미칠 PICK"과 동일 규격) 재사용 -->
-        <div class="prod-slider theme-prod-slider">
+        <div class="prod-slider theme-prod-slider" use:dragScroll>
           {#each activeThemeProducts as prod}
             <div
               class="prod-card"
+              class:tone-white={prod.card_tone === 'white'}
+              class:tone-lilac={prod.card_tone === 'lilac'}
               onclick={() => goto('/products/' + (prod.slug || prod.id))}
               role="button"
               tabindex={0}
               onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
             >
-              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="prod-card-img" loading="lazy" use:wideFit/>
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="prod-card-img" loading="lazy" />
               <div class="prod-card-info">
                 <div class="prod-card-price">
                   {#if prod.sale_only}
@@ -837,6 +885,8 @@
           {#each activeCatProds as p}
             <div
               class="prod-card"
+              class:tone-white={p.card_tone === 'white'}
+              class:tone-lilac={p.card_tone === 'lilac'}
               onclick={() => goto('/products/' + (p.slug || p.id))}
               role="button"
               tabindex={0}
@@ -1072,12 +1122,14 @@
           {#each activeThemeProducts as prod}
             <div
               class="m-prod-card"
+              class:tone-white={prod.card_tone === 'white'}
+              class:tone-lilac={prod.card_tone === 'lilac'}
               onclick={() => goto('/products/' + (prod.slug || prod.id))}
               role="button"
               tabindex={0}
               onkeydown={(e) => e.key === 'Enter' && goto('/products/' + (prod.slug || prod.id))}
             >
-              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy" use:wideFit/>
+              <img src={prod.image_urls?.[0] ?? '/favicon.png'} alt={prod.name} class="m-prod-img" loading="lazy" />
               <div class="m-prod-info">
                 <div class="m-prod-price">
                   {#if prod.sale_only}
@@ -1328,6 +1380,10 @@
       initialMode: data.faqHeroBgMode,
       initialTitle: data.faqHeroTitle,
       initialSub: data.faqHeroSub,
+    }}
+    gnbBadge={{
+      initialItems: data.gnbBadge?.items ?? [],
+      initialMode: data.gnbBadge?.mode ?? 'random',
     }}
     initialSection={homeSettingsSection}
     onclose={() => (homeSettingsSection = null)}
@@ -1949,11 +2005,16 @@
     scrollbar-width: none;
   }
   .prod-slider::-webkit-scrollbar { display: none; }
+  /* 마우스로 잡아끌어 슬라이드(취향직격 PC 슬라이더) — 잡는 모양 표시, 끄는 동안은 글자 선택·카드 호버 확대 방지 */
+  .theme-prod-slider { cursor: grab; }
+  .theme-prod-slider.is-dragging { cursor: grabbing; user-select: none; }
+  .theme-prod-slider.is-dragging :global(.prod-card) { cursor: grabbing; }
+  .theme-prod-slider.is-dragging :global(.prod-card-img) { transition: none; transform: none; }
   /* 표준 상품슬라이드 카드 — PC(.prod-card*)·모바일(.m-prod-card*) 스타일 공유(2026-11-18 Stephen 지시: 비율은 달라도 스타일은 공유).
      구조·색·정렬·모양은 이 블록 한 곳에서 정의하고, PC/모바일은 크기 값(--pc-*)만 다르다. 값을 바꿀 땐 아래 두 줄의 변수만 손댄다.
      Figma node 600:862 스펙(정사각 300×300, 반경 50px) 기준, 모바일은 축소값 */
   .prod-card   { --pc-size: 300px; --pc-radius: 50px; --pc-pad: 30px; --pc-gap: 10px; --pc-head-gap: 5px; --pc-cat: 12px; --pc-name: 18px; --pc-name-lh: 1.7; --pc-price-gap: 5px; --pc-label: 14px; --pc-num: 25px; --pc-desc: 12px; }
-  .m-prod-card { --pc-size: 260px; --pc-radius: 44px; --pc-pad: 24px; --pc-gap: 8px;  --pc-head-gap: 4px; --pc-cat: 11px; --pc-name: 16px; --pc-name-lh: 1.5; --pc-price-gap: 4px; --pc-label: 12px; --pc-num: 21px; --pc-desc: 11px; }
+  .m-prod-card { --pc-size: 260px; --pc-radius: 30px; --pc-pad: 24px; --pc-gap: 8px;  --pc-head-gap: 4px; --pc-cat: 11px; --pc-name: 16px; --pc-name-lh: 1.5; --pc-price-gap: 4px; --pc-label: 12px; --pc-num: 21px; --pc-desc: 11px; }
 
   .prod-card, .m-prod-card {
     position: relative;
@@ -1962,10 +2023,21 @@
     cursor: pointer;
     width: var(--pc-size); height: var(--pc-size);
     border-radius: var(--pc-radius);
-    background: #100b32;
+    /* 카드 자체에 배경색을 두면 둥근 모서리 가장자리에서 배경(#100b32)이 이미지 밖으로 가늘게 비쳐 보인다
+       (배경과 안쪽 이미지가 각각 따로 둥글게 깎여 경계가 겹치지 않음). 배경색은 이미지와 같이 잘리는 안쪽 층으로 옮긴다. */
+    background: transparent;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
+  }
+  /* 남색 바탕은 카드 가장자리에서 1px 안쪽까지만 깐다 — 가장자리 픽셀에는 남색이 아예 없으므로 둥근 모서리에 비칠 수 없다
+     (이미지가 카드 전체를 덮는 일반 경우엔 안 보이고, 이미지 아래 빈 공간·글자 영역은 안쪽 1px 차이라 눈에 띄지 않는다) */
+  .prod-card::before, .m-prod-card::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    background: #100b32;
   }
   .m-prod-card { scroll-snap-align: center; transition: transform 0.15s; }
   .m-prod-card:active { transform: scale(0.97); }
@@ -1973,36 +2045,50 @@
   /* PC 카드는 hover 시 내부 이미지만 부드럽게 확대(잘림 없는 줌) — 카드 자체는 고정 */
   .prod-card-img { transition: transform 0.4s ease; }
   .prod-card:hover .prod-card-img { transform: scale(1.25); }
-  /* 업로드 이미지가 가로형(너비>높이)이면 정사각 카드에 억지로 채우지 않고 원본 비율 그대로 위쪽에 배치 — 카드 하단 글자 영역(그라데이션)에 인물이 덮여 눌려 보이던 현상 해결(2026-11-18).
-     남는 아래쪽은 카드 배경색(#100b32)이 채우고, 이미지 아래 끝은 마스크로 부드럽게 이어 붙인다. 세로형·정사각은 기존 cover 그대로. */
-  /* data-wide 는 스크립트(wideFit)가 붙이는 속성이라 Svelte 가 '미사용 선택자'로 지우지 않도록 :global 로 감싼다 */
-  .m-prod-card :global(.m-prod-img[data-wide]), .prod-card :global(.prod-card-img[data-wide]) {
-    inset: 0 0 auto 0; height: auto;
-    -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
-  }
+  /* 이미지는 일반 썸네일 기준과 동일 — 카드를 꽉 채우고(object-fit: cover) 이미지 중심 기준으로 잘림. 가로형 이미지 별도 배치(data-wide)는 2026-11-24 폐지(Stephen 지시) */
   .prod-card-info, .m-prod-info {
     position: relative;
     width: 100%;
     box-sizing: border-box;
-    padding: var(--pc-pad);
+    /* 요금·상품명 묶음을 아래로 20% 내림(아래 여백 -20%) + 나머지 여백 -10% — 2026-11-24 Stephen 지시 */
+    padding: calc(var(--pc-pad) * 0.9) calc(var(--pc-pad) * 0.9) calc(var(--pc-pad) * 0.8);
     display: flex;
     flex-direction: column;
-    gap: var(--pc-gap);
+    gap: calc(var(--pc-gap) * 0.8);   /* 요금 ↔ 상품명 간격 -20%(PC 10→8px, 모바일 8→6.4px — 해상도별 변수 비율 유지) */
     background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.6) 40.385%, #100b32 100%);
   }
-  .prod-card-headline, .m-prod-headline { display: flex; flex-direction: column; gap: var(--pc-head-gap); }
+  /* 좌우 끝 패딩 = 요금 바 좌우 패딩과 같은 값 — 요금 글자와 상품명 시작·끝선을 맞춘다 */
+  .prod-card-headline, .m-prod-headline { display: flex; flex-direction: column; gap: var(--pc-head-gap); padding: 0 calc(var(--pc-gap) * 1.2); text-align: left; }
   .prod-card-cat, .m-prod-cat   { font-family: var(--font-kr); font-size: var(--pc-cat); font-weight: 700; color: #fff; }
-  .prod-card-name, .m-prod-name { font-family: var(--font-kr); font-size: var(--pc-name); font-weight: 700; color: #fff; line-height: var(--pc-name-lh); }
+  .prod-card-name, .m-prod-name { font-family: var(--font-kr); font-size: var(--pc-name); font-weight: 700; color: #fff; line-height: calc(1 + (var(--pc-name-lh) - 1) * 0.7); }  /* 행간 여백(줄 높이 − 1) −30%: PC 1.7→1.49, 모바일 1.5→1.35 */
   .prod-card-price, .m-prod-price {
     display: flex; align-items: center; gap: var(--pc-price-gap);
     color: #ff3535; letter-spacing: -0.5px;
+    /* 요금 라운드 바 — 카드 바탕색과 연동(다크 카드=불투명 다크, 흰색 카드=불투명 흰색), 상하 패딩은 최소 */
+    align-self: center;   /* 가로폭(글자 폭에 맞춤)은 유지한 채 카드 가운데 배치 */
+    padding: 2.9px calc(var(--pc-gap) * 1.2);   /* 상하 2px → +20% → 한 번 더 +20%(2.4→2.88, 반올림 2.9) · 좌우 +20%(PC 10→12px, 모바일 8→9.6px) */
+    border-radius: var(--radius-full, 99px);
+    background: #100b32;
   }
   .prod-card-price .price-label, .m-prod-price .price-label { font-family: var(--font-kr); font-size: var(--pc-label); font-weight: 700; }
   /* 금액 숫자: 숫자 전용 폰트 D-DIN(한글 대체 포함) — PC 2026-11-13·모바일 2026-11-12 Stephen 지시. D-DIN 최대 웨이트 700 → 900 보정(외곽선 0.5px) */
   .prod-card-price .price-num, .m-prod-price .price-num { font-family: 'D-DIN Exp', var(--font-kr); font-size: var(--pc-num); font-weight: 900; -webkit-text-stroke: 0.5px currentColor; }
   .prod-card-price .price-sep, .m-prod-price .price-sep { font-family: var(--font-kr); font-size: var(--pc-label); font-weight: 700; }
   .prod-card-desc, .m-prod-desc { font-family: var(--font-kr); font-size: var(--pc-desc); font-weight: 700; color: #fff; }
+  /* 카드 바탕색 '흰색' 선택(취향직격 상품별 설정) — 바탕·하단 그라데이션을 흰색으로, 상품명은 다크로 반전. 요금 색(#ff3535)은 그대로 */
+  .prod-card.tone-white::before, .m-prod-card.tone-white::before { background: #fff; }
+  .prod-card.tone-white .prod-card-price, .m-prod-card.tone-white .m-prod-price { background: #fff; }
+  .prod-card.tone-white .prod-card-info, .m-prod-card.tone-white .m-prod-info {
+    background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.6) 40.385%, #fff 100%);
+  }
+  .prod-card.tone-white .prod-card-name, .m-prod-card.tone-white .m-prod-name { color: #100b32; }
+  /* 카드 바탕색 '옅은 퍼플' 선택 — --cs-purple-op10(#E1DEF3) 바탕·그라데이션, 상품명 다크, 요금 바도 같은 불투명 색 */
+  .prod-card.tone-lilac::before, .m-prod-card.tone-lilac::before { background: var(--cs-purple-op10); }
+  .prod-card.tone-lilac .prod-card-price, .m-prod-card.tone-lilac .m-prod-price { background: var(--cs-purple-op10); }
+  .prod-card.tone-lilac .prod-card-info, .m-prod-card.tone-lilac .m-prod-info {
+    background: linear-gradient(to bottom, rgba(225,222,243,0) 0%, rgba(225,222,243,0.6) 40.385%, #e1def3 100%);
+  }
+  .prod-card.tone-lilac .prod-card-name, .m-prod-card.tone-lilac .m-prod-name { color: #100b32; }
 
   /* 카테고리 상품 슬라이더(PC) — /products 헤더 카드 슬라이더(.d-slider-relative/.d-slider-cards/.d-feat-card) 컨테이너 값 반영(2026-09-29)
      높이 500px(세로폭 Stephen 지정, /products는 580px) · 카드 3장 균등(gap 20px, 최소 300px) · 반경 50/20/50/20 · 카드 안쪽은 기존 prod-card 스타일 유지.

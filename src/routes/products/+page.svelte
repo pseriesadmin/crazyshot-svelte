@@ -89,7 +89,7 @@
         return [{
           id:         cat.id,
           code:       cat.code,
-          name:       cat.name,
+          name:       (item as { name?: string | null }).name?.trim() || cat.name,
           sort_order: item.sort_order,
           icon_url:   (item as { icon_url?: string | null }).icon_url ?? null,
           icon_active_url: (item as { icon_active_url?: string | null }).icon_active_url ?? null,
@@ -124,13 +124,17 @@
     return cat.id === 'all' ? '/products' : `/products?category=${cat.id}`
   }
   // 터치(pointerdown) 즉시 데이터 요청을 먼저 시작 — 손가락을 대고 떼는 사이(약 0.1~0.2초)만큼 단축. DOM·스타일은 바꾸지 않는다.
+  // 추천패키지 판정은 관리자가 바꾼 표시 이름이 아니라 원래 카테고리 이름 기준(이름을 바꿔도 이동이 그대로 유지)
+  function isHypePack(cat: { id: string }): boolean {
+    return data.categories.find((c) => c.id === cat.id)?.name === '추천패키지'
+  }
   function preloadCategory(cat: { id: string; name: string }): void {
-    if (cat.name === '추천패키지' || cat.id === activeCategory) return
+    if (isHypePack(cat) || cat.id === activeCategory) return
     preloadData(categoryHref(cat)).catch(() => { /* 미리 불러오기 실패는 무시 — 클릭 시 정상 이동이 다시 시도 */ })
   }
   function selectCategory(cat: { id: string; name: string }): void {
     triggerTouchBubble(cat.id)
-    if (cat.name === '추천패키지') { goto('/hype-pack'); return }
+    if (isHypePack(cat)) { goto('/hype-pack'); return }
     clearTimeout(pendingTimer)
     if (cat.id !== activeCategory) {
       pendingCategory = cat.id
@@ -504,7 +508,7 @@
       {/if}
       <div class="m-slider-track" class:slider-empty={data.heroProducts.length === 0}>
         {#each data.heroProducts as prod, i}
-          <a href={productLink(prod)} class="m-feat-card">
+          <a href={productLink(prod)} class="m-feat-card" class:tone-white={prod.card_tone === 'white'} class:tone-dark={prod.card_tone === 'dark'}>
             <div class="m-feat-bg"></div>
             <div class="m-feat-img-box">
               <img
@@ -583,7 +587,7 @@
           out:fly={{ x: dDirection * -80, duration: 300 }}
         >
           {#each visibleDesktopSlides as prod, i (prod.id)}
-            <a href={productLink(prod)} class="d-feat-card">
+            <a href={productLink(prod)} class="d-feat-card" class:tone-white={prod.card_tone === 'white'} class:tone-dark={prod.card_tone === 'dark'}>
               <div class="d-feat-bg"></div>
               <div class="d-feat-img-box">
                 <img
@@ -1504,6 +1508,24 @@
   }
   .d-feat-pcur { font: var(--text-pc-title-16); }
   .d-feat-psep { font: var(--text-pc-title-16); }
+
+  /* 헤더 슬라이드 카드 바탕색 선택(상품별) — 기본은 옅은 퍼플(#e1def3). 흰색·다크 선택 시 바탕·하단 그라데이션을 같은 색으로, 상품명·설명 글자는 반전. 요금 색(빨강)은 그대로 */
+  .d-feat-card.tone-white .d-feat-bg, .m-feat-card.tone-white .m-feat-bg { background: #fff; }
+  .d-feat-card.tone-white .d-feat-info {
+    background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.88) 30%, rgba(255,255,255,0.97) 100%);
+  }
+  .m-feat-card.tone-white .m-feat-info {
+    background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.85) 30%, rgba(255,255,255,0.95) 100%);
+  }
+  .d-feat-card.tone-dark .d-feat-bg, .m-feat-card.tone-dark .m-feat-bg { background: #100b32; }
+  .d-feat-card.tone-dark .d-feat-info {
+    background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.88) 30%, rgba(16,11,50,0.97) 100%);
+  }
+  .m-feat-card.tone-dark .m-feat-info {
+    background: linear-gradient(to bottom, rgba(16,11,50,0) 0%, rgba(16,11,50,0.85) 30%, rgba(16,11,50,0.95) 100%);
+  }
+  .d-feat-card.tone-dark .d-feat-name, .m-feat-card.tone-dark .m-feat-name { color: #fff; }
+  .d-feat-card.tone-dark .d-feat-desc, .m-feat-card.tone-dark .m-feat-desc { color: rgba(255, 255, 255, 0.7); }
 
   .d-slider-dots {
     display: flex;

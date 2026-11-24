@@ -6,6 +6,7 @@ import { loadMobileImageMap } from '$lib/server/productMobileImages'
 import { attachCardPrices, fetchGridRowsWithFixed, GRID_SORT_FIXED, mapGridRows, pickFixedIdsForCategory, pickGridSortForCategory, resolveCategoryCase, resolveGridSort, type ProductCard } from '$lib/server/products/productGrid'
 import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
 import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
+import { normalizeCardTone, type CardTone } from '$lib/utils/cardTone'
 import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ locals, url, cookies }) => {
@@ -40,7 +41,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 
   const settings = ((settingsRaw as unknown) as Record<string, unknown>) ?? {}
 
-  type HeroSettings     = { products: { id: string; order: number }[]; mode: ProductListMode }
+  type HeroSettings     = { products: { id: string; order: number; tone?: CardTone | null }[]; mode: ProductListMode }
   type GridSettings     = { category: string; count: number; sort: string; sortByCategory?: Record<string, string>; fixedProducts?: { id: string; order: number }[]; fixedByCategory?: Record<string, { id: string; order: number }[]> }
   type MdSettings       = { products: { id: string; order: number }[]; mode: ProductListMode }
   type CatSettings      = { items: { code_id: string; icon_key: string; sort_order: number }[] }
@@ -158,7 +159,9 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
   const mdMobileImages = await loadMobileImageMap(locals.supabase, mdProducts.map((p) => p.id))
 
   const pricedAll = await attachCardPrices(locals.supabase, [...heroProducts, ...gridProducts, ...mdProducts])
-  const pricedHero = pricedAll.slice(0, heroProducts.length)
+  // 헤더 슬라이드 카드 바탕색(상품별, 없으면 기존 옅은 퍼플) — 설정값을 화이트리스트로 걸러 상품에 붙인다
+  const heroToneById = new Map(heroSettings.products.map((p) => [p.id, normalizeCardTone(p.tone)]))
+  const pricedHero = pricedAll.slice(0, heroProducts.length).map((p) => ({ ...p, card_tone: heroToneById.get(p.id) ?? null }))
   const pricedGrid = pricedAll.slice(heroProducts.length, heroProducts.length + gridProducts.length)
   const pricedMd = pricedAll.slice(heroProducts.length + gridProducts.length)
 

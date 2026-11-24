@@ -1,3 +1,4 @@
+import { normalizeCardTone, type CardTone } from '$lib/utils/cardTone'
 import { env } from '$env/dynamic/private'
 import { loadProductBadgeMap } from '$lib/server/productBadges'
 import { loadCardKeywordMap } from '$lib/server/productCardKeywords'
@@ -264,6 +265,8 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
     image_urls: string[] | null; base_price_daily: number
     price_12h?: number | null; price_24h?: number | null
     sale_only?: boolean; sale_price?: number | null
+    /** 슬라이드 카드 바탕색('white'|'dark'|'lilac', 없으면 기존 다크) — 테마그룹 상품별 설정 */
+    card_tone?: 'white' | 'dark' | 'lilac' | null
   }
   type ThemeGroupWithProducts = {
     id: string; title: string; sub_copy: string | null;
@@ -299,7 +302,7 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
     locals.supabase.from('cms_settings').select('value').eq('key', 'product_page_md_picks').maybeSingle(),
   ])
 
-  type CatProductEntry = { category_id: string; products: { id: string; order: number }[]; mode: 'random' | 'fixed' }
+  type CatProductEntry = { category_id: string; products: { id: string; order: number; tone?: CardTone | null }[]; mode: 'random' | 'fixed' }
   type HomeCatProductsRaw = { items: CatProductEntry[] }
 
   const homeCategoryProductsRaw: HomeCatProductsRaw =
@@ -308,7 +311,7 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
 
   const categoryPageSettings =
     ((catPageSettingRes.data as { value: unknown } | null)?.value as {
-      items: { code_id: string; icon_key: string; sort_order: number; icon_url?: string | null; icon_active_url?: string | null }[]
+      items: { code_id: string; icon_key: string; sort_order: number; name?: string | null; icon_url?: string | null; icon_active_url?: string | null }[]
     } | null) ?? { items: [] }
 
   const keywordsPageSettings =
@@ -327,6 +330,8 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
     product_caption: string | null; is_active: boolean
     price_12h?: number | null; price_24h?: number | null
     sale_only?: boolean; sale_price?: number | null
+    /** 슬라이드 카드 바탕색(카테고리 상품 슬라이드의 상품별 설정, 없으면 기존 다크) */
+    card_tone?: CardTone | null
   }
 
   const mdPickIds = mdPicksRaw.products.map((p) => p.id)
@@ -352,7 +357,10 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
     const ordered: HomeProductRow[] = item.products
       .slice()
       .sort((a, b) => a.order - b.order)
-      .map((p) => homeProductById.get(p.id))
+      .map((p): HomeProductRow | undefined => {
+        const row = homeProductById.get(p.id)
+        return row ? { ...row, card_tone: normalizeCardTone(p.tone) } : undefined
+      })
       .filter((p): p is HomeProductRow => !!p)
 
     if (item.mode === 'random') {

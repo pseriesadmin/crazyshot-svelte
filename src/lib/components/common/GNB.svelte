@@ -5,6 +5,7 @@
   import { loginHref } from '$lib/utils/loginRedirect'
   import { supabase } from '$lib/services/supabase'
   import { fade } from 'svelte/transition'
+  import { pickBadgeIndex, type GnbBadgeSettings } from '$lib/utils/gnbBadgeBanner'
 
   // 비로그인 로그인 링크 — 지금 화면을 redirect로 붙여 로그인 후 직전 화면으로 복귀
   const signInHref = $derived(loginHref($page.url.pathname, $page.url.search))
@@ -15,6 +16,30 @@
   let { pathname = '/' }: Props = $props()
 
   let isLoggingOut = $state(false)
+
+  // 모바일 GNB 중앙 '배지 배너' — 관리자가 홈 화면 설정에서 등록(루트 레이아웃이 내려주는 gnbBadge).
+  // 화면을 열거나 이동할 때마다(pathname 변경) 한 장을 고른다: 랜덤은 무작위, 순서는 이 기기에 저장한 직전 순번의 다음 장. 저장 불가·값 없음은 조용히 처음부터.
+  const BADGE_SEQ_KEY = 'cs_gnb_badge_seq_v1'
+  const badgeSettings = $derived(($page.data.gnbBadge ?? null) as GnbBadgeSettings | null)
+  let badgeIdx = $state(-1)
+  $effect(() => {
+    void pathname
+    const s = badgeSettings
+    if (!s || s.items.length === 0) { badgeIdx = -1; return }
+    let last: number | null = null
+    if (s.mode === 'sequential') {
+      try {
+        const raw = localStorage.getItem(BADGE_SEQ_KEY)
+        last = raw === null ? null : Number(raw)
+      } catch { last = null }
+    }
+    const idx = pickBadgeIndex(s.items.length, s.mode, last)
+    if (s.mode === 'sequential') {
+      try { localStorage.setItem(BADGE_SEQ_KEY, String(idx)) } catch { /* 저장 불가 — 다음에도 처음부터 보일 뿐 */ }
+    }
+    badgeIdx = idx
+  })
+  const badge = $derived(badgeIdx >= 0 && badgeSettings ? (badgeSettings.items[badgeIdx] ?? null) : null)
 
   // 등록된 프로필 이미지 — GNB 아바타에 반영(없으면 이니셜 표시로 폴백, 이번 세션 신규)
   let gnbAvatarUrl = $state<string | null>(null)
@@ -292,6 +317,21 @@
       <img src="/logo-bi2.svg" alt="CRAZYSHOT" class="gnb-logo-img gnb-logo-mobile" width="103" height="64" />
     </a>
 
+    <!-- 중앙 배지 배너(모바일 전용) — 링크가 있으면 누를 수 있고, 없으면 표시만 -->
+    {#if badge}
+      {#if badge.link}
+        <a
+          class="gnb-badge"
+          href={badge.link}
+          aria-label="배지 배너"
+          target={badge.link.startsWith('/') ? undefined : '_blank'}
+          rel={badge.link.startsWith('/') ? undefined : 'noopener noreferrer'}
+        ><img src={badge.url} alt="" class="gnb-badge-img" draggable="false" /></a>
+      {:else}
+        <span class="gnb-badge"><img src={badge.url} alt="" class="gnb-badge-img" draggable="false" /></span>
+      {/if}
+    {/if}
+
     {#if !$authState.loading}
       {#if $authState.user && !isGuestUser}
         <span class="gnb-avatar-wrap">
@@ -507,6 +547,29 @@
     background: #1d183e;
     overflow: visible;
     pointer-events: all;
+    position: relative;   /* 중앙 배지 배너(.gnb-badge) 배치 기준 */
+  }
+
+  /* 중앙 배지 배너 — nav 정중앙, 로고·아바타 사이 공간 안에서 비율 유지(가로 최대 96px × 세로 32px) */
+  .gnb-badge {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 96px;
+    height: 32px;
+  }
+  .gnb-badge-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+  /* 아주 좁은 폰(≤340px)에서는 로고와 겹치므로 배지를 숨긴다 */
+  @media (max-width: 340px) {
+    .gnb-badge { display: none; }
   }
 
   /* 모바일 로고: 64px tall in 55px nav → 상하 각 4.5px 균등 overflow(align-items:center 자연 정렬)

@@ -5,6 +5,8 @@
   import SuggestPicker from '$lib/components/common/SuggestPicker.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import type { SuggestPickerOption } from '$lib/types/suggest-picker'
+  import CardToneSelect from '$lib/components/common/CardToneSelect.svelte'
+  import { normalizeCardTone, type CardTone } from '$lib/utils/cardTone'
   import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
   import type { ProductListMode } from '$lib/utils/productListOrder'
   import { csToast } from '$lib/utils/toast'
@@ -14,10 +16,12 @@
     name: string
     image_urls: string[] | null
     base_price_daily: number
+    /** 헤더 슬라이드 카드 바탕색(헤더 슬라이드 설정에서만 사용) — 비어 있으면 기존 옅은 퍼플 */
+    card_tone?: CardTone | null
   }
 
   interface HeroSettings {
-    products: { id: string; order: number }[]
+    products: { id: string; order: number; tone?: CardTone | null }[]
     mode: ProductListMode
   }
 
@@ -266,7 +270,11 @@
             base_price_daily: Number(r['base_price_daily'] ?? 0),
           })
         }
-        selected = ids.map((id) => map.get(id)).filter((x): x is ProductItem => !!x)
+        const toneById = new Map(initialSettings.products.map((p) => [p.id, normalizeCardTone(p.tone)]))
+        selected = ids
+          .map((id) => map.get(id))
+          .filter((x): x is ProductItem => !!x)
+          .map((x) => ({ ...x, card_tone: toneById.get(x.id) ?? null }))
         isLoadingInitial = false
       }
     )
@@ -307,6 +315,12 @@
     selected = [...selected, p]
   }
 
+  // 카드 바탕색 선택 — 해당 상품 항목만 직접 바꾼다
+  function setCardTone(id: string, tone: CardTone): void {
+    const item = selected.find((s) => s.id === id)
+    if (item) item.card_tone = tone
+  }
+
   function removeProduct(id: string) {
     selected = selected.filter((s) => s.id !== id)
   }
@@ -331,7 +345,8 @@
     savingSlide = true
     slideError = null
     const value: HeroSettings = {
-      products: selected.map((p, i) => ({ id: p.id, order: i })),
+      // tone: 헤더 슬라이드에서 바탕색을 고른 상품에만 담는다(비어 있으면 기존 옅은 퍼플 카드)
+      products: selected.map((p, i) => (isHero && p.card_tone ? { id: p.id, order: i, tone: p.card_tone } : { id: p.id, order: i })),
       mode,
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -514,8 +529,15 @@
         <div class="selected-products-panel">
           <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
             {#snippet renderItem(item)}
-              <div class="selected-row">
-                <span class="selected-name">{item.name}</span>
+              <div class="selected-row" class:selected-row--card={isHero}>
+                {#if isHero}
+                  <div class="selected-info">
+                    <span class="selected-name">{item.name}</span>
+                    <CardToneSelect value={item.card_tone} defaultTone="lilac" onselect={(t) => setCardTone(item.id, t)} />
+                  </div>
+                {:else}
+                  <span class="selected-name">{item.name}</span>
+                {/if}
                 <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
               </div>
             {/snippet}
@@ -863,6 +885,9 @@
     min-width: 0;
   }
 
+  .selected-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  /* 색 선택이 붙어 행이 높아진 헤더 슬라이드 목록 — 다른 설정 목록(.hcp-selected-row·.banner-row)과 같은 회색 면·반경 8px·안쪽 여백 10px로 행을 분리(보더 없음) */
+  .selected-row--card { padding: 10px; margin: 4px 0; background: var(--cs-surface-gray); border-radius: var(--radius-sm); }   /* 위아래 4px씩 — 행 사이 8px 여백으로 목록 분리 */
   .selected-name {
     flex: 1;
     font: var(--text-pc-body-14);
