@@ -99,6 +99,62 @@ describe.skipIf(!process.env.CS_COMPONENT_TEST)('/products 헤더 슬라이드 �
     expect((saved!.params.p_value as { products: unknown[] }).products).toEqual([{ id: 'a', order: 0, tone: 'white' }, { id: 'b', order: 1 }])
   })
 
+  it('MD 추천: 노출조건(찜·예약)을 불러와 표시하고, 바꾼 값이 저장 값의 popup 에 담긴다', async () => {
+    app = mount(ProductHeroModal, {
+      target,
+      props: { settingKey: 'product_page_md_picks', initialSettings: { mode: 'fixed', products: [{ id: 'a', order: 0 }], popup: { on_wish: true, on_reserve: false } }, onclose: () => {}, embedded: true },
+    })
+    await tick(30)
+    const btn = (label: string) => [...target.querySelectorAll('[aria-label="노출조건"] .combo-btn')].find((b) => b.textContent?.includes(label)) as HTMLButtonElement
+    expect(btn('찜 선택').getAttribute('aria-pressed')).toBe('true')
+    expect(btn('예약 선택').getAttribute('aria-pressed')).toBe('false')
+    btn('찜 선택').click()
+    btn('예약 선택').click()
+    await tick()
+    ;(target.querySelector('.btn-save') as HTMLButtonElement).click()
+    await tick(20)
+    const saved = upserts().find((c) => c.params.p_key === 'product_page_md_picks')
+    expect((saved!.params.p_value as { popup: unknown }).popup).toEqual({ on_wish: false, on_reserve: true })
+  })
+
+  it('MD 추천: 기본값이 아닌 저장값(찜 OFF·예약 ON)도 그대로 불러와 표시하고 그대로 다시 저장한다', async () => {
+    app = mount(ProductHeroModal, {
+      target,
+      props: { settingKey: 'product_page_md_picks', initialSettings: { mode: 'fixed', products: [{ id: 'a', order: 0 }], popup: { on_wish: false, on_reserve: true } }, onclose: () => {}, embedded: true },
+    })
+    await tick(30)
+    const btn = (label: string) => [...target.querySelectorAll('[aria-label="노출조건"] .combo-btn')].find((b) => b.textContent?.includes(label)) as HTMLButtonElement
+    expect(btn('찜 선택').getAttribute('aria-pressed')).toBe('false')
+    expect(btn('예약 선택').getAttribute('aria-pressed')).toBe('true')
+    ;(target.querySelector('.btn-save') as HTMLButtonElement).click()
+    await tick(20)
+    const saved = upserts().find((c) => c.params.p_key === 'product_page_md_picks')
+    expect((saved!.params.p_value as { popup: unknown }).popup).toEqual({ on_wish: false, on_reserve: true })
+  })
+
+  it('MD 추천: 저장값이 없으면 기본(찜 ON·예약 OFF)으로 표시된다', async () => {
+    app = mount(ProductHeroModal, {
+      target,
+      props: { settingKey: 'product_page_md_picks', initialSettings: { mode: 'fixed', products: [{ id: 'a', order: 0 }] }, onclose: () => {}, embedded: true },
+    })
+    await tick(30)
+    const pressed = [...target.querySelectorAll('[aria-label="노출조건"] .combo-btn[aria-pressed="true"]')].map((b) => b.textContent?.trim())
+    expect(pressed).toEqual(['찜 선택'])
+  })
+
+  it('헤더 슬라이드 설정에는 노출조건이 나오지 않고 popup 도 저장되지 않는다', async () => {
+    app = mount(ProductHeroModal, {
+      target,
+      props: { settingKey: 'product_page_hero', initialSettings: { mode: 'fixed', products: [{ id: 'a', order: 0 }] }, onclose: () => {}, embedded: true },
+    })
+    await tick(30)
+    expect(target.querySelector('[aria-label="노출조건"]')).toBeNull()
+    ;(target.querySelector('.btn-save') as HTMLButtonElement).click()
+    await tick(20)
+    const saved = upserts().find((c) => c.params.p_key === 'product_page_hero')
+    expect('popup' in (saved!.params.p_value as object)).toBe(false)
+  })
+
   it('MD 추천(헤더 슬라이드가 아닌 키)에서는 색 선택이 나오지 않는다', async () => {
     app = mount(ProductHeroModal, {
       target,

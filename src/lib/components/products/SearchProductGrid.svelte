@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import type { CustomerBadge } from '$lib/types/badge'
 
@@ -74,7 +75,7 @@
               isSaleOnly={p.isSaleOnly ?? false}
               salePrice={p.salePrice ?? null}
               href={p.href ?? `/products/${p.id}`}
-              wished={p.wished ?? false}
+              wished={resolveWished(String(p.id), p.wished ?? false)}
               badges={p.badges ?? []}
               cardKeywords={p.cardKeywords ?? []}
               onWishToggle={onWishToggle ? () => onWishToggle(String(p.id)) : undefined}

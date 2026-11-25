@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   import { untrack } from 'svelte'
   import { goto, preloadData } from '$app/navigation'
   import { PRODUCTS_META_DESCRIPTION, PRODUCTS_PAGE_TITLE } from '$lib/utils/pageMeta'
@@ -685,7 +686,7 @@
               salePrice={prod.sale_price}
               href={productLink(prod)}
               category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
-              wished={wishedSet.has(prod.id)}
+              wished={resolveWished(prod.id, wishedSet.has(prod.id))}
               badges={badgeMap[prod.id] ?? []}
             cardKeywords={kwMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
@@ -744,7 +745,7 @@
               salePrice={prod.sale_price}
               href={productLink(prod)}
               category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
-              wished={wishedSet.has(prod.id)}
+              wished={resolveWished(prod.id, wishedSet.has(prod.id))}
               badges={badgeMap[prod.id] ?? []}
             cardKeywords={kwMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
@@ -824,7 +825,7 @@
               salePrice={prod.sale_price}
               href={productLink(prod)}
               category={prod.category}
-              wished={wishedSet.has(prod.id)}
+              wished={resolveWished(prod.id, wishedSet.has(prod.id))}
               badges={badgeMap[prod.id] ?? []}
             cardKeywords={kwMap[prod.id] ?? []}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
@@ -922,7 +923,7 @@
             salePrice={prod.sale_price}
             href={productLink(prod)}
             category={prod.category ? (categoryNameMap[prod.category] ?? prod.category) : ''}
-            wished={wishedSet.has(prod.id)}
+            wished={resolveWished(prod.id, wishedSet.has(prod.id))}
             badges={badgeMap[prod.id] ?? []}
             cardKeywords={kwMap[prod.id] ?? []}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}

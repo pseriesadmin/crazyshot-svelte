@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   import CardKeywordChips from '$lib/components/products/CardKeywordChips.svelte'
   import { createDeleteSafetyToast } from '$lib/utils/deleteSafetyToast.svelte'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
@@ -26,6 +27,7 @@
   import SignUpModal from '$lib/components/auth/SignUpModal.svelte';
   import { csToast } from '$lib/utils/toast';
   import { toggleWish } from '$lib/utils/wishlist';
+  import { openWishMdSheet } from '$lib/stores/wishMdSheet.svelte';
   import { normalizeKeyValueList } from '$lib/utils/keyValueList';
   import PdfModal from '$lib/components/common/PdfModal.svelte';
   import { getSupabaseUrl } from '$lib/env/supabasePublic';
@@ -637,7 +639,7 @@
         // notify-hold는 draft 생성 시 발송하지 않음 — 체크아웃 승격(FE-4) 성공 시점에 발송
         // 장바구니 담기 아이콘(addOnly): 같은 저장 흐름을 거치되 화면 이동 없이 안내만 한다(2026-10-11)
         if (e.addOnly) { cartAdded = true; cartIds = [...(existingGroup?.member_reservation_ids ?? []), ...outcome.reservationIds]; csToast.success('장바구니에 담았어요.'); }
-        else goto('/cart');
+        else { openWishMdSheet('reserve'); goto('/cart'); }
       } else {
         // ── [NOT IN USE] hold 경로 — e.startDate가 항상 비어 도달하지 않는다(날짜는 장바구니에서 정한다). 검수·수정 대상 제외.
         type ReserveRpcFn = (name: string, args: Record<string, unknown>) => Promise<{
@@ -748,7 +750,7 @@
         }
         // 장바구니 담기 아이콘(addOnly): 같은 저장 흐름을 거치되 화면 이동 없이 안내만 한다(2026-10-11)
         if (e.addOnly) { cartAdded = true; cartIds = [...(existingGroup?.member_reservation_ids ?? []), ...outcome.reservationIds]; csToast.success('장바구니에 담았어요.'); }
-        else goto('/cart');
+        else { openWishMdSheet('reserve'); goto('/cart'); }
       }
     } catch {
       csToast.error('예약 중 오류가 발생했습니다.');
@@ -1134,7 +1136,7 @@
           oncartconfirm={() => goto('/cart')}
           onchange={handleCalChange}
           chatCallback={() => csToast.info('준비중입니다.')}
-          wished={wishedSet.has(product.id)}
+          wished={resolveWished(product.id, wishedSet.has(product.id))}
           onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
         />
       </div>
@@ -1164,7 +1166,7 @@
         oncartconfirm={() => goto('/cart')}
         onchange={handleCalChange}
         chatCallback={() => csToast.info('준비중입니다.')}
-        wished={wishedSet.has(product.id)}
+        wished={resolveWished(product.id, wishedSet.has(product.id))}
         onwishtoggle={data.isLoggedIn ? () => handleWishToggle(product.id) : undefined}
       />
 
@@ -1448,7 +1450,7 @@
             isSaleOnly={item.isSaleOnly}
             salePrice={item.salePrice}
             href="/products/{item.slug ?? item.id}"
-            wished={wishedSet.has(item.id)}
+            wished={resolveWished(item.id, wishedSet.has(item.id))}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             badges={data.productBadges?.[item.id] ?? []}
             cardKeywords={data.productCardKeywords?.[item.id] ?? []}

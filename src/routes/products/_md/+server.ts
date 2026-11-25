@@ -6,6 +6,7 @@ import { loadMobileImageMap } from '$lib/server/productMobileImages'
 import { attachCardPrices, type ProductCard } from '$lib/server/products/productGrid'
 import { orderByOnceSeed, type ProductListMode } from '$lib/utils/productListOrder'
 import { resolveOnceSeed } from '$lib/server/onceRandomSeed'
+import { normalizeMdPopupCondition } from '$lib/utils/mdPopupCondition'
 import type { RequestHandler } from './$types'
 
 // 찜 추가 직후 'MD 추천' 바텀 팝업이 쓰는 조회 — /products 페이지의 MD 추천 구간과 같은 설정(product_page_md_picks)·같은 정렬 규칙·같은 카드 정보
@@ -21,11 +22,16 @@ export const GET: RequestHandler = async ({ locals, url, cookies }) => {
   const md = ((settingsRaw as Record<string, unknown> | null)?.['product_page_md_picks'] ?? { products: [], mode: 'fixed' }) as {
     products?: { id: string; order: number }[]
     mode?: ProductListMode
+    popup?: unknown
   }
   const setting = { products: md.products ?? [], mode: (md.mode ?? 'fixed') as ProductListMode }
+  // 팝업 노출조건(찜 선택·예약 선택 ON/OFF) — 팝업이 열려도 되는지 클라이언트가 이 값으로 판단한다
+  const popup = normalizeMdPopupCondition(md.popup)
+  // ?only=popup — 팝업을 열어도 되는지만 가볍게 확인(상품·배지 조회 없이 노출조건만 반환)
+  if (url.searchParams.get('only') === 'popup') return json({ popup })
   const ids = setting.products.map((p) => p.id)
   if (ids.length === 0) {
-    return json({ products: [], wishedIds: [], productBadges: {}, productCardKeywords: {}, mdMobileImages: {} })
+    return json({ products: [], wishedIds: [], productBadges: {}, productCardKeywords: {}, mdMobileImages: {}, popup })
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -56,5 +62,5 @@ export const GET: RequestHandler = async ({ locals, url, cookies }) => {
     loadMobileImageMap(locals.supabase, productIds),
   ])
 
-  return json({ products, wishedIds, productBadges, productCardKeywords, mdMobileImages })
+  return json({ products, wishedIds, productBadges, productCardKeywords, mdMobileImages, popup })
 }

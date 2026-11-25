@@ -68,6 +68,9 @@
     onwishtoggle,
   }: Props = $props();
 
+  // 이 컴포넌트는 PC용·모바일용으로 두 번 그려지고 한쪽은 display:none 이다 — 같은 SVG id 를 쓰면 숨겨진 쪽 그라데이션을 참조해 찜 원이 투명해진다(2026-11-25)
+  const uid = $props.id();
+
   // 판매전용: 배송정책은 기본 배송요금('배송요금')만 노출
   const visibleShippingItems = $derived(
     shippingPolicy ? (saleOnly ? shippingPolicy.items.filter((i) => i.label === '배송요금') : shippingPolicy.items) : []
@@ -494,10 +497,10 @@
           <!-- 찜 아이콘: ProductDPCard 공통 찜 버튼과 같은 도형(OFF=옅은 원+흰 하트, ON=레드→퍼플 그라데이션 원+흰 하트) -->
           {#if wished}
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60" fill="none" aria-hidden="true">
-              <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="url(#cs-wish-on-grad-detail)"/>
+              <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="url(#cs-wish-on-grad-detail-{uid})"/>
               <path d="M37.2833 16C43.095 16 47 21.4013 47 26.44C47 36.6444 30.7933 45 30.5 45C30.2067 45 14 36.6444 14 26.44C14 21.4013 17.905 16 23.7167 16C27.0533 16 29.235 17.6494 30.5 19.0994C31.765 17.6494 33.9467 16 37.2833 16Z" fill="white"/>
               <defs>
-                <linearGradient id="cs-wish-on-grad-detail" x1="0" y1="30" x2="60" y2="30" gradientUnits="userSpaceOnUse">
+                <linearGradient id="cs-wish-on-grad-detail-{uid}" x1="0" y1="30" x2="60" y2="30" gradientUnits="userSpaceOnUse">
                   <stop stop-color="#FF3535"/>
                   <stop offset="0.408654" stop-color="#3B2F8A"/>
                 </linearGradient>
