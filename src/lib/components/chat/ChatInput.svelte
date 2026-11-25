@@ -6,6 +6,7 @@
   import type { SimilarNameItem } from '$lib/types/cms-similar-name'
   import { getCategoryLabel } from '$lib/constants/cannedResponseCategories'
   import { csToast } from '$lib/utils/toast'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
 
   // 상품검색 팝업 — 결과는 20건씩 스크롤 끝에서 추가 조회(후보 최대 500건, 서버 페이지 모드 — search-suggestions API 참고).
 
@@ -59,6 +60,8 @@
     oncoupongift?: (coupon: CouponItem) => void
     /** 쿠폰 목록 조회 시 이미 보유한 쿠폰인지 판별하기 위한 대상 고객 user_id (선택 세션 기준) */
     targetUserId?: string | null
+    /** 쿠폰 팝업: 세로 스크롤바를 숨기고 위·아래에 더 볼 내용이 있으면 끝에 작은 화살표를 보인다(모바일 상담 화면 전용, 기본 꺼짐) */
+    scrollHints?: boolean
   }
 
   let {
@@ -71,7 +74,30 @@
     onproductmention,
     oncoupongift,
     targetUserId = null,
+    scrollHints = false,
   }: Props = $props()
+
+  // 쿠폰 팝업 스크롤 힌트(scrollHints 전용) — 위·아래로 더 스크롤할 수 있는지
+  let couponScrollEl = $state<HTMLElement | null>(null)
+  let couponCanUp = $state(false)
+  let couponCanDown = $state(false)
+  function updateCouponHints(): void {
+    const el = couponScrollEl
+    if (!el) return
+    couponCanUp = el.scrollTop > 2
+    couponCanDown = el.scrollTop + el.clientHeight < el.scrollHeight - 2
+  }
+
+  // 팝업이 열리거나 목록 높이가 바뀔 때(불러오기 완료 등) 화살표 표시를 다시 계산한다
+  function couponHintsInit(node: HTMLElement, enabled: boolean) {
+    if (!enabled) return {}
+    const ro = new ResizeObserver(() => updateCouponHints())
+    ro.observe(node)
+    const mo = new MutationObserver(() => updateCouponHints())
+    mo.observe(node, { childList: true, subtree: true })
+    queueMicrotask(updateCouponHints)
+    return { destroy(): void { ro.disconnect(); mo.disconnect() } }
+  }
 
   let content = $state('')
   let textareaEl = $state<HTMLTextAreaElement | null>(null)
@@ -483,7 +509,18 @@
 
   <!-- 쿠폰 팝업 (관리자 전용 버튼으로 열림) -->
   {#if isAdmin && showCouponPopup}
-    <div class="coupon-popup" role="listbox" aria-label="발급 가능한 쿠폰 목록">
+    <div
+      class="coupon-popup"
+      class:coupon-popup--hints={scrollHints}
+      role="listbox"
+      aria-label="발급 가능한 쿠폰 목록"
+      bind:this={couponScrollEl}
+      onscroll={scrollHints ? updateCouponHints : undefined}
+      use:couponHintsInit={scrollHints}
+    >
+      {#if scrollHints && couponCanUp}
+        <div class="coupon-hint coupon-hint--up" aria-hidden="true"><ChevronIcon direction="up" size={6} /></div>
+      {/if}
       <p class="coupon-popup-title">쿠폰 선물</p>
       {#if couponLoading}
         <p class="coupon-empty">목록 불러오는 중...</p>
@@ -513,6 +550,9 @@
             {/if}
           </button>
         {/each}
+      {/if}
+      {#if scrollHints && couponCanDown}
+        <div class="coupon-hint coupon-hint--down" aria-hidden="true"><ChevronIcon direction="down" size={6} /></div>
       {/if}
     </div>
   {/if}
@@ -1019,6 +1059,14 @@
     overflow-y: auto;
     padding: 12px 0 4px;
   }
+
+  /* 스크롤 힌트 모드 — 세로 스크롤바 숨김, 위·아래 끝에 작은 화살표(스크롤 컨테이너 안 sticky 0높이 줄에 얹음) */
+  .coupon-popup--hints { scrollbar-width: none; -ms-overflow-style: none; }
+  .coupon-popup--hints::-webkit-scrollbar { display: none; }
+  .coupon-hint { position: sticky; height: 0; z-index: 2; display: flex; justify-content: center; pointer-events: none; }
+  .coupon-hint--up { top: 3px; }
+  .coupon-hint--down { bottom: 3px; }
+  .coupon-hint--down :global(svg) { margin-top: -11px; } /* 0높이 줄에서 아래로 넘치지 않게 위로 올림 */
 
   .coupon-popup-title {
     font: 700 12px/1 'Noto Sans KR', sans-serif;

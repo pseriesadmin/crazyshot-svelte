@@ -1,5 +1,6 @@
 import { attachCancelPending } from '$lib/server/attachCancelPending'
 import { attachPriorIssue } from '$lib/server/attachPriorIssue'
+import { attachManagedCustomer } from '$lib/server/attachManagedCustomer'
 import { attachReturnStage, RETURN_STAGE_RANK } from '$lib/server/attachReturnStage'
 import { requireMenuAccessAction } from '$lib/server/requireMenuAccess'
 import { createClient } from '@supabase/supabase-js'
@@ -239,6 +240,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
   await attachCancelPending(admin, rentals)
   // CS 사전 이슈 접수 표식("사전접수건", 3단계) — 검수 칩에서는 목록 상단에 모아 담당자가 먼저 보게 한다
   await attachPriorIssue(admin, rentals)
+  // 관리대상(관리고객) 고객 예약 표식 — 신청대기 등 모든 칩 목록의 고객명 옆 [관리고객] 배지
+  if (hasSettingsAccess(cmsRole)) await attachManagedCustomer(admin, rentals) // 관리대상 정보는 매니저 이상만(파트너 비공개)
   // 반납 진행 단계 배지(반납요청 예정/발송, 반납등록) — '반납중' 칩에서는 예정 → 발송 → 등록 순으로 정렬
   await attachReturnStage(admin, rentals)
   // 반납중 기본 정렬(전환일별 방식순) — 화면이 날짜 구분 행을 그리도록 각 행의 상태 전환 시각을 붙인다

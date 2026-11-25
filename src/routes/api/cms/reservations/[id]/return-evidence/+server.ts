@@ -256,7 +256,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
         .map((r) => ({ id: r.id, kind: r.kind, url: urlByPath.get(r.storage_path) ?? null })),
     }))
 
-    const checked = new Set(s.checklist ?? [])
+    // 체크리스트가 배열이 아닌 형태(키→참/거짓 객체 등 옛 저장값)여도 조회가 통째로 실패하지 않게 정규화한다(2026-11-25 — 완료 건 검수 탭 '조회에 실패했습니다' 원인)
+    const rawChecklist: unknown = s.checklist
+    const checkedKeys: string[] = Array.isArray(rawChecklist)
+      ? rawChecklist.filter((v): v is string => typeof v === 'string')
+      : rawChecklist && typeof rawChecklist === 'object'
+        ? Object.entries(rawChecklist as Record<string, unknown>).filter(([, v]) => v === true).map(([k]) => k)
+        : []
+    const checked = new Set(checkedKeys)
     return {
       submission: {
         method: s.method,

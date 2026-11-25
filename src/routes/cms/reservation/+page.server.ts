@@ -33,6 +33,8 @@ export interface RentalListRow {
   cancel_pending?:   boolean
   /** CS 사전 이슈 접수 건(has_prior_issue) — /cms/rentals 로더가 부착([사전접수건] 배지) */
   prior_issue?:      boolean
+  /** 관리대상(관리고객) 고객의 예약 — /cms/rentals 로더가 부착(attachManagedCustomer, [관리고객] 배지) */
+  managed_customer?: boolean
   /** 상태 전환 시각 — /cms/rentals 로더가 '같은 반납일' 그룹 정렬(changed_group_*)일 때만 부착(구분 행 날짜) */
   status_changed_at?: string | null
   /** '반납중' 칩의 반납 진행 단계 — /cms/rentals 로더가 부착(attachReturnStage) */

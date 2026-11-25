@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { mobileSubGnb } from '$lib/stores/mobileSubGnb.svelte'
   import { goto, invalidateAll } from '$app/navigation'
   import { resizeProductImage, shrinkImageToLimit } from '$lib/utils/imageResize'
   import OcrScanner from '$lib/components/common/OcrScanner.svelte'
@@ -16,6 +17,12 @@
   // $effect: invalidateAll() 후 data.product.image_urls가 갱신되면 imageUrls에 반영
   // ($state(prop) 초기화 안티패턴 보완 — ui-mobile.md §$state(prop) 절대 금지)
   $effect(() => { imageUrls = data.product.image_urls })
+  // 서브 GNB 가운데에 상품명(+품번)을 보이고, 화면을 떠나면 비운다
+  $effect(() => {
+    mobileSubGnb.title = data.product.name
+    mobileSubGnb.sub = data.product.product_code ?? null
+    return () => { mobileSubGnb.title = null; mobileSubGnb.sub = null }
+  })
   let imageUploading = $state(false)
   let imageUploadError = $state<string | null>(null)
   let cameraInputEl = $state<HTMLInputElement | null>(null)
@@ -524,19 +531,12 @@
 </script>
 
 <div class="mob-product-page">
-  <!-- 상단 헤더 -->
-  <div class="mob-product-header">
-    <button type="button" class="back-btn" onclick={() => goto('/cms/mobile')} aria-label="뒤로">‹</button>
-    <div class="header-info">
-      <span class="header-name">{data.product.name}</span>
-      {#if data.product.product_code}
-        <span class="header-code">{data.product.product_code}</span>
-      {/if}
-    </div>
-  </div>
+  <!-- 상품명·뒤로가기는 모바일 레이아웃의 공통 서브 GNB가 담당한다 -->
 
   <!-- 탭 네비게이션 + 탭 콘텐츠 (단일 그룹) -->
   <div class="mob-tab-group">
+    <!-- 서브 GNB에는 상품명이 한 줄로 줄어 보이므로, 전체 상품명을 옅은 라운드 바에 모두 보여 준다 -->
+    <p class="name-bar">{data.product.name}</p>
   <div class="mob-tab-nav" role="tablist">
     <button
       type="button"
@@ -1036,51 +1036,6 @@
     background: var(--cs-lilac);
   }
 
-  .mob-product-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 15px 16px 6px;
-    background: var(--cs-lilac);
-  }
-
-  .back-btn {
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    color: var(--cs-text);
-    font-size: 28px;
-    cursor: pointer;
-    flex-shrink: 0;
-    padding: 0;
-    line-height: 1;
-  }
-
-  .header-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .header-name {
-    font: var(--text-pc-title-16);
-    color: var(--cs-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .header-code {
-    font: var(--text-pc-script-12);
-    color: var(--cs-text-mid);
-  }
-
   /* 탭 네비 + 탭 콘텐츠 단일 그룹 래퍼 */
   .mob-tab-group {
     display: flex;
@@ -1090,6 +1045,18 @@
   }
 
   /* 서브탭 — CMS cms-subtabbar 표준 */
+  .name-bar {
+    margin: 0 14px;
+    padding: 12px 16px;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--cs-purple) 6%, var(--cs-white));
+    font: var(--text-pc-body-14);
+    line-height: 1.5;
+    color: var(--cs-text);
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+
   .mob-tab-nav {
     display: flex;
     justify-content: center;
@@ -1133,6 +1100,21 @@
     flex-shrink: 0;
     padding: 12px 16px 16px;
     background: var(--cs-lilac);
+    /* 탭 화면이 열릴 때마다(탭마다 이 바가 새로 그려진다) 아래에서 솟아올라 감쇠하며 튕긴다 — 진폭이 직전의 약 절반씩 줄어드는 감쇠 스프링 */
+    animation: bar-bounce-up 0.62s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+  }
+  @keyframes bar-bounce-up {
+    0%   { transform: translateY(110%); opacity: 0; }
+    35%  { transform: translateY(-14px); opacity: 1; }
+    52%  { transform: translateY(7px); }
+    67%  { transform: translateY(-3.5px); }
+    80%  { transform: translateY(1.7px); }
+    91%  { transform: translateY(-0.8px); }
+    100% { transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bottom-action-bar { animation: none; }
+    .mob-cta-btn::after { animation: none; }
   }
 
   /* 이미지 패널 — 하단 바 높이만큼 여백 불필요 (flex 구조로 자동 처리) */
@@ -1218,20 +1200,36 @@
   .mob-capture-btn:hover:not(:disabled) { opacity: 0.88; }
   .mob-capture-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
 
+  /* 주 실행 버튼 — 보라 그라데이션 면 + 은은한 광채 + 주기적으로 지나가는 빛줄기로 시선을 모은다 */
   .mob-cta-btn {
+    position: relative;
+    overflow: hidden;
     width: 100%;
     height: 52px;
-    background: var(--cs-purple);
+    background: linear-gradient(120deg, var(--cs-purple-light) 0%, var(--cs-purple) 60%, var(--cs-purple-dark) 100%);
     color: var(--cs-white);
     border: none;
     border-radius: var(--radius-xl);
     font-size: 16px;
     font-weight: 700;
     cursor: pointer;
-    transition: background 0.15s;
+    box-shadow: 0 8px 22px rgba(59, 47, 138, 0.38);
+    transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s;
   }
-  .mob-cta-btn:hover:not(:disabled) { background: var(--cs-purple-hover); }
-  .mob-cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; }
+  .mob-cta-btn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.28) 50%, transparent 62%);
+    transform: translateX(-120%);
+    animation: cta-sheen 3.4s ease-in-out 0.9s infinite;
+    pointer-events: none;
+  }
+  @keyframes cta-sheen { 0% { transform: translateX(-120%); } 45%, 100% { transform: translateX(120%); } }
+  .mob-cta-btn:active:not(:disabled) { transform: scale(0.97); box-shadow: 0 4px 12px rgba(59, 47, 138, 0.3); }
+  .mob-cta-btn:hover:not(:disabled) { filter: brightness(1.05); }
+  .mob-cta-btn:disabled { background: var(--cs-disabled-button); cursor: not-allowed; box-shadow: none; }
+  .mob-cta-btn:disabled::after { display: none; }
 
   /* 스캔 결과 후 두 버튼 레이아웃 */
   .bottom-action-bar.two-btn {
@@ -1246,7 +1244,9 @@
     border: 1.5px solid var(--cs-purple);
     color: var(--cs-purple);
   }
-  .mob-cta-rescan:hover:not(:disabled) { background: rgba(59,47,138,0.06); }
+  .mob-cta-rescan { box-shadow: none; }
+  .mob-cta-rescan::after { display: none; }
+  .mob-cta-rescan:hover:not(:disabled) { background: rgba(59,47,138,0.06); filter: none; }
   .mob-cta-rescan:disabled { border-color: var(--cs-disabled-button); color: var(--cs-disabled-button); background: transparent; }
 
   .device-hint {

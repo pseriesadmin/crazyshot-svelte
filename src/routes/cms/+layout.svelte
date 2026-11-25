@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, setContext } from 'svelte'
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation'
   import { page } from '$app/state'
   import { supabase } from '$lib/services/supabase'
@@ -79,10 +79,11 @@
   // 상담 권한(consulting.chat)이 꺼진 계정은 구독하지 않는다.
   const canReceiveChatToast = $derived(hasMenuAccess(data.cmsRole ?? '', data.menuPermissionOverrides, 'consulting.chat'))
   const chatInbox = createCmsChatInbox()
+  setContext('cmsChatInbox', chatInbox) // 모바일 현장앱의 채팅 플로팅 아이콘(MobileChatFab)이 응대 필요 건수를 읽는다
   $effect(() => {
     if (!data.cmsRole || !canReceiveChatToast) return
     return chatInbox.start((found) => {
-      if (page.url.pathname.startsWith('/cms/chat')) return
+      if (page.url.pathname.startsWith('/cms/chat') || page.url.pathname.startsWith('/cms/mobile/chat')) return
       const text = found
         ? `${found.name} · ${found.label ?? found.preview}`
         : '새로운 채팅이 수신되었습니다.'
@@ -90,7 +91,11 @@
         id: 'cms-chat-inbox',
         duration: 4000,
         actionLabel: '열기',
-        onClick: () => { void goto(found ? `/cms/chat?session=${found.session_id}` : '/cms/chat') },
+        // 모바일 현장앱 화면에서는 모바일 전용 상담 화면으로 바로 연결
+        onClick: () => {
+          const base = page.url.pathname.startsWith('/cms/mobile') ? '/cms/mobile/chat' : '/cms/chat'
+          void goto(found ? `${base}?session=${found.session_id}` : base)
+        },
       })
     }, () => {
       // 수신벨 — 고객 메시지가 오는 즉시, 자동답변으로 해결되는 건도 포함(2026-10-23 Stephen 지시). 짧은 간격 중복만 내부에서 걸러짐

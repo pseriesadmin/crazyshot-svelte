@@ -63,9 +63,11 @@
     onrequestdoc?: (docType: 'identity' | 'foreign') => void
     /** 요청 전송 중인 문서 유형(버튼 비활성화용) — 부모가 관리 */
     requestingDocType?: 'identity' | 'foreign' | null
+    /** 모바일 전용: 주면 기본정보 제목줄 우측 끝에 닫기(✕) 버튼을 보인다(고객정보 보기 닫기) */
+    onclose?: () => void
   }
 
-  let { detail, summary = null, isLoading = false, onrequestdoc, requestingDocType = null }: Props = $props()
+  let { detail, summary = null, isLoading = false, onrequestdoc, requestingDocType = null, onclose }: Props = $props()
 
   // 본인증명·외국인증명 — 등록일(verified_at) 기준 6개월 경과 시 자동 만료(Stephen 2026-08-27 확정)
   const DOC_VALID_MONTHS = 6
@@ -165,13 +167,19 @@
       <!-- 기본정보 -->
       <div class="section-title section-title--row">
         <span>기본정보</span>
-        {#if summary?.user_id}
-          <!-- 더보기 → 고객 관리 메뉴의 해당 고객 패널(기본정보 탭)로 새 탭 랜딩 -->
-          <MoreDotsIconButton
-            href={`/cms/customers?selected=${encodeURIComponent(summary.user_id)}&tab=info`}
-            label="고객 관리에서 기본정보 열기"
-          />
-        {/if}
+        <span class="title-actions">
+          {#if summary?.user_id && !onclose}
+            <!-- 더보기 → 고객 관리 메뉴의 해당 고객 패널(기본정보 탭)로 새 탭 랜딩 — 모바일(닫기 버튼 노출 모드)에서는 숨긴다 -->
+            <MoreDotsIconButton
+              href={`/cms/customers?selected=${encodeURIComponent(summary.user_id)}&tab=info`}
+              label="고객 관리에서 기본정보 열기"
+            />
+          {/if}
+          {#if onclose}
+            <!-- 공통 닫기 버튼(close-red, cms-uiux §0-10-A-1) -->
+            <button class="close-btn" type="button" aria-label="패널 닫기" onclick={onclose}>✕</button>
+          {/if}
+        </span>
       </div>
       <div class="info-section">
         <div class="info-row">
@@ -397,6 +405,18 @@
     align-items: center;
     justify-content: space-between;
   }
+  .title-actions { display: inline-flex; align-items: center; gap: 4px; }
+
+  /* 공통 닫기 버튼 close-red — cms-uiux.md §0-10-A-1 표준 */
+  .close-btn {
+    flex-shrink: 0;
+    width: 28px; height: 28px; min-height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: var(--cs-text-light); font-size: 14px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .close-btn:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
 
   /* 정보 섹션 — RentalDetailPanel.svelte .info-section/.info-row 반영 */
   .info-section {

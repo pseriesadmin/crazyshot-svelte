@@ -7,6 +7,8 @@
   import { CHAT_SORT_OPTIONS, chatDefaultSort, sortChatSessions, type ChatSortMode, type ChatSortTab } from '$lib/utils/chatSessionSort'
   import MessageList from './MessageList.svelte'
   import ChatInput from './ChatInput.svelte'
+  import { mobileChatNav } from '$lib/stores/mobileChatNav.svelte'
+  import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import CustomerDetailPanel from './CustomerDetailPanel.svelte'
   import BookmarkListView from './BookmarkListView.svelte'
   import GuestMergeModal from './GuestMergeModal.svelte'
@@ -159,9 +161,11 @@
   interface Props {
     initialSessions?: ChatSession[]
     initialSessionId?: string | null
+    /** 모바일 전용 화면(/cms/mobile/chat) — 세션 목록과 대화창을 한 화면씩 번갈아 보여 준다(상담 기능·로직은 PC와 같다) */
+    mobile?: boolean
   }
 
-  let { initialSessions = [], initialSessionId = null }: Props = $props()
+  let { initialSessions = [], initialSessionId = null, mobile = false }: Props = $props()
 
   // 크레이지챗 · 빠른답변 상태 표시 pill (sessions-header) — 기존 빠른답변 자동매칭 스위치(auto_reply_settings)
   let autoReplyEnabled = $state<boolean | null>(null)
@@ -260,6 +264,20 @@
 
   let filterTab = $state<FilterTab>('open')
   let selectedSessionId = $state<string | null>(null)
+  // 모바일 전용: 고객 정보 영역을 대화 위에 덮어 보이는 상태(세션이 바뀌면 닫는다)
+  let showMobileInfo = $state(false)
+  // 모바일: 아바타 영역을 누르고 있는 동안 true(터치 호버) — 이니셜 자리에 '보기' 표시
+  let identityPressed = $state(false)
+  // 모바일: 대화창이 열려 있는지·목록으로 돌아가는 동작을 서브 GNB(모바일 레이아웃)에 알린다
+  $effect(() => {
+    if (!mobile) return
+    mobileChatNav.inSession = !!selectedSession
+    mobileChatNav.back = () => { selectedSessionId = null }
+    return () => { mobileChatNav.inSession = false; mobileChatNav.back = null }
+  })
+  // 모바일 전용: 상담 메모 아코디언 펼침 상태(기본 접힘)
+  let memoOpen = $state(false)
+  $effect(() => { void selectedSessionId; showMobileInfo = false })
   let messages = $state<ChatMessage[]>([])
   let isSending = $state(false)
   let isUploading = $state(false)
@@ -566,6 +584,17 @@
   let resizingCompose = $state(false)
   let splitEl = $state<HTMLElement | null>(null)
   let composeEl = $state<HTMLElement | null>(null)
+  // 모바일: 하단 작성 그룹을 대화 위에 띄운 레이어로 쓰므로, 그 높이를 재서 대화 목록 아래 여백으로 쓴다(마지막 메시지가 가려지지 않게)
+  let composeH = $state(0)
+  $effect(() => {
+    if (!mobile || !composeEl) return
+    const el = composeEl
+    const update = () => { composeH = el.offsetHeight }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
   let measuredComposePct = $state(35) // 자동일 때 실제 비율(방향키 시작값·접근성 값)
 
   function saveComposePct(): void {
@@ -822,6 +851,23 @@
         if (d?.blacklisted) csToast.warning('블랙리스트 고객입니다. 예약 승인·계약·혜택 안내 전에 확인해 주세요.')
       })
       .catch(() => { customerSummary = null })
+  })
+
+  // 상담 중 고객이 입력한 이름·전화번호 ↔ 관리대상 자동 대조 경고(관리자 화면 전용 — 대화 메시지로 넣지 않는다).
+  // 대조는 서버에서만 수행하고, 새 고객 메시지가 들어오면(고객 메시지 개수 변화) 다시 확인한다.
+  interface ManagedChatMatch { basis: 'phone' | 'name'; source: 'registered' | 'member'; name: string; member_code: string | null }
+  let managedChatMatches = $state<ManagedChatMatch[]>([])
+  const userMsgCount = $derived(messages.filter((m) => m.sender_type === 'user').length)
+  $effect(() => {
+    const uid = selectedUserId
+    void userMsgCount
+    if (!uid) { managedChatMatches = []; return }
+    fetch(`/api/cms/customers/${uid}/managed-alert`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { matches?: ManagedChatMatch[] } | null) => {
+        if (selectedUserId === uid) managedChatMatches = d?.matches ?? []
+      })
+      .catch(() => { if (selectedUserId === uid) managedChatMatches = [] })
   })
 
   // GSD-5: 고객 상세정보 조회 (CustomerDetailPanel용)
@@ -1404,9 +1450,9 @@
   }
 </script>
 
-<div class="admin-panel">
+<div class="admin-panel" class:mobile>
   <!-- 좌측: 세션 목록 -->
-  <aside class="sessions-pane">
+  <aside class="sessions-pane" class:m-hide={mobile && !!selectedSession}>
     <div class="sessions-header">
       <h2 class="pane-title">상담 세션</h2>
       {#if autoReplyEnabled !== null}
@@ -1573,7 +1619,7 @@
   </aside>
 
   <!-- 우측: 대화창 -->
-  <section class="chat-pane">
+  <section class="chat-pane" class:m-hide={mobile && !selectedSession}>
     {#if !selectedSession}
       <div class="no-session">
         <svg xmlns="http://www.w3.org/2000/svg" width="70" height="70" viewBox="0 0 70 70" fill="none" aria-hidden="true" class="no-session-icon">
@@ -1587,15 +1633,44 @@
       <div class="chat-header">
         <!-- 아바타+식별정보를 하나의 그룹으로 묶어 우측 header-toolbar 버튼군과 레이아웃상
              명확히 분리(2026-09-28, Stephen 지시 — 이전엔 flat하게 나열돼 경계가 불명확했음) -->
-        <div class="chat-identity">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+        <!-- 모바일: 이 영역(아바타·이름·상태·이메일·회원코드)을 누르면 고객정보가 대화 위에 열리고, 다시 누르면 닫힌다 -->
+        <div
+          class="chat-identity"
+          class:chat-identity--tap={mobile}
+          role={mobile ? 'button' : undefined}
+          tabindex={mobile ? 0 : undefined}
+          aria-label={mobile ? '고객정보 보기' : undefined}
+          aria-pressed={mobile ? showMobileInfo : undefined}
+          onclick={mobile ? () => { showMobileInfo = !showMobileInfo } : undefined}
+          onpointerdown={mobile ? () => { identityPressed = true } : undefined}
+          onpointerup={mobile ? () => { identityPressed = false } : undefined}
+          onpointercancel={mobile ? () => { identityPressed = false } : undefined}
+          onpointerleave={mobile ? () => { identityPressed = false } : undefined}
+          onkeydown={mobile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showMobileInfo = !showMobileInfo } } : undefined}
+        >
           <div class="chat-avatar" aria-hidden="true">
             <span class="chat-avatar-initials">{initialsOf(sessionLabel(selectedSession))}</span>
+            <!-- 모바일: 이 영역을 누르고 있는 동안(터치 호버) 기존 아바타 위에 반투명 막을 덮고 '보기'를 보인다 -->
+            {#if mobile && identityPressed}<span class="chat-avatar-hint">보기</span>{/if}
           </div>
 
           <div class="chat-header-info">
             <div class="chat-header-top">
               <span class="chat-user">{sessionLabel(selectedSession)}</span>
-              <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
+              {#if mobile && selectedSession.status === 'open'}
+                <!-- 모바일: 진행중 배지를 누르면 대기로 전환('대기탭 이동' 버튼 기능을 이 배지로 통합) -->
+                <button
+                  type="button"
+                  class="chat-status chat-status--btn status-open"
+                  title="누르면 대기로 전환"
+                  aria-label="진행중 — 누르면 대기로 전환"
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onclick={(e) => { e.stopPropagation(); handleSessionStatusChange('pending') }}
+                >{STATUS_LABEL[selectedSession.status as FilterTab]}</button>
+              {:else}
+                <span class="chat-status status-{selectedSession.status}">{STATUS_LABEL[selectedSession.status as FilterTab]}</span>
+              {/if}
             </div>
 
             <!-- 고객 아이디·회원코드 — 나머지 요약(등급·크레이지스코어·블랙리스트·상세정보)은
@@ -1652,14 +1727,15 @@
           {/if}
 
           <!-- GSD-1/2: 상태 세그먼트 컨트롤 -->
-          {#if selectedSession?.status !== 'open'}
+          <!-- 모바일에서는 '진행중탭 이동'을 숨긴다 — 대기·종료 세션에 관리자가 답장(메시지·첨부)하면 서버가 자동으로 진행중으로 복구하므로 중복 기능 -->
+          {#if selectedSession?.status !== 'open' && !mobile}
             <button
               class="toolbar-btn toolbar-btn--status"
               onclick={() => handleSessionStatusChange('open')}
               title="진행중으로 전환"
             >진행중탭 이동</button>
           {/if}
-          {#if selectedSession?.status === 'open'}
+          {#if selectedSession?.status === 'open' && !mobile}
             <button
               class="toolbar-btn toolbar-btn--status"
               onclick={() => handleSessionStatusChange('pending')}
@@ -1682,8 +1758,19 @@
         </div>
       {/if}
 
+      {#if managedChatMatches.length > 0}
+        <div class="managed-alert" role="alert">
+          <span class="managed-alert-title">관리대상 의심</span>
+          {#each managedChatMatches as m (m.source + m.name + (m.member_code ?? ''))}
+            <span class="managed-alert-desc">
+              대화 중 입력한 {m.basis === 'phone' ? '전화번호' : '이름'}이 관리대상 {m.name}{m.member_code ? ` (${m.member_code})` : ''}님과 {m.basis === 'phone' ? '일치합니다' : '같습니다(동명이인일 수 있어요)'}.
+            </span>
+          {/each}
+        </div>
+      {/if}
+
       <!-- 위아래 높이 조절 영역(2026-10-20): 대화 영역 + 하단 작성 그룹의 합이 100% -->
-      <div class="chat-split" class:chat-split--resizing={resizingCompose} bind:this={splitEl}>
+      <div class="chat-split" class:chat-split--resizing={resizingCompose} bind:this={splitEl} style:--compose-h="{composeH}px">
       <div
         class="chat-messages"
         class:chat-messages--resizing={resizingInfo}
@@ -1711,13 +1798,14 @@
 
         <!-- 우측 플로팅: 고객 정보(읽기전용) — 별도 3분할 컬럼이 아니라 대화 목록 영역
              내부 우측에 겹쳐 노출, 세션 선택 시 함께 노출됨 -->
-        <div class="customer-info-float">
+        <div class="customer-info-float" class:m-info-open={showMobileInfo}>
           <CustomerDetailPanel
             detail={customerDetail}
             summary={customerSummary}
             isLoading={customerDetailLoading}
             onrequestdoc={handleRequestDoc}
             {requestingDocType}
+            onclose={mobile ? () => { showMobileInfo = false } : undefined}
           />
         </div>
 
@@ -1782,11 +1870,29 @@
           onproductmention={handleProductMention}
           oncoupongift={handleCouponGift}
           targetUserId={selectedUserId}
+          scrollHints={mobile}
         />
       </div>
 
       <!-- CS-A1: 상담 메모 카드 — 목록(최신순, 메모별 삭제) + 입력 한 행. 단문 100자 이내 무한 등록 -->
-      <div class="cs-record-section">
+      <div class="cs-record-section" class:cs-record-section--open={mobile && memoOpen}>
+        {#if mobile}
+          <!-- 모바일 전용 아코디언 헤더 — 접힌 상태에선 이 한 줄만 보여 면적을 아낀다(PC는 항상 펼침) -->
+          <button
+            type="button"
+            class="cs-record-acc-head"
+            aria-expanded={memoOpen}
+            onclick={() => { memoOpen = !memoOpen }}
+          >
+            <span>상담 메모</span>
+            <!-- 메모 수량은 우측 화살표 아이콘 바로 왼쪽에 둔다 -->
+            <span class="cs-record-acc-right">
+              {#if csRecords.length > 0}<span class="cs-record-acc-count">{csRecords.length}</span>{/if}
+              <ChevronIcon direction={memoOpen ? 'up' : 'down'} size={7} />
+            </span>
+          </button>
+        {/if}
+        {#if !mobile || memoOpen}
         <!-- 목록 스크롤 영역 — 년월일시는 saved-at 폰트, 메모 내용은 label 폰트 토큰 -->
         <div class="cs-record-list" role="list" aria-label="상담 메모 목록">
           {#each csRecords as rec (rec.id)}
@@ -1846,6 +1952,7 @@
             aria-label="상담 메모 저장"
           >{isSavingCsRecord ? '저장 중' : '저장'}</button>
         </div>
+        {/if}
       </div>
       </div>
       </div>
@@ -2344,6 +2451,114 @@
     flex-shrink: 0;
   }
   /* 블랙리스트 경고 배지 — 긴급 배지와 구분되는 연한 레드 면(CustomerDetailPanel .badge-danger와 같은 색 언어) */
+  /* 관리대상 의심 경고 배너 — 대화 영역 위(관리자 화면 전용), 블랙리스트 경고와 같은 색 언어 */
+  .managed-alert {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    background: var(--cs-red-xlight);
+    color: var(--cs-red-badge);
+  }
+  .managed-alert-title { font: var(--text-pc-body-14); font-weight: 700; }
+  .managed-alert-desc { font: var(--text-pc-script-12); }
+  /* ── 모바일 전용 화면(mobile prop) — 목록/대화 번갈아 한 화면씩, PC 가로 분할·손잡이 없음 ── */
+  .admin-panel.mobile { padding: 0; }
+  .admin-panel.mobile .m-hide { display: none; }
+  .admin-panel.mobile .sessions-pane,
+  .admin-panel.mobile .chat-pane {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+    margin: 0 12px 12px; /* 위 간격은 서브 GNB 아래 공통 여백(20px)이 담당 */
+  }
+  .admin-panel.mobile .info-resizer,
+  .admin-panel.mobile .compose-resizer { display: none; }
+  .admin-panel.mobile .chat-header { padding: 12px; flex-direction: column; align-items: stretch; gap: 8px; }
+  .admin-panel.mobile .chat-identity { padding: 8px 12px; }
+  .admin-panel.mobile .chat-identity--tap { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .admin-panel.mobile .chat-identity--tap { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; } /* 길게 눌러도 글자가 선택(파란 블록)되지 않게 */
+  .chat-avatar-hint {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(16, 11, 50, 0.55); /* 기존 아바타가 비쳐 보이는 반투명 막 */
+    color: var(--cs-white);
+    font: 700 12px/1 'Noto Sans KR', sans-serif;
+  }
+  .admin-panel.mobile .chat-messages { padding-right: 0; }
+  .admin-panel.mobile .customer-info-float { display: none; width: 100%; border-left: none; box-shadow: none; z-index: 9; } /* 하단 작성 레이어(z-index 7)보다 위에 노출 */
+  .admin-panel.mobile .customer-info-float.m-info-open { display: block; }
+  .admin-panel.mobile .chat-compose-group { padding: 14.4px 12px 12px; } /* 위 패딩 12px +20% */
+  /* 상담 메모(아코디언)는 입력창 아래 — 원래 순서 그대로(PC와 동일), 모바일은 접힌 한 줄 높이로 */
+  .admin-panel.mobile .cs-record-section { padding: 0 16px; background: color-mix(in srgb, var(--cs-purple) 4%, var(--cs-white)); } /* 입력창과 같은 불투명 옅은 퍼플 면 */
+  .admin-panel.mobile .cs-record-empty { display: none; } /* 모바일: 메모 없음 안내 문구를 가려 공간 절약(Stephen 지시 2026-11-25) */
+  /* 모바일은 하단 작성 그룹을 내용 높이로 — PC에서 저장한 비율 높이(--sized)·메모 영역의 늘어남을 쓰지 않아,
+     메모를 펼치면 그룹이 위로 자라며 입력창까지 함께 밀어 올리고(대화 영역이 그만큼 줄어듦), 접으면 한 줄 높이로 돌아온다 */
+  .admin-panel.mobile .chat-compose-group,
+  .admin-panel.mobile .chat-compose-group--sized { flex: 0 0 auto; min-height: 0; }
+  /* 하단 작성 그룹(아이콘 탭·입력창·상담 메모)은 대화 위에 따로 떼어 띄운 레이어 — 배경 없음, 대화 목록은 위아래 전면으로 스크롤 */
+  .admin-panel.mobile .chat-split { position: relative; }
+  .admin-panel.mobile .chat-compose-group,
+  .admin-panel.mobile .chat-compose-group--sized {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: transparent;
+    z-index: 7;
+  }
+  .admin-panel.mobile .chat-messages :global(.message-list) { padding-bottom: calc(var(--compose-h, 0px) + 12px); }
+  .admin-panel.mobile .chat-compose-group--sized .cs-record-section { flex: 0 0 auto; }
+  .admin-panel.mobile .chat-compose-group--sized .cs-record-list { flex: 0 1 auto; max-height: 120px; }
+  .cs-record-acc-right { display: inline-flex; align-items: center; gap: 8px; }
+  .cs-record-acc-count { color: var(--cs-text-mid); }
+  .cs-record-acc-head {
+    width: 100%;
+    min-height: 28px; /* 접힌 한 줄 높이 축소(Stephen 지시 2026-11-25, 40→28px) */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--cs-text-mid);
+    font: var(--text-pc-script-12);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .admin-panel.mobile .cs-record-section--open { padding-bottom: 14px; }
+  /* 첨부·상품검색·쿠폰 아이콘 묶음 — 입력창 위쪽 우측에 걸쳐 놓는 레이어(입력창은 가로 전체를 글쓰기에 사용) */
+  .admin-panel.mobile .chat-input-wrap :global(.input-bar) { padding-top: 38.4px; } /* 아이콘 탭 높이(48px × 0.8) */
+  .admin-panel.mobile .chat-input-wrap :global(.input-pill) { position: relative; padding: 14px 16px; min-height: 52px; background: color-mix(in srgb, var(--cs-purple) 4%, var(--cs-white)); filter: drop-shadow(0 3px 10px rgba(16, 11, 50, 0.24)); } /* 불투명 면(뒤 대화가 비치지 않음) + 아이콘 탭·입력창을 한 덩어리 모양 그대로 따라가는 옅은 그림자(뒤 스크롤 대화와 분리) */
+  /* 쿠폰 선물 팝업(모바일): 상하좌우 안쪽 여백을 주고, 가로 스크롤 없이 쿠폰 코드가 줄바꿈되게 한다 */
+  .admin-panel.mobile .chat-input-wrap :global(.coupon-popup) { padding: 16px 12px 12px; overflow-x: hidden; box-sizing: border-box; }
+  .admin-panel.mobile .chat-input-wrap :global(.coupon-item) { box-sizing: border-box; }
+  .admin-panel.mobile .chat-input-wrap :global(.coupon-item-main) { flex-wrap: wrap; }
+  .admin-panel.mobile .chat-input-wrap :global(.coupon-discount) { white-space: nowrap; flex-shrink: 0; }
+  .admin-panel.mobile .chat-input-wrap :global(.coupon-code-chip) { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+  .admin-panel.mobile .chat-input-wrap :global(.input-field::placeholder) { font-size: 14px; } /* 안내글만 한 단계 작게(16→14px, 입력한 글자 크기는 그대로) */
+  .admin-panel.mobile .chat-input-wrap :global(.input-pill:focus-within) { background: var(--cs-white); outline: 3px solid var(--cs-focus-ring); outline-offset: -3px; } /* 입력 중(선택)에는 흰 면 + 3px 아웃라인(포커스 링, Stephen 지시 2026-11-25) */
+  .admin-panel.mobile .chat-input-wrap :global(.icon-group) {
+    position: absolute;
+    zoom: 0.8; /* 아이콘 탭 전체 20% 축소(아이콘·패딩·높이·반경 함께) */
+    transform: translateX(-10%); /* 좌측으로 탭 자기 폭의 10% 이동 */
+    width: 173px; /* 가로폭 30% 확대(133→173px, zoom 적용 전 값) */
+    justify-content: space-evenly;
+    top: -48px; /* 입력창 위로 완전히 올려 글쓰기 영역을 가리지 않는다 */
+    right: 14px;
+    height: 48px; /* 상하 패딩 7px(높이의 약 20%)씩 추가: 34→48px */
+    padding: 7px 12px;
+    box-sizing: border-box;
+    background: color-mix(in srgb, var(--cs-purple) 4%, var(--cs-white)); /* 입력창과 같은 불투명 면 */
+    border-radius: 24px 24px 0 0; /* 입력창 윗변에 맞붙은 탭 모양 */
+    z-index: 2;
+  }
+  .admin-panel.mobile .toolbar-btn { height: 28px; min-height: 28px; padding: 0 12px; } /* 모바일 상단 버튼 상하폭 축소(Stephen 지시 2026-11-25, 32→28px) */
+  .admin-panel.mobile .header-toolbar { gap: 6px; }
   .blacklist-badge {
     background: var(--cs-red-xlight);
     color: var(--cs-red-badge);
@@ -2441,6 +2656,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    position: relative; /* 모바일 '보기' 반투명 막의 기준 */
   }
 
   .chat-avatar-initials {
@@ -2461,19 +2677,26 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    min-width: 0;
   }
 
+  /* 이름이 길어도 한 행 — 넘치면 말줄임(PC·모바일 공통) */
   .chat-user {
     font: var(--text-m-title-18B);
     color: var(--cs-dark);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ── 고객 기본정보 요약 ── */
   .customer-strip {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* 이메일·회원코드를 한 행에 두고 긴 이메일은 말줄임 */
     gap: 8px;
+    min-width: 0;
   }
 
   .cs-item {
@@ -2481,9 +2704,17 @@
     color: var(--cs-text-mid);
   }
 
-  .cs-email { color: var(--cs-text-mid); }
+  .cs-email {
+    color: var(--cs-text-mid);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .cs-code {
+    flex-shrink: 0;
+    white-space: nowrap;
     font-weight: 700;
     color: var(--cs-purple);
     background: var(--cs-purple-op10);
@@ -2491,6 +2722,7 @@
     padding: 2px 6px;
   }
 
+  .chat-status--btn { border: none; cursor: pointer; }
   .chat-status {
     display: inline-block;
     font: var(--text-pc-descript-10);

@@ -4,9 +4,13 @@
   import RentalDetailPanel from '$lib/components/cms/RentalDetailPanel.svelte'
   import QrScannerOverlay from '$lib/components/common/QrScannerOverlay.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
-  import { extractProductId, extractMemberCode, isProductMatch } from '$lib/utils/qrProductId'
+  import { extractProductId, extractMemberCode, identifyQrPayload, isProductMatch } from '$lib/utils/qrProductId'
   import { nextStatus } from '$lib/utils/rentalTransition'
   import { scrollPeek } from '$lib/utils/scrollPeek'
+  import MobileChatFab from '$lib/components/cms/MobileChatFab.svelte'
+  import CmsHelpBubble from '$lib/components/cms/CmsHelpBubble.svelte'
+  import FabCountBadge from '$lib/components/cms/FabCountBadge.svelte'
+  import { mobileNewRentals } from '$lib/stores/mobileNewRentals.svelte'
   import type { PageData } from './$types'
   import type { RentalListRow } from './+page.server'
 
@@ -63,14 +67,34 @@
     return true
   }
 
+  interface CardUnit { reservationId: number; status: string; pickupMethod: string | null; returnMethod: string | null }
+
+  // 스캔한 상품이 이 카드(주문 1건)의 어느 상품인지 찾는다 — 대표 상품이 아니면 같은 주문의 다른 상품(형제 예약)까지 확인한다
+  async function findCardUnit(row: RentalListRow, scannedId: string): Promise<CardUnit | null> {
+    if (isProductMatch(scannedId, row)) {
+      return { reservationId: row.reservation_id, status: row.status, pickupMethod: row.pickup_method ?? null, returnMethod: row.return_method ?? null }
+    }
+    if ((row.order_item_count ?? 1) <= 1) return null
+    try {
+      const res = await fetch(`/api/cms/reservations/${row.reservation_id}/rental-siblings`)
+      if (!res.ok) return null
+      const d = (await res.json()) as { siblings?: Array<{ reservationId: number; status: string; pickupMethod: string | null; returnMethod: string | null; productCode: string | null }> }
+      const hit = (d.siblings ?? []).find((sb) => isProductMatch(scannedId, { product_id: '', product_code: sb.productCode }))
+      return hit ? { reservationId: hit.reservationId, status: hit.status, pickupMethod: hit.pickupMethod, returnMethod: hit.returnMethod } : null
+    } catch {
+      return null
+    }
+  }
+
   async function processCardQrMatch(row: RentalListRow, scannedId: string): Promise<void> {
-    if (!isProductMatch(scannedId, row)) {
+    const unit = await findCardUnit(row, scannedId)
+    if (!unit) {
       csToast.error('스캔한 상품이 예약 상품과 일치하지 않습니다')
       return
     }
 
-    const target = nextStatus(row.status, row.pickup_method, row.return_method)
-    if (!AUTO_STATUSES.has(row.status) || !target) {
+    const target = nextStatus(unit.status, unit.pickupMethod, unit.returnMethod)
+    if (!AUTO_STATUSES.has(unit.status) || !target) {
       goto(`/cms/mobile/qr/${encodeURIComponent(scannedId)}`)
       return
     }
@@ -79,11 +103,11 @@
       const res = await fetch('/api/cms/rental-qr-transition', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reservationId: row.reservation_id, newStatus: target, productId: scannedId }),
+        body: JSON.stringify({ reservationId: unit.reservationId, newStatus: target, productId: scannedId }),
       })
       const body = await res.json()
       if (body.ok) {
-        csToast.success(row.status === 'confirmed' ? '반출로 자동 기록되었습니다' : '반납으로 자동 기록되었습니다')
+        csToast.success(unit.status === 'confirmed' ? '반출로 자동 기록되었습니다' : '반납으로 자동 기록되었습니다')
         invalidateAll()
       } else {
         csToast.error(body.message ?? '처리에 실패했습니다')
@@ -107,36 +131,72 @@
   // 플로팅 메뉴 스크롤 인터랙션 — 업스크롤 시 절반 숨김, 다운스크롤 시 튀어나오며 노출
   let fabPeek = $state(false)
 
+  // 홈·상품 목록 화면과 같은 판별(identifyQrPayload)을 쓴다 — 예약코드 QR(CS…·CZ-…)이 상품 품번으로 오인돼 404가 나지 않게 한다(2026-11-25)
   function handleGeneralQrDetected(raw: string): boolean {
-    const memberCode = extractMemberCode(raw)
-    if (memberCode) {
-      goto(`/cms/mobile/qr/member/${encodeURIComponent(memberCode)}`)
+    const result = identifyQrPayload(raw)
+    if (result.type === 'member') {
+      // 회원 QR — 모바일에서는 회원정보를 열지 않고 안내만 한다(회원정보는 PC 관리자에서 확인)
+      csToast.warning('회원정보는 PC 관리자에서 확인 가능합니다.')
       return true
     }
-    const id = extractProductId(raw)
-    if (!id) return false
-    goto(`/cms/mobile/qr/${id}`)
-    return true
+    if (result.type === 'reservation') {
+      goto(`/cms/mobile/qr/reservation/${encodeURIComponent(result.value)}`)
+      return true
+    }
+    if (result.type === 'product') {
+      goto(`/cms/mobile/qr/${result.value}`)
+      return true
+    }
+    return false
   }
+  // 정렬(홈 목록의 정렬 아이콘과 같은 UI) — 서버가 내려준 신청일 최신순(기본)을 시작으로 눌러서 순서를 돌린다.
+  // 이미 불러온 목록(한 페이지)에서만 순서를 바꾼다.
+  // 오늘 날짜(한국 시각) — 목록 상단 우측 끝에 표시. 서버·브라우저 시각 차로 인한 불일치를 피하려고 화면이 뜬 뒤에 채운다
+  let todayLabel = $state('')
+  $effect(() => {
+    const p = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }).formatToParts(new Date())
+    const g = (t: string) => p.find((x) => x.type === t)?.value ?? ''
+    todayLabel = `${g('year')}.${g('month')}.${g('day')} (${g('weekday')})`
+  })
+
+  const SORT_MODES = ['신청일 최신순', '대여 시작일 빠른순', '대여 시작일 늦은순'] as const
+  let sortMode = $state(0)
+  function toggleSort(): void { sortMode = (sortMode + 1) % SORT_MODES.length }
+  const sortedRentals = $derived.by(() => {
+    if (sortMode === 0) return data.rentals
+    const dir = sortMode === 1 ? 1 : -1
+    return [...data.rentals].sort((a, b) => (a.rental_start ?? '').localeCompare(b.rental_start ?? '') * dir)
+  })
 </script>
 
 <div class="mob-rentals-page">
-  <div class="mob-rentals-header">
-    <button type="button" class="back-btn" onclick={() => goto('/cms/mobile')} aria-label="뒤로">‹</button>
-    <span class="header-title">대여 목록</span>
+  <!-- 제목·뒤로가기는 모바일 레이아웃의 공통 서브 GNB가 담당한다 -->
+  <div class="list-toolbar">
+    <CmsHelpBubble text={SORT_MODES[sortMode]}>
+      <button type="button" class="toolbar-btn" onclick={toggleSort} aria-label={`정렬 — 현재 ${SORT_MODES[sortMode]}, 누르면 다음 정렬`} title="정렬">
+        <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+          <rect width="30" height="30" rx="15" fill="rgba(59,47,138,0.08)"/>
+          <path d="M12.999 12V21L9 16.7651M17 18V9L21 13.2349"
+            stroke="#3B2F8A"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </CmsHelpBubble>
+    {#if todayLabel}<span class="today-label">{todayLabel}</span>{/if}
   </div>
 
   {#if data.rentals.length === 0}
     <div class="no-data">표시할 대여 건이 없습니다.</div>
   {:else}
     <ul class="rental-card-list" role="list">
-      {#each data.rentals as row (row.reservation_id)}
+      {#each sortedRentals as row (row.reservation_id)}
         <li>
           <div class="rental-card" class:expanded={expandedReservationId === row.reservation_id}>
             <button
               type="button"
               class="rental-card-header"
               onclick={() => toggleCard(row.reservation_id)}
+              ontouchstart={() => {}}
               aria-expanded={expandedReservationId === row.reservation_id}
             >
               <div class="rental-card-main">
@@ -189,6 +249,7 @@
                   enableQrVerify={true}
                   stepFilter={['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
                   lockerViewRole={data.cmsRole}
+                  inspectionRole={data.cmsRole}
                   hiddenTabs={['payment', 'contract']}
                   largeTabs={true}
                   hideCustomerLink={true}
@@ -204,6 +265,7 @@
 
 <!-- 플로팅 아이콘 메뉴 그룹 (/cms/mobile 메인 화면과 동일 — 대여목록 + 카메라, 하단 우측 고정) -->
 <div class="fab-group" class:peek={fabPeek} use:scrollPeek={(v) => (fabPeek = v)}>
+  <MobileChatFab />
   <button
     type="button"
     class="rental-list-fab"
@@ -217,6 +279,7 @@
         <path d="M5.50195 0.552734V0H11.4268V0.552734C11.4269 0.0478777 11.4273 0.00376604 11.4277 0H11.4521C11.4617 0.000207732 11.4733 0.000442309 11.4854 0.000976562C11.5102 0.0020945 11.5413 0.00449327 11.5762 0.0078125C11.6461 0.0144915 11.7373 0.0265941 11.8418 0.0498047C12.0492 0.0959336 12.3309 0.18971 12.6162 0.379883C13.0867 0.693805 13.4563 1.19576 13.6133 1.9043C14.1644 1.95503 14.5826 2.04988 14.9473 2.23047C15.6296 2.56854 16.1845 3.10811 16.5322 3.77148C16.9275 4.52581 16.9277 5.51345 16.9277 7.48828V16.5166C16.9277 18.4914 16.9275 19.4791 16.5322 20.2334C16.1845 20.8969 15.6297 21.4363 14.9473 21.7744C14.1714 22.1587 13.1553 22.1592 11.124 22.1592H5.80371C3.77246 22.1592 2.75635 22.1588 1.98047 21.7744C1.29818 21.4363 0.743199 20.8968 0.395508 20.2334C0.000285467 19.4791 7.97912e-10 18.4913 0 16.5166V7.48828C1.06551e-08 5.51345 0.000185887 4.52581 0.395508 3.77148C0.743212 3.10806 1.29813 2.56857 1.98047 2.23047C2.34492 2.04993 2.7628 1.95507 3.31348 1.9043C3.47046 1.19536 3.8417 0.693827 4.3125 0.379883C4.59801 0.189565 4.87948 0.095915 5.08691 0.0498047C5.19155 0.0265825 5.28265 0.0144769 5.35254 0.0078125C5.38751 0.00448526 5.41847 0.00208781 5.44336 0.000976562C5.45551 0.000442312 5.46699 0.000207629 5.47656 0H5.50098C5.50145 0.00462108 5.50179 0.0532855 5.50195 0.552734ZM4.83594 15.6426C4.14581 15.6428 3.58602 16.2024 3.58594 16.8926C3.58595 17.5828 4.14576 18.1424 4.83594 18.1426H8.46289C9.15324 18.1426 9.71288 17.5829 9.71289 16.8926C9.7128 16.2023 9.15319 15.6426 8.46289 15.6426H4.83594ZM4.83594 10.752C4.14597 10.7522 3.58628 11.312 3.58594 12.002C3.58594 12.6922 4.14575 13.2518 4.83594 13.252H12.0908C12.781 13.2518 13.3408 12.6922 13.3408 12.002C13.3405 11.312 12.7808 10.7521 12.0908 10.752H4.83594ZM4.83594 5.8623C4.14581 5.86251 3.58602 6.42215 3.58594 7.1123C3.58594 7.80254 4.14575 8.3621 4.83594 8.3623H12.0908C12.781 8.36214 13.3408 7.80256 13.3408 7.1123C13.3407 6.42212 12.781 5.86247 12.0908 5.8623H4.83594Z" fill="white"/>
       </g>
     </svg>
+    <FabCountBadge count={mobileNewRentals.count} />
   </button>
 
   <button
@@ -255,31 +318,25 @@
     background: var(--cs-lilac);
   }
 
-  .mob-rentals-header {
+  .list-toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 15px 16px 12px;
+    justify-content: space-between;
+    padding: 28px 21px 0;
   }
-
-  .back-btn {
-    width: 44px;
-    height: 44px;
+  .today-label {
+    font: var(--text-m-script-14B);
+    font-family: var(--font-en-d-din), var(--font-kr); /* 숫자 전용 폰트 */
+    color: var(--cs-text-mid);
+  }
+  .toolbar-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
-    background: none;
+    background: transparent;
     border: none;
-    font-size: 28px;
-    color: var(--cs-text);
+    padding: 0;
     cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .header-title {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--cs-text);
+    line-height: 0;
   }
 
   .no-data {
@@ -350,8 +407,17 @@
   .rental-card-chevron {
     flex-shrink: 0;
     display: flex;
-    transition: transform 0.15s;
+    align-items: center;
+    justify-content: center;
+    /* 원형 터치 호버 영역 — 눈에 보이는 화살표 주변으로 32px 원, 마진을 빼서 행 높이는 그대로 */
+    width: 32px;
+    height: 32px;
+    margin: -9px;
+    border-radius: 50%;
+    transition: transform 0.15s, background 0.12s;
   }
+  /* 터치(누르는 동안) 시 원형 배경 — 공식 면 토큰만 사용 */
+  .rental-card-header:active .rental-card-chevron { background: var(--cs-lilac); }
   .rental-card-chevron.rotated { transform: rotate(180deg); }
 
   .rental-card-body {
@@ -412,13 +478,23 @@
   .rental-card-period {
     margin: 8px 0 0;
     font-size: 13px;
+    font-family: var(--font-en-d-din), var(--font-kr); /* 숫자 전용 폰트 */
     color: var(--cs-text-mid);
   }
 
   .rental-card-code {
     margin: 2px 0 0;
     font-size: 12px;
+    font-family: var(--font-en-d-din), var(--font-kr); /* 숫자 전용 폰트 */
     color: var(--cs-text-light);
+  }
+
+  /* 상세 패널의 숫자 UI(예약코드·품번·일시·기간 등) — 숫자 전용 폰트(D-DIN Exp), 한글은 한글 폰트로 대체. 크기·굵기는 기존 그대로 */
+  .rental-card-detail-wrap :global(.info-value),
+  .rental-card-detail-wrap :global(.info-value.mono),
+  .rental-card-detail-wrap :global(.panel-id),
+  .rental-card-detail-wrap :global(code) {
+    font-family: var(--font-en-d-din), var(--font-kr);
   }
 
   .rental-card-detail-wrap {
@@ -444,7 +520,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 16px;
+    gap: 11.2px; /* 아이콘 30% 축소에 맞춰 16→11.2px */
     transform: translateX(0);
   }
   /* 업스크롤 → peek(절반 숨김, 미세 감쇠) / 다운스크롤 → expand(팝아웃, 감쇠 스프링)
@@ -458,26 +534,27 @@
   }
   @keyframes fab-pop-out {
     0%   { transform: translateX(calc(50% + 20px)); }
-    28%  { transform: translateX(-21px); }
-    46%  { transform: translateX(10px); }
-    61%  { transform: translateX(-5px); }
-    73%  { transform: translateX(2.5px); }
-    83%  { transform: translateX(-1.2px); }
-    91%  { transform: translateX(0.6px); }
+    28%  { transform: translateX(-16.8px); }
+    46%  { transform: translateX(8px); }
+    61%  { transform: translateX(-4px); }
+    73%  { transform: translateX(2px); }
+    83%  { transform: translateX(-1px); }
+    91%  { transform: translateX(0.5px); }
     100% { transform: translateX(0); }
   }
   @keyframes fab-peek-in {
     0%   { transform: translateX(0); }
-    55%  { transform: translateX(65px); }
-    78%  { transform: translateX(53px); }
-    92%  { transform: translateX(58.5px); }
+    55%  { transform: translateX(52px); }
+    78%  { transform: translateX(42.4px); }
+    92%  { transform: translateX(46.8px); }
     100% { transform: translateX(calc(50% + 20px)); }
   }
 
+  .rental-list-fab { position: relative; }
   .qr-fab,
   .rental-list-fab {
-    width: 75px;
-    height: 75px;
+    width: 52.5px; /* 75px × 0.7 (Stephen 지시 2026-11-25, 플로팅 아이콘 30% 축소) */
+    height: 52.5px;
     padding: 0;
     background: none;
     border: none;
@@ -487,6 +564,7 @@
     justify-content: center;
     transition: transform 0.15s;
   }
+  .qr-fab svg, .rental-list-fab svg { width: 100%; height: 100%; }
   .qr-fab:active, .rental-list-fab:active { transform: scale(0.96); }
   @media (hover: hover) and (pointer: fine) {
     .qr-fab:hover, .rental-list-fab:hover { transform: scale(1.06); }

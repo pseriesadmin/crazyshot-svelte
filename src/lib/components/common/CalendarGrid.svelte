@@ -3,6 +3,10 @@
     value?: string
     onselect: (iso: string) => void
     disablePast?: boolean
+    // 지난 날짜도 선택할 수 있게 한다(2026-11-25, 모바일 현장앱 대시보드 날짜 조회용). 지난 날짜의 회색 표시는 그대로 유지하고 선택만 허용한다 — 미전달 시(기존 모든 호출부) 동작 100% 동일
+    pastSelectable?: boolean
+    // 터치로 좌우로 밀어 이전·다음 달로 넘긴다(2026-11-25, 모바일 현장앱) — 미전달 시 기존 동작 그대로
+    swipeMonths?: boolean
     // 지정 시 이 날짜보다 이전(미포함)은 선택 불가 — 예: 반납일 캘린더에서 수령일 이전 선택
     // 방지. minDate 당일은 선택 가능(당일 대여/반납 케이스 허용)
     minDate?: string
@@ -72,6 +76,8 @@
     value = '',
     onselect,
     disablePast = true,
+    pastSelectable = false,
+    swipeMonths = false,
     minDate = '',
     maxDate = '',
     rangeStart = '',
@@ -152,6 +158,30 @@
     else viewMonth += 1
   }
 
+  // ── 터치 좌우 스와이프 월 이동(swipeMonths 전용) ──
+  // 왼쪽으로 밀면 다음 달, 오른쪽으로 밀면 이전 달. 세로 스크롤과 구분하려고 가로 이동이 세로의 1.5배 이상일 때만 인식한다.
+  // 달이 바뀌면 밀린 방향에서 들어오는 짧은 슬라이드 모션을 준다.
+  let slideClass = $state('')
+  function slideIn(dir: 'next' | 'prev'): void {
+    slideClass = ''
+    requestAnimationFrame(() => { slideClass = dir === 'next' ? 'cal-slide-from-right' : 'cal-slide-from-left' })
+  }
+  function swipeAction(node: HTMLElement) {
+    if (!swipeMonths) return {}
+    let sx = 0
+    let sy = 0
+    const down = (e: TouchEvent): void => { sx = e.touches[0].clientX; sy = e.touches[0].clientY }
+    const up = (e: TouchEvent): void => {
+      const dx = e.changedTouches[0].clientX - sx
+      const dy = e.changedTouches[0].clientY - sy
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return
+      if (dx < 0) { nextMonth(); slideIn('next') } else { prevMonth(); slideIn('prev') }
+    }
+    node.addEventListener('touchstart', down, { passive: true })
+    node.addEventListener('touchend', up, { passive: true })
+    return { destroy(): void { node.removeEventListener('touchstart', down); node.removeEventListener('touchend', up) } }
+  }
+
   function isPastDay(iso: string): boolean {
     const beforeToday = disablePast && new Date(iso) < new Date(today.getFullYear(), today.getMonth(), today.getDate())
     const beforeMin = minDate ? iso < minDate : false
@@ -171,7 +201,7 @@
   // disablePast/minDate 중 더 제한적인 쪽을 유효 최소일로 취급 — 연/월 목록의 과거 항목
   // 비활성 판정에 재사용(캘린더 그리드의 day-level 판정과 동일한 두 조건을 그대로 반영)
   const effectiveMinIso = $derived(
-    disablePast
+    disablePast && !pastSelectable
       ? (minDate && minDate > todayIso ? minDate : todayIso)
       : minDate
   )
@@ -307,8 +337,9 @@
        measureCalGrid가 실측한 "현재 폭 기준 6행 높이"로 채운다(모바일·PC 반응형 불일치
        수정, 위 script 주석 참고). -->
   <div
-    class="cal-date-area"
+    class="cal-date-area {slideClass}"
     use:measureCalGrid
+    use:swipeAction
     style={gridMinHeight ? `--cal-min-h: ${gridMinHeight}px` : undefined}
   >
   {#if showYearPicker}
@@ -375,7 +406,8 @@
             class:cal-day-range-start={isRangeStart}
             class:cal-day-range-end={isRangeEnd}
             class:cal-day-in-range={isInRange}
-            disabled={past}
+            class:cal-day-past-pick={past && pastSelectable}
+            disabled={past && !pastSelectable}
             aria-disabled={holidayDisabled}
             title={
               holidayDisabled ? '선택할 수 없는 날짜입니다'
@@ -407,7 +439,13 @@
      아래 빈 공간이 생기던 결함 수정, 위 script 주석 참고). .cal-grid 자체에는 절대 높이
      제약을 주지 않는다(그리드 컨테이너에 직접 주면 auto 행이 stretch되어 aspect-ratio:1인
      .cal-day 폭까지 함께 커지는 결함이 있었음, 2026-09-15). */
-  .cal-date-area { --cal-min-h: 292px; min-height: var(--cal-min-h); }
+  .cal-date-area { --cal-min-h: 292px; min-height: var(--cal-min-h); touch-action: pan-y; }
+  /* 월 스와이프 슬라이드 — 밀어 넘긴 방향의 반대편에서 들어오며 감쇠 */
+  .cal-slide-from-right { animation: cal-in-right 0.32s cubic-bezier(0.25, 0.1, 0.25, 1) both; }
+  .cal-slide-from-left { animation: cal-in-left 0.32s cubic-bezier(0.25, 0.1, 0.25, 1) both; }
+  @keyframes cal-in-right { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes cal-in-left { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: translateX(0); } }
+  @media (prefers-reduced-motion: reduce) { .cal-slide-from-right, .cal-slide-from-left { animation: none; } }
 
   .cal-header {
     display: flex;
@@ -727,6 +765,7 @@
   .cal-day:hover:not(:disabled):not(.cal-day-holiday) { background: var(--cs-lilac); }
   .cal-day-sel { background: var(--cs-purple) !important; color: var(--cs-white) !important; font-weight: 700; }
   .cal-day-past { color: var(--cs-text-placeholder); cursor: not-allowed; }
+  .cal-day-past.cal-day-past-pick { cursor: pointer; }
   /* 택배 휴무일 비활성(2026-08-24) — 과거 날짜와 같은 톤이되 취소선으로 구분 */
   .cal-day-holiday { color: var(--cs-text-placeholder); cursor: not-allowed; text-decoration: line-through; }
   .cal-day-sun:not(.cal-day-past) { color: var(--cs-red-badge); }
