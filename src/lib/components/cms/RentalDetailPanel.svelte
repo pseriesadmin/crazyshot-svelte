@@ -158,6 +158,8 @@
     /** 모바일 대여현황용(2026-11-06) — cmsRole 을 넘기지 않고(매니저 전용 변경 기능은 계속 숨김) 이 역할이 매니저 이상이면
      *  '무인보관함 배정정보'를 PC 와 같은 모양의 보기 전용으로 보여 준다(입력·시범 발송·배정 확정 없음). */
     lockerViewRole?: string | null
+    /** 모바일 대여현황용(2026-11-25) — cmsRole 을 넘기지 않아도(다른 매니저 전용 변경 기능은 계속 숨김) 이 역할이 매니저 이상이면 '검수' 탭의 CS 접수 수동 등록·검수 처리를 PC와 같이 보인다. 서버(API)가 같은 기준으로 한 번 더 막는다 */
+    inspectionRole?: string | null
     /** 모바일 대여현황 전용(2026-11-06) — 숨길 탭 id 목록. 탭 버튼을 그리지 않고, 그 탭이 선택돼 있으면 대여정보 탭으로 돌려보낸다(접근 불가). */
     hiddenTabs?: ReadonlyArray<'rental' | 'customer' | 'payment' | 'contract' | 'inspection' | 'sms'>
     /** 모바일 대여현황 전용 — 탭 글자를 한 사이즈 크게(14px) + 볼드로 보여 준다 */
@@ -185,7 +187,7 @@
     /** 헤더 [반납 검수 승인] 숨김 — '검수' 칩 목록(이슈 검수중)에서는 [완료 처리(추가청구)]가 완료까지 처리하므로 승인 버튼을 두지 않는다(2026-11-12) */
     hideInspectionApprove?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, hideInspectionApprove = false, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, inspectionRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, hideInspectionApprove = false, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -624,7 +626,7 @@
 
   // ── 검수 처리(2단계, Migration #724): 반납 검수 승인 · 이슈 등록 · 이슈 해소 — manager 이상 ──
   const inspStatus = $derived(normalizeInspectionStatus(evInspection?.status))
-  const canInspect = $derived(canManagePaymentAndLocker && evInspection !== null)
+  const canInspect = $derived((canManagePaymentAndLocker || hasSettingsAccess(inspectionRole ?? '')) && evInspection !== null)
   const canApproveStage = $derived(row.status === 'returned' || row.status === 'return_requested') // 검수 승인(완료 처리) 가능 단계
   // 헤더 [반납 검수 승인] 활성 조건: 반납요청·반납완료 단계 + 고객 반납 제출 정보 또는 CS 접수 정보가 등록돼 있고 이슈 검수중이 아닐 때
   const hasInspectionInfo = $derived(evSubmission !== null || evSiblingSubs.length > 0 || evAdminEntries.length > 0 || (evInspection?.prior_reports?.length ?? 0) > 0 || (evInspection?.issues.length ?? 0) > 0)
@@ -4071,7 +4073,7 @@
           {#if evOrderUnits.length > 1}
             <div class="ev-chips">
               {#each evOrderUnits as u (u.reservation_id)}
-                <button type="button" class="ev-chip" class:ev-chip-on={adminRetTargetId === u.reservation_id} aria-pressed={adminRetTargetId === u.reservation_id} onclick={() => (adminRetTarget = u.reservation_id)}>{u.product_name ?? `예약 ${u.reservation_id}`}{u.has_record ? ' ✓' : ''}</button>
+                <button type="button" class="ev-chip ev-chip--name" class:ev-chip-on={adminRetTargetId === u.reservation_id} aria-pressed={adminRetTargetId === u.reservation_id} onclick={() => (adminRetTarget = u.reservation_id)}>{u.product_name ?? `예약 ${u.reservation_id}`}{u.has_record ? ' ✓' : ''}</button>
               {/each}
             </div>
           {/if}
@@ -4861,6 +4863,8 @@
   .cs-card-done .cs-title { color: var(--cs-text-light); }
   .ev-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .ev-chip { height: 36px; padding: 0 14px; border: none; border-radius: var(--cms-radius-sm); background: var(--cs-white); color: var(--cs-text); font: var(--text-pc-script-12); cursor: pointer; transition: background 0.15s; }
+  /* 상품 이름 칩 — 이름이 길어도 잘리거나 칩 밖으로 넘치지 않게 전체를 좌측 정렬로 줄바꿈해 보여 준다(1개 이상 목록) */
+  .ev-chip--name { height: auto; min-height: 36px; max-width: 100%; padding: 8px 14px; text-align: left; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
   .ev-chip:hover:not(.ev-chip-on) { background: var(--cs-lilac); }
   .ev-chip-on { background: var(--cs-purple); color: var(--cs-white); }
   .ev-textarea { resize: vertical; min-height: 64px; }

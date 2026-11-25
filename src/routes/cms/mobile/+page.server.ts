@@ -1,23 +1,16 @@
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
 import { createClient } from '@supabase/supabase-js'
+import { loadMobileTotalCounts, todayKst } from '$lib/server/cms/mobileDashboard'
 import type { PageServerLoad } from './$types'
 
+// 현장앱 첫 화면 = 대시보드. 카테고리 버튼(상품목록 이동용)과 '현재까지' 통합 건수와 오늘 날짜를 내려준다 — 날짜를 고르면 화면이 API로 그 날짜 건수를 다시 불러온다.
+// 상품 목록 자체는 /cms/mobile/products 가 불러온다.
 export const load: PageServerLoad = async () => {
-  // 상품 목록은 인증 여부와 무관하게 로드 (레이아웃에서 인증 처리)
   const admin = createClient(getSupabaseUrl(), env.SUPABASE_SERVICE_ROLE_KEY ?? '')
+  const date = todayKst()
 
-  const [{ data: products }, { data: rawCategoryGroups }] = await Promise.all([
-    admin
-      .from('products')
-      .select('id, name, product_code, category, image_urls, is_active')
-      .is('deleted_at', null)
-      .is('parent_product_id', null)
-      .eq('is_active', true)
-      .order('name', { ascending: true })
-      .limit(200),
-    // PC CMS 상품목록과 동일한 카테고리 소스 — code_mapping_groups.default_category가
-    // products.category 필터 키이며, show_in_product_filter=true인 그룹만 탭으로 노출
+  const [{ data: rawCategoryGroups }, counts] = await Promise.all([
     admin
       .from('code_mapping_groups')
       .select('name, default_category, show_in_product_filter')
@@ -26,23 +19,13 @@ export const load: PageServerLoad = async () => {
       .eq('show_in_product_filter', true)
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
+    loadMobileTotalCounts(admin),
   ])
 
-  // value = default_category (products.category 비교용 실제 필터 키)
   const categories = (rawCategoryGroups ?? []).map((g) => ({
     value: g.default_category as string,
     label: g.name as string,
   }))
 
-  return {
-    products: (products ?? []) as Array<{
-      id: string
-      name: string
-      product_code: string | null
-      category: string
-      image_urls: string[]
-      is_active: boolean
-    }>,
-    categories,
-  }
+  return { categories, date, counts }
 }

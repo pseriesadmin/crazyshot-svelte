@@ -546,6 +546,9 @@
                 </td>
                 <td>
                   <span class="customer-name">{row.customer_name ?? '-'}</span>
+                  {#if row.managed_customer}
+                    <span class="status-badge" style="background:{STATUS_STYLE.cancelled.bg};color:{STATUS_STYLE.cancelled.color}" title="관리대상으로 등록된 고객입니다">관리고객</span>
+                  {/if}
                 </td>
                 <td>
                   <div class="product-cell">

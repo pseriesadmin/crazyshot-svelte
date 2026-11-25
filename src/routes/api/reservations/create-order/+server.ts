@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit'
 import { createClient } from '@supabase/supabase-js'
 import { env } from '$env/dynamic/private'
 import { getSupabaseUrl } from '$lib/env/supabasePublic'
-import { sendPushToAdmins } from '$lib/server/push'
+import { sendPushToAdmins, sendPushToManagers } from '$lib/server/push'
 import type { RequestHandler } from './$types'
 
 // 예약 신청(hold) 시점 주문(orders/order_items) 연결 — Migration 280 create_reservation_order.
@@ -151,15 +151,24 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   try {
     const { data: profile } = await admin
       .from('user_profiles')
-      .select('full_name')
+      .select('full_name, blacklisted')
       .eq('id', session.user.id)
       .maybeSingle()
-    const customerName = (profile as { full_name?: string } | null)?.full_name ?? '고객'
+    const profileRow = profile as { full_name?: string; blacklisted?: boolean | null } | null
+    const customerName = profileRow?.full_name ?? '고객'
     await sendPushToAdmins('new_reservation', {
       title: '새 예약 신청이 들어왔어요',
       body: `${customerName}님이 ${reservationIds.length}건 예약 신청을 했어요.`,
       link: '/cms/reservation',
     })
+    // 관리대상(관리고객) 계정이면 매니저 이상에게만 경고 푸시를 추가 발송 — 관리대상 정보는 파트너에게 비공개(고객 요약 API와 같은 기준)
+    if (profileRow?.blacklisted === true) {
+      await sendPushToManagers('new_reservation_managed', {
+        title: '관리고객이 예약을 신청했어요',
+        body: `관리대상 고객 ${customerName}님이 ${reservationIds.length}건 예약 신청을 했어요. 확인 후 진행해 주세요.`,
+        link: '/cms/reservation',
+      })
+    }
   } catch {
     // 관리자 푸시 실패는 무시
   }

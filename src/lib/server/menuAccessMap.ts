@@ -75,6 +75,8 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       // 2-A(Stephen 확정 Q0 2026-10-06): 상담 고객패널 전용 조회는 상담 단독
       'src/routes/api/cms/customers/[id]/coupons',
       'src/routes/api/cms/customers/[id]/summary',
+      // 상담 중 입력한 이름·전화번호 ↔ 관리대상 자동 대조 경고(2026-11-25) — 상담 단독 + 서버에서 매니저 이상 확인
+      'src/routes/api/cms/customers/[id]/managed-alert',
       'src/routes/api/cms/coupons/available',
     ],
   },
@@ -163,6 +165,10 @@ export const MENU_GUARDED_ENDPOINTS: Record<string, { dirs: string[]; phase: Men
       'src/routes/api/cms/reservations/resolve',
       // 1g(Stephen 확정 2026-10-05): 모바일 전용 API — 호출처는 /cms/mobile 화면뿐
       'src/routes/api/cms/mobile-search-rank',
+      // 모바일 '대여 목록' 아이콘 당일 신규 건수 배지(2026-11-25) — 호출처는 /cms/mobile 화면뿐
+      'src/routes/api/cms/mobile-new-count',
+      // 모바일 첫 화면 대시보드 날짜별 건수(2026-11-25)
+      'src/routes/api/cms/mobile-dashboard',
       'src/routes/api/cms/assets',
       'src/routes/api/cms/assets/[id]',
       // 1d 후속(Stephen 확정 2026-10-05): 예약 패널 상품찾기 모달 전용 API — 계정별 예약대여현황 권한을 따름
