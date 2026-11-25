@@ -6,6 +6,7 @@
   interface HeroSettings {
     products: { id: string; order: number }[]
     mode: ProductListMode
+    popup?: { on_wish?: boolean; on_reserve?: boolean }
   }
 
   interface Props {

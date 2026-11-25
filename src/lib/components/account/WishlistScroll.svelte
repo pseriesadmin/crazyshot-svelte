@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished, setWishOverride } from '$lib/stores/wishState.svelte'
   import ChevronIcon from '$lib/components/common/ChevronIcon.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import type { CustomerBadge } from '$lib/types/badge'
@@ -29,6 +30,8 @@
 
   let localItems = $state([...items])
   let localCount = $state(totalCount)
+  // 다른 화면에서 이번 접속 중 찜을 해제한 상품은 서버 목록(미리 받아 둔 옛 데이터 포함)에 남아 있어도 보이지 않게 한다
+  const visibleItems = $derived(localItems.filter((i) => resolveWished(i.product_id, true)))
 
   $effect(() => {
     localItems = [...items]
@@ -47,6 +50,7 @@
     if (!data.ok) return
 
     if (data.action === 'removed') {
+      setWishOverride(productId, false)
       localItems = localItems.filter(i => i.product_id !== productId)
       localCount = Math.max(0, localCount - 1)
     }
@@ -61,7 +65,7 @@
       <div class="section-header">
         <p class="section-title">관심가져봄</p>
         <div class="section-right">
-          <p class="section-count">{localCount}</p>
+          <p class="section-count">{Math.max(0, localCount - (localItems.length - visibleItems.length))}</p>
           <div class="chevron-wrap">
             <ChevronIcon size={8} color="var(--cs-text-dark)" />
           </div>
@@ -70,7 +74,7 @@
     {/if}
 
     <!-- 가로 스크롤 카드 목록 -->
-    {#if localItems.length === 0}
+    {#if visibleItems.length === 0}
       <div class="empty-wish">
         <p class="empty-wish-msg">관심 상품이 없습니다</p>
         <p class="empty-wish-sub">마음에 드는 상품에 하트를 눌러 보세요</p>
@@ -78,7 +82,7 @@
     {:else}
       <div class="scroll-track">
         <div class="scroll-inner">
-          {#each localItems as item (item.wishlist_id)}
+          {#each visibleItems as item (item.wishlist_id)}
             <ProductDPCard
               variant="scroll-s"
               id={item.product_id}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   // 찜 추가 직후 열리는 'MD 추천' 바텀 팝업(2026-11-18 Stephen 지시) — 루트 레이아웃에서 1개만 렌더링.
   // 열림 상태: $lib/stores/wishMdSheet.svelte. 내용: /products 의 MD 추천과 같은 상품(조회: GET /products/_md), 카드는 표준 ProductDPCard 'pick' 변형.
   // 닫기: 바깥(백드롭) 터치 · ✕ · 핸들을 잡아 아래로 끌기 · ESC. 모달은 transform 이 걸린 조상 밖(루트)에 둔다(position:fixed 충돌 방지).
@@ -7,6 +8,7 @@
   import { wishMdSheet, closeWishMdSheet } from '$lib/stores/wishMdSheet.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
   import type { CustomerBadge } from '$lib/types/badge'
+  import { resolveMdPopupOpen, normalizeMdPopupCondition, type MdPopupCondition, type MdPopupTrigger } from '$lib/utils/mdPopupCondition'
 
   interface MdProduct {
     id: string
@@ -33,27 +35,57 @@
   let wishedSet = $state<Set<string>>(new Set())
   let dialogEl = $state<HTMLDivElement | null>(null)
 
-  async function load(): Promise<void> {
-    if (loading) return
+  let inflight: Promise<void> | null = null
+
+  function load(): Promise<void> {
+    if (inflight) return inflight
     loading = true
     failed = false
-    try {
-      const res = await fetch('/products/_md')
-      if (!res.ok) throw new Error('md_fetch_failed')
-      payload = (await res.json()) as MdPayload
-      wishedSet = new Set(payload.wishedIds)
-    } catch {
-      failed = true
-    } finally {
-      loading = false
-    }
+    inflight = (async () => {
+      try {
+        const res = await fetch('/products/_md')
+        if (!res.ok) throw new Error('md_fetch_failed')
+        payload = (await res.json()) as MdPayload
+        wishedSet = new Set(payload.wishedIds)
+      } catch {
+        failed = true
+      } finally {
+        loading = false
+        inflight = null
+      }
+    })()
+    return inflight
   }
 
-  // 열릴 때마다 최신 상태(방금 찜한 상품 반영)로 다시 조회하고 포커스를 시트로 옮긴다
+  // 열기 요청(찜 추가 · 예약신청)이 들어오면 최신 상태(방금 찜한 상품 반영)로 조회한 뒤, MD 추천 설정의 '노출조건'이 허용할 때만 연다.
+  // 조건이 꺼져 있으면 요청만 지우고 열지 않는다. 조회가 실패하면 기존처럼 찜 때는 안내와 함께 열고, 예약신청 때는 열지 않는다.
   // load() 안에서 읽는 loading·payload 가 이 효과의 의존성으로 잡히면 조회가 끝날 때마다 다시 조회하는 반복이 생기므로 untrack 으로 감싼다(sp3 M1)
+  // 먼저 노출조건만 가볍게 확인(?only=popup)하고, 허용될 때만 상품 목록 전체를 조회한다 — 불허일 때는 큰 조회를 하지 않는다.
+  async function fetchCondition(): Promise<MdPopupCondition | null> {
+    try {
+      const res = await fetch('/products/_md?only=popup')
+      if (!res.ok) return null
+      const body = (await res.json()) as { popup?: unknown }
+      return normalizeMdPopupCondition(body.popup)
+    } catch {
+      return null
+    }
+  }
+  async function openIfAllowed(trigger: MdPopupTrigger): Promise<void> {
+    const condition = await fetchCondition()
+    if (wishMdSheet.requested !== trigger) return
+    if (!resolveMdPopupOpen(condition, trigger)) {
+      wishMdSheet.requested = null
+      return
+    }
+    await load()
+    if (wishMdSheet.requested !== trigger) return
+    wishMdSheet.open = true
+  }
   $effect(() => {
-    if (!wishMdSheet.open) return
-    untrack(() => { void load() })
+    const trigger = wishMdSheet.requested
+    if (!trigger || untrack(() => wishMdSheet.open)) return
+    untrack(() => { void openIfAllowed(trigger) })
   })
   $effect(() => {
     if (wishMdSheet.open && dialogEl) dialogEl.focus()
@@ -181,7 +213,7 @@
               isSaleOnly={prod.sale_only}
               salePrice={prod.sale_price}
               href={`/products/${prod.slug ?? prod.id}`}
-              wished={wishedSet.has(prod.id)}
+              wished={resolveWished(prod.id, wishedSet.has(prod.id))}
               badges={payload.productBadges[prod.id] ?? []}
               cardKeywords={payload.productCardKeywords[prod.id] ?? []}
               onWishToggle={handleWish}

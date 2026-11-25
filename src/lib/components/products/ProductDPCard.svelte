@@ -61,6 +61,9 @@
     cardKeywords = [],
   }: Props = $props()
 
+  // 같은 SVG id 를 여러 카드가 쓰면 숨겨진 변형(반응형 display:none)의 그라데이션을 참조할 수 있어 카드마다 고유 id 를 쓴다(2026-11-25)
+  const uid = $props.id()
+
   // 이미지형은 좌상단, 바(텍스트)형은 하단 중앙 — 표시 개수 상한은 두지 않는다(2026-11-16, Stephen 확정)
   const iconBadges = $derived(badges.filter((b) => b.kind !== 'textbar'))
   const barBadges = $derived(badges.filter((b) => b.kind === 'textbar'))
@@ -122,10 +125,10 @@
       >
         {#if isWished}
           <svg class:pop={justToggled} viewBox="0 0 60 60" fill="none" aria-hidden="true">
-            <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="url(#cs-wish-on-grad)"/>
+            <path d="M60 30C60 46.5685 46.5685 60 30 60C13.4315 60 0 46.5685 0 30C0 13.4315 13.4315 0 30 0C46.5685 0 60 13.4315 60 30Z" fill="url(#cs-wish-on-grad-{uid})"/>
             <path d="M37.2833 16C43.095 16 47 21.4013 47 26.44C47 36.6444 30.7933 45 30.5 45C30.2067 45 14 36.6444 14 26.44C14 21.4013 17.905 16 23.7167 16C27.0533 16 29.235 17.6494 30.5 19.0994C31.765 17.6494 33.9467 16 37.2833 16Z" fill="white"/>
             <defs>
-              <linearGradient id="cs-wish-on-grad" x1="0" y1="30" x2="60" y2="30" gradientUnits="userSpaceOnUse">
+              <linearGradient id="cs-wish-on-grad-{uid}" x1="0" y1="30" x2="60" y2="30" gradientUnits="userSpaceOnUse">
                 <stop stop-color="#FF3535"/>
                 <stop offset="0.408654" stop-color="#3B2F8A"/>
               </linearGradient>

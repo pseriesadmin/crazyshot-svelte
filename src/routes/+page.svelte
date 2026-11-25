@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   import { goto } from '$app/navigation'
 
   /** 스크롤해서 화면 안쪽에 충분히 들어올 때 한 번만 '팍' 터지듯 튀어나오는 모션(data-burst=in) — 보이기 전에는 숨겨 두었다가(data-burst=wait) 진입 시 재생. 모션 줄이기 설정이면 바로 표시 */
@@ -1222,7 +1223,7 @@
             isSaleOnly={prod.sale_only}
             salePrice={prod.sale_price}
             href={'/products/' + (prod.slug || prod.id)}
-            wished={wishedSet.has(prod.id)}
+            wished={resolveWished(prod.id, wishedSet.has(prod.id))}
             onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
             badges={data.productBadges?.[prod.id] ?? []}
             cardKeywords={data.productCardKeywords?.[prod.id] ?? []}

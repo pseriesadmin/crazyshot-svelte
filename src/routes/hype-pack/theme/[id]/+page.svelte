@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolveWished } from '$lib/stores/wishState.svelte'
   import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import ProductDPCard from '$lib/components/products/ProductDPCard.svelte'
   import { toggleWish } from '$lib/utils/wishlist'
@@ -54,7 +55,7 @@
               price24h={prod.price24h}
               price12h={prod.price12h}
               href={productLink(prod)}
-              wished={wishedSet.has(prod.id)}
+              wished={resolveWished(prod.id, wishedSet.has(prod.id))}
               onWishToggle={data.isLoggedIn ? handleWishToggle : undefined}
               badges={data.productBadges?.[prod.id] ?? []}
               cardKeywords={data.productCardKeywords?.[prod.id] ?? []}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { invalidateAll } from '$app/navigation'
   import { supabase } from '$lib/services/supabase'
   import CmsDragList from '$lib/components/cms/CmsDragList.svelte'
@@ -10,6 +11,7 @@
   import { validateUploadFile, validateUploadFileSize, getMimeExtension } from '$lib/utils/fileValidation'
   import type { ProductListMode } from '$lib/utils/productListOrder'
   import { csToast } from '$lib/utils/toast'
+  import { DEFAULT_MD_POPUP_CONDITION, normalizeMdPopupCondition, type MdPopupCondition } from '$lib/utils/mdPopupCondition'
 
   interface ProductItem {
     id: string
@@ -23,6 +25,8 @@
   interface HeroSettings {
     products: { id: string; order: number; tone?: CardTone | null }[]
     mode: ProductListMode
+    /** MD 추천 픽 설정 전용 — 'MD 추천' 팝업 노출조건(없으면 찜 ON·예약 OFF) */
+    popup?: Partial<MdPopupCondition>
   }
 
   // 카테고리 선택 시 헤더 슬라이드 대신 노출되는 배너(가로 100% × 세로 150px) — 카테고리별 1개
@@ -73,6 +77,7 @@
 
   const BANNER_KEY = 'product_page_category_banners'
   const isHero = settingKey === 'product_page_hero'
+  const isMd = settingKey === 'product_page_md_picks'
   // 카테고리 배너 행 아코디언 — 기본 닫힘(행이 길어 목록 파악이 어려움), 펼친 행의 category_id 목록
   let openBanners = $state<string[]>([])
   function toggleBanner(id: string): void {
@@ -186,6 +191,18 @@
   }
 
   let mode = $state<ProductListMode>(initialSettings.mode)
+  // MD 추천 팝업 노출조건 — 설정값에 없으면 찜 ON·예약 OFF(기존 동작 유지)
+  // 저장된 값(prop)이 '실제로 달라졌을 때만' 그 값으로 다시 맞춘다 — $state(prop) 1회 초기화 금지 규칙.
+  // 설정을 다시 불러와도(객체만 새로 바뀌고 값은 같을 때) 편집 중인 토글은 유지한다: 비교는 값 문자열(savedPopupKey)로 한다.
+  const savedPopupKey = $derived.by(() => {
+    const c = normalizeMdPopupCondition(initialSettings.popup)
+    return `${c.on_wish}-${c.on_reserve}`
+  })
+  let popup = $state<MdPopupCondition>({ ...DEFAULT_MD_POPUP_CONDITION })
+  $effect(() => {
+    void savedPopupKey
+    popup = untrack(() => normalizeMdPopupCondition(initialSettings.popup))
+  })
   let selected = $state<ProductItem[]>([])
   let searchResults = $state<ProductItem[]>([])
   let isSearching = $state(false)
@@ -348,6 +365,8 @@
       // tone: 헤더 슬라이드에서 바탕색을 고른 상품에만 담는다(비어 있으면 기존 옅은 퍼플 카드)
       products: selected.map((p, i) => (isHero && p.card_tone ? { id: p.id, order: i, tone: p.card_tone } : { id: p.id, order: i })),
       mode,
+      // MD 추천 픽 설정에만: 'MD 추천' 팝업 노출조건(찜 선택·예약 선택)
+      ...(isMd ? { popup: { on_wish: popup.on_wish, on_reserve: popup.on_reserve } } : {}),
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: err } = await (supabase.rpc as any)('upsert_product_page_setting', {
@@ -462,6 +481,21 @@
   <div class="modal-body">
     <!-- 노출 방식 + 상품 추가 + 선택된 상품 — 카드 스타일 없이 div로만 그룹핑 -->
     <div class="group-wrap">
+    {#if isMd}
+      <!-- 노출조건: 찜 선택·예약 선택 각각 ON/OFF — ON인 행위를 고객이 했을 때 'MD 추천' 팝업을 연다 -->
+      <div class="section">
+        <p class="section-label">노출조건</p>
+        <div class="combo-wrap" role="group" aria-label="노출조건">
+          <button type="button" class="combo-btn" class:combo-btn-active={popup.on_wish} aria-pressed={popup.on_wish} onclick={() => (popup.on_wish = !popup.on_wish)}>
+            <span class="combo-label">찜 선택</span>
+          </button>
+          <button type="button" class="combo-btn" class:combo-btn-active={popup.on_reserve} aria-pressed={popup.on_reserve} onclick={() => (popup.on_reserve = !popup.on_reserve)}>
+            <span class="combo-label">예약 선택</span>
+          </button>
+        </div>
+        <p class="banner-help">옵션 다중 선택 가능</p>
+      </div>
+    {/if}
     <div class="section">
       <p class="section-label">노출 방식</p>
       <div class="combo-wrap" role="group" aria-label="노출 방식">
@@ -475,6 +509,7 @@
           <span class="combo-label">1회 랜덤노출</span>
         </button>
       </div>
+      <p class="banner-help">옵션 중 단일 선택 가능</p>
     </div>
 
     <!-- 상품 추가 + 선택된 상품 — 카드형 그룹 -->
