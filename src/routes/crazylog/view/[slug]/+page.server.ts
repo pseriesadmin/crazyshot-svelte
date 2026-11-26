@@ -1,7 +1,8 @@
-import type { PageServerLoad } from './$types'
+import type { Actions, PageServerLoad } from './$types'
 import { resolveGrade } from '$lib/utils/membership'
 import { canManagePost, canDeletePost } from '$lib/utils/crazylogPostPermissions'
 import { sanitizeCrazylogBlocks } from '$lib/server/sanitizeCrazylogHtml'
+import { countPostView, loadTopViewedPosts } from '$lib/server/crazylogViews'
 
 type PostRow = {
 	id: string
@@ -55,6 +56,8 @@ function extractYoutubeVideoId(blocks: unknown): string | null {
 	}
 	return null
 }
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	const { session } = await locals.safeGetSession()
@@ -175,8 +178,23 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const canManage = canManagePost(permInput)
 	const canDelete = canDeletePost(permInput)
 
+	// 같은 분류에서 많이 본 로그 최대 10개(현재 글 제외).
+	// ⛔ 조회수 +1 은 load 에서 하지 않는다 — 전역 data-sveltekit-preload-data="hover" 때문에 링크에 마우스만 올려도(봇·프리페치 포함) load 가 실행된다.
+	//   집계는 화면이 실제로 열린 뒤 클라이언트가 보내는 form action(?/view)에서만 한다(아래 actions.view).
+	const topViewed = await loadTopViewedPosts(locals.supabase, postData.log_type ?? '', postData.id)
+
 	// 작성자가 댓글을 막은 글(allow_comments=false)이면 새 댓글 입력을 막는다(기존 댓글은 그대로 표시) — 집행은 DB 트리거 #648
 	const allowComments = postData.allow_comments !== false
 
-	return { isAdmin, isLoggedIn, isOwner, canManage, canDelete, allowComments, currentUser, postId: params.slug, postStatus: postData.status, post, comments }
+	return { isAdmin, isLoggedIn, isOwner, canManage, canDelete, allowComments, currentUser, postId: params.slug, postStatus: postData.status, post, comments, topViewed }
+}
+
+
+export const actions: Actions = {
+	/** 상세 화면이 실제로 열린 뒤 클라이언트가 1회 호출 — 조회수 +1(게시·공개 글, 브라우저당 24시간 1회) */
+	view: async ({ params, cookies, url }) => {
+		if (!UUID_PATTERN.test(params.slug)) return { counted: false }
+		await countPostView(cookies, params.slug, url.protocol === 'https:')
+		return { counted: true }
+	},
 }

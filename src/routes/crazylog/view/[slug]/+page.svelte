@@ -7,8 +7,8 @@
   import type { SupabaseClient } from '@supabase/supabase-js'
   import type { PageData } from './$types'
   import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
-  import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import TopViewedLogs from '$lib/components/crazylog/TopViewedLogs.svelte'
   import { describePostActionError } from '$lib/utils/crazylogPostPermissions'
   import '$lib/styles/rich-content.css'
   import { imageBlockStyle } from '$lib/types/content-editor'
@@ -21,6 +21,21 @@
   // 않고 data만 갱신될 수 있다. $derived로 매번 최신 data.post를 반영한다.
   const post = $derived(data.post)
   const YOUTUBE_VIDEO_ID = $derived(post?.youtubeVideoId ?? null)
+
+  // 조회수 +1 — 화면이 실제로 열린 뒤(브라우저에서만) 서버 form action 에 글마다 1회 알린다. 마우스를 올려 미리 받아 둔 데이터(load)로는 올라가지 않는다.
+  // 글 id 만 따로 뽑아($derived는 같은 값이면 알리지 않음) 댓글 등록·삭제 뒤 data 가 갱신돼도 같은 글에는 다시 보내지 않는다. 쿠키 중복 제외는 서버가 처리.
+  const viewedPostId = $derived(data.postStatus === 'published' ? (data.post?.id ?? null) : null)
+  let lastCountedId: string | null = null
+  $effect(() => {
+    const id = viewedPostId
+    if (!id || id === lastCountedId) return
+    lastCountedId = id
+    void fetch(`/crazylog/view/${id}?/view`, {
+      method: 'POST',
+      body: new FormData(),
+      headers: { 'x-sveltekit-action': 'true' },
+    }).catch(() => { /* 조회수 집계 실패는 화면에 영향 없음 */ })
+  })
 
   // ── 작성자 옵션 연결(2026-10-06) ───────────────────────────────────────────
   // 스크랩 허용 꺼짐 → 본문 복사·잘라내기·드래그 선택·우클릭(이미지 저장)을 막는다. 작성자·관리자(canManage)는 예외.
@@ -548,6 +563,9 @@
 
     </div><!-- /d-comments -->
 
+    <!-- 같은 분류에서 많이 본 로그(최대 10개) — PC -->
+    <div class="d-top-viewed"><TopViewedLogs posts={data.topViewed ?? []} /></div>
+
   </div>
 </div>
 
@@ -556,8 +574,8 @@
 ══════════════════════════════════ -->
 <div class="m-view">
 
-  <!-- 모바일 sub-GNB — SubGnb.svelte 표준(cart·search와 동일, noGnbOffset) -->
-  <SubGnb title={post?.logType ?? ''} titleLocale="kr" mobileOnly noGnbOffset />
+  <!-- sub-GNB — SubGnb.svelte 표준(cart·search와 동일, noGnbOffset). 768px 미만은 모바일 알약, 768~1023px은 PC 알약(1024px 이상은 위 d-view의 sub-gnb-b) -->
+  <SubGnb title={post?.logType ?? ''} titleLocale="kr" noGnbOffset />
 
   <!-- 2. Body: pt-[50px] -->
   <div class="m-body">
@@ -742,11 +760,12 @@
 
     </div><!-- /m-huri -->
 
+    <!-- 같은 분류에서 많이 본 로그(최대 10개) — 모바일 -->
+    <div class="m-top-viewed"><TopViewedLogs posts={data.topViewed ?? []} /></div>
+
   </div><!-- /m-body -->
 
 </div><!-- /m-view -->
-
-<BottomTabBar />
 
 <!-- ══════════════════════════════════
      ADMIN: 삭제 확인 모달
@@ -1229,18 +1248,9 @@
     .m-view { display: flex; }
   }
 
-  /* 이 페이지는 PC/모바일 분기가 1024px — SubGnb 기본(768px)보다 넓은 구간에서도
-     모바일 sub-GNB를 유지(cart·search와 동일 top:0·~74px 높이) */
-  @media (max-width: 1023px) {
-    .m-view :global(.sub-gnb-mobile-wrap) {
-      display: block !important;
-      overflow: hidden;
-      max-height: 100px;
-      width: 100%;
-    }
-    .m-view :global(.sub-gnb-mobile) {
-      display: block !important;
-    }
+  /* 768~1023px: 공통 SubGnb의 PC 알약이 이 화면의 가운데 정렬 flex 부모 안에서 내용 폭으로 줄어들지 않게 가로 전체로 늘린다(front-uiux §13-1 SubGnb CSS 패턴 주의) */
+  @media (min-width: 768px) {
+    .m-view :global(.sub-gnb-pc) { align-self: stretch; width: 100%; }
   }
 
   /* 2. Body: pt-[50px] */
@@ -1261,6 +1271,10 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+  }
+  /* 모바일 카드 반경 "대"(최상위 컨테이너) 30px — front-uiux.md §4 표(card 대 Mobile 30px, PC 50px × 0.60) */
+  @media (max-width: 640px) {
+    .m-posts-eng { border-radius: 30px 30px 0 0; }
   }
 
   /* Img(): h-[450px] */
@@ -1475,6 +1489,9 @@
   .m-license a { color: var(--cs-purple); text-decoration: underline; }
 
   /* 후기 div: px-[25px] pb-[100px] on #ecebf4 bg */
+  .m-top-viewed { width: 100%; padding: 0 25px 100px; }
+  .d-top-viewed { width: 100%; max-width: 1240px; }
+
   .m-huri {
     width: 100%;
     padding: 0 25px 100px;
