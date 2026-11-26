@@ -55,6 +55,18 @@
 
   const M_KEYWORDS = $derived(data.headKeywords)
 
+  // 더보기(+) 첫 오픈 강조 — 브라우저 탭을 연 뒤 처음 이 화면에 들어왔을 때 한 번만(sessionStorage 표식) 번짐 + 회전을 재생한다
+  let moreHint = $state(false)
+  $effect(() => {
+    try {
+      if (sessionStorage.getItem('cs_crazylog_more_hint')) return
+      sessionStorage.setItem('cs_crazylog_more_hint', '1')
+    } catch { /* 저장소 사용 불가 — 이 화면을 열 때마다 재생될 수 있을 뿐 */ }
+    moreHint = true
+    const t = setTimeout(() => { moreHint = false }, 2400)
+    return () => clearTimeout(t)
+  })
+
   interface CardItem {
     id: string | null
     href: string
@@ -295,7 +307,9 @@
       <!-- Figma: body text — 18px Medium #666 -->
       <p class="m-head-desc">한정특가 이벤트부터 제품 출시정보까지,<br/>언제나 최신 흐름을 따라가세요.</p>
       <!-- Figma: Frame3 — keyword chips + help circle -->
-      <div class="m-chips-wrap">
+      <!-- 키워드가 없으면 영역 자체를 그리지 않아 위아래 간격(gap)까지 사라진다. 관리자는 '키워드 설정' 버튼 때문에 남기되, 키워드가 없을 땐 설명글 위에 겹치지 않게 흐름 안에 둔다 -->
+      {#if M_KEYWORDS.length > 0 || data.isCms}
+      <div class="m-chips-wrap" class:m-chips-wrap-empty={M_KEYWORDS.length === 0}>
         {#if data.isCms}
           <button
             class="admin-edit-btn admin-kw-btn"
@@ -303,17 +317,21 @@
             aria-label="헤드 키워드 설정"
           >✦ 키워드 설정</button>
         {/if}
-        <div class="m-chips">
-          {#each M_KEYWORDS as kw}
-            <a class="m-chip" href={kw.href}>{kw.title}</a>
-          {/each}
-          <svg class="m-chip-help" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="도움말">
-            <circle cx="15" cy="15" r="15" fill="#FF3535"/>
-            <path d="M11 12.5C11 10.567 12.567 9 14.5 9S18 10.567 18 12.5c0 1.5-1 2.5-2 3v1" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
-            <circle cx="15" cy="19.5" r="1" fill="white"/>
-          </svg>
-        </div>
+        <!-- 키워드 설정값이 없으면 칩 영역과 도움말 아이콘을 통째로 숨긴다(관리자의 '키워드 설정' 버튼은 위에서 별도 유지) -->
+        {#if M_KEYWORDS.length > 0}
+          <div class="m-chips">
+            {#each M_KEYWORDS as kw}
+              <a class="m-chip" href={kw.href}>{kw.title}</a>
+            {/each}
+            <svg class="m-chip-help" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-label="도움말">
+              <circle cx="15" cy="15" r="15" fill="#FF3535"/>
+              <path d="M11 12.5C11 10.567 12.567 9 14.5 9S18 10.567 18 12.5c0 1.5-1 2.5-2 3v1" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+              <circle cx="15" cy="19.5" r="1" fill="white"/>
+            </svg>
+          </div>
+        {/if}
       </div>
+      {/if}
     </div>
   </section>
 
@@ -331,7 +349,7 @@
             <!-- Figma: shrink-0 header bar -->
             <div class="m-card-header" style="background:{card.headerBg}">
               <span class="m-card-category">{card.category}</span>
-              <button type="button" class="m-card-more" aria-label="{card.category} 콘텐츠 목록 보기" onclick={(e) => openCategoryList(e, card.category)}>
+              <button type="button" class="m-card-more" class:more-hint={moreHint} aria-label="{card.category} 콘텐츠 목록 보기" onclick={(e) => openCategoryList(e, card.category)}>
                 <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
                   <rect width="22" height="22" rx="7" fill="rgba(225,222,243,0.9)"/>
                   <path d="M6 11h10M11 6v10" stroke="#553FE0" stroke-width="2.5" stroke-linecap="round"/>
@@ -950,6 +968,10 @@
   .m-chips-wrap {
     position: relative;
   }
+  /* 키워드 없음(관리자만 이 영역이 남음): 영역은 높이 0 + 위 간격(gap 30px) 상쇄로 공간을 차지하지 않고,
+     '키워드 설정' 버튼만 설명글 바로 아래 오른쪽에 떠 있는다(아래 여백 안에 겹쳐 놓아 레이아웃 높이 증가 없음) */
+  .m-chips-wrap-empty { height: 0; margin-top: -30px; }
+  .m-chips-wrap-empty .admin-kw-btn { top: 8px; }
   .admin-kw-btn {
     position: absolute;
     top: -34px;
@@ -1001,15 +1023,17 @@
   /* 카드가 1개뿐이면 스크롤할 대상이 없음 — 카드(340px) 폭이 좌우 25px 패딩과
      동시에 맞아떨어지지 않는 뷰포트(예: 375px)에서 드래그 시 여백이 좌/우로
      쏠리는 현상을 막기 위해 스크롤 자체를 잠근다 */
-  .m-carousel-static { overflow-x: hidden; }
+  .m-carousel-static { overflow-x: hidden; justify-content: center; }
 
   /* Figma: card — min-w-[340px] max-w-[605px] min-h-[300px] max-h-[400px] rounded-[30px] shadow */
   .m-card {
     position: relative;
     flex-shrink: 0;
-    width: 340px;
+    /* 폭 340px 고정이면 375px 화면에서 좌25+카드340=365로 우측 여백이 10px뿐이라 우측으로 쏠려 보임.
+       컨테이너 안쪽 폭(화면-좌우 패딩 50px)을 넘지 않게 제한해 좌우 25px 대칭 유지 */
+    width: min(340px, 100%);
     height: 400px;
-    min-width: 340px;
+    min-width: min(340px, 100%);
     border-radius: 30px;
     box-shadow: 4px 4px 0px rgba(39,27,122,0.5);
     display: flex;
@@ -1057,6 +1081,33 @@
     justify-content: center;
     min-width: 44px;
     min-height: 44px;
+  }
+  /* 목록 더보기(+) 모션 — 아이콘 모양은 그대로.
+     · 올려두거나 누르면: + 기호가 90° 돌며 스프링으로 자리 잡고, 아이콘 뒤에서 원이 번지며 퍼졌다 사라진다. 누르는 동안 버튼은 살짝 작아진다
+     · 첫 오픈 1회(.more-hint): 같은 번짐 2번 + 회전 1번 */
+  .m-card-more { position: relative; isolation: isolate; }
+  .m-card-more::after {
+    content: ''; position: absolute; left: 50%; top: 50%; z-index: -1;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: rgba(225, 222, 243, 0.6);
+    transform: translate(-50%, -50%) scale(1); opacity: 0; pointer-events: none;
+  }
+  .m-card-more:hover::after, .m-card-more:active::after { animation: more-ripple 0.7s ease-out; }
+  .m-card-more.more-hint::after { animation: more-ripple 0.9s ease-out 0.3s 2 both; }
+  @keyframes more-ripple {
+    0%   { transform: translate(-50%, -50%) scale(0.9); opacity: 0.7; }
+    100% { transform: translate(-50%, -50%) scale(2.6); opacity: 0; }
+  }
+  .m-card-more svg { transition: transform 0.15s ease; }
+  .m-card-more path { transform-box: fill-box; transform-origin: center; transition: transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1); }
+  .m-card-more:hover path, .m-card-more:active path { transform: rotate(90deg); }
+  .m-card-more.more-hint path { animation: more-spin 0.7s cubic-bezier(0.22, 1.5, 0.36, 1) 0.3s 1 both; }
+  @keyframes more-spin { 0% { transform: rotate(0); } 100% { transform: rotate(90deg); } }
+  .m-card-more:active svg { transform: scale(0.92); }
+  @media (prefers-reduced-motion: reduce) {
+    .m-card-more svg, .m-card-more path { transition: none; }
+    .m-card-more:hover path, .m-card-more:active path { transform: none; }
+    .m-card-more::after, .m-card-more.more-hint path { animation: none !important; }
   }
   /* Figma: Script — flex-[1_0_0] flex-col justify-between items-center */
   .m-card-script {

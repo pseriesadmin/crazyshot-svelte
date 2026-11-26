@@ -5,7 +5,6 @@
 	import { supabase } from '$lib/services/supabase'
 	import type { PageData } from './$types'
 	import RichContentEditor from '$lib/components/editor/RichContentEditor.svelte'
-	import MobileMoreMenu from '$lib/components/common/MobileMoreMenu.svelte'
 	import SubGnb from '$lib/components/common/SubGnb.svelte'
 	import BottomTabBar from '$lib/components/common/BottomTabBar.svelte'
 	import { makeEmptyTextBlock, type ContentBlock } from '$lib/types/content-editor'
@@ -145,7 +144,6 @@
 	)
 	let keywords = $state<string[]>((ep?.keywords as string[]) ?? [])
 	let typeOpen = $state(false)
-	let moreMenuOpen = $state(false)
 	let isSubmitting = $state(false)
 	let errorMsg = $state<string | null>(null)
 
@@ -292,29 +290,8 @@
      MOBILE LAYOUT
      ============================================================ -->
 <div class="m-page">
-	<!-- Mobile GNB (custom — replaces common GNB on mobile) -->
-	<header class="m-gnb-wrap">
-		<nav class="m-gnb">
-			<button class="m-gnb-close" aria-label="닫기" onclick={() => history.back()}>
-				<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-					<path
-						d="M15 1L8 8M8 8L1 15M8 8L15 15M8 8L1 1"
-						stroke="#444444"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					/>
-				</svg>
-			</button>
-			<span class="m-gnb-title">로그 등록</span>
-			<button class="m-gnb-ham" aria-label="더보기 메뉴" onclick={() => moreMenuOpen = true}>
-				<svg width="20" height="17" viewBox="0 0 20 17" fill="none" aria-hidden="true">
-					<path d="M18.5 6.75C19.3284 6.75 20 7.42157 20 8.25C20 9.07843 19.3284 9.75 18.5 9.75H1.5C0.671573 9.75 0 9.07843 0 8.25C0 7.42157 0.671573 6.75 1.5 6.75H18.5Z" fill="#CF0000"/>
-					<path d="M18.5 14C19.1904 14 19.75 14.5596 19.75 15.25C19.75 15.9404 19.1904 16.5 18.5 16.5H1.5C0.809644 16.5 0.25 15.9404 0.25 15.25C0.25 14.5596 0.809644 14 1.5 14H18.5ZM18.5 0C19.1904 0 19.75 0.559644 19.75 1.25C19.75 1.94036 19.1904 2.5 18.5 2.5H1.5C0.809644 2.5 0.25 1.94036 0.25 1.25C0.25 0.559644 0.809644 0 1.5 0H18.5Z" fill="#201857"/>
-				</svg>
-			</button>
-		</nav>
-	</header>
+	<!-- 모바일 sub-GNB — SubGnb.svelte 표준(크레이지로그 목록·뷰와 동일, noGnbOffset). 전역 GNB가 /crazylog/* 에서 제외되므로 noGnbOffset -->
+	<SubGnb title="로그 등록" mobileOnly noGnbOffset />
 
 	<!-- Notice section -->
 	<section class="m-notice">
@@ -511,7 +488,7 @@
      PC LAYOUT (≥ 768px)
      ============================================================ -->
 <div class="d-page">
-	<!-- PC sub-GNB — 전역 GNB가 /crazylog/* 에서 제외되므로 SubGnb 표준(noGnbOffset) 적용, 모바일은 자체 헤더 사용 -->
+	<!-- PC sub-GNB — 전역 GNB가 /crazylog/* 에서 제외되므로 SubGnb 표준(noGnbOffset) 적용, 모바일은 위 m-page 안의 mobileOnly SubGnb -->
 	<SubGnb title="로그 등록" pcOnly noGnbOffset />
 	<div class="d-container">
 		<!-- Notice bar -->
@@ -732,54 +709,6 @@
 		flex-direction: column;
 		min-height: 100dvh; /* 100vh 툴바 재계산 잔떨림 방지 — 되돌리지 말 것(front-uiux §19) */
 		background: var(--cs-lilac);
-	}
-
-	/* Mobile GNB */
-	.m-gnb-wrap {
-		padding: 40px 25px 0;
-		flex-shrink: 0;
-	}
-
-	.m-gnb {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		background: var(--cs-purple-op10);
-		border-radius: var(--radius-lg);
-		min-height: 60px;
-		padding: 5px 20px;
-	}
-
-	.m-gnb-close {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		min-width: 44px;
-		min-height: 44px;
-		background: none;
-		border: none;
-		cursor: pointer;
-		padding: 0;
-		margin-left: -12px;
-	}
-
-	.m-gnb-title {
-		font: var(--text-m-body-16B);
-		color: var(--cs-text);
-		letter-spacing: -0.5px;
-	}
-
-	.m-gnb-ham {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		min-width: 44px;
-		min-height: 44px;
-		background: none;
-		border: none;
-		cursor: pointer;
-		padding: 0;
-		margin-right: -12px;
 	}
 
 	/* Notice */
@@ -1542,5 +1471,4 @@
 	}
 </style>
 
-<MobileMoreMenu open={moreMenuOpen} onclose={() => moreMenuOpen = false} />
 <BottomTabBar />

@@ -2,8 +2,8 @@
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
   import type { PageData } from './$types'
-  import CrazylogWriteCard from '$lib/components/common/CrazylogWriteCard.svelte'
   import SubGnb from '$lib/components/common/SubGnb.svelte'
+  import { tabScroller } from '$lib/utils/tabScroller'
   import DeleteIconButton from '$lib/components/common/DeleteIconButton.svelte'
   import { supabase } from '$lib/services/supabase'
   import { invalidateAll } from '$app/navigation'
@@ -60,18 +60,6 @@
     { label: '채널홍보', tab: '채널홍보', countKey: 'promo'  },
   ]
 
-  let writeCardVisible = $state(true)
-
-  $effect(() => {
-    let lastY = window.scrollY
-    function onScroll() {
-      const currentY = window.scrollY
-      writeCardVisible = currentY <= lastY
-      lastY = currentY
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  })
 
   // ── 검색 상태 ─────────────────────────────────────────────────────────────
   // data.posts와 동일한 shape으로 정규화해 템플릿을 공유한다
@@ -220,11 +208,12 @@
 
     <!-- ② 공통: TabMenu + 검색창 ───────────────────────────── -->
     <div class="tab-section">
-      <div class="tab-inner">
+      <div class="tab-inner cat-tabs" role="tablist" aria-label="로그 분류" use:tabScroller={activeTab}>
         {#each TABS as tab}
           <button
-            class="tab-btn"
+            class="tab-btn cat-tab"
             class:tab-btn-active={activeTab === tab}
+            class:active={activeTab === tab}
             onclick={() => onTabClick(tab)}
           >
             {tab}
@@ -419,11 +408,6 @@
   </div>
 {/snippet}
 
-<CrazylogWriteCard
-  currentUser={data.currentUser}
-  isLoggedIn={data.isLoggedIn}
-  visible={writeCardVisible}
-/>
 
 <style>
   /* ── 관리자 행 조작 / 비공개 흐림(2026-10-05) ──────────────────── */
@@ -504,12 +488,25 @@
     background: transparent;
     color: var(--cs-text);
     min-height: 44px;
-    transition: background 0.15s, color 0.15s;
   }
   .tab-btn-active {
     background: var(--cs-purple-dark);
     color: var(--cs-white);
   }
+
+  /* 가로 스크롤 탭 메뉴 모션 표준(uiux.md §12-A, tabScroller) — 값은 지침 그대로 */
+  .cat-tabs { -webkit-overflow-scrolling: touch; }
+  .cat-tabs { scroll-snap-type: x proximity; scroll-padding: 0 14px; overscroll-behavior-x: none; cursor: grab; }
+  /* 가장자리 흐림 28px — 더 볼 내용이 있는 쪽만 */
+  .cat-tabs:global(.has-left.has-right)       { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); }
+  .cat-tabs:global(.has-left:not(.has-right)) { -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px); mask-image: linear-gradient(90deg, transparent 0, #000 28px); }
+  .cat-tabs:global(.has-right:not(.has-left)) { -webkit-mask-image: linear-gradient(270deg, transparent 0, #000 28px); mask-image: linear-gradient(270deg, transparent 0, #000 28px); }
+
+  .cat-tab { scroll-snap-align: center; transform: skewX(calc(var(--tab-skew, 0) * 1deg)); translate: calc(var(--tab-pull, 0) * 1px) 0; }
+  .cat-tab { transition: background 0.12s, color 0.12s, transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1); }
+  .cat-tabs:global(.tabs-release) .cat-tab { transition: translate 0.85s cubic-bezier(0.22, 1.6, 0.36, 1), background 0.12s, color 0.12s, transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1); }
+  .cat-tab:active { transform: skewX(calc(var(--tab-skew, 0) * 1deg)) scale(0.92); }
+  @media (prefers-reduced-motion: reduce) { .cat-tab { transform: none; } }
 
   /* ── 검색창 공통 ──────────────────────────────────────────── */
   .search-wrap {

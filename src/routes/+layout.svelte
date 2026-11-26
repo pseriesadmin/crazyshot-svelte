@@ -188,8 +188,8 @@
 		<slot />
 	</main>
 
-	<!-- 공통 플로팅 바: /cms · /cart · /account · /contract · /issue-report(로그인 없는 증빙 폼, 2026-10-19) 제외 전체 사용자 화면 -->
-	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/issue-report')}
+	<!-- 공통 플로팅 바: /cms · /cart · /account · /contract · /issue-report(로그인 없는 증빙 폼, 2026-10-19) · /crazylog/view/(콘텐츠 읽기 방해, 2026-11-26) 제외 전체 사용자 화면 -->
+	{#if !page.url.pathname.startsWith('/cms') && !page.url.pathname.startsWith('/cart') && !page.url.pathname.startsWith('/account') && !page.url.pathname.startsWith('/contract') && !page.url.pathname.startsWith('/issue-report') && !page.url.pathname.startsWith('/crazylog/view/')}
 		<FloatingBar
 			userId={chatUserId}
 			userName={chatUserName}

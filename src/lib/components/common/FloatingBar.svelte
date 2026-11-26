@@ -34,12 +34,31 @@
 	const SETTLE_DELAY_MS = 250
 	let settleTimer: ReturnType<typeof setTimeout> | undefined
 
+	/** 쓰기 아이콘 강조(연필 쓱쓱) — 쓰기 아이콘이 처음 펼쳐질 때 딱 한 번만(새로고침 전까지 재생하지 않음) */
+	let writeEmph = $state(false)
+	let writeHinted = false
+
+	let emphTimers: ReturnType<typeof setTimeout>[] = []
+
+	function maybeEmphasizeWrite(): void {
+		if (writeHinted || !showWrite) return
+		writeHinted = true
+		emphTimers.push(setTimeout(() => {
+			writeEmph = true
+			emphTimers.push(setTimeout(() => { writeEmph = false }, 1000))
+		}, 750)) // 팝아웃(0.75s)이 끝난 뒤 시작
+	}
+
+	// 컴포넌트가 사라질 때 남은 모션 타이머 정리
+	$effect(() => () => { emphTimers.forEach(clearTimeout); emphTimers = [] })
+
 	function scheduleExpand(delay: number): void {
 		clearTimeout(settleTimer)
 		settleTimer = setTimeout(() => {
 			if (chatStore.isOpen) return
 			entering = false
 			expandFromPeek()
+			maybeEmphasizeWrite()
 		}, delay)
 	}
 
@@ -92,6 +111,14 @@
 		void goAfterExpand('/cart')
 	}
 
+	function handleWriteClick(e: MouseEvent): void {
+		e.stopPropagation()
+		void goAfterExpand('/crazylog/new')
+	}
+
+	/** 쓰기 아이콘은 크레이지로그 첫 화면(/crazylog)과 목록 화면(/crazylog/list)에서만 노출 */
+	const showWrite = $derived(['/crazylog', '/crazylog/list'].includes(page.url.pathname.replace(/\/+$/, '')))
+
 	function handleSearchClick(e: MouseEvent): void {
 		e.stopPropagation()
 		void goAfterExpand('/products/search')
@@ -133,8 +160,30 @@
 	role="group"
 	aria-label="빠른 메뉴"
 >
-	<!-- 장바구니 (순차 모션 1번째) -->
+	<!-- 크레이지로그 쓰기 (순차 모션 1번째) — 크레이지로그 첫 화면·목록 화면에서만 노출(2026-11-26, Stephen 지시).
+	     모양은 목록의 '내로그 등록' 연필 아이콘, 바탕색은 같은 버튼의 --cs-purple-light -->
+	{#if showWrite}
 	<div class="fab-item fab-item-center" style="--i: 0">
+	<button
+		class="fab-btn"
+		aria-label="로그 쓰기"
+		onpointerdown={() => warmUp('/crazylog/new')}
+		onclick={handleWriteClick}
+	>
+		<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70" fill="none" aria-hidden="true">
+			<path d="M70 35C70 54.33 54.33 70 35 70C15.67 70 0 54.33 0 35C0 15.67 15.67 0 35 0C54.33 0 70 15.67 70 35Z" style="fill: var(--cs-purple-light)"/>
+			<g transform="translate(17.5 16.1) scale(1.4)">
+				<g class="fab-pencil" class:fab-pencil-write={writeEmph}>
+					<path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 2.5L22.5 7.5L8.5 21.5H3.5V16.5L17.5 2.5ZM17.5 5.33L19.67 7.5L7.5 19.67V18.5H6.33L17.5 5.33ZM3.5 23.5H21.5V25.5H3.5V23.5Z" fill="white"/>
+				</g>
+			</g>
+		</svg>
+	</button>
+	</div>
+	{/if}
+
+	<!-- 장바구니 (순차 모션) -->
+	<div class="fab-item fab-item-center" style="--i: {showWrite ? 1 : 0}">
 	<button
 		class="fab-btn"
 		aria-label="장바구니"
@@ -149,8 +198,8 @@
 	</button>
 	</div>
 
-	<!-- 검색 (순차 모션 2번째) -->
-	<div class="fab-item fab-item-center" style="--i: 1">
+	<!-- 검색 (순차 모션) -->
+	<div class="fab-item fab-item-center" style="--i: {showWrite ? 2 : 1}">
 	<button
 		class="fab-btn"
 		aria-label="검색"
@@ -164,8 +213,8 @@
 	</button>
 	</div>
 
-	<!-- 채팅 FAB (순차 모션 3번째) -->
-	<div class="fab-item" style="--i: 2">
+	<!-- 채팅 FAB (순차 모션 마지막) -->
+	<div class="fab-item" style="--i: {showWrite ? 3 : 2}">
 		<FloatingButton
 			{userId}
 			{userName}
@@ -217,6 +266,20 @@
 		min-height: 44px;
 		min-width: 44px;
 	}
+
+	/* 쓰기 아이콘 첫 노출 강조 — 연필이 좌우로 두 번 쓱쓱 쓰는 동작(0.9s, 감쇠). 동그라미 배경은 그대로, 연필만 움직인다. 한 번 재생 후 클래스가 빠진다 */
+	.fab-pencil { transform-box: fill-box; transform-origin: 20% 85%; }
+	.fab-pencil-write { animation: fab-pencil-write 0.9s cubic-bezier(0.25, 0.1, 0.25, 1) both; }
+	@keyframes fab-pencil-write {
+		0%   { transform: translateX(0) rotate(0); }
+		16%  { transform: translateX(2.5px) rotate(7deg); }
+		34%  { transform: translateX(-2.5px) rotate(-7deg); }
+		52%  { transform: translateX(1.8px) rotate(5deg); }
+		70%  { transform: translateX(-1.2px) rotate(-3deg); }
+		86%  { transform: translateX(0.5px) rotate(1deg); }
+		100% { transform: translateX(0) rotate(0); }
+	}
+	@media (prefers-reduced-motion: reduce) { .fab-pencil-write { animation: none; } }
 
 	.fab-btn:hover  { transform: scale(1.07); }
 	.fab-btn:active { transform: scale(0.95); }
