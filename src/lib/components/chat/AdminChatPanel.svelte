@@ -27,6 +27,7 @@
     markMessagesRead,
   } from '$lib/services/chatService'
   import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
+  import { isFreshNewSession, mergeFetchedSessions, createRefetchScheduler } from '$lib/utils/chatSessionSync'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
@@ -674,9 +675,19 @@
   $effect(() => {
     const unsub = subscribeToSessions((session) => {
       const existedBefore = chatStore.sessions.some((s) => s.id === session.id)
+      // 목록에 없던 '옛 세션'의 이벤트는 고객 이름·미리보기가 빠진 원본 행이라 그대로 끼워 넣으면 과거 카드가 튀어나온다 —
+      // 서버 목록을 다시 받아 완전한 카드로 반영한다. 새로 만들어진 세션만 즉시 끼워 넣는다.
+      if (!existedBefore && !isFreshNewSession(session)) {
+        refetchScheduler.schedule(500)
+        return
+      }
+      sessionArrivedAt.set(session.id, Date.now())
       upsertSession(session)
-      // 신규 채팅목록(세션) 등장 시 점멸 표시
-      if (!existedBefore) flashSession(session.id)
+      // 신규 채팅목록(세션) 등장 시 점멸 표시 + 고객 이름 등 파생 값을 채우려 목록을 다시 받는다
+      if (!existedBefore) {
+        flashSession(session.id)
+        refetchScheduler.schedule(800)
+      }
     })
     return unsub
   })
@@ -689,31 +700,32 @@
       flashSession(message.session_id)
       // 긴급 배지(is_urgent)는 서버가 의도분류 로그를 근거로 계산하는 값이라 Realtime payload에 없다 —
       // 메시지 도착 후 잠시 뒤(의도 로그 기록 대기) 목록을 다시 받아 배지를 즉시 반영·해제한다
-      if (!message.admin_only) scheduleSessionsRefetch()
+      if (!message.admin_only) refetchScheduler.schedule()
     })
     return () => {
       unsub()
-      if (sessionsRefetchTimer) { clearTimeout(sessionsRefetchTimer); sessionsRefetchTimer = null }
+      refetchScheduler.cancel()
     }
   })
 
-  let sessionsRefetchTimer: ReturnType<typeof setTimeout> | null = null
-  function scheduleSessionsRefetch(): void {
-    if (sessionsRefetchTimer) clearTimeout(sessionsRefetchTimer)
-    sessionsRefetchTimer = setTimeout(async () => {
-      sessionsRefetchTimer = null
-      const { sessions } = await loadAdminSessions()
-      if (sessions.length > 0) setSessions(sessions)
-    }, 3000)
+  // 실시간으로 받은 세션의 도착 시각(이 브라우저 시계) — 서버·브라우저 시계 차이와 무관하게 '방금 들어온 세션'을 보존하는 기준
+  const sessionArrivedAt = new Map<string, number>()
+  // 이 화면에서 삭제한 세션 — 삭제 직전에 요청된 재조회 응답에 남아 있어도 되살리지 않는다
+  const deletedSessionIds = new Set<string>()
+  // 서버 목록으로 교체하되, 요청 중에 실시간으로 들어온 새 세션은 보존한다(경합으로 새 카드가 사라지는 문제 방지)
+  async function refreshSessionsFromServer(): Promise<void> {
+    const startedAt = Date.now()
+    const { sessions, error } = await loadAdminSessions()
+    if (error) return
+    setSessions(mergeFetchedSessions(chatStore.sessions, sessions, startedAt, { arrivedAt: sessionArrivedAt, excludeIds: deletedSessionIds }))
   }
+  // 재조회 예약 — 먼저 예약된 짧은 재조회는 늦추지 않고, 더 늦게 요청된 재조회(긴급 배지 반영 등)도 앞선 실행 뒤에 한 번 더 실행한다
+  const refetchScheduler = createRefetchScheduler(() => { void refreshSessionsFromServer() })
 
   // auto_pending 주기적 갱신 — 5분마다 API 호출 → auto_pending_inactive_sessions() RPC 트리거
   // open 세션이 1시간 비활성 시 pending으로 자동 전환되는 조건을 수동 새로고침 없이도 반영
   $effect(() => {
-    const timer = setInterval(async () => {
-      const { sessions } = await loadAdminSessions()
-      if (sessions.length > 0) setSessions(sessions)
-    }, 5 * 60 * 1000)
+    const timer = setInterval(() => { void refreshSessionsFromServer() }, 5 * 60 * 1000)
     return () => clearInterval(timer)
   })
 
@@ -1270,7 +1282,7 @@
   async function handleGuestMerged(memberSessionId: string | null, movedMessages: number): Promise<void> {
     showGuestMerge = false
     csToast.success(`회원 상담으로 병합했습니다. (메시지 ${movedMessages}건 이동)`)
-    await handleRefresh()
+    await handleRefresh(true)
     selectedSessionId = memberSessionId
   }
 
@@ -1378,9 +1390,12 @@
     }
   }
 
-  async function handleRefresh(): Promise<void> {
-    const { sessions } = await loadAdminSessions()
-    setSessions(sessions)
+  // replace=false(기본): 수동 새로고침 중에 막 들어온 새 세션이 응답에 없어도 보존 / replace=true: 서버 응답으로 그대로 교체(비회원 병합처럼 세션이 사라지는 경우)
+  async function handleRefresh(replace: boolean = false): Promise<void> {
+    const startedAt = Date.now()
+    const { sessions, error } = await loadAdminSessions()
+    // 조회 실패 시 목록을 건드리지 않는다(빈 응답으로 목록이 비는 것 방지) — 문의·요청 새로고침은 그대로 진행
+    if (!error) setSessions(replace ? sessions : mergeFetchedSessions(chatStore.sessions, sessions, startedAt, { arrivedAt: sessionArrivedAt, excludeIds: deletedSessionIds }))
     loadPendingInquiries()
     loadAgentRequests()
   }
@@ -1400,7 +1415,8 @@
     try {
       const res = await fetch(`/api/chat/sessions/${pendingDeleteId}`, { method: 'DELETE' })
       if (res.ok) {
-        // 로컬 목록에서 즉시 제거
+        // 로컬 목록에서 즉시 제거 — 삭제 직전에 요청된 재조회 응답이 늦게 와도 되살아나지 않게 기억해 둔다
+        deletedSessionIds.add(pendingDeleteId)
         const updated = chatStore.sessions.filter((s) => s.id !== pendingDeleteId)
         setSessions(updated)
         if (selectedSessionId === pendingDeleteId) selectedSessionId = null
@@ -1464,7 +1480,7 @@
           aria-label="크레이지챗 · 빠른답변 {autoReplyEnabled ? 'ON' : 'OFF'} — 빠른답변 설정으로 이동"
         >크레이지챗 · 빠른답변 {autoReplyEnabled ? 'ON' : 'OFF'}</a>
       {/if}
-      <button class="refresh-btn" onclick={handleRefresh} aria-label="새로고침">↻</button>
+      <button class="refresh-btn" onclick={() => handleRefresh()} aria-label="새로고침">↻</button>
     </div>
 
     <div class="filter-tabs" role="tablist">
