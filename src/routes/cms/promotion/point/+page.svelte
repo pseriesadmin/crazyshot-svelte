@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import { csToast } from '$lib/utils/toast'
+  import { rateToPercentText } from '$lib/utils/earnRuleInput'
   import type { PageData, ActionData } from './$types'
   import type { EarnRule } from './+page.server'
   import CmsDatePicker from '$lib/components/cms/CmsDatePicker.svelte'
@@ -76,7 +77,7 @@
     editingRule = r.event_type
     ruleEdits[r.event_type] = {
       amount:    String(r.amount),
-      rate:      String(r.rate),
+      rate:      rateToPercentText(r.rate),  // 입력칸은 % 단위(3 = 3%) — 표 표시와 같은 단위
       is_active: r.is_active,
     }
   }
@@ -413,7 +414,7 @@
                     bind:value={ruleEdits[r.event_type].amount} />
                 </td>
                 <td>
-                  <input type="number" min="0" step="0.01" class="f-input inline"
+                  <input type="number" min="0" max="100" step="0.01" class="f-input inline"
                     bind:value={ruleEdits[r.event_type].rate} />
                 </td>
                 <td>
@@ -446,7 +447,7 @@
                 </td>
               {:else}
                 <td>{r.amount > 0 ? r.amount.toLocaleString() + 'P' : '—'}</td>
-                <td>{r.rate > 0 ? (r.rate * 100).toFixed(1) + '%' : '—'}</td>
+                <td>{r.rate > 0 ? rateToPercentText(r.rate) + '%' : '—'}</td>
                 <td>
                   <span class="badge {r.is_active ? 'badge-active' : 'badge-inactive'}">
                     {r.is_active ? '활성' : '비활성'}

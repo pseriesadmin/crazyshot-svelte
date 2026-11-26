@@ -76,7 +76,8 @@ async function updateRule(client: SupabaseClient, eventType: string, isActive: b
 
 describe('[TDD] update_point_earn_rule referrer/referee 준비중 고정 — Migration #599', () => {
   it('① referrer를 is_active=true로 요청해도 실제로는 false로 저장된다', async () => {
-    const client = await createEphemeralCmsSession();
+    // Migration #850 — 규칙 저장은 service_role 전용(앱 서버 액션이 호출)
+    const client = admin;
     const { data, error } = await updateRule(client, 'referrer', true);
     expect(error).toBeNull();
     expect(data?.ok).toBe(true);
@@ -84,7 +85,7 @@ describe('[TDD] update_point_earn_rule referrer/referee 준비중 고정 — Mig
   });
 
   it('② referee를 is_active=true로 요청해도 실제로는 false로 저장된다', async () => {
-    const client = await createEphemeralCmsSession();
+    const client = admin;
     const { data, error } = await updateRule(client, 'referee', true);
     expect(error).toBeNull();
     expect(data?.ok).toBe(true);
@@ -97,11 +98,58 @@ describe('[TDD] update_point_earn_rule referrer/referee 준비중 고정 — Mig
       await admin.from('point_earn_rules').update({ is_active: original }).eq('event_type', 'rental_complete');
     });
 
-    const client = await createEphemeralCmsSession();
+    const client = admin;
     const target = !original;
     const { data, error } = await updateRule(client, 'rental_complete', target);
     expect(error).toBeNull();
     expect(data?.ok).toBe(true);
     expect(await getIsActive('rental_complete')).toBe(target);
+  });
+});
+
+describe('[TDD] update_point_earn_rule 서버 전용 잠금·값 범위 — Migration #850', () => {
+  async function rawUpdate(client: SupabaseClient, args: Record<string, unknown>) {
+    return (client.rpc as unknown as (
+      f: string,
+      a: Record<string, unknown>
+    ) => Promise<{ data: { ok: boolean; error?: string } | null; error: { message: string } | null }>)(
+      'update_point_earn_rule',
+      { p_event_type: 'rental_complete', p_amount: null, p_rate: null, p_is_active: null, p_grade_multipliers: null, ...args },
+    );
+  }
+
+  it('④ 로그인한 CMS 직원(manager)이 브라우저에서 직접 호출하면 권한 오류로 거절된다', async () => {
+    const before = await admin.from('point_earn_rules').select('rate').eq('event_type', 'rental_complete').single();
+    const client = await createEphemeralCmsSession();
+    const { data, error } = await rawUpdate(client, { p_rate: 0.5 });
+    expect(data).toBeNull();
+    expect(error).not.toBeNull();
+    const after = await admin.from('point_earn_rules').select('rate').eq('event_type', 'rental_complete').single();
+    expect(after.data?.rate).toBe(before.data?.rate);
+  });
+
+  it('⑤ 로그인한 CMS 직원이 표를 직접 수정해도 반영되지 않는다', async () => {
+    const before = await admin.from('point_earn_rules').select('amount').eq('event_type', 'review').single();
+    const client = await createEphemeralCmsSession();
+    await client.from('point_earn_rules').update({ amount: 999999 }).eq('event_type', 'review');
+    const after = await admin.from('point_earn_rules').select('amount').eq('event_type', 'review').single();
+    expect(after.data?.amount).toBe(before.data?.amount);
+  });
+
+  it('⑥ 적립률 1 초과(예: 3 = 300%)와 음수는 거절되고 값은 그대로다', async () => {
+    const before = await admin.from('point_earn_rules').select('rate').eq('event_type', 'rental_complete').single();
+    const over = await rawUpdate(admin, { p_rate: 3 });
+    expect(over.data?.ok).toBe(false);
+    expect(over.data?.error).toBe('INVALID_RATE');
+    const neg = await rawUpdate(admin, { p_rate: -0.01 });
+    expect(neg.data?.error).toBe('INVALID_RATE');
+    const after = await admin.from('point_earn_rules').select('rate').eq('event_type', 'rental_complete').single();
+    expect(after.data?.rate).toBe(before.data?.rate);
+  });
+
+  it('⑦ 음수 고정 적립은 거절된다', async () => {
+    const res = await rawUpdate(admin, { p_amount: -1 });
+    expect(res.data?.ok).toBe(false);
+    expect(res.data?.error).toBe('INVALID_AMOUNT');
   });
 });

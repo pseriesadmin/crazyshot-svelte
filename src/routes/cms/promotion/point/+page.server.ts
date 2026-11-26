@@ -4,6 +4,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
+import { parseEarnRuleInput } from '$lib/utils/earnRuleInput'
 import type { PageServerLoad, Actions } from './$types'
 
 export type PointStats = {
@@ -204,18 +205,21 @@ export const actions: Actions = {
     if (!hasSettingsAccess(cmsRole3 ?? '')) return { ok: false, error: '권한 없음' }
     const form = await request.formData()
     const event_type = String(form.get('event_type') ?? '')
-    const amount_raw = form.get('amount')
-    const rate_raw   = form.get('rate')
     const is_active  = form.get('is_active')
 
     if (!event_type) return { ok: false, error: '이벤트 유형이 필요합니다.' }
 
+    // 화면은 적립률을 % 로 보낸다(3 = 3%) — 범위를 검사하고 DB 저장용 소수(0.03)로 바꾼다
+    const parsed = parseEarnRuleInput(form.get('amount'), form.get('rate'))
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+
+    // 적립 규칙 변경은 고객 포인트 지급에 직접 영향 → DB 함수는 service_role 전용(Migration #850). manager 이상 게이트를 통과한 이 액션만 호출한다.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const db = locals.supabase as unknown as any
+    const db = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) as unknown as any
     const { data, error } = await db.rpc('update_point_earn_rule', {
       p_event_type:        event_type,
-      p_amount:            amount_raw !== null ? Number(amount_raw) : null,
-      p_rate:              rate_raw   !== null ? Number(rate_raw)   : null,
+      p_amount:            parsed.amount,
+      p_rate:              parsed.rate,
       p_is_active:         is_active  !== null ? is_active === 'true' : null,
       p_grade_multipliers: null,
     })
