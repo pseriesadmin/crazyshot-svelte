@@ -1467,6 +1467,10 @@
   }
 
   function addOptionProduct(item: OptionSearchResult) {
+    if (item.id === product.id) {
+      csToast.info('자기 자신은 옵션상품으로 추가할 수 없습니다.')
+      return
+    }
     if (localOptions.some((o) => o.option_product_id === item.id)) {
       csToast.info('이미 추가된 상품입니다.')
       return
@@ -2208,6 +2212,7 @@
               bind:value={optionKeyword}
               source="product_search"
               activeOnly={true}
+              excludeId={product.id}
               placeholder="상품명 또는 키워드 입력 후 검색..."
               categoryLabels={{}}
               onselect={onOptionSuggestSelect}
