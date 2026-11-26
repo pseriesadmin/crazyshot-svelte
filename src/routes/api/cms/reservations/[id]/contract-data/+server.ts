@@ -238,6 +238,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       .from('reservation_option_assets')
       .select('id, reservation_option_id, asset:products!reservation_option_assets_asset_product_id_fkey(product_code)')
       .in('reservation_option_id', optionRowIds)
+      .is('via_package_product_id', null) // 패키지 옵션의 구성품 점유 행(Migration #854)은 옵션 실물 품번 목록에서 제외
       .order('id', { ascending: true })
     if (assetErr) return byOpt
     const codes: Record<number, string[]> = {}

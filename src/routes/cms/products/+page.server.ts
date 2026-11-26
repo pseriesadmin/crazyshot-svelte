@@ -1315,7 +1315,15 @@ export const actions: Actions = {
           p_option_links: option_links,
         })
 
-      if (updateError) return fail(500, { error: `옵션상품 수정에 실패했습니다: ${updateError.message}` })
+      if (updateError) {
+        // Migration #853: 옵션상품 등록 검증 오류를 쉬운 문구로 돌려준다
+        const msg = updateError.message
+        if (msg.includes('OPTION_SELF_REF'))        return fail(400, { error: '자기 자신을 옵션상품으로 추가할 수 없습니다.' })
+        if (msg.includes('OPTION_CHILD_PRODUCT'))   return fail(400, { error: '재고 단위 상품은 옵션상품으로 추가할 수 없습니다.' })
+        if (msg.includes('OPTION_DELETED_PRODUCT')) return fail(400, { error: '삭제된 상품은 옵션상품으로 추가할 수 없습니다.' })
+        if (msg.includes('OPTION_BUNDLE_OVERLAP'))  return fail(400, { error: '이 상품의 결합상품 구성품은 옵션상품으로 추가할 수 없습니다.' })
+        return fail(500, { error: `옵션상품 수정에 실패했습니다: ${msg}` })
+      }
     }
 
     if (sectionType === 'bundles') {
