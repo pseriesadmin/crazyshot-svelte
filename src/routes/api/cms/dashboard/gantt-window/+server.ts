@@ -27,16 +27,28 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   }
 
   const admin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-  const { data: rows, error } = await admin.rpc('get_rental_list', {
-    p_status:           null,
-    p_search:           null,
-    p_date_from:        from,
-    p_date_to:          to,
-    p_page:             1,
-    p_per_page:         200,
-    p_exclude_statuses: ['cancelled', 'draft'],
-  })
+  // 한 번에 200건 상한 — 넘으면 다음 페이지를 이어서 받는다(최대 MAX_PAGES장). 그래도 모자라면 truncated 로 알린다(화면은 지우지 않고 갱신만).
+  const PER_PAGE = 200
+  const MAX_PAGES = 3
+  const rows: Array<{ total_count?: number | string | null }> = []
+  let total = 0
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, error } = await admin.rpc('get_rental_list', {
+      p_status:           null,
+      p_search:           null,
+      p_date_from:        from,
+      p_date_to:          to,
+      p_page:             page,
+      p_per_page:         PER_PAGE,
+      p_exclude_statuses: ['cancelled', 'draft'],
+      p_date_overlap:     true, // 구간 경계에 걸친 예약·이미 종료된 예약 바까지 노출(#860)
+    })
+    if (error) return json({ error: error.message }, { status: 500 })
+    const got = (data ?? []) as Array<{ total_count?: number | string | null }>
+    rows.push(...got)
+    total = Number(got[0]?.total_count ?? total)
+    if (got.length < PER_PAGE || rows.length >= total) break
+  }
 
-  if (error) return json({ error: error.message }, { status: 500 })
-  return json({ rows: rows ?? [] })
+  return json({ rows, truncated: rows.length < total })
 }

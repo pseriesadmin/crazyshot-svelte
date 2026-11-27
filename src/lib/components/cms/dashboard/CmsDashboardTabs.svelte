@@ -53,7 +53,7 @@
 
   <!-- 각 탭 바디: Phase 1~4에서 실제 컴포넌트로 교체 예정 -->
   {#if activeTab === 'gantt'}
-    <CmsDashboardGantt initial={data.ganttWindow} />
+    <CmsDashboardGantt initial={data.ganttWindow} cmsRole={data.cmsRole} />
   {:else if activeTab === 'consult'}
     <CmsDashboardConsultCards initialSessions={data.chatSessions} topCannedResponses={data.topCannedResponses} />
   {:else if activeTab === 'subscription'}

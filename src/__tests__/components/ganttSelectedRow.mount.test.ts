@@ -25,7 +25,7 @@ describe.skipIf(!process.env.CS_COMPONENT_TEST)('CmsDashboardGantt 상세 패널
     const app = mount(Gantt, { target, props: { initial: { from: d(-30), to: d(30), rows: [row] } } as never })
     try {
       flushSync()
-      ;(target.querySelector('.gantt-label-body') as HTMLElement).click()
+      ;(target.querySelector('.gantt-bar') as HTMLElement).click()
       flushSync(); await new Promise(r => setTimeout(r, 150)); flushSync()
       expect(target.querySelector('.gantt-detail-overlay')).not.toBeNull()
     } catch (e) { err = e }

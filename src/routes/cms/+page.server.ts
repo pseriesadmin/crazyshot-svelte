@@ -90,6 +90,7 @@ export const load: PageServerLoad = async ({ parent, fetch, locals }) => {
         p_page:             1,
         p_per_page:         200,
         p_exclude_statuses: ['cancelled', 'draft'],
+        p_date_overlap:     true, // 구간 경계에 걸친 예약·이미 종료된 예약 바까지 노출(#860)
       })
     : { data: null, error: null }
   if (ganttError) {
