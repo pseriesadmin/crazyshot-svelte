@@ -2222,7 +2222,7 @@
     position: relative;
     width: 100%;
     overflow: hidden;
-    height: 720px;
+    height: 648px;   /* 720px × 0.9 — 모바일 브라우저 주소창에 히어로 하단이 가려지는 증상 대응(2026-11-26, Stephen 지시) */
     background: #fdefc3;
   }
   /* 좌우 터치 슬라이드: 세로 스크롤은 브라우저가, 가로 드래그는 JS가 처리 */
@@ -2230,7 +2230,7 @@
   .m-hero-track {
     display: flex;
     width: 100%;
-    height: 720px;
+    height: 648px;
     /* 자석처럼 끌려가 착 붙는 느낌 — 끝에서 아주 살짝만 넘쳤다 돌아옴 */
     transition: transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.08);
     will-change: transform;
@@ -2273,13 +2273,17 @@
     background: var(--cs-white);
   }
   .m-hero-dot-btn:active .m-hero-dot { transform: scale(0.8); }   /* 터치 순간 눌림 */
+  /* 슬라이드 내비(모바일·PC 공통, 크기 배율 --hd-k) — 전부 원형: 안 보고 있는 장은 기존 크기(18px×k)에 화이트 30% 투명도, 보고 있는 장은 2배(36px×k) 불투명 화이트 원형 (2026-11-26, Stephen 지시) */
+  .m-hero-dots .m-hero-dot { background: rgba(255, 255, 255, 0.3); }
+  .m-hero-dots .m-hero-dot.active { width: calc(36px * var(--hd-k)); height: calc(36px * var(--hd-k)); background: rgba(255, 255, 255, 0.7); }   /* 보고 있는 장: 화이트에 투명값 30% 추가(불투명도 70%) */
+  .m-hero-dots .m-hero-dot-btn.active { padding: 0 calc(13.6px * var(--hd-k)); }
   @media (prefers-reduced-motion: reduce) {
     .m-hero-dot { transition: none; }
   }
   .m-hero-slide {
     position: relative;
     flex: 0 0 100%;
-    height: 720px;
+    height: 648px;
   }
   @media (prefers-reduced-motion: reduce) {
     .m-hero-track { transition: none; }
@@ -2289,9 +2293,9 @@
     top: 0;
     left: 0;
     width: 100%;
-    /* 히어로(.m-hero 720px) 전체를 채운다 — 예전 top:20px/height:680px은 위아래 20px 배경색 띠를 노출시켰음.
+    /* 히어로(.m-hero 648px, 2026-11-26 720→648) 전체를 채운다 — 예전 top:20px/height:680px은 위아래 20px 배경색 띠를 노출시켰음.
        배너 등록 권장 규격: 1170×2160px(390×720의 3배, HomeBannerModal 안내문과 동일) */
-    height: 720px;
+    height: 648px;
     object-fit: cover;
     object-position: top;
     pointer-events: none;
