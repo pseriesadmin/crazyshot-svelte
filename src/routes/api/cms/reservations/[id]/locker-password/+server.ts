@@ -2,7 +2,7 @@
  * GET  /api/cms/reservations/[id]/locker-password — 무인보관함 비밀번호 조회 (CMS 전용)
  * PATCH /api/cms/reservations/[id]/locker-password — 무인보관함 비밀번호 저장 (CMS 전용)
  *
- * 물리보안 성격 데이터라 manager 이상만 조회·저장 가능(hasSettingsAccess) — tracking API에는
+ * 물리보안 성격 데이터지만 CMS 직원 전원(partner 이상)이 조회·저장 가능(hasCmsStaffAccess, 2026-11-27 Stephen 확대 — 현장 응대 파트너 포함) — tracking API에는
  * 이 등급 체크가 빠져 있던 전례가 있어(security-auth.md) 이번 신규 라우트는 반드시 포함.
  *
  * GET  : service_role로 조회 (RLS 우회 — 관리자는 모든 예약 조회 가능해야 함)
@@ -16,7 +16,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 import { isValidLockerNumber, isValidLockerPassword, isValidLockerGuideLegs, LOCKER_NUMBER_ERROR, LOCKER_PASSWORD_ERROR, LOCKER_GUIDE_LEGS_ERROR } from '$lib/utils/lockerFields'
 import { sendLockerAssignNotice } from '$lib/server/lockerAssignNotice'
 import type { RequestHandler } from './$types'
@@ -25,7 +25,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const denied = await requireMenuAccessApi(locals, 'rental.reservation')
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!cmsRole || !hasCmsStaffAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) {
@@ -57,7 +57,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (!session) throw error(401, '로그인이 필요합니다.')
 
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole || !hasSettingsAccess(cmsRole)) throw error(403, '권한이 없습니다.')
+  if (!cmsRole || !hasCmsStaffAccess(cmsRole)) throw error(403, '권한이 없습니다.')
 
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) throw error(400, '유효하지 않은 예약 ID입니다.')

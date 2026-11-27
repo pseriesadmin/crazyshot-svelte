@@ -14,7 +14,7 @@ import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 import { applyParentFieldsToRowProducts } from '$lib/server/products/resolveParentProductFields'
 import { sendSms, buildLockerGuideSms, buildLockerReturnGuideSms } from '$lib/server/sms'
 import { getLockerEntrancePassword } from '$lib/server/lockerEntrance'
@@ -39,7 +39,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   const { session } = await locals.safeGetSession()
   if (!session) return json({ error: '로그인이 필요합니다.' }, { status: 401 })
   const cmsRole = await getCmsRoleForAction(locals)
-  if (!cmsRole || !hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!cmsRole || !hasCmsStaffAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = parseInt(params.id, 10)
   if (isNaN(reservationId) || reservationId <= 0) return json({ error: '유효하지 않은 예약 ID입니다.' }, { status: 400 })

@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
+  role: 'manager' as string | null,
   env: { SOLAPI_API_KEY: 'a', SOLAPI_API_SECRET: 'b', SMS_SENDER_PHONE: '01000000000', SMS_TEST_PHONE: '01012345678' } as Record<string, string | undefined>,
 }))
 
@@ -25,7 +26,7 @@ vi.mock('$env/static/private', () => ({ SUPABASE_SERVICE_ROLE_KEY: 'k' }))
 vi.mock('$env/static/public', () => ({ PUBLIC_SUPABASE_URL: 'http://localhost' }))
 vi.mock('$env/dynamic/private', () => ({ env: h.env }))
 vi.mock('$lib/server/requireMenuAccess', () => ({ requireMenuAccessApi: async () => null }))
-vi.mock('$lib/server/getCmsRoleForAction', () => ({ getCmsRoleForAction: async () => 'manager' }))
+vi.mock('$lib/server/getCmsRoleForAction', () => ({ getCmsRoleForAction: async () => h.role }))
 vi.mock('$lib/server/products/resolveParentProductFields', () => ({ applyParentFieldsToRowProducts: async () => undefined }))
 vi.mock('$lib/server/lockerEntrance', () => ({ getLockerEntrancePassword: async () => '#1234' }))
 vi.mock('$lib/server/lockerGuideMessage', () => ({ composeLockerGuideMessage: async (_a: unknown, _id: number, o?: { leg?: string }) => `문장-${o?.leg ?? 'pickup'}` }))
@@ -73,6 +74,7 @@ const save = async (body: Record<string, unknown>): Promise<{ status: number; js
 const VALID = { locker_password: '1234', locker_number: '5', locker_guide_legs: 'both' }
 
 beforeEach(() => {
+  h.role = 'manager'
   dbRow = { locker_password: null, locker_number: null, status: 'confirmed', products: { name: '카메라' } }
   claimRows = [{ id: 5 }]
   rpcError = null
@@ -106,6 +108,22 @@ describe('F1 저장 → 이용안내 발송', () => {
     expect(again.status).toBe(200)
     expect(again.json).toMatchObject({ assign_notice: 'already_sent' })
     expect(pushMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('F5 파트너 확대(2026-11-27)', () => {
+  it('파트너도 배정 저장·이용안내 발송이 된다', async () => {
+    h.role = 'partner'
+    const r = await save(VALID)
+    expect(r.status).toBe(200)
+    expect(r.json).toMatchObject({ assign_notice: 'sent' })
+  })
+  it('CMS 직원이 아닌 계정(역할 없음·알 수 없는 값)은 403 — 발송 없음', async () => {
+    for (const role of ['', 'user']) {
+      h.role = role
+      expect((await save(VALID)).status).toBe(403)
+    }
+    expect(pushMock).not.toHaveBeenCalled()
   })
 })
 

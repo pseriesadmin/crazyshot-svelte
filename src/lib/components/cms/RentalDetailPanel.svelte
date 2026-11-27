@@ -35,7 +35,7 @@
   import { revertTarget, revertLabel } from '$lib/utils/rentalRevert'
   import { summarizeOrderTransition } from '$lib/utils/orderStatusTransition'
   import { extractProductId, isProductMatch } from '$lib/utils/qrProductId'
-  import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+  import { hasSettingsAccess, hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 
   // 메뉴 권한 게이트(403)가 내려준 안내문은 그대로 보여주고, 그 외 실패는 일반 문구 유지
   function actionErrorMessage(result: { type: string; status?: number; data?: Record<string, unknown> }): string {
@@ -158,6 +158,8 @@
     /** 모바일 대여현황용(2026-11-06) — cmsRole 을 넘기지 않고(매니저 전용 변경 기능은 계속 숨김) 이 역할이 매니저 이상이면
      *  '무인보관함 배정정보'를 PC 와 같은 모양의 보기 전용으로 보여 준다(입력·시범 발송·배정 확정 없음). */
     lockerViewRole?: string | null
+    /** 모바일 대여현황용(2026-11-27) — cmsRole 을 넘기지 않아도(다른 매니저 전용 변경 기능은 계속 숨김) 이 역할이 CMS 직원(partner 이상)이면 '무인보관함 배정정보'를 PC 와 같이 입력·저장·시범 발송할 수 있다. 서버(locker-password API)가 같은 기준으로 한 번 더 막는다 */
+    lockerEditRole?: string | null
     /** 모바일 대여현황용(2026-11-25) — cmsRole 을 넘기지 않아도(다른 매니저 전용 변경 기능은 계속 숨김) 이 역할이 매니저 이상이면 '검수' 탭의 CS 접수 수동 등록·검수 처리를 PC와 같이 보인다. 서버(API)가 같은 기준으로 한 번 더 막는다 */
     inspectionRole?: string | null
     /** 모바일 대여현황 전용(2026-11-06) — 숨길 탭 id 목록. 탭 버튼을 그리지 않고, 그 탭이 선택돼 있으면 대여정보 탭으로 돌려보낸다(접근 불가). */
@@ -187,7 +189,7 @@
     /** 헤더 [반납 검수 승인] 숨김 — '검수' 칩 목록(이슈 검수중)에서는 [완료 처리(추가청구)]가 완료까지 처리하므로 승인 버튼을 두지 않는다(2026-11-12) */
     hideInspectionApprove?: boolean
   }
-  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, inspectionRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, hideInspectionApprove = false, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
+  let { row, onclose, onrefresh, stepFilter, isRentalView = false, hideChangeCancelButtons = false, enableQrVerify = false, cmsRole = null, lockerViewRole = null, lockerEditRole = null, inspectionRole = null, hiddenTabs = [], largeTabs = false, hideCustomerLink = false, initialTab, onstatuschange, canChangeOrCancelReservation = true, hideInspectionApprove = false, oncancelled, oninspectionchange, oncancelstate, oncontractsent }: Props = $props()
 
   // RSV-B-B3: 이 derived는 "환불 처리" + "보관함 비밀번호" 두 기능 모두의 권한 게이트이므로
   // canManagePaymentAndLocker 대신 실제 역할을 반영한 이름으로 변경.
@@ -219,10 +221,12 @@
   // 수령 또는 반납 방식이 방문(visit)·퀵서비스(quick)이면 시간대·예약 단계와 무관하게 항상 노출(사용하지 않아도 노출).
   // 취소·만료 예약은 비밀번호가 폐기되고 저장도 거부되므로(Migration #673) 입력·저장만 비활성화한다.
   const LOCKER_FIELD_METHODS = ['visit', 'quick']
-  // 비밀번호가 보이는 화면이라 매니저 이상만: 편집 권한(cmsRole)이거나, 모바일처럼 보기 전용 역할(lockerViewRole)이 매니저 이상일 때
-  let canViewLocker = $derived(canManagePaymentAndLocker || hasSettingsAccess(lockerViewRole ?? ''))
+  // 2026-11-27(Stephen 확대): 무인보관함 배정정보는 CMS 직원 전원(partner 이상)에게 열린다 — 편집 권한(cmsRole)이 있으면 입력·저장·시범 발송,
+  // 모바일처럼 보기 전용 역할(lockerViewRole)만 있으면 보기만. 서버(locker-password API)도 같은 기준(hasCmsStaffAccess).
+  let canManageLocker = $derived(hasCmsStaffAccess(cmsRole ?? '') || hasCmsStaffAccess(lockerEditRole ?? ''))
+  let canViewLocker = $derived(canManageLocker || hasCmsStaffAccess(lockerViewRole ?? ''))
   // 보기 전용 = 편집 권한(cmsRole)이 없는 경우 — 입력칸은 저장된 값을 비활성으로 보여 주고 시범 발송·배정 확정 버튼은 숨긴다
-  let lockerReadOnly = $derived(!canManagePaymentAndLocker)
+  let lockerReadOnly = $derived(!canManageLocker)
   let showLockerPasswordField = $derived(
     canViewLocker &&
     (LOCKER_FIELD_METHODS.includes(row.pickup_method ?? '') ||
@@ -2966,7 +2970,7 @@
                   class="btn-reassign-small"
                   onclick={() => openReassign(unit.reservationId)}
                   aria-label="상품코드 재배정"
-                >{reassignTargetId === unit.reservationId ? '닫기' : '재배정'}</button>
+                >{reassignTargetId === unit.reservationId ? '닫기' : '상품 재고 재배정'}</button>
               {/if}
               {#if canEditUnit(unit)}
                 {@const delKey = `prod-${unit.reservationId}`}

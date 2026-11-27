@@ -43,7 +43,6 @@ describe('모바일 대여현황 패널 — 탭 메뉴', () => {
     expect(panel).toMatch(/\{:else if lockerReadOnly\}[\s\S]*?\{lockerNumber \|\| '-'\}[\s\S]*?\{lockerPassword \|\| '-'\}/)
     // 편집 가능한 쪽(PC 매니저)의 입력칸 배치는 그대로
     expect(panel).toMatch(/\.locker-no-input \{ flex: 0 0 130px; \}/)
-    expect(mobilePage).not.toContain('locker-group') // 줄바꿈 우회 스타일 불필요(입력칸이 없어짐)
   })
 
   it("모바일은 고객정보 탭의 '고객 상세 보기' 링크를 숨긴다(링크 자체를 그리지 않음)", () => {
@@ -73,21 +72,26 @@ describe('모바일 대여현황 패널 — 탭 메뉴', () => {
   })
 })
 
-describe('모바일 대여현황 패널 — 무인보관함 배정정보 보기 전용', () => {
-  it('편집 권한(cmsRole)은 넘기지 않고 보기 역할(lockerViewRole)만 넘긴다', () => {
+describe('모바일 대여현황 패널 — 무인보관함 배정정보 (보기 전용 모드 + 모바일 편집)', () => {
+  it('편집 권한(cmsRole)은 넘기지 않고 무인보관함 편집 역할(lockerEditRole)만 넘긴다(2026-11-27: 모바일에서도 입력·저장)', () => {
     const mount = mobilePage.slice(mobilePage.indexOf('<RentalDetailPanel'), mobilePage.indexOf('/>', mobilePage.indexOf('<RentalDetailPanel')))
-    expect(mount).toContain('lockerViewRole={data.cmsRole}')
+    expect(mount).toContain('lockerEditRole={data.cmsRole}')
     expect(mount).not.toMatch(/\bcmsRole=/) // 환불·취소·검수 승인 등 매니저 전용 변경 기능은 모바일에서 계속 열지 않는다
   })
 
   it('패널은 보기 전용에서 시범 발송·배정 확정 버튼을 숨기고 입력·수령/반납 선택을 잠근다', () => {
-    expect(panel).toContain('lockerReadOnly = $derived(!canManagePaymentAndLocker)')
+    expect(panel).toContain('lockerReadOnly = $derived(!canManageLocker)')
     expect(panel).toMatch(/\{#if !lockerReadOnly\}\s*<button[\s\S]*?시범 발송[\s\S]*?배정 확정[\s\S]*?\{\/if\}/)
     expect(panel.match(/disabled=\{lockerPwClosed \|\| lockerReadOnly\}/g)?.length).toBe(4) // 무인함 번호·비밀번호 입력 2 + 수령·반납 선택 2
   })
 
-  it('보기 역할이 매니저 이상일 때만 섹션이 보인다(비밀번호가 보이는 화면)', () => {
-    expect(panel).toMatch(/canViewLocker = \$derived\(canManagePaymentAndLocker \|\| hasSettingsAccess\(lockerViewRole \?\? ''\)\)/)
+  it('편집 역할(lockerEditRole)이 CMS 직원이면 PC 와 같이 입력·저장·시범 발송이 열리고, 좁은 화면에서는 입력 줄이 줄바꿈된다', () => {
+    expect(panel).toContain("canManageLocker = $derived(hasCmsStaffAccess(cmsRole ?? '') || hasCmsStaffAccess(lockerEditRole ?? ''))")
+    expect(mobilePage).toMatch(/\.rental-card-detail-wrap :global\(\.locker-group \.info-row\) \{\s*flex-wrap: wrap;/)
+  })
+
+  it('보기 역할이 CMS 직원(partner 이상)일 때 섹션이 보인다(2026-11-27 확대)', () => {
+    expect(panel).toMatch(/canViewLocker = \$derived\(canManageLocker \|\| hasCmsStaffAccess\(lockerViewRole \?\? ''\)\)/)
     expect(panel).toMatch(/showLockerPasswordField = \$derived\(\s*canViewLocker &&/)
   })
 })
