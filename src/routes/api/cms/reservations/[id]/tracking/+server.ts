@@ -14,6 +14,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
 import { sendReservationLifecyclePush } from '$lib/server/push'
 import { getTrackingApplicability } from '$lib/server/trackingApplicability'
+import { listOrderReservationIds } from '$lib/server/dheroOrderUnits'
 import type { RequestHandler } from './$types'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
@@ -103,6 +104,30 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   })
 
   if (rpcErr) throw error(500, '운송장 정보 저장 중 오류가 발생했습니다.')
+
+  // 같은 주문(예약코드)의 다른 상품에도 반영(2026-11-27) — 배송은 "예약코드 1건 = 배송 1건"인데 수동 운송장이 대표 예약 1행에만 저장돼
+  // 나머지 상품 카드·고객 화면에는 운송장이 비어 보이던 문제. 번호를 비울 때는 직전 번호와 같은 형제만 비운다(다른 번호는 건드리지 않음). 실패는 fail-soft.
+  try {
+    const orderIds = await listOrderReservationIds(admin, reservationId)
+    const otherIds = orderIds.filter((id) => id !== reservationId)
+    if (otherIds.length > 0) {
+      const { data: sibs, error: sibsErr } = await admin.from('rental_reservations').select('id, tracking_number').in('id', otherIds)
+      if (sibsErr) console.error(`[tracking/sibling-lookup] fail-soft [${reservationId}]:`, sibsErr.message)
+      for (const u of (sibs ?? []) as { id: number; tracking_number: string | null }[]) {
+        const cur = (u.tracking_number ?? '').trim() || null
+        if (trackingNumber === null && (previousNumber === undefined || cur === null || cur !== previousNumber)) continue
+        if (trackingNumber !== null && cur === trackingNumber) continue
+        const { error: sibErr } = await (locals.supabase.rpc as unknown as (
+          fn: string, args: Record<string, unknown>
+        ) => Promise<{ data: unknown; error: { message: string } | null }>)('update_reservation_tracking', {
+          p_reservation_id: u.id, p_tracking_number: trackingNumber, p_courier_code: courierCode,
+        })
+        if (sibErr) console.error(`[tracking/sibling] fail-soft [${u.id}]:`, sibErr.message)
+      }
+    }
+  } catch (e) {
+    console.error(`[tracking/siblings] fail-soft [${reservationId}]:`, e instanceof Error ? e.message : e)
+  }
 
   // RSV-B-B4: 운송장 등록 완료 안내 — 채팅카드 + 브라우저 푸시(fail-soft, 저장 자체는 이미 성공)
   // service-operations.md §15: 채팅카드(RPC)와 브라우저 푸시는 별개 시스템이라 둘 다 명시 호출 필요.
