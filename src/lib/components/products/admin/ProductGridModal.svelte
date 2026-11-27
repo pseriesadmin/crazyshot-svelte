@@ -592,7 +592,7 @@
   .fx-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     display: flex;
     align-items: center;
     gap: 6px;

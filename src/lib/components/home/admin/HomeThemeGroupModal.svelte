@@ -45,17 +45,20 @@
   // ── Props ─────────────────────────────────────────────────────────────
   interface Props {
     groups: ThemeGroupRow[]
+    /** '우선노출지정' 그룹 id — 홈 테마 탭에서 맨 앞(먼저 열림) */
+    firstId?: string | null
     onclose: () => void
     /** 통합 설정 모달 안에 섹션으로 표시(오버레이·헤더·취소 숨김) */
     embedded?: boolean
   }
-  let { groups, onclose, embedded = false }: Props = $props()
+  let { groups, firstId = null, onclose, embedded = false }: Props = $props()
 
   const MAX_GROUPS   = 10
   const MAX_PRODUCTS = 10
 
   // ── 로컬 상태 ─────────────────────────────────────────────────────────
   let localGroups = $state<LocalGroup[]>([])
+  let localFirst  = $state<string | null>(null)   // 우선노출지정 그룹의 _tempId
   let origIds     = $state<Set<string>>(new Set())
   let isSaving    = $state(false)
   let saveError   = $state<string | null>(null)
@@ -74,6 +77,7 @@
   // ── Props 동기화 ($state(prop) 절대 금지 → $effect 사용) ──────────────
   $effect(() => {
     localGroups = groups.map(toLocal)
+    localFirst  = firstId && groups.some((g) => g.id === firstId && g.is_active) ? firstId : null
     origIds     = new Set(groups.map((g) => g.id))
     activeGroupId      = null
     activeProductsList = []
@@ -97,9 +101,17 @@
   }
 
   function toggleActive(tempId: string) {
+    const next = !localGroups.find((g) => g._tempId === tempId)?.is_active
     localGroups = localGroups.map((g) =>
-      g._tempId === tempId ? { ...g, is_active: !g.is_active } : g
+      g._tempId === tempId ? { ...g, is_active: next } : g
     )
+    if (!next && localFirst === tempId) localFirst = null   // 숨김이면 우선노출 해제
+  }
+
+  // 우선노출지정 — 노출 중인 그룹 1개만, 다시 누르면 해제
+  function toggleFirst(tempId: string) {
+    if (!localGroups.find((g) => g._tempId === tempId)?.is_active) return
+    localFirst = localFirst === tempId ? null : tempId
   }
 
   function newTempId() {
@@ -147,6 +159,7 @@
       activeProductsList = []
     }
     localGroups = localGroups.filter((g) => g._tempId !== tempId)
+    if (localFirst === tempId) localFirst = null
   }
 
   // ── 그룹 필드 수정 ────────────────────────────────────────────────────
@@ -247,9 +260,15 @@
     saveError = null
     syncActiveBack()
 
+    // 저장 도중 어느 단계에서 실패해도 finally 에서 반영할 수 있도록 try 밖에 둔다
+    let withUrls: LocalGroup[] | null = null
+    const savedIds: Record<string, string> = {}
+    const deletedIds = new Set<string>()
+    let succeeded = false
+
     try {
       // 1. 이미지 업로드
-      const withUrls: LocalGroup[] = await Promise.all(
+      withUrls = await Promise.all(
         localGroups.map(async (g) => {
           if (!g._file) return g
           const url = await uploadImage(g)
@@ -264,6 +283,7 @@
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const { data: res } = await (supabase.rpc as any)('cms_delete_theme_group', { p_id: oid }) as { data: { ok: boolean; error?: string } }
           if (!res?.ok) throw new Error(res?.error ?? '삭제 실패')
+          deletedIds.add(oid)
         }
       }
 
@@ -285,20 +305,42 @@
 
         if (g.id === null) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: res } = await (supabase.rpc as any)('cms_create_theme_group', params) as { data: { ok: boolean; error?: string } }
+          const { data: res } = await (supabase.rpc as any)('cms_create_theme_group', params) as { data: { ok: boolean; error?: string; id?: string } }
           if (!res?.ok) throw new Error(res?.error ?? '생성 실패')
+          if (res.id) savedIds[g._tempId] = res.id
         } else {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const { data: res } = await (supabase.rpc as any)('cms_update_theme_group', { p_id: g.id, ...params }) as { data: { ok: boolean; error?: string } }
           if (!res?.ok) throw new Error(res?.error ?? '수정 실패')
+          savedIds[g._tempId] = g.id
         }
       }
 
+      // 4. 우선노출지정 저장 — 방금 만든 그룹이면 새 id 로 바꿔 기록
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: settingsErr } = await (supabase.rpc as any)('upsert_product_page_setting', {
+        p_key: 'home_theme_group_settings',
+        p_value: { first_id: localFirst ? (savedIds[localFirst] ?? null) : null },
+      })
+      if (settingsErr) throw new Error(`우선노출 저장 실패: ${settingsErr.message}`)
+
+      succeeded = true
       await invalidateAll()
       onclose()
     } catch (e) {
       saveError = e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.'
     } finally {
+      // 실패했을 때만 그룹 저장 결과(새 id·업로드된 이미지 주소)를 화면 상태에 반영 —
+      // 루프 중간이나 설정 저장에서 실패해 같은 화면에서 다시 저장해도 이미 만든 그룹을 또 만들거나 이미지를 다시 올리지 않는다.
+      // 성공하면 서버 재조회(invalidateAll → groups 동기화)가 정본이라 덮어쓰지 않는다.
+      if (withUrls && !succeeded) {
+        localGroups = withUrls.map((g) => ({ ...g, id: savedIds[g._tempId] ?? g.id }))
+        // 삭제 대기 중이던 그룹이 빠지지 않도록: 기존 목록 − 삭제 성공분 + 새로 만든 그룹
+        origIds = new Set([
+          ...[...origIds].filter((id) => !deletedIds.has(id)),
+          ...Object.values(savedIds),
+        ])
+      }
       isSaving = false
     }
   }
@@ -341,6 +383,35 @@
     <CmsDragList bind:items={localGroups} itemKey={(g) => g._tempId}>
       {#snippet renderItem(g, _idx)}
         <div class="tg-group-card">
+          <!-- 상단 바: 왼쪽 우선노출지정 / 오른쪽 기본노출지정(노출·숨김) — 홈 배너 카드와 동일 -->
+          <div class="first-bars">
+            <button
+              type="button"
+              class="first-bar"
+              class:first-bar--on={localFirst === g._tempId}
+              aria-pressed={localFirst === g._tempId}
+              aria-label="우선노출지정"
+              title="우선노출지정 — 사용자 화면을 열 때 이 그룹을 먼저 노출"
+              disabled={!g.is_active}
+              onclick={() => toggleFirst(g._tempId)}
+            >우선노출지정</button>
+            <button
+              type="button"
+              class="first-bar first-bar--visible"
+              class:first-bar--on={g.is_active}
+              aria-pressed={g.is_active}
+              aria-label={g.is_active ? '노출 중 — 클릭 시 숨김' : '숨김 — 클릭 시 노출'}
+              title={g.is_active ? '노출 중 — 클릭 시 숨김' : '숨김 — 클릭 시 노출'}
+              onclick={() => toggleActive(g._tempId)}
+            >
+              <span class="vis-ico">
+                                      <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                    <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor"/>
+                  </svg>
+                  </span>기본노출지정
+            </button>
+          </div>
+
           <!-- 그룹 헤더 행 -->
           <div class="tg-group-row">
             <!-- 이미지 썸네일 -->
@@ -368,103 +439,102 @@
               onchange={(e) => onFileChange(g._tempId, e)}
             />
 
-            <!-- 제목 입력 -->
+            <div class="tg-fields">
+              <!-- 제목 입력 -->
+              <input
+                type="text"
+                class="tg-title-input"
+                placeholder="그룹명"
+                value={g.title}
+                oninput={(e) => setField(g._tempId, 'title', (e.target as HTMLInputElement).value)}
+              />
+
+            <!-- 서브카피 -->
             <input
               type="text"
-              class="tg-title-input"
-              placeholder="그룹명"
-              value={g.title}
-              oninput={(e) => setField(g._tempId, 'title', (e.target as HTMLInputElement).value)}
+              class="tg-subcopy-input"
+              placeholder="서브 카피 (선택)"
+              value={g.sub_copy}
+              oninput={(e) => setField(g._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
             />
 
-            <!-- 삭제 / 노출 토글 (아코디언 토글은 검색입력폼바와 함께 아래로 이동) -->
-            <div class="tg-group-actions">
+            <!-- 검색 입력폼바 + 아코디언 버튼 — 상시 노출(펼치지 않아도 바로 검색 가능) -->
+            <div class="tg-picker-row">
+              {#if (activeGroupId === g._tempId ? activeProductsList.length : g.productItems.length) < MAX_PRODUCTS}
+                <div class="tg-picker-wrap">
+                  <SuggestPicker
+                    id={`theme-product-search-${g._tempId}`}
+                    bind:selectedId={pickerSelId}
+                    options={activeGroupId === g._tempId ? pickerOptions : []}
+                    noFilter
+                    clearOnSelect
+                    itemLayout="row"
+                    placeholder="상품 검색…"
+                    listLabel="검색 결과"
+                    variant="generic"
+                    oninput={onPickerInput}
+                    onselect={onProductSelect}
+                  >
+                    {#snippet field(c)}
+                      <input
+                        type="text"
+                        class="f-input tg-search-f-input"
+                        id={c.id}
+                        placeholder={c.placeholder}
+                        value={c.value}
+                        oninput={c.oninput}
+                        onkeydown={c.onkeydown}
+                        onfocus={() => { if (activeGroupId !== g._tempId) activateGroup(g._tempId); c.onfocus() }}
+                        onblur={c.onblur}
+                        aria-autocomplete={c.ariaAutocomplete}
+                        aria-expanded={c.ariaExpanded}
+                        aria-controls={c.ariaControls}
+                        autocomplete="off"
+                      />
+                    {/snippet}
+                    {#snippet renderItem(item, _i, _sel)}
+                      <span class="suggest-name">{item.label}</span>
+                      <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
+                    {/snippet}
+                  </SuggestPicker>
+                </div>
+              {:else}
+                <div class="tg-picker-wrap tg-picker-full">최대 {MAX_PRODUCTS}개까지 등록 가능합니다.</div>
+              {/if}
               <button
-                class="tg-del-btn"
-                onclick={() => removeGroup(g._tempId)}
-                aria-label="그룹 삭제"
-                type="button"
-              >✕</button>
-              <button
-                class="checkbox-btn tg-visible-btn"
-                class:checked={g.is_active}
-                onclick={() => toggleActive(g._tempId)}
-                aria-label={g.is_active ? '노출 중 — 클릭 시 숨김' : '숨김 — 클릭 시 노출'}
+                class="tg-expand-btn"
+                class:active={activeGroupId === g._tempId}
+                onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
+                aria-label="상품 편집"
                 type="button"
               >
-                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z"
-                    fill="currentColor" />
-                </svg>
+                <ChevronIcon
+                  direction={activeGroupId === g._tempId ? 'up' : 'down'}
+                  size={8}
+                  color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
+                />
               </button>
             </div>
-          </div>
 
-          <!-- 서브카피 -->
-          <input
-            type="text"
-            class="tg-subcopy-input"
-            placeholder="서브 카피 (선택)"
-            value={g.sub_copy}
-            oninput={(e) => setField(g._tempId, 'sub_copy', (e.target as HTMLInputElement).value)}
-          />
-
-          <!-- 검색 입력폼바 + 아코디언 버튼 — 상시 노출(펼치지 않아도 바로 검색 가능) -->
-          <div class="tg-picker-row">
-            {#if (activeGroupId === g._tempId ? activeProductsList.length : g.productItems.length) < MAX_PRODUCTS}
-              <div class="tg-picker-wrap">
-                <SuggestPicker
-                  id={`theme-product-search-${g._tempId}`}
-                  bind:selectedId={pickerSelId}
-                  options={activeGroupId === g._tempId ? pickerOptions : []}
-                  noFilter
-                  clearOnSelect
-                  itemLayout="row"
-                  placeholder="상품 검색…"
-                  listLabel="검색 결과"
-                  variant="generic"
-                  oninput={onPickerInput}
-                  onselect={onProductSelect}
+              <!-- 삭제 / 노출 토글 (아코디언 토글은 검색입력폼바와 함께 아래로 이동) -->
+              <div class="tg-group-actions">
+                <button
+                  class="tg-del-btn"
+                  onclick={() => removeGroup(g._tempId)}
+                  aria-label="그룹 삭제"
+                  title="그룹 삭제"
+                  type="button"
                 >
-                  {#snippet field(c)}
-                    <input
-                      type="text"
-                      class="f-input tg-search-f-input"
-                      id={c.id}
-                      placeholder={c.placeholder}
-                      value={c.value}
-                      oninput={c.oninput}
-                      onkeydown={c.onkeydown}
-                      onfocus={() => { if (activeGroupId !== g._tempId) activateGroup(g._tempId); c.onfocus() }}
-                      onblur={c.onblur}
-                      aria-autocomplete={c.ariaAutocomplete}
-                      aria-expanded={c.ariaExpanded}
-                      aria-controls={c.ariaControls}
-                      autocomplete="off"
-                    />
-                  {/snippet}
-                  {#snippet renderItem(item, _i, _sel)}
-                    <span class="suggest-name">{item.label}</span>
-                    <span class="suggest-meta">{item.meta?.[0] ?? ''}</span>
-                  {/snippet}
-                </SuggestPicker>
+                  <!-- CMS 공통 표준 삭제 아이콘(CmsDeleteButton 의 휴지통 SVG 12×12) -->
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <polyline points="3,6 5,6 21,6"/>
+                    <path d="M19,6l-1,14H6L5,6"/>
+                    <path d="M10,11v6M14,11v6"/>
+                    <path d="M9,6V4h6v2"/>
+                  </svg>
+                </button>
               </div>
-            {:else}
-              <div class="tg-picker-wrap tg-picker-full">최대 {MAX_PRODUCTS}개까지 등록 가능합니다.</div>
-            {/if}
-            <button
-              class="tg-expand-btn"
-              class:active={activeGroupId === g._tempId}
-              onclick={() => activateGroup(activeGroupId === g._tempId ? null : g._tempId)}
-              aria-label="상품 편집"
-              type="button"
-            >
-              <ChevronIcon
-                direction={activeGroupId === g._tempId ? 'up' : 'down'}
-                size={8}
-                color={activeGroupId === g._tempId ? '#fff' : 'currentColor'}
-              />
-            </button>
+            </div>
           </div>
 
           <!-- 상품 목록 아코디언 — 기존과 동일하게 펼침보기 유지 -->
@@ -615,27 +685,37 @@
   /* ── 그룹 카드 ── */
   .tg-group-card {
     background: var(--cs-surface-gray, #f6f6f6);
-    border-radius: var(--radius-md, 15px);
-    padding: 12px;
+    border-radius: var(--radius-sm, 8px);
+    padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    flex: 1;
+    min-width: 0;
   }
 
+  /* 홈 배너 카드와 같은 구조 — 왼쪽 썸네일, 오른쪽 입력칸 세로 나열 */
   .tg-group-row {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .tg-fields {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
   /* 썸네일 버튼 — 테마 대표이미지는 원형으로 등록(요구사항: 테마 원형이미지) */
   .tg-thumb-btn {
     flex-shrink: 0;
-    width: 48px;
-    height: 48px;
+    width: 64px;
+    height: 64px;
     border-radius: 50%;
     overflow: hidden;
-    border: 1.5px solid #dcdcdc;
+    border: none;
     background: #ececec;
     cursor: pointer;
     padding: 0;
@@ -650,33 +730,34 @@
 
   /* 제목 입력 */
   .tg-title-input {
-    flex: 1;
-    min-width: 0;
-    height: 36px;
-    border: 1.5px solid #dcdcdc;
-    border-radius: var(--radius-sm, 8px);
-    padding: 0 10px;
-    font-size: 13px;
-    font-weight: 600;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 40px;
+    border: none;
+    border-radius: var(--cms-radius-sm, 10px);
+    padding: 0 16px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
     color: var(--cs-text, #100b32);
     background: #fff;
     outline: none;
-    transition: border-color 0.15s;
   }
-  .tg-title-input:focus { border-color: var(--cs-purple, #3b2f8a); }
+  .tg-title-input::placeholder { color: var(--cs-text-light); }
+  .tg-title-input:focus { outline: 2px solid var(--cs-purple, #3b2f8a); outline-offset: -2px; }
 
   /* 아코디언·삭제 버튼 영역 */
   .tg-group-actions {
     display: flex;
     gap: 4px;
     flex-shrink: 0;
+    align-self: flex-end;   /* 입력칸 아래 우측 */
   }
   .tg-expand-btn {
-    width: 30px;
-    height: 30px;
+    width: 40px;
+    height: 40px;
     flex-shrink: 0;
-    border: 1.5px solid #dcdcdc;
-    border-radius: var(--radius-sm, 8px);
+    border: none;
+    border-radius: var(--cms-radius-sm, 10px);
     background: #fff;
     display: flex;
     align-items: center;
@@ -686,58 +767,85 @@
     transition: border-color 0.15s, background 0.15s;
   }
   .tg-expand-btn.active {
-    border-color: var(--cs-purple, #3b2f8a);
     background: var(--cs-purple, #3b2f8a);
     color: #fff;
   }
+  /* CMS 공통 표준 삭제 아이콘 버튼(홈 배너 모달 .btn-remove 규격과 동일) — 투명 면, 호버는 옅은 레드 면 + 레드 아이콘 */
   .tg-del-btn {
-    width: 30px;
-    height: 30px;
-    border: 1.5px solid #ffb3b3;
-    border-radius: var(--radius-sm, 8px);
-    background: #fff;
-    font-size: 12px;
-    cursor: pointer;
-    color: #cf0000;
-    transition: background 0.15s;
-  }
-  .tg-del-btn:hover { background: #fff0f0; }
-
-  /* 그룹 노출 선택 — 체크아이콘 버튼 표준(front-uiux.md §17, CMS 재사용) */
-  .checkbox-btn {
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-sm, 8px);
-    transition: background 0.15s;
+    flex-shrink: 0;
+    min-width: 28px;
+    min-height: 32px;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
   }
-  .tg-visible-btn { color: var(--cs-purple-op10, #ECEBF4); }
-  .tg-visible-btn.checked { color: var(--cs-purple, #3b2f8a); }
-  .tg-visible-btn:hover { background: rgba(59, 47, 138, 0.06); }
-  .tg-visible-btn svg { width: 18px; height: 12px; }
+  .tg-del-btn:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
+
+  /* 카드 상단 바(가로 전체, 절반씩): 왼쪽 우선노출지정 / 오른쪽 기본노출지정. 각 칸 미선택 옅은 회색(--cs-border) / 선택 옅은 퍼플(--cs-purple-op10) */
+  .first-bars {
+    display: flex;
+    margin: -10px -10px 0;         /* 카드 안쪽 여백 상쇄(아래 간격은 카드 gap) */
+  }
+  .first-bar {
+    flex: 1;                       /* 절반씩 */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    box-sizing: content-box;
+    height: 30px;                  /* 노출 아이콘 버튼(30px)이 들어가도록 글자 영역 30px + 위아래 안쪽 여백 5px씩 = 바 전체 40px */
+    padding: 5px 0;
+    border: none;
+    border-radius: 0;
+    background: var(--cs-border);
+    color: var(--cs-text-mid);
+    font: var(--text-pc-descript-10); /* 한 단계 작은 볼드 없는 토큰(300 10px) */
+    line-height: 15px;                /* 토큰의 줄 높이(160%) 대신 바 높이에 맞춤 */
+    cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease;
+  }
+  .first-bar:first-child { border-top-left-radius: var(--radius-sm); }
+  .first-bar:last-child { border-top-right-radius: var(--radius-sm); }
+  .first-bar--on { background: var(--cs-purple-op10); color: var(--cs-purple-dark); }   /* 선택: 더 옅은 퍼플(#E1DEF3) */
+  .first-bar:disabled { cursor: not-allowed; opacity: 0.5; }
+  /* 오른쪽 칸의 노출 아이콘 — 기존 노출 버튼(HomeThemeGroupModal .tg-visible-btn)의 버튼형 UI: 30×30 · 반경 8px · 아이콘 18×12 · 호버 옅은 퍼플 면, 노출이면 --cs-purple / 숨김이면 옅은 색 */
+  .vis-ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm, 8px);
+    color: var(--cs-purple-op10, #ECEBF4);
+    transition: background 0.15s, color 0.15s;
+  }
+  .first-bar--on .vis-ico { color: var(--cs-purple, #3b2f8a); }
+  .first-bar--visible:hover .vis-ico { background: rgba(59, 47, 138, 0.06); }
+  .vis-ico svg { width: 18px; height: 12px; }
 
   /* 서브카피 */
   .tg-subcopy-input {
     width: 100%;
-    height: 32px;
-    border: 1.5px solid #dcdcdc;
-    border-radius: var(--radius-sm, 8px);
-    padding: 0 10px;
-    font-size: 12px;
-    color: var(--cs-text-mid, #666);
+    min-height: 40px;
+    border: none;
+    border-radius: var(--cms-radius-sm, 10px);
+    padding: 0 16px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    color: var(--cs-text, #100b32);
     background: #fff;
     outline: none;
     box-sizing: border-box;
-    transition: border-color 0.15s;
   }
-  .tg-subcopy-input:focus { border-color: var(--cs-purple, #3b2f8a); }
+  .tg-subcopy-input::placeholder { color: var(--cs-text-light); }
+  .tg-subcopy-input:focus { outline: 2px solid var(--cs-purple, #3b2f8a); outline-offset: -2px; }
 
   /* ── 상품 편집 아코디언 ── */
   .tg-products-area {
@@ -842,14 +950,16 @@
      분명히 하고 포커스 시에는 tg-search-input(하입팩 모달)과 동일하게 테두리 색만 바뀌도록 보정.
      .f-input 자체(다른 25+개 화면의 공용 표준)는 무변경 — 이 검색 입력에만 별도 클래스로 덧씌움. */
   .tg-search-f-input {
-    height: 34px;
-    padding: 0 10px;
-    font-size: 12px;
-    border: 1.5px solid #dcdcdc;
+    min-height: 40px;
+    padding: 0 16px;
+    font: var(--text-pc-body-14);
+    font-weight: 700;
+    background: #fff;
+    border: none;
   }
   .tg-search-f-input:focus {
-    outline: none;
-    border-color: var(--cs-purple, #3b2f8a);
+    outline: 2px solid var(--cs-purple, #3b2f8a);
+    outline-offset: -2px;
   }
 
   /* SuggestPicker dropdown 오버라이드 */

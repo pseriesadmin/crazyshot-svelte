@@ -276,9 +276,23 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: tgData, error: tgError } = await (db.rpc as any)('get_home_theme_groups_with_products')
-  const themeGroups: ThemeGroupWithProducts[] = tgError
+  const themeGroupsRaw: ThemeGroupWithProducts[] = tgError
     ? []
     : ((tgData as ThemeGroupWithProducts[] | null) ?? [])
+
+  // '우선노출지정' 테마그룹(cms_settings home_theme_group_settings.first_id) — 노출 중인 그룹일 때만 맨 앞으로(홈 테마 탭이 첫 그룹부터 열린다)
+  const { data: themeGroupSettingsRow } = await locals.supabase
+    .from('cms_settings')
+    .select('value')
+    .eq('key', 'home_theme_group_settings')
+    .maybeSingle()
+  const themeGroupSettings: { first_id: string | null } = {
+    first_id: ((themeGroupSettingsRow as { value: { first_id?: unknown } | null } | null)?.value?.first_id as string | undefined) ?? null,
+  }
+  const themeFirst = themeGroupsRaw.find((g) => g.id === themeGroupSettings.first_id)
+  const themeGroups: ThemeGroupWithProducts[] = themeFirst
+    ? [themeFirst, ...themeGroupsRaw.filter((g) => g.id !== themeFirst.id)]
+    : themeGroupsRaw
 
   // 관리자 전용(is_active 무관 전체) — "테마그룹 관리" 모달에서 비노출 그룹도 편집 가능해야
   // 하므로 별도 RPC로 조회(Migration #355, hype-pack #343과 동일 패턴). 비관리자에게는 절대 노출 안 됨.
@@ -458,7 +472,7 @@ export const load: PageServerLoad = async ({ locals, cookies, url }) => {
 
   return {
     bannerMap, isCms, categories, crazylogPosts, bannerSlots, recentLogPosts, topFaqs, faqHeroBgUrl, faqHeroTitle, faqHeroSub, faqHeroBgImages: heroBgImages, faqHeroBgMode: heroBgModeVal,
-    heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupsAdmin,
+    heroBannerRowsRaw, heroBannerSettings, themeGroups, themeGroupSettings, themeGroupsAdmin,
     homeCategoryProductsRaw, categoryProducts, categoryPageSettings, keywordsPageSettings,
     mdPicksRaw, mdProducts, mdMobileImages, categoryMobileImages,
     isLoggedIn: !!session?.user.id, wishedIds, productBadges, productCardKeywords,
