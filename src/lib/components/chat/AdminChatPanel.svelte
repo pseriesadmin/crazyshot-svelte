@@ -27,7 +27,7 @@
     markMessagesRead,
   } from '$lib/services/chatService'
   import { setSessions, upsertSession, pushMessage, applyIncomingMessagePreview } from '$lib/stores/chat.svelte'
-  import { isFreshNewSession, mergeFetchedSessions, createRefetchScheduler } from '$lib/utils/chatSessionSync'
+  import { isFreshNewSession, mergeFetchedSessions, mergeMessagesById, createRefetchScheduler } from '$lib/utils/chatSessionSync'
   import { chatStore } from '$lib/stores/chat.svelte'
   import { supabase } from '$lib/services/supabase'
   import type { ChatSession, ChatMessage, ChatSessionStatus, CsRecord, ActionPayload, CtaModalRequest } from '$lib/types/chat'
@@ -682,6 +682,9 @@
         return
       }
       sessionArrivedAt.set(session.id, Date.now())
+      // 세션의 마지막 메시지 시각이 앞서 있으면(새 메시지가 도착했는데 메시지 이벤트가 늦거나 누락된 경우 포함) 카드 미리보기를 서버 기준으로 다시 맞춘다
+      const prevLast = chatStore.sessions.find((x) => x.id === session.id)?.last_message_at
+      if (existedBefore && session.last_message_at && (!prevLast || session.last_message_at > prevLast)) refetchScheduler.schedule()
       upsertSession(session)
       // 신규 채팅목록(세션) 등장 시 점멸 표시 + 고객 이름 등 파생 값을 채우려 목록을 다시 받는다
       if (!existedBefore) {
@@ -701,6 +704,9 @@
       // 긴급 배지(is_urgent)는 서버가 의도분류 로그를 근거로 계산하는 값이라 Realtime payload에 없다 —
       // 메시지 도착 후 잠시 뒤(의도 로그 기록 대기) 목록을 다시 받아 배지를 즉시 반영·해제한다
       if (!message.admin_only) refetchScheduler.schedule()
+    }, () => {
+      // 삭제된 대화가 카드의 마지막 대화였다면 카드가 삭제 전 문구를 계속 보이므로 서버 기준으로 다시 맞춘다
+      refetchScheduler.schedule(300)
     })
     return () => {
       unsub()
@@ -740,6 +746,10 @@
 
     isLoadingMessages = true
     hasMoreOlderMessages = false
+    // 불러오는 동안 실시간으로 도착한 메시지는 따로 모았다가 불러온 결과와 합친다(불러오기 결과가 그 메시지를 덮어 지우거나,
+    // 아직 이전 세션 목록이 보이는 상태에서 새 세션 메시지가 섞이는 것을 막는다)
+    let loaded = false
+    const pendingRealtime: ChatMessage[] = []
     Promise.all([
       loadMessages(sid),
       fetch(`/api/chat/sessions/${sid}/bookmarks`)
@@ -750,15 +760,21 @@
       sessionBookmarkedIds = new Set<string>(
         ((bookmarkData as { bookmarks?: BookmarkEntry[] }).bookmarks ?? []).map((b) => b.message_id)
       )
-      messages = msgs.map((m) => ({ ...m, is_bookmarked: sessionBookmarkedIds.has(m.id) }))
+      messages = mergeMessagesById(msgs.map((m) => ({ ...m, is_bookmarked: sessionBookmarkedIds.has(m.id) })), pendingRealtime)
+      loaded = true
       hasMoreOlderMessages = hasMore
       isLoadingMessages = false
       markMessagesRead(sid, ['user'])
-    }).catch(() => { isLoadingMessages = false })
+    }).catch(() => {
+      loaded = true
+      messages = mergeMessagesById([], pendingRealtime)
+      isLoadingMessages = false
+    })
 
     const unsub = subscribeToChatMessages(
       sid,
       (msg) => {
+        if (!loaded) { pendingRealtime.push(msg); return }
         const already = messages.some((m) => m.id === msg.id)
         if (!already) messages = [...messages, msg]
         // 새 사용자 메시지 도착 시 즉시 읽음 처리 (관리자 패널 열려 있음)
@@ -776,6 +792,39 @@
       }
     )
     return unsub
+  })
+
+  // 탭이 백그라운드였다가 돌아오거나(노트북 절전·네트워크 끊김 포함) 네트워크가 복구되면 실시간 연결이 끊겨 있었을 수 있다 —
+  // 그 사이 도착한 메시지가 카드와 채팅창에 반영되지 않으므로 목록과 열린 대화의 최근 메시지를 서버 기준으로 다시 맞춘다.
+  async function reloadLatestMessages(): Promise<void> {
+    const sid = selectedSessionId
+    if (!sid) return
+    const { messages: latest, error } = await loadMessages(sid)
+    if (error || selectedSessionId !== sid) return
+    const current = new Map(messages.map((m) => [m.id, m]))
+    messages = mergeMessagesById(
+      latest.map((m) => ({ ...m, is_bookmarked: current.get(m.id)?.is_bookmarked ?? sessionBookmarkedIds.has(m.id) })),
+      messages
+    )
+  }
+  $effect(() => {
+    let lastRun = 0
+    function resync(): void {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      if (now - lastRun < 2000) return
+      lastRun = now
+      refetchScheduler.schedule(0)
+      void reloadLatestMessages()
+    }
+    document.addEventListener('visibilitychange', resync)
+    window.addEventListener('online', resync)
+    window.addEventListener('focus', resync)
+    return () => {
+      document.removeEventListener('visibilitychange', resync)
+      window.removeEventListener('online', resync)
+      window.removeEventListener('focus', resync)
+    }
   })
 
   // MessageList가 위로 스크롤해 상단 근처에 닿으면 호출 — 현재 가장 오래된 메시지 이전 페이지 조회
@@ -818,9 +867,8 @@
   let selectedUserId = $derived(selectedSession?.user_id ?? null)
 
   // GSD-7: 중요 카드만 보기 필터링
-  // 기본 뷰: sender_type='ai'인 메시지 중 "자유응답 텍스트"만 숨긴다(AI 챗봇 잡담이 관리자 뷰를
-  // 어지럽히던 문제) — action_card는 발신자가 ai여도 구조화된 실데이터(예약정보 등)라 항상 노출.
-  // 그렇지 않으면 예약 컨텍스트 요약 카드(chatReservationCard.ts) 등이 기본 뷰에서 보이지 않음.
+  // 기본 뷰: 모든 메시지를 보여준다. (2026-11-27 Stephen 지시 — 상담 카드 미리보기가 'AI 자동응답'을 마지막 대화로 쓰는데
+  // 채팅창이 sender_type='ai' 자유응답을 숨기면 카드와 채팅창의 마지막 내용이 어긋났다. 이전 규칙: AI 잡담 숨김)
   let filteredMessages = $derived(
     showImportantOnly
       ? messages.filter(
@@ -830,13 +878,7 @@
               ((m.action_payload as { type?: string } | null)?.type) ?? ''
             )
         )
-      : messages.filter(
-          (m) =>
-            m.sender_type !== 'ai' ||
-            m.message_type === 'action_card' ||
-            // 크레이지챗이 보낸 답변은 관리자가 고객이 받은 안내를 그대로 볼 수 있도록 기본 뷰에 노출(로고 배지로 구분)
-            (m.action_payload as { type?: string } | null)?.type === 'crazychat_reply'
-        )
+      : messages
   )
 
   // 고객 기본정보 요약 (chat-header 노출용) — 선택된 세션의 user_id가 바뀔 때만 재조회
@@ -1038,6 +1080,8 @@
       messages = messages.map((m) => m.id === messageId
         ? { ...m, message_type: 'system', content: DELETED_MESSAGE_TEXT, action_payload: { type: 'message_deleted' }, deleted_at: new Date().toISOString() }
         : m)
+      // 지운 대화가 카드의 마지막 대화였다면 카드도 바뀌어야 하므로 서버 기준으로 다시 맞춘다
+      refetchScheduler.schedule(300)
       return true
     })
   }

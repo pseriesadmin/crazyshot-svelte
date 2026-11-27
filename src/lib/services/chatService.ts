@@ -322,17 +322,28 @@ export function subscribeToChatMessages(
 
 // 관리자: 전체 메시지 Realtime 구독 (세션 필터 없음 — 목록의 마지막 메시지 미리보기·정렬 갱신용)
 export function subscribeToAllMessages(
-  onMessage: (message: ChatMessage) => void
+  onMessage: (message: ChatMessage) => void,
+  /** 관리자가 대화를 삭제해 행이 '대화가 삭제되었습니다.'로 바뀐 경우(Migration #733) — 카드 미리보기를 서버 기준으로 다시 맞추기 위함 */
+  onDeleted?: (message: ChatMessage) => void
 ): () => void {
   const uid = ++_channelSeq
-  const channel = supabase
+  let builder = supabase
     .channel(`chat:all-messages:${uid}`)
     .on(
       'postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'chat_messages' },
       (payload) => onMessage(payload.new as ChatMessage)
     )
-    .subscribe()
+  if (onDeleted) {
+    builder = builder.on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'chat_messages' },
+      (payload) => {
+        if (payload.new?.deleted_at && !payload.old?.deleted_at) onDeleted(payload.new as ChatMessage)
+      }
+    )
+  }
+  const channel = builder.subscribe()
 
   return () => {
     supabase.removeChannel(channel)

@@ -1,6 +1,7 @@
 // PRD.1.7 — 채팅 Svelte 5 Runes 스토어 (class 패턴)
 
 import type { ChatSession, ChatMessage } from '$lib/types/chat'
+import { shouldApplyIncomingPreview } from '$lib/utils/chatSessionSync'
 
 // 공통 플로팅 채팅 모달을 다른 화면(예: /account/rental 카드별 문의 버튼)에서
 // 특정 컨텍스트로 호출할 때 사용 — ChatWindow가 props보다 이 값을 우선 사용한다.
@@ -162,6 +163,8 @@ export function applyIncomingMessagePreview(message: ChatMessage): void {
   if (idx < 0) return
 
   const existing = chatStore.sessions[idx]
+  // 순서가 뒤바뀌어 옛 메시지가 늦게 도착하면 카드가 옛 대화로 되돌아가므로 건너뛴다(카드의 마지막 시각보다 오래된 메시지)
+  if (!shouldApplyIncomingPreview(existing.last_message_at, message.created_at)) return
   // admin_only 카드(경고·검토요청 등)는 관리자에게만 보이는 내부 메시지라 — 세션 카드의
   // "마지막 메시지 미리보기"를 그 문구로 덮어쓰면 마치 고객이 보낸 것처럼 오인될 수 있다
   // (service-operations.md §17). 미리보기·발신자 표시는 갱신하지 않고 그대로 유지한다.

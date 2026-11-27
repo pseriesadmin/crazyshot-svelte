@@ -4,7 +4,7 @@
 // 맨 앞에 끼워 넣어 과거 대화카드가 튀어나왔다(고객 이름·마지막 대화 없이). ②서버 목록 응답이 실시간으로 방금
 // 들어온 새 세션보다 먼저 계산돼 있으면, 응답으로 목록을 통째로 교체할 때 새 세션이 사라져 배지에만 남았다.
 
-import type { ChatSession } from '$lib/types/chat'
+import type { ChatMessage, ChatSession } from '$lib/types/chat'
 
 /** 이 시간 안에 만들어진 세션만 '신규 세션'으로 보고 목록에 바로 끼워 넣는다 */
 export const NEW_SESSION_WINDOW_MS = 2 * 60 * 1000
@@ -96,4 +96,25 @@ export function createRefetchScheduler(run: () => void): { schedule: (delayMs?: 
   }
 
   return { schedule, cancel }
+}
+
+/**
+ * 채팅창에 불러온 메시지(base)와 불러오는 중 실시간으로 도착한 메시지(extra)를 합친다.
+ * 같은 id 는 한 번만(불러온 쪽 서버 값 우선), 시간순(오래된→최신). 불러오기 결과가 도착한 메시지를 덮어 지우던 경합을 막는다.
+ */
+export function mergeMessagesById(base: ChatMessage[], extra: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>()
+  for (const m of extra) byId.set(m.id, m)
+  for (const m of base) byId.set(m.id, m)
+  return [...byId.values()].sort((a, b) => ms(a.created_at) - ms(b.created_at))
+}
+
+/**
+ * 실시간으로 도착한 메시지로 카드 미리보기를 바꿔도 되는지.
+ * 카드가 이미 더 최신 메시지 시각을 가지고 있으면(순서가 뒤바뀌어 옛 메시지가 늦게 도착) 덮어쓰지 않는다.
+ * 같은 시각은 반영한다(세션 갱신 이벤트가 먼저 도착해 시각만 앞서 있는 경우 내용을 채워야 한다).
+ */
+export function shouldApplyIncomingPreview(existingLastAt: string | null | undefined, messageCreatedAt: string | null | undefined): boolean {
+  if (!existingLastAt || !messageCreatedAt) return true
+  return ms(messageCreatedAt) >= ms(existingLastAt)
 }
