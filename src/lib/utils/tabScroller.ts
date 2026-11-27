@@ -19,17 +19,23 @@ export function tabScroller(node: HTMLElement, selected: unknown) {
   let prevLeft = node.scrollLeft
   let prevT = performance.now()
   let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let smoothV = 0 // 스크롤 속도의 부드러운 평균 — 프레임마다 튀지 않고 이어서 변한다
   function updateSkew(): void {
     const now = performance.now()
     const dt = Math.max(1, now - prevT)
     const v = (node.scrollLeft - prevLeft) / dt // px/ms, 오른쪽으로 스크롤 = +
     prevLeft = node.scrollLeft
     prevT = now
-    const skew = Math.max(-9, Math.min(9, -v * 7))
-    node.style.setProperty('--tab-skew', String(skew))
+    smoothV = 0.75 * smoothV + 0.25 * v
+    const skew = Math.max(-7, Math.min(7, -smoothV * 6))
+    node.style.setProperty('--tab-skew', skew.toFixed(2))
     clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => node.style.setProperty('--tab-skew', '0'), 90)
+    idleTimer = setTimeout(() => { smoothV = 0; node.style.setProperty('--tab-skew', '0') }, 120)
   }
+
+  // 끌기·관성 중에는 스냅이 스크롤을 끌어당기지 않게 잠시 끈다(끊김 방지)
+  function snapOff(): void { node.style.scrollSnapType = 'none' }
+  function snapOn(): void { node.style.scrollSnapType = '' }
 
   function inertia(): void {
     cancelAnimationFrame(raf)
@@ -39,15 +45,18 @@ export function tabScroller(node: HTMLElement, selected: unknown) {
       const dt = now - t
       t = now
       node.scrollLeft -= v * dt
-      v *= Math.pow(0.94, dt / 16) // 마찰 — 매 프레임 6%씩 감속
-      if (Math.abs(v) > 0.04) raf = requestAnimationFrame(step)
+      v *= Math.pow(0.955, dt / 16) // 마찰 — 매 프레임 4.5%씩 감속(더 길고 부드럽게 미끄러짐)
+      const max = node.scrollWidth - node.clientWidth
+      if (node.scrollLeft <= 0 || node.scrollLeft >= max) v *= 0.6 // 끝에 닿으면 빠르게 잦아든다
+      if (Math.abs(v) > 0.02) raf = requestAnimationFrame(step)
+      else snapOn()
     }
     raf = requestAnimationFrame(step)
   }
 
-  // 양끝 고무줄: 끝을 넘어 끌린 만큼의 40%만 버튼이 따라 움직인다. 놓으면 release 클래스로 스프링 전환을 켜고 0으로 돌린다.
-  const PULL_RESIST = 0.4
-  const PULL_MAX = 60
+  // 양끝 고무줄: 끝을 넘어 끌린 만큼의 50%만 버튼이 따라 움직인다. 놓으면 release 클래스로 스프링 전환을 켜고 0으로 돌린다.
+  const PULL_RESIST = 0.5
+  const PULL_MAX = 72
   function setPull(px: number): void {
     node.classList.remove('tabs-release')
     node.style.setProperty('--tab-pull', String(Math.max(-PULL_MAX, Math.min(PULL_MAX, px))))
@@ -87,6 +96,7 @@ export function tabScroller(node: HTMLElement, selected: unknown) {
   function onPointerDown(e: PointerEvent): void {
     if (e.pointerType !== 'mouse') return
     cancelAnimationFrame(raf)
+    snapOff()
     down = true
     moved = false
     startX = e.clientX
@@ -105,7 +115,7 @@ export function tabScroller(node: HTMLElement, selected: unknown) {
     else if (node.style.getPropertyValue('--tab-pull') !== '0') setPull(0)
     const now = performance.now()
     const dt = Math.max(1, now - lastT)
-    dragV = 0.8 * dragV + 0.2 * ((e.clientX - lastX) / dt) // 최근 이동 속도(부드럽게 평균)
+    dragV = 0.7 * dragV + 0.3 * ((e.clientX - lastX) / dt) // 최근 이동 속도(부드럽게 평균)
     lastX = e.clientX
     lastT = now
   }
@@ -114,6 +124,7 @@ export function tabScroller(node: HTMLElement, selected: unknown) {
     down = false
     releasePull()
     if (moved && Math.abs(dragV) > 0.1) inertia()
+    else snapOn()
   }
   // 끌고 난 뒤 손을 뗄 때 버튼 클릭이 실행되지 않게 막는다
   function onClickCapture(e: MouseEvent): void {
