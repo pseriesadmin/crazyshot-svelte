@@ -5,7 +5,7 @@ import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -55,7 +55,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
-  if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!hasCmsStaffAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {

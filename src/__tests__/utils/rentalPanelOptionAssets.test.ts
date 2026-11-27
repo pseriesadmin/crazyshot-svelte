@@ -64,12 +64,12 @@ describe('RentalDetailPanel — 옵션상품 실물 배정·재배정', () => {
 })
 
 describe('옵션상품 실물 API', () => {
-  it('assets: 조회(GET)는 메뉴권한 + 세션 역할, 보정 배정은 manager 이상만, 재배정(PATCH)은 manager 이상', () => {
+  it('assets: 조회(GET)는 메뉴권한 + 세션 역할, 보정 배정은 manager 이상만, 재배정(PATCH)은 CMS 직원 전원(partner 이상)', () => {
     const get = handlerSource(assetsApi, 'GET')
     expect(get.indexOf('requireMenuAccessApi')).toBeLessThan(get.indexOf('getCmsRoleForAction'))
     expect(get).toMatch(/if \(hasSettingsAccess\(cmsRole\)\) \{[\s\S]{0,200}cms_ensure_reservation_option_assets/)
     const patch = handlerSource(assetsApi, 'PATCH')
-    expect(patch.indexOf('hasSettingsAccess(cmsRole)')).toBeLessThan(patch.indexOf('admin.rpc'))
+    expect(patch.indexOf('hasCmsStaffAccess(cmsRole)')).toBeLessThan(patch.indexOf('admin.rpc'))
     expect(patch).toContain('cms_reassign_option_asset')
     // 입력 검증: 깨진 JSON → 400, 배정 행 id 정수, 새 실물 UUID
     expect(patch).toContain("요청 본문이 올바르지 않습니다.")
@@ -81,8 +81,8 @@ describe('옵션상품 실물 API', () => {
     expect(availableApi).not.toContain('RESERVATION_COMPOSITION_EDIT_ENABLED')
   })
 
-  it('available: manager 이상 + 후보 RPC 호출, 품번 정렬 정본(availableUnitOrder) 사용', () => {
-    expect(availableApi.indexOf('hasSettingsAccess(cmsRole)')).toBeLessThan(availableApi.indexOf('admin.rpc'))
+  it('available: CMS 직원 전원(partner 이상) + 후보 RPC 호출, 품번 정렬 정본(availableUnitOrder) 사용', () => {
+    expect(availableApi.indexOf('hasCmsStaffAccess(cmsRole)')).toBeLessThan(availableApi.indexOf('admin.rpc'))
     expect(availableApi).toContain('cms_list_option_asset_candidates')
     expect(availableApi).toContain('sortUnitsByCode')
   })

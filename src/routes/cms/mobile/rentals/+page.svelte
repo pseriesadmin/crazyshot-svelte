@@ -248,7 +248,7 @@
                   isRentalView={true}
                   enableQrVerify={true}
                   stepFilter={['hold', 'confirmed', 'shipped', 'in_use', 'return_requested', 'returned']}
-                  lockerViewRole={data.cmsRole}
+                  lockerEditRole={data.cmsRole}
                   inspectionRole={data.cmsRole}
                   hiddenTabs={['payment', 'contract']}
                   largeTabs={true}
@@ -510,6 +510,14 @@
   }
   .rental-card-detail-wrap :global(.info-label) {
     flex: 0 0 72px;
+  }
+  /* 무인보관함 배정정보 입력 줄(번호·비밀번호·수령/반납) — 좁은 화면에서 줄바꿈(2026-11-27, 모바일에서도 입력 가능) */
+  .rental-card-detail-wrap :global(.locker-group .info-row) {
+    flex-wrap: wrap;
+  }
+  .rental-card-detail-wrap :global(.locker-group .tracking-input) {
+    flex: 1 1 120px;
+    min-width: 0;
   }
   /* ── 플로팅 아이콘 메뉴 그룹 (/cms/mobile 메인 화면과 동일 스타일) ── */
   .fab-group {

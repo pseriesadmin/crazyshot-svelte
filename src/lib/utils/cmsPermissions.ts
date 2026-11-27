@@ -37,6 +37,11 @@ export function hasRouteAccess(role: string, pathname: string): boolean {
   return true
 }
 
+/** CMS 직원 전원(partner 이상)인지 — 역할이 없거나 알 수 없는 값이면 false (2026-11-27: 재배정·무인보관함 배정 확대용) */
+export function hasCmsStaffAccess(role: string): boolean {
+  return getRoleLevel(role) >= getRoleLevel('partner')
+}
+
 /** 설정 메뉴(계정관리·계정목록) 접근 가능 여부 */
 export function hasSettingsAccess(role: string): boolean {
   return getRoleLevel(role) >= getRoleLevel('manager')

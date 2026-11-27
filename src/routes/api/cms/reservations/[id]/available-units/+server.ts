@@ -19,7 +19,7 @@
  * 이 엔드포인트는 읽기 전용 SELECT만 사용한다 — H-01 "직접 DML 금지" 원칙의
  * INSERT/UPDATE/DELETE에만 해당하며 SELECT는 RPC 경유 의무 없음(core-rules.md).
  *
- * - manager 이상 전용 (getCmsRoleForAction + hasSettingsAccess)
+ * - CMS 직원 전원(partner 이상, 2026-11-27 Stephen 확대) (getCmsRoleForAction + hasCmsStaffAccess)
  * - service_role admin 클라이언트 사용 (관리자가 어느 예약이든 조회 가능해야 함)
  */
 import { requireMenuAccessApi } from '$lib/server/requireMenuAccess'
@@ -28,7 +28,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 import { sortUnitsByCode } from '$lib/utils/availableUnitOrder'
 import type { RequestHandler } from './$types'
 
@@ -37,7 +37,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
-  if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!hasCmsStaffAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {

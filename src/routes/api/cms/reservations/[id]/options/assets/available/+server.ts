@@ -12,7 +12,7 @@ import { createClient } from '@supabase/supabase-js'
 import { SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private'
 import { PUBLIC_SUPABASE_URL } from '$env/static/public'
 import { getCmsRoleForAction } from '$lib/server/getCmsRoleForAction'
-import { hasSettingsAccess } from '$lib/utils/cmsPermissions'
+import { hasCmsStaffAccess } from '$lib/utils/cmsPermissions'
 import { sortUnitsByCode } from '$lib/utils/availableUnitOrder'
 import type { RequestHandler } from './$types'
 
@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
   if (denied) return denied
   const cmsRole = await getCmsRoleForAction(locals)
   if (!cmsRole) return json({ error: 'Unauthorized' }, { status: 401 })
-  if (!hasSettingsAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
+  if (!hasCmsStaffAccess(cmsRole)) return json({ error: '권한이 없습니다.' }, { status: 403 })
 
   const reservationId = Number(params.id)
   if (!Number.isInteger(reservationId) || reservationId <= 0) {
