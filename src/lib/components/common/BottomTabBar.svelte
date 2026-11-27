@@ -153,8 +153,8 @@
     else if (id === 'More') moreMenuOpen = true
   }
 
-  const ACTIVE   = '#100b32'
-  const INACTIVE = '#c1bbec'
+  const ACTIVE   = 'var(--cs-purple-light)'   // 선택된 탭: 밝은 퍼플 #553FE0
+  const INACTIVE = 'var(--cs-text)'           // 선택 안 된 탭: 진한 남색 #100B32
 </script>
 
 <div class="tab-bar" class:hidden={cssHidden} class:removed class:naver-inapp={naverInApp} bind:this={barEl}>
