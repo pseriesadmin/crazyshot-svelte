@@ -611,7 +611,7 @@
   .section-label {
     font-size: 13px;
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     display: flex;
     align-items: center;
     gap: 6px;

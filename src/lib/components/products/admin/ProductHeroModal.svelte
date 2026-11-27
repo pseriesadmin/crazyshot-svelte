@@ -125,8 +125,13 @@
     return supabase.storage.from('cms-assets').getPublicUrl(path).data.publicUrl
   }
 
+  // 저장된 순서(items 배열 순서)대로 먼저, 아직 저장된 적 없는 카테고리는 기존 카테고리 순서로 뒤에
+  const bannerOrderIdx = (id: string) => {
+    const i = initialBanners.items?.findIndex((b) => b.category_id === id) ?? -1
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i
+  }
   let bannerRows = $state<BannerRow[]>(
-    categories.map((c) => {
+    [...categories].sort((a, b) => bannerOrderIdx(a.id) - bannerOrderIdx(b.id)).map((c) => {
       const saved = initialBanners.items?.find((b) => b.category_id === c.id)
       return {
         category_id: c.id,
@@ -513,7 +518,7 @@
     </div>
 
     <!-- 상품 추가 + 선택된 상품 — 카드형 그룹 -->
-    <div class="group-products">
+    <div class="group-products group-plain">
     <div class="section">
       <p class="section-label">상품 추가 <span class="count-badge count-badge-end">{selected.length}/{MAX_ITEMS}</span></p>
       <div class="search-wrap">
@@ -561,10 +566,11 @@
     <!-- 선택된 상품 목록 (드래그 순서) -->
     {#if selected.length > 0}
       <div class="section">
+        <p class="section-label">선택된 상품 <span class="drag-hint">드래그로 순서 변경</span></p>
         <div class="selected-products-panel">
           <CmsDragList bind:items={selected} itemKey={(item) => item.id}>
             {#snippet renderItem(item)}
-              <div class="selected-row" class:selected-row--card={isHero}>
+              <div class="selected-row selected-row--plain">
                 {#if isHero}
                   <div class="selected-info">
                     <span class="selected-name">{item.name}</span>
@@ -573,7 +579,15 @@
                 {:else}
                   <span class="selected-name">{item.name}</span>
                 {/if}
-                <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">✕</button>
+                <button class="remove-btn" onclick={() => removeProduct(item.id)} aria-label="{item.name} 제거">
+                    <!-- CMS 공통 표준 삭제 아이콘(휴지통 SVG 12×12) -->
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <polyline points="3,6 5,6 21,6"/>
+                      <path d="M19,6l-1,14H6L5,6"/>
+                      <path d="M10,11v6M14,11v6"/>
+                      <path d="M9,6V4h6v2"/>
+                    </svg>
+                </button>
               </div>
             {/snippet}
           </CmsDragList>
@@ -600,23 +614,29 @@
       <div class="section banner-section">
         <p class="section-label">카테고리 배너 <span class="count-badge">가로 100% × 세로 150px</span></p>
         <p class="banner-help">카테고리 메뉴를 선택하면 헤더 슬라이드 대신 해당 카테고리의 배너가 노출됩니다. 권장 이미지 크기 1240×150px(가로 세로 약 8:1).</p>
-        {#each bannerRows as row (row.category_id)}
-          <div class="banner-row">
-            <div class="banner-row-head">
-              <!-- front-uiux.md §17 체크아이콘 버튼 표준 — 좌측 배치, ON=--cs-purple / OFF=--cs-purple-op10 -->
+        <CmsDragList bind:items={bannerRows} itemKey={(r) => r.category_id}>
+          {#snippet renderItem(row)}
+          <div class="banner-row banner-row--card">
+            <!-- 상단 바 — 홈 배너 카드와 같은 구성: 왼쪽 우선노출지정(카테고리 배너에는 해당 기능이 없어 비활성 표시) / 오른쪽 기본노출지정(노출 on/off) -->
+            <div class="vis-bars">
+              <button type="button" class="vis-bar vis-bar--first" disabled aria-label="우선노출지정(사용 불가)" tabindex="-1">우선노출지정</button>
               <button
                 type="button"
-                class="checkbox-btn checkbox-btn-terms"
-                class:checked={row.enabled}
+                class="vis-bar"
+                class:vis-bar--on={row.enabled}
                 disabled={!row.image_url && !row._preview && !row.mobile_image_url && !row._mPreview}
                 aria-pressed={row.enabled}
                 aria-label="{catName(row.category_id)} 배너 노출"
                 onclick={() => patchBanner(row.category_id, { enabled: !row.enabled })}
               >
-                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
-                  <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
-                </svg>
+                <span class="vis-ico">
+                  <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                    <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                  </svg>
+                </span>기본노출지정
               </button>
+            </div>
+            <div class="banner-row-head">
               <button
                 type="button"
                 class="acc-head acc-head--row"
@@ -628,49 +648,66 @@
               </button>
             </div>
             {#if openBanners.includes(row.category_id)}
-            <p class="banner-sub">PC 이미지 (1240×150px)</p>
-            <div class="banner-thumb" class:banner-thumb-empty={!(row._preview ?? row.image_url)}>
-              {#if row._preview ?? row.image_url}
-                <img src={row._preview ?? row.image_url} alt="{catName(row.category_id)} 배너 미리보기" />
-              {:else}
-                <span>이미지 없음</span>
-              {/if}
-            </div>
-            <div class="banner-actions">
-              <label class="banner-file-btn">
-                이미지 선택
+            <div class="banner-media">
+              <div class="banner-thumbs">
+            <!-- 이미지 칸 자체가 버튼 — 홈 배너 카드(HomeBannerModal .thumb-wrap)처럼 눌러서 교체, 슬롯 이름표(PC·모바일)는 칸 안 왼쪽 아래 -->
+            <div class="banner-thumb-wrap">
+              <label class="banner-thumb" class:banner-thumb-empty={!(row._preview ?? row.image_url)} title="PC 이미지 (1240×150px) — 클릭하여 교체">
+                {#if row._preview ?? row.image_url}
+                  <img src={row._preview ?? row.image_url} alt="{catName(row.category_id)} 배너 미리보기" />
+                {:else}
+                  <span>없음</span>
+                {/if}
+                <span class="slot-tag">PC</span>
                 <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={(e) => onBannerFile(row.category_id, e)} hidden />
               </label>
               {#if row.image_url || row._preview}
-                <button type="button" class="remove-btn" aria-label="{catName(row.category_id)} 배너 이미지 제거"
+                <button type="button" class="remove-btn banner-thumb-remove" aria-label="{catName(row.category_id)} 배너 이미지 제거"
                   onclick={() => patchBanner(row.category_id, { image_url: null, _file: null, _preview: null, enabled: !!(row.mobile_image_url || row._mPreview) && row.enabled })}>✕</button>
               {/if}
             </div>
-            <p class="banner-sub">모바일 이미지 (가로 100% × 세로 200px, 권장 680×400px)</p>
-            <div class="banner-thumb banner-thumb-m" class:banner-thumb-empty={!(row._mPreview ?? row.mobile_image_url)}>
-              {#if row._mPreview ?? row.mobile_image_url}
-                <img src={row._mPreview ?? row.mobile_image_url} alt="{catName(row.category_id)} 모바일 배너 미리보기" />
-              {:else}
-                <span>이미지 없음 (PC 이미지로 대체 노출)</span>
-              {/if}
-            </div>
-            <div class="banner-actions">
-              <label class="banner-file-btn">
-                모바일 이미지 선택
+            <div class="banner-thumb-wrap banner-thumb-wrap-m">
+              <label class="banner-thumb banner-thumb-m" class:banner-thumb-empty={!(row._mPreview ?? row.mobile_image_url)} title="모바일 이미지 (가로 100% × 세로 200px, 권장 680×400px) — 클릭하여 교체">
+                {#if row._mPreview ?? row.mobile_image_url}
+                  <img src={row._mPreview ?? row.mobile_image_url} alt="{catName(row.category_id)} 모바일 배너 미리보기" />
+                {:else}
+                  <span>PC로 대체</span>
+                {/if}
+                <span class="slot-tag">모바일</span>
                 <input type="file" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={(e) => onBannerFile(row.category_id, e, 'mobile')} hidden />
               </label>
               {#if row.mobile_image_url || row._mPreview}
-                <button type="button" class="remove-btn" aria-label="{catName(row.category_id)} 모바일 배너 이미지 제거"
+                <button type="button" class="remove-btn banner-thumb-remove" aria-label="{catName(row.category_id)} 모바일 배너 이미지 제거"
                   onclick={() => patchBanner(row.category_id, { mobile_image_url: null, _mFile: null, _mPreview: null })}>✕</button>
               {/if}
             </div>
-            <input type="text" class="f-input" placeholder="연결 링크 (예: /products/abc 또는 https://…)" maxlength="500"
-              value={row.link_url ?? ''} oninput={(e) => patchBanner(row.category_id, { link_url: e.currentTarget.value })} />
-            <input type="text" class="f-input" placeholder="대체 텍스트 (접근성)" maxlength="100"
-              value={row.alt} oninput={(e) => patchBanner(row.category_id, { alt: e.currentTarget.value })} />
+              </div>
+            <div class="banner-fields">
+              <input type="text" class="f-input" placeholder="연결 링크 (예: /products/abc 또는 https://…)" maxlength="500"
+                value={row.link_url ?? ''} oninput={(e) => patchBanner(row.category_id, { link_url: e.currentTarget.value })} />
+              <input type="text" class="f-input" placeholder="대체 텍스트 (접근성)" maxlength="100"
+                value={row.alt} oninput={(e) => patchBanner(row.category_id, { alt: e.currentTarget.value })} />
+            </div>
+            </div>
+            <!-- 삭제 — 홈 배너 카드(.btn-remove)와 같은 표준 휴지통 아이콘, 카드 하단 우측. 이 카테고리의 이미지·링크·대체 텍스트를 비우고 숨김 처리(저장 시 반영) -->
+            <button
+              type="button"
+              class="row-remove"
+              onclick={() => patchBanner(row.category_id, { image_url: null, _file: null, _preview: null, mobile_image_url: null, _mFile: null, _mPreview: null, link_url: '', alt: '', enabled: false })}
+              aria-label="{catName(row.category_id)} 배너 비우기"
+              title="배너 비우기"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <polyline points="3,6 5,6 21,6"/>
+                <path d="M19,6l-1,14H6L5,6"/>
+                <path d="M10,11v6M14,11v6"/>
+                <path d="M9,6V4h6v2"/>
+              </svg>
+            </button>
             {/if}
           </div>
-        {/each}
+          {/snippet}
+        </CmsDragList>
         <!-- ② 카테고리 배너 모듈 저장 -->
         {#if bannerError}<p class="save-error" role="alert">{bannerError}</p>{/if}
         <div class="module-actions">
@@ -684,25 +721,42 @@
       <div class="section banner-section">
         <p class="section-label">모바일 목록 중간 배너 <span class="count-badge">모바일 카드 화면폭×160px · 둥근 사각형</span></p>
         <p class="banner-help">모바일 상품 목록 중간의 "촬영본능 PICK!" 카드입니다. 이미지·문구·링크를 바꾸거나 노출을 끌 수 있습니다.</p>
-        <div class="banner-row">
+        <div class="banner-row banner-row--card">
+          <!-- 상단 바 — 카테고리 배너 카드와 같은 구성: 왼쪽 우선노출지정(해당 기능 없음, 비활성) / 오른쪽 기본노출지정(노출 on/off) -->
+          <div class="vis-bars">
+            <button type="button" class="vis-bar vis-bar--first" disabled aria-label="우선노출지정(사용 불가)" tabindex="-1">우선노출지정</button>
+            <button
+              type="button"
+              class="vis-bar"
+              class:vis-bar--on={midEnabled}
+              aria-pressed={midEnabled}
+              aria-label="목록 중간 배너 노출"
+              onclick={() => (midEnabled = !midEnabled)}
+            >
+              <span class="vis-ico">
+                <svg width="18" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+                    <path d="M14.788 0.40847C15.5937 -0.206503 16.7506 -0.123176 17.4589 0.632103C18.2144 1.4379 18.1729 2.70376 17.3671 3.45925L17.3622 3.46413C17.3585 3.46759 17.3528 3.47297 17.3456 3.47976C17.3311 3.49333 17.3101 3.51407 17.2821 3.54031C17.2261 3.59279 17.1437 3.66974 17.039 3.76784C16.8294 3.96413 16.5289 4.24474 16.1669 4.58327C15.4428 5.26035 14.4707 6.169 13.4774 7.09304C12.4848 8.01654 11.4689 8.95836 10.6591 9.70144C9.90326 10.3949 9.21125 11.0229 8.954 11.219C8.38484 11.6526 7.64783 12.0001 6.7831 12.0003C5.89707 12.0003 5.14509 11.6357 4.57217 11.138C4.258 10.865 3.25694 9.9462 2.37197 9.13015C1.92122 8.71451 1.48885 8.31388 1.16885 8.01785C1.0088 7.86979 0.875998 7.74749 0.78408 7.66238C0.738281 7.61997 0.702073 7.58638 0.677634 7.56374C0.665704 7.55269 0.656551 7.54415 0.650291 7.53835C0.647126 7.53542 0.644094 7.53301 0.642478 7.53152L0.641502 7.52956H0.640525C-0.169647 6.77877 -0.217693 5.51259 0.533103 4.70242C1.28393 3.89251 2.55017 3.84526 3.36025 4.59597L3.36123 4.59792C3.3628 4.59938 3.36592 4.60089 3.36904 4.60378C3.37524 4.60953 3.38439 4.61807 3.39638 4.62917C3.42067 4.65167 3.45618 4.68551 3.50185 4.72781C3.59333 4.81251 3.72524 4.93384 3.88467 5.08132C4.2037 5.37646 4.63512 5.77493 5.08388 6.18874C5.73477 6.78894 6.40077 7.39812 6.82217 7.78054C6.86093 7.74604 6.90358 7.70918 6.94814 7.66921C7.21008 7.43424 7.55408 7.12113 7.954 6.75417C8.7536 6.02049 9.76226 5.0859 10.7528 4.16433C11.7428 3.24336 12.7128 2.33711 13.4354 1.6614C13.7965 1.32374 14.0957 1.04357 14.3046 0.847923C14.409 0.750147 14.491 0.67359 14.5468 0.621361C14.5745 0.595342 14.5959 0.575239 14.6103 0.56179C14.6174 0.555065 14.6232 0.549566 14.6269 0.546165L14.6317 0.541282L14.788 0.40847Z" fill="currentColor" />
+                  </svg>
+              </span>기본노출지정
+            </button>
+          </div>
           <div class="banner-row-head">
-            <span class="banner-cat">목록 중간 배너</span>
-            <label class="radio-opt">
-              <input type="checkbox" checked={midEnabled} onchange={(e) => (midEnabled = e.currentTarget.checked)} />
-              <span>노출</span>
-            </label>
+            <span class="banner-cat banner-cat--pad">목록 중간 배너</span>
           </div>
-          <!-- 이미지에 마우스를 올리거나 선택(포커스)하면 [이미지 선택] 버튼이 나타나고 누르면 파일 선택창이 열린다(별도 상시 버튼 없음) -->
-          <div class="banner-thumb banner-thumb-mid">
-            <img src={midPreview ?? midImageUrl ?? MID_DEFAULT_IMAGE} alt="목록 중간 배너 이미지 미리보기" />
-            <label class="mid-pick">
-              <span class="banner-file-btn">이미지 선택</span>
-              <input type="file" class="mid-pick-input" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={onMidFile} />
-            </label>
+          <div class="banner-media">
+            <div class="banner-thumbs">
+              <!-- 이미지 칸 자체가 버튼 — 눌러서 교체 -->
+              <label class="banner-thumb banner-thumb-mid" title="목록 중간 배너 이미지 — 클릭하여 교체">
+                <img src={midPreview ?? midImageUrl ?? MID_DEFAULT_IMAGE} alt="목록 중간 배너 이미지 미리보기" />
+                <input type="file" class="mid-pick-input" accept="image/png,image/jpeg,image/webp,image/heif,image/heic" onchange={onMidFile} />
+              </label>
+            </div>
+            <div class="banner-fields">
+              <input type="text" class="f-input" placeholder="타이틀 (예: 촬영본능)" maxlength="20" bind:value={midTitle} />
+              <input type="text" class="f-input" placeholder="서브 텍스트 (예: PICK!)" maxlength="20" bind:value={midSub} />
+              <input type="text" class="f-input" placeholder="연결 링크 (예: /hype-pack 또는 https://…, 비우면 링크 없음)" maxlength="500" bind:value={midLink} />
+            </div>
           </div>
-          <input type="text" class="f-input" placeholder="타이틀 (예: 촬영본능)" maxlength="20" bind:value={midTitle} />
-          <input type="text" class="f-input" placeholder="서브 텍스트 (예: PICK!)" maxlength="20" bind:value={midSub} />
-          <input type="text" class="f-input" placeholder="연결 링크 (예: /hype-pack 또는 https://…, 비우면 링크 없음)" maxlength="500" bind:value={midLink} />
         </div>
         <!-- ③ 목록 중간 배너 모듈 저장 -->
         {#if midError}<p class="save-error" role="alert">{midError}</p>{/if}
@@ -808,7 +862,7 @@
   .section-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     margin: 0;
     display: flex;
     align-items: center;
@@ -860,16 +914,7 @@
     .combo-btn   { padding: 8px 12px; }
   }
 
-  .radio-opt {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font: var(--text-pc-body-14);
-    color: var(--cs-text);
-    cursor: pointer;
-  }
 
-  .radio-opt input { accent-color: var(--cs-purple); }
 
   .search-wrap { position: relative; }
 
@@ -921,8 +966,6 @@
   }
 
   .selected-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  /* 색 선택이 붙어 행이 높아진 헤더 슬라이드 목록 — 다른 설정 목록(.hcp-selected-row·.banner-row)과 같은 회색 면·반경 8px·안쪽 여백 10px로 행을 분리(보더 없음) */
-  .selected-row--card { padding: 10px; margin: 4px 0; background: var(--cs-surface-gray); border-radius: var(--radius-sm); }   /* 위아래 4px씩 — 행 사이 8px 여백으로 목록 분리 */
   .selected-name {
     flex: 1;
     font: var(--text-pc-body-14);
@@ -1035,39 +1078,70 @@
     color: var(--cs-text-mid);
   }
   .selected-products-panel { margin-top: 12px; }
+
+  /* MD 추천 설정 — 홈 카테고리 상품 모달(HomeCategoryProductsModal)과 같은 구성: 연보라 카드 없이 '상품 추가'·'선택된 상품' 두 구역으로 분리 */
+  .group-products.group-plain { background: transparent; border-radius: 0; padding: 0; gap: 20px; }
+  .group-products.group-plain .section-label { font: var(--text-pc-body-14); font-weight: 700; color: var(--cs-text-mid); }
+  .group-plain .count-badge-end { margin-left: 0; background: none; padding: 0; font-size: 12px; font-weight: 400; color: var(--cs-text-mid); }
+  .group-plain .drag-hint { font-size: 11px; font-weight: 400; color: var(--cs-text-light); }
+  .group-plain .selected-products-panel { margin-top: 0; }
+  .group-plain :global(.drag-list) { gap: 8px; }
+  .selected-row--plain { padding: 8px 10px; background: var(--cs-surface-gray); border-radius: var(--radius-sm); }
+  .group-plain .selected-name { font: var(--text-pc-script-12); font-weight: 700; }
   .banner-row {
     display: flex; flex-direction: column; gap: 8px;
     background: var(--cs-lilac); border-radius: var(--radius-md); padding: 12px 20px;
   }
+  /* 카테고리 배너 카드 — 홈 배너 카드(HomeBannerModal .banner-row)와 같은 연회색 면·반경 8px·안쪽 여백 10px + 상단 노출 바 */
+  .banner-row--card { flex: 1; min-width: 0; background: var(--cs-surface-gray); border-radius: var(--radius-sm); padding: 10px; }
+  .banner-row--card .acc-head--row { padding: 0 10px; }   /* 카테고리명·화살표 좌우 끝 여백 */
+  .banner-section :global(.drag-list) { gap: 8px; }
+  .vis-bars { display: flex; margin: -10px -10px 0; }
+  .vis-bar {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    font: var(--text-pc-descript-10); line-height: 15px; color: var(--cs-text-mid);
+    box-sizing: content-box; height: 30px; padding: 5px 0;
+    border: none; border-radius: 0;
+    background: var(--cs-border); cursor: pointer; transition: background 0.18s ease, color 0.18s ease;
+  }
+  .vis-bar:first-child { border-top-left-radius: var(--radius-sm); }
+  .vis-bar:last-child { border-top-right-radius: var(--radius-sm); }
+  .vis-bar--on { background: var(--cs-purple-op10); color: var(--cs-purple-dark); }
+  .vis-bar:disabled { cursor: not-allowed; opacity: 0.5; }
+  .vis-ico { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--radius-sm, 8px); color: var(--cs-purple-op10); transition: background 0.15s, color 0.15s; }
+  .vis-bar--on .vis-ico { color: var(--cs-purple); }
+  .vis-bar:not(:disabled):hover .vis-ico { background: rgba(59, 47, 138, 0.06); }
+  .vis-ico svg { width: 18px; height: 12px; }
   .banner-row-head { display: flex; align-items: center; gap: 12px; }
-  .checkbox-btn { background: none; border: none; padding: 0; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; }
-  .checkbox-btn:disabled { cursor: not-allowed; opacity: 0.5; }
-  .checkbox-btn-terms { color: var(--cs-purple-op10); }
-  .checkbox-btn-terms.checked { color: var(--cs-purple); }
-  .checkbox-btn-terms svg { width: 22px; height: 15px; }
-  @media (min-width: 768px) { .checkbox-btn-terms svg { width: 18px; height: 12px; } }
   .banner-cat { font: var(--text-pc-title-16); color: var(--cs-text); }
   .banner-thumb {
-    width: 100%; aspect-ratio: 1240 / 150; border-radius: var(--radius-sm); overflow: hidden;
+    width: 64px; height: 48px; border-radius: 6px; overflow: hidden;
     background: var(--cs-white); display: flex; align-items: center; justify-content: center;
   }
   .banner-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .banner-thumb-empty span { font: var(--text-pc-script-12); color: var(--cs-text-light); }
-  .banner-sub { font: var(--text-pc-script-12); color: var(--cs-text-mid); margin: 4px 0 0; }
-  .banner-thumb-mid { aspect-ratio: 1 / 1; max-width: 120px; border-radius: 50%; position: relative; }
-  /* 목록 중간 배너 이미지 — 올리거나(hover)·선택(focus)했을 때만 [이미지 선택] 버튼을 이미지 가운데에 노출 */
-  .mid-pick {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    cursor: pointer; opacity: 0; transition: opacity 0.15s;
+  .banner-thumb { position: relative; cursor: pointer; user-select: none; -webkit-user-select: none; transition: opacity 0.15s; }
+  .banner-thumb:hover { opacity: 0.85; }
+  .banner-thumb-wrap { position: relative; }
+  /* CMS 공통 표준 삭제 아이콘 버튼(홈 배너 카드 .btn-remove 규격) — 투명 면, 호버는 옅은 레드 면 + 레드 아이콘 */
+  .row-remove {
+    display: inline-flex; align-items: center; justify-content: center; align-self: flex-end;
+    min-height: 32px; min-width: 28px; flex-shrink: 0; padding: 0 8px;
+    border: none; border-radius: var(--radius-sm); background: transparent;
+    color: var(--cs-text-light); cursor: pointer; transition: background 0.1s, color 0.1s;
   }
-  .mid-pick:hover, .mid-pick:focus-within { opacity: 1; }
+  .row-remove:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
+  .banner-media { display: flex; align-items: flex-start; gap: 8px; }
+  .banner-media .banner-fields { flex: 1; }
+  .banner-thumbs { flex-shrink: 0; width: 64px; display: flex; flex-direction: column; gap: 4px; }
+  .banner-thumb-remove { position: absolute; top: 2px; right: 2px; z-index: 2; min-height: 18px; min-width: 18px; width: 18px; height: 18px; padding: 0; font-size: 10px; background: rgba(255, 255, 255, 0.85); }
+  .slot-tag {
+    position: absolute; bottom: 3px; left: 3px; z-index: 1; padding: 1px 5px; border-radius: 5px;
+    background: var(--cs-dark); color: var(--cs-white); font-size: 10px; font-weight: 700; line-height: 1.3; pointer-events: none;
+  }
+  .banner-thumb-empty span:not(.slot-tag) { font-size: 10px; text-align: center; line-height: 1.2; color: var(--cs-text-light); }
+  .banner-thumb-mid { width: 64px; height: 64px; border-radius: 50%; }
+  .banner-cat--pad { padding: 0 10px; }
   .mid-pick-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  .banner-thumb-m { aspect-ratio: 680 / 400; max-width: 260px; }
-  .banner-actions { display: flex; align-items: center; gap: 8px; }
-  .banner-file-btn {
-    display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 14px;
-    background: var(--cs-purple); color: var(--cs-white); border-radius: var(--radius-md);
-    font: var(--text-pc-body-14); cursor: pointer;
-  }
-  .banner-file-btn:hover { background: var(--cs-purple-hover); }
+  .banner-fields { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 </style>

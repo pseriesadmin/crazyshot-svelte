@@ -293,7 +293,7 @@
     {#if selected.length > 0}
       <p class="section-label mt">
         카테고리 추가목록
-        <span class="hint">드래그로 순서 변경</span>
+       
       </p>
       <div class="order-list">
         <CmsDragList bind:items={selected} class="order-drag">
@@ -349,7 +349,16 @@
                 class="btn-remove"
                 onclick={() => removeItem(item.code_id)}
                 aria-label="{item.name} 제거"
-              >✕</button>
+                title="제거"
+              >
+                <!-- CMS 공통 표준 삭제 아이콘(CmsDeleteButton 의 휴지통 SVG 12×12) -->
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polyline points="3,6 5,6 21,6"/>
+                  <path d="M19,6l-1,14H6L5,6"/>
+                  <path d="M10,11v6M14,11v6"/>
+                  <path d="M9,6V4h6v2"/>
+                </svg>
+              </button>
             </div>
           {/snippet}
         </CmsDragList>
@@ -497,6 +506,7 @@
     font-weight: 700;
   }
   .section-label.mt { margin-top: 24px; }
+  .section-label { font: var(--text-pc-body-14); font-weight: 700; }   /* 분류선택 메뉴등록·카테고리 추가목록 — 한 단계 크게(12px → 14px) */
 
   .hint {
     font-weight: 400;
@@ -521,12 +531,16 @@
   /* ── 추가목록 ── */
   .order-list :global(.order-drag) { gap: 8px; }
 
+  /* 선택 상품 목록(HomeCategoryProductsModal .hcp-selected-row)과 같은 카드형 행 — 연회색 면 + 반경 8px + 안쪽 여백 8px 10px */
   .cat-card-inner {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex: 1;
     min-width: 0;
+    padding: 8px 10px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-sm);
   }
 
   /* 아이콘 박스 */
@@ -582,7 +596,7 @@
     min-width: 0;
     height: 34px;
     padding: 0 10px;
-    background: var(--cs-surface-gray);
+    background: var(--cs-white, #fff);   /* 연회색 카드 위에서 보이도록 흰 면 */
     border: none;
     border-radius: var(--cms-radius-sm);
     font: var(--text-pc-body-14);
@@ -600,18 +614,23 @@
   }
 
   /* 삭제 버튼 */
+  /* CMS 공통 표준 삭제 아이콘 버튼(홈 배너 모달 .btn-remove 규격과 동일) — 투명 면, 호버는 옅은 레드 면 + 레드 아이콘 */
   .btn-remove {
-    background: none;
-    border: none;
-    color: var(--cs-text-light);
-    font-size: 13px;
-    cursor: pointer;
-    padding: 4px 6px;
-    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex-shrink: 0;
-    transition: color 0.12s;
+    min-width: 28px;
+    min-height: 32px;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
   }
-  .btn-remove:hover { color: var(--cs-red-badge); }
+  .btn-remove:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
 
   /* 빈 상태 */
   .empty-hint {

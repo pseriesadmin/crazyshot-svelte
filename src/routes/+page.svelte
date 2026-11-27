@@ -1364,7 +1364,7 @@
       pcFirstId: data.heroBannerSettings?.pc_first_id ?? null,
       mobileFirstId: data.heroBannerSettings?.mobile_first_id ?? null,
     }}
-    theme={{ groups: data.themeGroupsAdmin ?? [] }}
+    theme={{ groups: data.themeGroupsAdmin ?? [], firstId: data.themeGroupSettings?.first_id ?? null }}
     category={{
       categories: data.categories,
       initialSettings: data.categoryPageSettings,

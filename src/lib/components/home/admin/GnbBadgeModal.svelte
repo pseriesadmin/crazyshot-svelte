@@ -129,15 +129,7 @@
       </div>
     </div>
 
-    <!-- 이미지 업로드 -->
-    <div class="section">
-      <p class="section-label">이미지 업로드 <span class="hint">PNG · JPEG · SVG</span></p>
-      <button class="upload-btn" type="button" onclick={openFilePicker} disabled={isUploading}>
-        {#if isUploading}업로드 중…{:else}+ 이미지 추가{/if}
-      </button>
-      <p class="size-help">모바일 GNB 중앙 · 최대 96×32 · 비율 유지</p>
-      <input bind:this={fileInput} type="file" accept={ACCEPT} multiple class="hidden-input" onchange={onFileChange} />
-    </div>
+    <input bind:this={fileInput} type="file" accept={ACCEPT} multiple class="hidden-input" onchange={onFileChange} />
 
     <!-- 배지 목록 -->
     {#if items.length > 0}
@@ -156,14 +148,46 @@
                 aria-label="배지 이동 링크"
                 oninput={(e) => onLinkInput(item.id, e)}
               />
-              <button class="img-remove" type="button" onclick={() => removeItem(item.id)} aria-label="배지 제거">✕</button>
+              <button class="img-remove" type="button" onclick={() => removeItem(item.id)} aria-label="배지 제거">
+                <!-- CMS 공통 표준 삭제 아이콘(휴지통 SVG 12×12) -->
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polyline points="3,6 5,6 21,6"/>
+                  <path d="M19,6l-1,14H6L5,6"/>
+                  <path d="M10,11v6M14,11v6"/>
+                  <path d="M9,6V4h6v2"/>
+                </svg>
+              </button>
             </div>
           {/snippet}
         </CmsDragList>
+        <div class="empty-msg add-only"><button type="button" class="icon-tile" onclick={openFilePicker} disabled={isUploading} aria-label="이미지 추가"><span class="tile-tag">+</span></button></div>
       </div>
     {:else}
-      <p class="empty-msg">배지를 추가하면 모바일 GNB 중앙에 노출됩니다.</p>
+      <div class="empty-row">
+        <span class="empty-handle" aria-hidden="true">
+          <svg width="10" height="14" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="3" cy="2" r="1.5" fill="currentColor"/><circle cx="7" cy="2" r="1.5" fill="currentColor"/>
+            <circle cx="3" cy="7" r="1.5" fill="currentColor"/><circle cx="7" cy="7" r="1.5" fill="currentColor"/>
+            <circle cx="3" cy="12" r="1.5" fill="currentColor"/><circle cx="7" cy="12" r="1.5" fill="currentColor"/>
+          </svg>
+        </span>
+        <div class="empty-msg">
+        <button type="button" class="icon-tile" onclick={openFilePicker} disabled={isUploading} aria-label="이미지 추가"><span class="tile-tag">+</span></button>
+        <p class="empty-text">배지를 추가하면 모바일 GNB 중앙에 노출됩니다.</p>
+        <button type="button" class="empty-remove" disabled aria-label="제거(비활성)" tabindex="-1">
+            <!-- CMS 공통 표준 삭제 아이콘(휴지통 SVG 12×12) — 비어 있어 비활성 표시 -->
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <polyline points="3,6 5,6 21,6"/>
+              <path d="M19,6l-1,14H6L5,6"/>
+              <path d="M10,11v6M14,11v6"/>
+              <path d="M9,6V4h6v2"/>
+            </svg>
+          </button>
+      </div>
+      </div>
     {/if}
+
+    <p class="size-help size-help--center">모바일 GNB 중앙 · 최대 96×32 · 비율 유지</p>
 
     {#if error}
       <p class="save-error" role="alert">{error}</p>
@@ -239,7 +263,7 @@
   .section-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -257,33 +281,21 @@
     font-weight: 700;
   }
 
+  .size-help--center { align-self: center; }
+
   .hint {
     font: var(--text-pc-script-12);
     font-weight: 400;
     color: var(--cs-text-light);
   }
 
-  .upload-btn {
-    height: 40px;
-    padding: 0 20px;
-    background: var(--cs-purple);
-    color: var(--cs-white);
-    border: none;
-    border-radius: var(--radius-md);
-    font: var(--text-pc-body-14);
-    font-weight: 700;
-    cursor: pointer;
-    align-self: flex-start;
-  }
-  .upload-btn:hover { opacity: 0.85; }
-  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .hidden-input { display: none; }
 
   .img-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     padding: 8px 10px;
     background: var(--cs-surface-gray);
     border-radius: var(--radius-sm);
@@ -314,29 +326,100 @@
     background: var(--cs-white);
     border: none;
     border-radius: var(--cms-radius-sm, 10px);
-    font: var(--text-pc-script-12);
+    font: var(--text-pc-body-14);
+    font-weight: 700;
     color: var(--cs-text);
   }
   .link-input::placeholder { color: var(--cs-text-light); }
   .link-input:focus { outline: 2px solid var(--cs-purple); outline-offset: -2px; }
 
+  /* CMS 공통 표준 삭제 아이콘 버튼(카테고리 추가목록 .btn-remove 규격과 동일) — 투명 면, 호버는 옅은 레드 면 + 레드 아이콘 */
   .img-remove {
-    background: none;
-    border: none;
-    color: var(--cs-text-mid);
-    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-height: 32px;
-    min-width: 32px;
+    min-width: 28px;
     flex-shrink: 0;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
   }
-  .img-remove:hover { color: var(--cs-red-badge); }
+  .img-remove:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
 
+  /* 카테고리 추가목록과 같은 목록 간격 8px */
+  .section :global(.drag-list) { gap: 8px; }
+
+  /* '비어있음' 카드 — 목록 행과 같은 연회색 면 + 반경 8px, 왼쪽에 카테고리 추가목록과 같은 44px 아이콘 칸(눌러서 이미지 추가) */
   .empty-msg {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--cs-surface-gray);
+    border-radius: var(--radius-sm);
+  }
+  .empty-text {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
     font: var(--text-pc-script-12);
     color: var(--cs-text-mid);
     text-align: center;
-    padding: 20px 0;
     line-height: 1.6;
+  }
+  .add-only { margin-top: 8px; margin-left: 24px; }
+  .icon-tile {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    background: var(--cs-lilac);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .icon-tile:hover { background: var(--cs-purple-op10); }
+  .icon-tile:disabled { opacity: 0.5; cursor: not-allowed; }
+  .tile-tag { font: var(--text-pc-body-14); color: var(--cs-text-mid, #666); pointer-events: none; }
+  /* 목록 행과 같은 배치 — 왼쪽 드래그 손잡이·오른쪽 삭제 아이콘을 비활성(흐린) 상태로 표시 */
+  .empty-row { display: flex; align-items: center; }
+  .empty-handle {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    min-height: 44px;
+    color: var(--cs-text-light);
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .empty-row .empty-msg { flex: 1; min-width: 0; }
+  .empty-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 32px;
+    min-width: 28px;
+    flex-shrink: 0;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .save-error {

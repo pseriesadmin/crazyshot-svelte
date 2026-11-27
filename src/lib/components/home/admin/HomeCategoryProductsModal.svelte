@@ -279,7 +279,16 @@
                 class="hcp-remove-btn"
                 onclick={() => { selected = selected.filter((s) => s.id !== item.id) }}
                 aria-label="{item.name} 제거"
-              >✕</button>
+                title="제거"
+              >
+                <!-- CMS 공통 표준 삭제 아이콘(CmsDeleteButton 의 휴지통 SVG 12×12) -->
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polyline points="3,6 5,6 21,6"/>
+                  <path d="M19,6l-1,14H6L5,6"/>
+                  <path d="M10,11v6M14,11v6"/>
+                  <path d="M9,6V4h6v2"/>
+                </svg>
+              </button>
             </div>
           {/snippet}
         </CmsDragList>
@@ -369,11 +378,13 @@
   }
 
   .hcp-section { display: flex; flex-direction: column; gap: 8px; }
+  /* 선택된 상품 목록 행 사이 간격(카테고리 추가목록과 동일 8px) — 공용 CmsDragList 는 건드리지 않고 이 섹션 안에서만 지정 */
+  .hcp-section :global(.drag-list) { gap: 8px; }
 
   .hcp-label {
     font: var(--text-pc-body-14);
     font-weight: 700;
-    color: var(--cs-text);
+    color: var(--cs-text-mid);
     display: flex;
     align-items: center;
     gap: 6px;
@@ -472,21 +483,23 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* CMS 공통 표준 삭제 아이콘 버튼(홈 배너 모달 .btn-remove 규격과 동일) — 투명 면, 호버는 옅은 레드 면 + 레드 아이콘 */
   .hcp-remove-btn {
-    flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    border: none;
-    background: transparent;
-    color: var(--cs-text-mid);
-    cursor: pointer;
-    font-size: 13px;
-    border-radius: 4px;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    min-width: 28px;
+    min-height: 32px;
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--cs-text-light);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
   }
-  .hcp-remove-btn:hover { background: var(--cs-lilac); color: var(--cs-red-badge); }
+  .hcp-remove-btn:hover { background: rgba(255, 53, 53, 0.08); color: var(--cs-red-badge); }
 
   .hcp-empty {
     font: var(--text-pc-script-12);
