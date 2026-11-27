@@ -368,8 +368,8 @@
   /* 스크롤 속도에 따라 버튼이 살짝 기울었다가(--tab-skew, tabScroller가 설정) 스프링으로 돌아온다 */
   /* 양끝 고무줄 — 끝에서 더 끌면 버튼이 저항을 받으며 따라 늘어났다가, 놓으면 용수철로 튕겨 돌아온다(--tab-pull, tabScroller가 설정) */
   .cat-tabs { overscroll-behavior-x: none; }
-  .cat-tab { translate: calc(var(--tab-pull, 0) * 1px) 0; }
-  .cat-tabs:global(.tabs-release) .cat-tab { transition: translate 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.12s, color 0.12s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .cat-tab { translate: calc(var(--tab-pull, 0) * 1px) 0; transition: transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1), background 0.12s, color 0.12s; }
+  .cat-tabs:global(.tabs-release) .cat-tab { transition: translate 0.85s cubic-bezier(0.22, 1.6, 0.36, 1), background 0.12s, color 0.12s, transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1); }
   .cat-tab { scroll-snap-align: center; transform: skewX(calc(var(--tab-skew, 0) * 1deg)); }
   .cat-tab:active { transform: skewX(calc(var(--tab-skew, 0) * 1deg)) scale(0.92); }
   @media (prefers-reduced-motion: reduce) { .cat-tab { transform: none; } }
@@ -386,7 +386,7 @@
     cursor: pointer;
     min-height: 34px; /* 패딩 축소가 높이에 반영되도록 44→34px */
     white-space: nowrap;
-    transition: background 0.12s, color 0.12s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: background 0.12s, color 0.12s, transform 0.45s cubic-bezier(0.22, 1.5, 0.36, 1);
   }
   .cat-tab.active { background: var(--cs-purple); color: var(--cs-white); }
 
